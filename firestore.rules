@@ -1,0 +1,131 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function getUserDoc() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function myRole() {
+      return isSignedIn() ? getUserDoc().role : null;
+    }
+
+    function isSuperAdmin() {
+      return isSignedIn() && myRole() == 'superadmin';
+    }
+
+    function isAdmin() {
+      return isSignedIn() && myRole() == 'admin';
+    }
+
+    function isStaff() {
+      return isSignedIn() && myRole() == 'staff';
+    }
+
+    function isActive() {
+      return isSignedIn() && getUserDoc().active == true;
+    }
+
+    function hasPermission(action) {
+      let userDoc = getUserDoc();
+      let role = userDoc.role;
+      let perms = get(/databases/$(database)/documents/settings/rolePermissions).data;
+      let override = userDoc.get(['permissionOverrides', action], 'NONE');
+      
+      return role == 'superadmin' || 
+             override == true || 
+             (override == 'NONE' && (
+               (role == 'admin' && perms.admin.get(action, false) == true) ||
+               (role == 'staff' && perms.staff.get(action, false) == true)
+             ));
+    }
+
+    match /users/{userId} {
+      allow read: if isSignedIn() && (request.auth.uid == userId || isSuperAdmin() || isAdmin());
+      allow create: if isSignedIn() && request.auth.uid == userId;
+      allow update: if isSuperAdmin()
+                    || (isAdmin()
+                        && resource.data.role == 'staff'
+                        && request.resource.data.role == 'staff');
+      allow delete: if isSuperAdmin();
+
+      match /private/employment {
+        allow read, write: if isSuperAdmin();
+      }
+    }
+
+    match /settings/rolePermissions {
+      allow read: if isSignedIn();
+      allow write: if isSuperAdmin();
+    }
+
+    match /settings/{docId} {
+      allow read: if isSignedIn();
+      allow write: if isSuperAdmin();
+    }
+
+    match /categories/{categoryId} {
+      allow read: if isSignedIn();
+      allow create, update: if isSuperAdmin() || hasPermission('manageCategories');
+      allow delete: if isSuperAdmin() || (hasPermission('manageCategories') && isAdmin());
+    }
+
+    match /brands/{brandId} {
+      allow read: if isSignedIn();
+      allow create, update: if isSuperAdmin() || hasPermission('manageCategories');
+      allow delete: if isSuperAdmin() || (hasPermission('manageCategories') && isAdmin());
+    }
+
+    match /products/{productId} {
+      allow read: if isSignedIn();
+      allow create: if isActive() && (isSuperAdmin() || hasPermission('addProduct'));
+      allow update: if isActive() && (isSuperAdmin() || hasPermission('editProduct'));
+      allow delete: if isSuperAdmin() || (isActive() && hasPermission('deleteProduct'));
+    }
+
+    match /stockLogs/{logId} {
+      allow read: if isSignedIn();
+      allow create: if isActive() && (isSuperAdmin() || hasPermission('stockIn') || hasPermission('stockOut') || hasPermission('stockAdjustment'));
+      allow update: if false;
+      allow delete: if isSuperAdmin();
+    }
+
+    match /attendance/{sessionId} {
+      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
+      allow update: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isSuperAdmin());
+      allow delete: if isSuperAdmin();
+    }
+
+    match /orders/{orderId} {
+      allow read: if isSignedIn();
+      allow create, update: if isActive() && (isSuperAdmin() || hasPermission('manageOrders'));
+      allow delete: if isSuperAdmin();
+    }
+
+    match /invoices/{invoiceId} {
+      allow read: if isSignedIn();
+      allow create: if isActive() && (isSuperAdmin() || hasPermission('manageOrders'));
+      allow update: if false;
+      allow delete: if isSuperAdmin();
+    }
+
+    match /customers/{customerId} {
+      allow read: if isSignedIn();
+      allow write: if isActive() && (isSuperAdmin() || hasPermission('manageOrders'));
+    }
+
+    match /suppliers/{supplierId} {
+      allow read: if isSignedIn();
+      allow write: if isActive() && (isSuperAdmin() || hasPermission('manageCategories'));
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

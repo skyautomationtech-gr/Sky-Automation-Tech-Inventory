@@ -1,0 +1,58 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "UserProfile",
+      "description": "User profile document",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "email": { "type": "string" },
+        "phone": { "type": "string" },
+        "photoUrl": { "type": "string" },
+        "role": { "type": "string" },
+        "subBrandAccess": { "type": "array" },
+        "designation": { "type": "string" },
+        "joiningDate": { "type": "string" },
+        "nidNumber": { "type": "string" },
+        "address": { "type": "string" },
+        "requirePasswordChange": { "type": "boolean" },
+        "permissionOverrides": { "type": "object" },
+        "active": { "type": "boolean" },
+        "createdBy": { "type": "string" },
+        "createdAt": { "type": "number" }
+      }
+    },
+    "PrivateEmploymentInfo": {
+      "title": "PrivateEmploymentInfo",
+      "description": "Restricted employment data",
+      "type": "object",
+      "properties": {
+        "salary": { "type": "number" },
+        "updatedAt": { "type": "number" }
+      }
+    },
+    "CompanySettings": {
+      "title": "CompanySettings",
+      "description": "Company settings document",
+      "type": "object",
+      "properties": {
+        "companyName": { "type": "string" },
+        "onboarded": { "type": "boolean" }
+      }
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "User profile collection"
+    },
+    "/users/{userId}/private/employment": {
+      "schema": "PrivateEmploymentInfo",
+      "description": "Private employment data sub-collection"
+    },
+    "/settings/company": {
+      "schema": "CompanySettings",
+      "description": "Company settings document"
+    }
+  }
+}
