@@ -275,14 +275,22 @@ export async function getCategories(): Promise<Category[]> {
 }
 
 export async function addCategory(name: string, subCategories: string[]): Promise<Category> {
-  const colRef = collection(db, 'categories');
-  const docRef = await addDoc(colRef, { name, subCategories });
-  return { id: docRef.id, name, subCategories };
+  try {
+    const colRef = collection(db, 'categories');
+    const docRef = await addDoc(colRef, { name, subCategories });
+    return { id: docRef.id, name, subCategories };
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, 'categories');
+  }
 }
 
 export async function updateCategory(id: string, name: string, subCategories: string[]): Promise<void> {
-  const docRef = doc(db, 'categories', id);
-  await updateDoc(docRef, { name, subCategories });
+  try {
+    const docRef = doc(db, 'categories', id);
+    await updateDoc(docRef, { name, subCategories });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, 'categories/' + id);
+  }
 }
 
 export async function deleteCategory(id: string): Promise<void> {
@@ -315,14 +323,22 @@ export async function getBrands(): Promise<Brand[]> {
 }
 
 export async function addBrand(name: string): Promise<Brand> {
-  const colRef = collection(db, 'brands');
-  const docRef = await addDoc(colRef, { name });
-  return { id: docRef.id, name };
+  try {
+    const colRef = collection(db, 'brands');
+    const docRef = await addDoc(colRef, { name });
+    return { id: docRef.id, name };
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, 'brands');
+  }
 }
 
 export async function updateBrand(id: string, name: string): Promise<void> {
-  const docRef = doc(db, 'brands', id);
-  await updateDoc(docRef, { name });
+  try {
+    const docRef = doc(db, 'brands', id);
+    await updateDoc(docRef, { name });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, 'brands/' + id);
+  }
 }
 
 export async function deleteBrand(id: string): Promise<void> {
@@ -361,35 +377,43 @@ export async function getProducts(includeArchived: boolean = false): Promise<Pro
 }
 
 export async function addProduct(product: Omit<Product, 'id'>, userId: string, userName: string): Promise<string> {
-  const colRef = collection(db, 'products');
-  const docRef = await addDoc(colRef, {
-    ...product,
-    createdAt: Date.now()
-  });
-
-  // Create an initial stock log / opening stock entry for each variant that has quantity > 0
-  const totalQty = product.variants.reduce((acc, v) => acc + (v.stock || 0), 0);
-  if (totalQty > 0) {
-    await addStockLog({
-      productId: docRef.id,
-      productName: product.name,
-      type: 'in',
-      qty: totalQty,
-      reason: 'Opening Stock',
-      userId,
-      userName,
-      beforeQty: 0,
-      afterQty: totalQty,
-      refNo: 'OPEN-STOCK'
+  try {
+    const colRef = collection(db, 'products');
+    const docRef = await addDoc(colRef, {
+      ...product,
+      createdAt: Date.now()
     });
-  }
 
-  return docRef.id;
+    // Create an initial stock log / opening stock entry for each variant that has quantity > 0
+    const totalQty = product.variants.reduce((acc, v) => acc + (v.stock || 0), 0);
+    if (totalQty > 0) {
+      await addStockLog({
+        productId: docRef.id,
+        productName: product.name,
+        type: 'in',
+        qty: totalQty,
+        reason: 'Opening Stock',
+        userId,
+        userName,
+        beforeQty: 0,
+        afterQty: totalQty,
+        refNo: 'OPEN-STOCK'
+      });
+    }
+
+    return docRef.id;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, 'products');
+  }
 }
 
 export async function updateProduct(id: string, updatedFields: Partial<Product>): Promise<void> {
-  const docRef = doc(db, 'products', id);
-  await updateDoc(docRef, updatedFields);
+  try {
+    const docRef = doc(db, 'products', id);
+    await updateDoc(docRef, updatedFields);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, 'products/' + id);
+  }
 }
 
 export async function archiveProduct(id: string): Promise<void> {
@@ -448,6 +472,7 @@ export async function addStockLog(log: Omit<StockLog, 'id' | 'timestamp'>): Prom
     });
   } catch (error) {
     console.error('Error logging stock transaction:', error);
+    handleFirestoreError(error, OperationType.CREATE, 'stockLogs');
   }
 }
 
@@ -552,6 +577,7 @@ export async function checkInUser(userId: string, userName: string, role: string
   const dateStr = new Date(now).toISOString().split('T')[0];
 
   // 1. Safety Check: Check if user already has an open session
+  // We query for ALL open sessions for this user to be sure
   const qOpen = query(
     colRef, 
     where('userId', '==', userId), 
@@ -559,19 +585,38 @@ export async function checkInUser(userId: string, userName: string, role: string
   );
   
   const openSnap = await getDocs(qOpen);
+  
+  // If multiple open sessions exist, we need to handle them
   if (!openSnap.empty) {
-    console.warn('User already has an open session, re-using existing session ID.');
-    const existingId = openSnap.docs[0].id;
+    console.warn('User already has open session(s), cleaning up and re-using latest.');
+    
+    // Sort in memory just in case
+    const sessions = openSnap.docs.map(d => ({ id: d.id, ...d.data() as any }));
+    sessions.sort((a, b) => b.checkInTime - a.checkInTime);
+    
+    const latestSessionId = sessions[0].id;
+    const latestDate = sessions[0].date;
+
+    // Close other "orphan" sessions if there are more than 1
+    if (sessions.length > 1) {
+      for (let i = 1; i < sessions.length; i++) {
+        await updateDoc(doc(db, 'attendance', sessions[i].id), {
+          checkOutTime: sessions[i].checkInTime + 60000, // +1 min dummy
+          durationMinutes: 1,
+          cleanupFlag: 'auto-closed-on-checkin'
+        });
+      }
+    }
     
     // Ensure user profile is synced
     const userDocRef = doc(db, 'users', userId);
     await updateDoc(userDocRef, {
       currentSessionStatus: 'checked_in',
-      currentSessionId: existingId,
-      currentSessionDate: openSnap.docs[0].data().date
+      currentSessionId: latestSessionId,
+      currentSessionDate: latestDate
     });
     
-    return existingId;
+    return latestSessionId;
   }
 
   const docRef = await addDoc(colRef, {
@@ -595,23 +640,50 @@ export async function checkInUser(userId: string, userName: string, role: string
   return docRef.id;
 }
 
-export async function checkOutUser(userId: string, sessionId: string): Promise<void> {
-  const docRef = doc(db, 'attendance', sessionId);
-  const docSnap = await getDoc(docRef);
-  if (!docSnap.exists()) {
-    throw new Error('Session not found');
+export async function checkOutUser(userId: string, sessionId: string | null): Promise<void> {
+  const now = Date.now();
+  const colRef = collection(db, 'attendance');
+
+  // If sessionId is provided, try to close it specifically first
+  if (sessionId) {
+    try {
+      const docRef = doc(db, 'attendance', sessionId);
+      const docSnap = await getDoc(docRef);
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        const checkInTime = data.checkInTime;
+        const durationMinutes = Math.round((now - checkInTime) / (1000 * 60));
+
+        await updateDoc(docRef, {
+          checkOutTime: now,
+          durationMinutes
+        });
+      }
+    } catch (e) {
+      console.error('Failed to close specific session:', sessionId, e);
+    }
   }
 
-  const data = docSnap.data();
-  const checkInTime = data.checkInTime;
-  const now = Date.now();
-  const durationMinutes = Math.round((now - checkInTime) / (1000 * 60));
+  // Safety: Find and close ANY other open sessions for this user
+  const qOpen = query(
+    colRef, 
+    where('userId', '==', userId), 
+    where('checkOutTime', '==', null)
+  );
+  const openSnap = await getDocs(qOpen);
+  
+  if (!openSnap.empty) {
+    for (const d of openSnap.docs) {
+      const checkInTime = d.data().checkInTime;
+      const durationMinutes = Math.round((now - checkInTime) / (1000 * 60));
+      await updateDoc(doc(db, 'attendance', d.id), {
+        checkOutTime: now,
+        durationMinutes: durationMinutes > 0 ? durationMinutes : 1
+      });
+    }
+  }
 
-  await updateDoc(docRef, {
-    checkOutTime: now,
-    durationMinutes
-  });
-
+  // Always reset user profile status
   const userDocRef = doc(db, 'users', userId);
   await updateDoc(userDocRef, {
     currentSessionStatus: 'checked_out',

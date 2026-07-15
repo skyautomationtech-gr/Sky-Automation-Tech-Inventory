@@ -17,6 +17,7 @@ import {
   History,
   X,
   AlertCircle,
+  Check,
   FolderPlus,
   Coins
 } from 'lucide-react';
@@ -83,6 +84,10 @@ export default function ProductManagement({
   const [deletingCatId, setDeletingCatId] = useState<string | null>(null);
   const [deletingBrandId, setDeletingBrandId] = useState<string | null>(null);
 
+  // General Status State
+  const [formError, setFormError] = useState('');
+  const [formSuccess, setFormSuccess] = useState('');
+
   // Bulk CSV Upload State
   const [isCsvModalOpen, setIsCsvModalOpen] = useState(false);
   const [csvError, setCsvError] = useState('');
@@ -125,6 +130,8 @@ export default function ProductManagement({
   // Open Add Product Drawer
   const openAddDrawer = () => {
     setEditModeProduct(null);
+    setFormError('');
+    setFormSuccess('');
     setFormName('');
     setFormSku('');
     setFormCategory(categories[0]?.name || '');
@@ -142,6 +149,8 @@ export default function ProductManagement({
   // Open Edit Product Drawer
   const openEditDrawer = (product: Product) => {
     setEditModeProduct(product);
+    setFormError('');
+    setFormSuccess('');
     setFormName(product.name);
     setFormSku(product.sku);
     setFormCategory(product.category);
@@ -207,8 +216,14 @@ export default function ProductManagement({
   // Form Submit (Add or Edit Product)
   const handleFormSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    setFormError('');
+    setFormSuccess('');
+    
     if (requireCheckIn && !requireCheckIn()) return;
-    if (!formName.trim() || !formSku.trim()) return;
+    if (!formName.trim() || !formSku.trim()) {
+      setFormError('Product Name and SKU are required.');
+      return;
+    }
 
     const finalSku = formSku.trim().toUpperCase();
 
@@ -216,14 +231,14 @@ export default function ProductManagement({
     const productPayload = {
       name: formName.trim(),
       sku: finalSku,
-      category: formCategory,
-      subCategory: formSubCategory || undefined,
-      brand: formBrand,
-      subBrand: formSubBrand,
+      category: formCategory || '',
+      subCategory: formSubCategory || '',
+      brand: formBrand || '',
+      subBrand: formSubBrand || '',
       costPrice: Number(formCostPrice),
       sellingPrice: Number(formSellingPrice),
       reorderThreshold: Number(formReorderThreshold),
-      images: formImages,
+      images: formImages || [],
       variants: formVariants,
       archived: false,
       createdAt: editModeProduct ? editModeProduct.createdAt : Date.now()
@@ -233,15 +248,20 @@ export default function ProductManagement({
       if (editModeProduct) {
         // Edit existing product
         await updateProduct(editModeProduct.id, productPayload);
+        setFormSuccess('Product details updated successfully!');
       } else {
         // Create new product
         await addProduct(productPayload, user?.id || 'demo', user?.name || 'Operator');
+        setFormSuccess('New product added to catalog!');
       }
 
-      setIsDrawerOpen(false);
+      setTimeout(() => {
+        setIsDrawerOpen(false);
+      }, 1500);
       await onRefreshData();
-    } catch (err) {
+    } catch (err: any) {
       console.error(err);
+      setFormError(err.message || 'Failed to persist product record to cloud database.');
     }
   };
 
@@ -261,13 +281,22 @@ export default function ProductManagement({
   // Category CRUD Handlers
   const handleAddCategory = async (e: React.FormEvent) => {
     e.preventDefault();
+    setFormError('');
+    setFormSuccess('');
+    
     if (requireCheckIn && !requireCheckIn()) return;
     if (!newCatName.trim()) return;
-    const subs = newCatSub.split(',').map(s => s.trim()).filter(s => s.length > 0);
-    await addCategory(newCatName.trim(), subs);
-    setNewCatName('');
-    setNewCatSub('');
-    await onRefreshData();
+    
+    try {
+      const subs = newCatSub.split(',').map(s => s.trim()).filter(s => s.length > 0);
+      await addCategory(newCatName.trim(), subs);
+      setFormSuccess(`Category "${newCatName}" created!`);
+      setNewCatName('');
+      setNewCatSub('');
+      await onRefreshData();
+    } catch (err: any) {
+      setFormError(err.message || 'Failed to create category.');
+    }
   };
 
   const handleDeleteCategory = async (id: string, name: string) => {
@@ -298,11 +327,20 @@ export default function ProductManagement({
   // Brand CRUD Handlers
   const handleAddBrand = async (e: React.FormEvent) => {
     e.preventDefault();
+    setFormError('');
+    setFormSuccess('');
+    
     if (requireCheckIn && !requireCheckIn()) return;
     if (!newBrandName.trim()) return;
-    await addBrand(newBrandName.trim());
-    setNewBrandName('');
-    await onRefreshData();
+    
+    try {
+      await addBrand(newBrandName.trim());
+      setFormSuccess(`Brand "${newBrandName}" created!`);
+      setNewBrandName('');
+      await onRefreshData();
+    } catch (err: any) {
+      setFormError(err.message || 'Failed to create brand.');
+    }
   };
 
   const handleDeleteBrand = async (id: string, name: string) => {
@@ -467,11 +505,11 @@ export default function ProductManagement({
     <div className="space-y-6">
       
       {/* Tab Selectors */}
-      <div className="border-b border-slate-200 flex justify-between items-center pb-2">
-        <div className="flex gap-4">
+      <div className="border-b border-slate-200 overflow-x-auto no-scrollbar">
+        <div className="flex gap-4 min-w-max pb-1">
           <button
             onClick={() => setActiveSubTab('catalog')}
-            className={`pb-2.5 px-1 font-semibold text-sm transition-all border-b-2 cursor-pointer ${
+            className={`pb-2.5 px-1 font-semibold text-sm transition-all border-b-2 cursor-pointer whitespace-nowrap ${
               activeSubTab === 'catalog'
                 ? 'border-amber-400 text-slate-900 font-extrabold'
                 : 'border-transparent text-slate-500 hover:text-slate-950'
@@ -481,7 +519,7 @@ export default function ProductManagement({
           </button>
           <button
             onClick={() => setActiveSubTab('categories')}
-            className={`pb-2.5 px-1 font-semibold text-sm transition-all border-b-2 cursor-pointer ${
+            className={`pb-2.5 px-1 font-semibold text-sm transition-all border-b-2 cursor-pointer whitespace-nowrap ${
               activeSubTab === 'categories'
                 ? 'border-amber-400 text-slate-900 font-extrabold'
                 : 'border-transparent text-slate-500 hover:text-slate-950'
@@ -491,7 +529,7 @@ export default function ProductManagement({
           </button>
           <button
             onClick={() => setActiveSubTab('brands')}
-            className={`pb-2.5 px-1 font-semibold text-sm transition-all border-b-2 cursor-pointer ${
+            className={`pb-2.5 px-1 font-semibold text-sm transition-all border-b-2 cursor-pointer whitespace-nowrap ${
               activeSubTab === 'brands'
                 ? 'border-amber-400 text-slate-900 font-extrabold'
                 : 'border-transparent text-slate-500 hover:text-slate-950'
@@ -500,26 +538,44 @@ export default function ProductManagement({
             Brands CRUD
           </button>
         </div>
-
-        {activeSubTab === 'catalog' && (
-          <div className="flex gap-2">
-            <button
-              onClick={() => setIsCsvModalOpen(true)}
-              className="flex items-center gap-1.5 py-1.5 px-3 bg-white hover:bg-slate-50 border border-slate-200 text-xs font-semibold text-slate-700 rounded-xl cursor-pointer"
-            >
-              <FileSpreadsheet size={14} className="text-emerald-600" />
-              Bulk CSV Import
-            </button>
-            <button
-              onClick={openAddDrawer}
-              className="flex items-center gap-1.5 py-1.5 px-4 bg-amber-400 hover:bg-amber-500 text-slate-950 font-bold text-xs rounded-xl cursor-pointer"
-            >
-              <Plus size={14} />
-              Add Product
-            </button>
-          </div>
-        )}
       </div>
+
+      {activeSubTab === 'catalog' && (
+        <div className="flex flex-wrap gap-2 md:justify-end">
+          <button
+            onClick={() => setIsCsvModalOpen(true)}
+            className="flex items-center gap-1.5 py-1.5 px-3 bg-white hover:bg-slate-50 border border-slate-200 text-[10px] sm:text-xs font-semibold text-slate-700 rounded-xl cursor-pointer"
+          >
+            <FileSpreadsheet size={14} className="text-emerald-600" />
+            Bulk CSV Import
+          </button>
+          <button
+            onClick={openAddDrawer}
+            className="flex items-center gap-1.5 py-1.5 px-4 bg-amber-400 hover:bg-amber-500 text-slate-950 font-bold text-[10px] sm:text-xs rounded-xl cursor-pointer"
+          >
+            <Plus size={14} />
+            Add Product
+          </button>
+        </div>
+      )}
+
+      {/* GLOBAL ALERTS */}
+      {(formError || formSuccess) && (
+        <div className="space-y-2">
+          {formError && (
+            <div className="bg-red-50 border border-red-200 text-red-600 p-4 rounded-2xl text-xs flex items-start gap-2 animate-in fade-in slide-in-from-top-1 duration-200">
+              <AlertCircle size={16} className="text-red-500 flex-shrink-0" />
+              <p className="font-semibold">{formError}</p>
+            </div>
+          )}
+          {formSuccess && (
+            <div className="bg-teal-50 border border-teal-200 text-teal-700 p-4 rounded-2xl text-xs flex items-center gap-2 animate-in fade-in slide-in-from-top-1 duration-200">
+              <Check size={16} className="text-teal-500" />
+              <p className="font-semibold">{formSuccess}</p>
+            </div>
+          )}
+        </div>
+      )}
 
       {/* SUB TAB 1: PRODUCT CATALOG */}
       {activeSubTab === 'catalog' && (
@@ -1071,6 +1127,19 @@ export default function ProductManagement({
 
               {/* Drawer Scrollable Content */}
               <form onSubmit={handleFormSubmit} className="flex-1 overflow-y-auto p-5 md:p-6 space-y-6">
+                {formError && (
+                  <div className="bg-red-50 border border-red-200 text-red-600 p-4 rounded-xl text-xs flex items-start gap-2">
+                    <AlertCircle size={16} className="text-red-500 flex-shrink-0" />
+                    <p className="font-semibold">{formError}</p>
+                  </div>
+                )}
+
+                {formSuccess && (
+                  <div className="bg-teal-50 border border-teal-200 text-teal-700 p-4 rounded-xl text-xs flex items-center gap-2">
+                    <Check size={16} className="text-teal-500" />
+                    <p className="font-semibold">{formSuccess}</p>
+                  </div>
+                )}
                 
                 {/* Section 1: Core details */}
                 <div className="space-y-4">

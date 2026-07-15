@@ -362,7 +362,7 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-100 text-slate-800 flex flex-col md:flex-row">
+    <div className="min-h-screen bg-slate-100 text-slate-800 flex flex-col lg:flex-row">
       
       {/* Sidebar Navigation */}
       <Sidebar 

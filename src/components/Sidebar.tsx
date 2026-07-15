@@ -63,9 +63,8 @@ export default function Sidebar({
       <aside className={`
         fixed inset-y-0 left-0 z-40 bg-slate-950 text-slate-100 flex flex-col justify-between
         border-r border-slate-800 transition-all duration-300 ease-in-out
-        ${isOpen ? 'translate-x-0 w-64' : '-translate-x-full lg:translate-x-0'}
-        lg:static lg:h-screen lg:w-64
-        md:w-20 lg:w-64
+        ${isOpen ? 'translate-x-0 w-64 shadow-2xl' : '-translate-x-full lg:translate-x-0'}
+        lg:sticky lg:top-0 lg:h-screen lg:w-64 lg:flex-shrink-0
       `}>
         {/* Brand Header */}
         <div className="p-4 lg:p-6 border-b border-slate-800 flex items-center justify-center lg:justify-start">

@@ -176,6 +176,8 @@ export default function UserManagement({ user }: UserManagementProps) {
     setError('');
     setSuccess('');
 
+    console.log('UserManagement: Starting AddUser process...');
+
     // Validations
     if (!email.trim() || !fullName.trim() || !phoneNumber.trim()) {
       setError('Name, Email, and Phone Number are required basic fields.');
@@ -218,18 +220,22 @@ export default function UserManagement({ user }: UserManagementProps) {
     try {
       const { initializeApp } = await import('firebase/app');
       const { getAuth, createUserWithEmailAndPassword, updateProfile } = await import('firebase/auth');
-      const { auth } = await import('../firebase/config');
+      const { auth: primaryAuth } = await import('../firebase/config');
       
-      const secondaryApp = initializeApp(auth.app.options, `SecondaryApp-${Date.now()}`);
+      console.log('UserManagement: Initializing secondary app for operator creation...');
+      const secondaryApp = initializeApp(primaryAuth.app.options, `SecondaryApp-${Date.now()}`);
       const secondaryAuth = getAuth(secondaryApp);
 
       // 1. Create Auth User
+      console.log('UserManagement: Creating Firebase Auth account for:', email);
       const userCredential = await createUserWithEmailAndPassword(secondaryAuth, email.toLowerCase().trim(), tempPassword);
       const newUserId = userCredential.user.uid;
+      console.log('UserManagement: Auth account created. UID:', newUserId);
 
       // 2. Upload Photo if present
       let photoUrl = '';
       if (photoFile) {
+        console.log('UserManagement: Attempting photo upload for operator...');
         try {
           if (storage) {
             const photoRef = ref(storage, `avatars/${newUserId}/${photoFile.name}`);
@@ -244,9 +250,9 @@ export default function UserManagement({ user }: UserManagementProps) {
             });
           }
           await updateProfile(userCredential.user, { photoURL: photoUrl });
+          console.log('UserManagement: Photo processed successfully.');
         } catch (storageErr) {
           console.error('Photo upload failed, continuing without photo:', storageErr);
-          // Optional: fallback to base64 even on upload error
         }
       }
 
@@ -256,25 +262,28 @@ export default function UserManagement({ user }: UserManagementProps) {
         name: fullName,
         email: email.toLowerCase().trim(),
         phone: phoneNumber,
-        photoUrl: photoUrl,
+        photoUrl: photoUrl || '',
         role: selectedRole,
-        subBrandAccess: brandAccess,
-        permissionOverrides: permissionOverrides,
-        designation: designation || undefined,
-        joiningDate: joiningDate || undefined,
-        nidNumber: nidNumber || undefined,
-        address: address || undefined,
-        requirePasswordChange: requirePasswordChange,
-        active: isActiveAccount,
+        subBrandAccess: brandAccess || [],
+        permissionOverrides: permissionOverrides || [],
+        designation: designation || '',
+        joiningDate: joiningDate || '',
+        nidNumber: nidNumber || '',
+        address: address || '',
+        requirePasswordChange: !!requirePasswordChange,
+        active: !!isActiveAccount,
         createdBy: user.id,
         createdAt: Date.now(),
         onboardingCompleted: true
       };
 
+      console.log('UserManagement: Writing user profile to Firestore...');
       await createUserProfile(newUserId, newProfile);
+      console.log('UserManagement: Profile write successful.');
 
       // 4. Save Private Salary Data if Super Admin
       if (isSuperAdmin && salary !== '') {
+        console.log('UserManagement: Writing private employment info...');
         await updatePrivateEmploymentInfo(newUserId, {
           salary: Number(salary),
           updatedAt: Date.now()
@@ -283,13 +292,21 @@ export default function UserManagement({ user }: UserManagementProps) {
       
       // 5. Send Email if requested
       if (sendEmail) {
-        await sendCredentialsEmail(email.toLowerCase().trim(), tempPassword, fullName);
+        console.log('UserManagement: Sending credentials email...');
+        try {
+          await sendCredentialsEmail(email.toLowerCase().trim(), tempPassword, fullName);
+        } catch (emailErr) {
+          console.error('Email sending failed:', emailErr);
+          setSuccess(`Profile created for ${fullName}, but email sending failed. Password: ${tempPassword}`);
+        }
       }
       
       // Clean up
       await secondaryAuth.signOut();
 
-      setSuccess(`Operator profile created for ${fullName}. Credentials have been ${sendEmail ? 'sent' : 'logged'}.`);
+      if (!success) {
+        setSuccess(`Operator profile successfully provisioned for ${fullName}.`);
+      }
       
       // Reset form
       setEmail('');
@@ -311,10 +328,18 @@ export default function UserManagement({ user }: UserManagementProps) {
       setIsActiveAccount(true);
       setShowAddForm(false);
       
+      console.log('UserManagement: Refreshing operator list...');
       await fetchUsersList();
     } catch (err: any) {
       console.error('Add user error:', err);
-      setError(err.message || 'Failed to provision user profile.');
+      let errorMsg = err.message || 'Failed to provision user profile.';
+      try {
+        const parsed = JSON.parse(err.message);
+        errorMsg = `Firestore Error: ${parsed.error} (Path: ${parsed.path})`;
+      } catch (e) {
+        // Not JSON, keep original
+      }
+      setError(errorMsg);
     } finally {
       setLoading(false);
     }
