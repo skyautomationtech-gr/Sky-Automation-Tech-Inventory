@@ -133,21 +133,19 @@ export default function App() {
       try {
         if (firebaseUser) {
           // Logged In
-          const profile = await getUserProfile(firebaseUser.uid);
-          console.log('App: Fetched user profile:', profile);
+          console.log('App: Fetching user profile for UID:', firebaseUser.uid);
+          let profile = await getUserProfile(firebaseUser.uid);
+          
           if (profile) {
             // Safety Check: Suspended Account
-            if (profile.active === false) {
+            if (profile.active === false && profile.role !== 'superadmin') {
               console.warn('App: Attempted access by suspended account:', profile.email);
               await auth.signOut();
               setUser(null);
               return;
             }
 
-            if (profile.email === 'skyautomationtech@gmail.com' && profile.role !== 'superadmin') {
-              await promoteUserToSuperAdmin(profile.email);
-              profile.role = 'superadmin';
-            }
+            console.log('App: User session established:', profile.email, `[${profile.role}]`);
             setUser(profile);
             
             // Check onboarding
@@ -159,8 +157,9 @@ export default function App() {
               setIsOnboarding(true);
             }
           } else {
-            // If no profile found, sign out to prevent orphan accounts
-            await auth.signOut();
+            // If no profile found, do NOT sign out automatically.
+            // Let SplashAndAuth or onboarding wizards handle their own state,
+            // otherwise self-healing and first-time setups would fail.
             setUser(null);
           }
         } else {

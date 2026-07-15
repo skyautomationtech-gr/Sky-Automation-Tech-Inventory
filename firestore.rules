@@ -7,11 +7,18 @@ service cloud.firestore {
     }
 
     function getUserDoc() {
-      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+      let path = /databases/$(database)/documents/users/$(request.auth.uid);
+      return exists(path) ? get(path).data : null;
     }
 
     function myRole() {
-      return isSignedIn() ? getUserDoc().role : null;
+      let user = getUserDoc();
+      return user != null ? user.role : null;
+    }
+
+    function getRole(uid) {
+      let path = /databases/$(database)/documents/users/$(uid);
+      return exists(path) ? get(path).data.role : null;
     }
 
     function isSuperAdmin() {
@@ -27,35 +34,40 @@ service cloud.firestore {
     }
 
     function isActive() {
-      return isSignedIn() && getUserDoc().active == true;
+      let user = getUserDoc();
+      return user != null && user.active == true;
     }
 
     function hasPermission(action) {
       let userDoc = getUserDoc();
-      let role = userDoc.role;
-      let perms = get(/databases/$(database)/documents/settings/rolePermissions).data;
-      let override = userDoc.get(['permissionOverrides', action], 'NONE');
+      let permsPath = /databases/$(database)/documents/settings/rolePermissions;
+      let perms = exists(permsPath) ? get(permsPath).data : null;
+      let override = userDoc != null ? userDoc.get(['permissionOverrides', action], 'NONE') : 'NONE';
       
-      return role == 'superadmin' || 
-             override == true || 
-             (override == 'NONE' && (
-               (role == 'admin' && perms.admin.get(action, false) == true) ||
-               (role == 'staff' && perms.staff.get(action, false) == true)
-             ));
+      return userDoc != null && perms != null && (
+        userDoc.role == 'superadmin' || 
+        override == true || 
+        (override == 'NONE' && (
+          (userDoc.role == 'admin' && perms.admin.get(action, false) == true) ||
+          (userDoc.role == 'staff' && perms.staff.get(action, false) == true)
+        ))
+      );
     }
 
     match /users/{userId} {
-      allow read: if isSignedIn() && (request.auth.uid == userId || isSuperAdmin() || isAdmin());
+      allow read: if isSignedIn();
       allow create: if isSignedIn() && (
         request.auth.uid == userId 
         || isSuperAdmin() 
         || (isAdmin() && request.resource.data.role == 'staff')
       );
       allow update: if isSuperAdmin()
+                    && (resource.data.role != 'superadmin' || request.resource.data.role == 'superadmin')
                     || (isAdmin()
                         && resource.data.role == 'staff'
-                        && request.resource.data.role == 'staff');
-      allow delete: if isSuperAdmin();
+                        && request.resource.data.role == 'staff')
+                    || (request.auth.uid == userId && request.resource.data.role == resource.data.role);
+      allow delete: if isSuperAdmin() && resource.data.role != 'superadmin';
 
       match /private/employment {
         allow read, write: if isSuperAdmin();

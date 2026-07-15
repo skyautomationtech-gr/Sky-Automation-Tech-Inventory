@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
+import { motion } from 'motion/react';
 import { UserProfile, UserRole } from '../types';
 import { 
   getAllUsers, 
   createUserProfile, 
+  findUserProfileByEmail,
   updateUserProfile, 
   deleteSokolDemoData,
   getPrivateEmploymentInfo,
@@ -34,9 +36,11 @@ import {
   Send,
   Eye,
   EyeOff,
-  RefreshCw
+  RefreshCw,
+  ShieldAlert,
+  Wrench
 } from 'lucide-react';
-import { storage } from '../firebase/config';
+import { storage, auth } from '../firebase/config';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { sendCredentialsEmail } from '../lib/emailjs';
 
@@ -79,6 +83,12 @@ export default function UserManagement({ user }: UserManagementProps) {
 
   // Form states - Basic Info
   const [showAddForm, setShowAddForm] = useState(false);
+  const [showRepairTool, setShowRepairTool] = useState(false);
+  const [repairUid, setRepairUid] = useState('');
+  const [repairEmail, setRepairEmail] = useState('');
+  const [repairName, setRepairName] = useState('');
+  const [repairRole, setRepairRole] = useState<'staff' | 'admin' | 'superadmin'>('staff');
+  const [repairBrands, setRepairBrands] = useState<string[]>([]);
   const [email, setEmail] = useState('');
   const [fullName, setFullName] = useState('');
   const [phoneNumber, setPhoneNumber] = useState('');
@@ -122,11 +132,13 @@ export default function UserManagement({ user }: UserManagementProps) {
 
   const fetchUsersList = async () => {
     setLoading(true);
+    console.log('UserManagement: fetchUsersList starting...');
     try {
       const list = await getAllUsers();
-      setUsers(list);
+      console.log(`UserManagement: fetchUsersList retrieved ${list?.length || 0} users:`, list);
+      setUsers(list || []);
     } catch (err) {
-      console.error('Failed to load users:', err);
+      console.error('UserManagement: fetchUsersList failed:', err);
       setError('Could not retrieve operator registry.');
     } finally {
       setLoading(false);
@@ -168,6 +180,90 @@ export default function UserManagement({ user }: UserManagementProps) {
       } else {
         setBrandAccess([...brandAccess, brand]);
       }
+    }
+  };
+
+  const handleRepairAccount = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!repairEmail) {
+      setError('Email is required for repair.');
+      return;
+    }
+
+    setLoading(true);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      console.log('UserManagement: Initiating server-side repair for:', repairEmail);
+      const user = auth.currentUser;
+      if (!user) throw new Error('Not authenticated');
+      const idToken = await user.getIdToken();
+
+      const response = await fetch('/api/admin/repair-user', {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${idToken}`
+        },
+        body: JSON.stringify({ 
+          email: repairEmail.trim()
+        }),
+      });
+
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Server repair failed');
+
+      setSuccess(`Repair Successful: ${result.message}`);
+      setShowRepairTool(false);
+      
+      // Refresh list
+      setTimeout(async () => {
+        await fetchUsersList();
+      }, 1000);
+    } catch (err: any) {
+      console.error('Repair error:', err);
+      setError(`Repair failed: ${err.message}`);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleBulkRepair = async () => {
+    if (!window.confirm('This will scan ALL user accounts and migrate any mismatched IDs. Proceed?')) return;
+
+    setLoading(true);
+    setError(null);
+    setSuccess(null);
+
+    try {
+      const user = auth.currentUser;
+      if (!user) throw new Error('Not authenticated');
+      const idToken = await user.getIdToken();
+
+      const response = await fetch('/api/admin/bulk-repair', {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${idToken}`
+        },
+        body: JSON.stringify({}),
+      });
+
+      const result = await response.json();
+      if (!response.ok) throw new Error(result.error || 'Bulk repair failed');
+
+      setSuccess(`Scan Complete: Scanned ${result.scanned} users, Repaired ${result.repaired} mismatches.`);
+      if (result.repaired > 0) {
+        setTimeout(async () => {
+          await fetchUsersList();
+        }, 1000);
+      }
+    } catch (err: any) {
+      console.error('Bulk repair error:', err);
+      setError(`Bulk repair failed: ${err.message}`);
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -226,23 +322,42 @@ export default function UserManagement({ user }: UserManagementProps) {
       const secondaryApp = initializeApp(primaryAuth.app.options, `SecondaryApp-${Date.now()}`);
       const secondaryAuth = getAuth(secondaryApp);
 
+      console.log('UserManagement: Primary Auth state:', primaryAuth.currentUser?.email, primaryAuth.currentUser?.uid);
+      
       // 1. Create Auth User
-      console.log('UserManagement: Creating Firebase Auth account for:', email);
-      const userCredential = await createUserWithEmailAndPassword(secondaryAuth, email.toLowerCase().trim(), tempPassword);
+      console.log('UserManagement: STEP 1 - Creating Firebase Auth account for email:', email);
+      let userCredential;
+      try {
+        userCredential = await createUserWithEmailAndPassword(secondaryAuth, email.toLowerCase().trim(), tempPassword);
+        console.log('UserManagement: STEP 1 SUCCESS - Auth account created. UID:', userCredential.user.uid);
+      } catch (authErr: any) {
+        console.error('UserManagement: STEP 1 FAILED - Auth account creation error:', authErr.code, authErr.message);
+        if (authErr.code === 'auth/email-already-in-use') {
+          // Check if profile exists
+          const existingProfile = await findUserProfileByEmail(email);
+          if (!existingProfile) {
+            console.log('UserManagement: ALERT - Email in use but no Firestore profile found (ORPHAN).');
+            setError('This email is already in Authentication but has no profile. Use the Repair Tool below to fix it.');
+          }
+        }
+        throw authErr;
+      }
+      
       const newUserId = userCredential.user.uid;
-      console.log('UserManagement: Auth account created. UID:', newUserId);
+      console.log('UserManagement: Captured new UID for Firestore write:', newUserId);
 
       // 2. Upload Photo if present
       let photoUrl = '';
       if (photoFile) {
-        console.log('UserManagement: Attempting photo upload for operator...');
+        console.log('UserManagement: STEP 2 - Processing photo upload for UID:', newUserId);
         try {
           if (storage) {
             const photoRef = ref(storage, `avatars/${newUserId}/${photoFile.name}`);
             const uploadResult = await uploadBytes(photoRef, photoFile);
             photoUrl = await getDownloadURL(uploadResult.ref);
+            console.log('UserManagement: STEP 2 SUCCESS - Photo uploaded to:', photoUrl);
           } else {
-            console.warn('Storage not available, using base64 fallback');
+            console.warn('UserManagement: Storage not available, using base64 fallback');
             photoUrl = await new Promise<string>((resolve) => {
               const reader = new FileReader();
               reader.onloadend = () => resolve(reader.result as string);
@@ -250,13 +365,14 @@ export default function UserManagement({ user }: UserManagementProps) {
             });
           }
           await updateProfile(userCredential.user, { photoURL: photoUrl });
-          console.log('UserManagement: Photo processed successfully.');
+          console.log('UserManagement: Auth profile updated with photo URL.');
         } catch (storageErr) {
-          console.error('Photo upload failed, continuing without photo:', storageErr);
+          console.error('UserManagement: STEP 2 FAILED - Photo upload error (non-blocking):', storageErr);
         }
       }
 
       // 3. Create Public Profile
+      console.log('UserManagement: STEP 3 - Preparing Firestore profile document for UID:', newUserId);
       const newProfile: UserProfile = {
         id: newUserId,
         name: fullName,
@@ -277,18 +393,38 @@ export default function UserManagement({ user }: UserManagementProps) {
         onboardingCompleted: true
       };
 
-      console.log('UserManagement: Writing user profile to Firestore...');
-      await createUserProfile(newUserId, newProfile);
-      console.log('UserManagement: Profile write successful.');
+      console.log('UserManagement: STEP 3 - Executing Firestore write to path: users/' + newUserId);
+      try {
+        await createUserProfile(newUserId, newProfile);
+        console.log('UserManagement: STEP 3 SUCCESS - Firestore profile document written.');
+      } catch (profileErr: any) {
+        console.error('UserManagement: STEP 3 FAILED - Firestore profile write error:', profileErr);
+        console.log('UserManagement: CRITICAL - Auth account created but Profile failed. Initiating Rollback...');
+        try {
+          // Rollback: Delete the Auth user if profile write failed
+          await userCredential.user.delete();
+          console.log('UserManagement: ROLLBACK SUCCESS - Orphaned Auth account deleted.');
+        } catch (rollbackErr) {
+          console.error('UserManagement: ROLLBACK FAILED - Auth account could not be deleted! ACCOUNT IS NOW AN ORPHAN:', rollbackErr);
+        }
+        throw new Error(`Profile creation failed: ${profileErr.message}. The account was rolled back for safety.`);
+      }
 
       // 4. Save Private Salary Data if Super Admin
       if (isSuperAdmin && salary !== '') {
-        console.log('UserManagement: Writing private employment info...');
-        await updatePrivateEmploymentInfo(newUserId, {
-          salary: Number(salary),
-          updatedAt: Date.now()
-        });
+        console.log('UserManagement: STEP 4 - Writing private employment info for UID:', newUserId);
+        try {
+          await updatePrivateEmploymentInfo(newUserId, {
+            salary: Number(salary),
+            updatedAt: Date.now()
+          });
+          console.log('UserManagement: STEP 4 SUCCESS - Private salary info written.');
+        } catch (salaryErr) {
+          console.error('UserManagement: STEP 4 FAILED - Private info write error (non-blocking):', salaryErr);
+        }
       }
+      
+      let partialSuccessMsg = '';
       
       // 5. Send Email if requested
       if (sendEmail) {
@@ -297,14 +433,16 @@ export default function UserManagement({ user }: UserManagementProps) {
           await sendCredentialsEmail(email.toLowerCase().trim(), tempPassword, fullName);
         } catch (emailErr) {
           console.error('Email sending failed:', emailErr);
-          setSuccess(`Profile created for ${fullName}, but email sending failed. Password: ${tempPassword}`);
+          partialSuccessMsg = `Profile created for ${fullName}, but email sending failed. Password: ${tempPassword}`;
         }
       }
       
       // Clean up
       await secondaryAuth.signOut();
 
-      if (!success) {
+      if (partialSuccessMsg) {
+        setSuccess(partialSuccessMsg);
+      } else {
         setSuccess(`Operator profile successfully provisioned for ${fullName}.`);
       }
       
@@ -328,8 +466,11 @@ export default function UserManagement({ user }: UserManagementProps) {
       setIsActiveAccount(true);
       setShowAddForm(false);
       
-      console.log('UserManagement: Refreshing operator list...');
-      await fetchUsersList();
+      console.log('UserManagement: Refreshing operator list in 1.5s...');
+      setLoading(true);
+      setTimeout(async () => {
+        await fetchUsersList();
+      }, 1500);
     } catch (err: any) {
       console.error('Add user error:', err);
       let errorMsg = err.message || 'Failed to provision user profile.';
@@ -347,6 +488,7 @@ export default function UserManagement({ user }: UserManagementProps) {
           const parsed = JSON.parse(err.message);
           errorMsg = `Cloud Database Error: ${parsed.error}`;
           if (parsed.path) errorMsg += ` (at ${parsed.path})`;
+          if (parsed.operationType) errorMsg += ` [Op: ${parsed.operationType}]`;
         } catch (e) {
           // Not JSON, keep original errorMsg or err.message
         }
@@ -504,8 +646,74 @@ export default function UserManagement({ user }: UserManagementProps) {
             <UserPlus size={14} />
             {showAddForm ? 'Close Invitation Pane' : 'Invite New Operator'}
           </button>
+
+          {isSuperAdmin && (
+            <button
+              onClick={() => setShowRepairTool(!showRepairTool)}
+              className="w-full mt-2 py-2 px-4 border border-slate-200 text-slate-500 hover:bg-slate-50 font-bold text-[10px] rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer"
+            >
+              <Wrench size={12} />
+              {showRepairTool ? 'Hide Repair Tool' : 'System Repair Tool'}
+            </button>
+          )}
         </div>
       </div>
+
+      {showRepairTool && (
+        <motion.div 
+          initial={{ opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="bg-amber-50 rounded-3xl border border-amber-100 shadow-sm p-6"
+        >
+          <div className="flex items-center justify-between mb-4">
+            <div className="flex items-center gap-2 text-amber-800">
+              <ShieldAlert className="w-5 h-5" />
+              <h3 className="font-bold font-display">Automated Account Repair Utility</h3>
+            </div>
+            <button
+              onClick={handleBulkRepair}
+              disabled={loading}
+              className="flex items-center gap-2 text-[10px] font-bold bg-amber-200 text-amber-900 px-4 py-2 rounded-xl hover:bg-amber-300 transition-colors uppercase tracking-wider disabled:opacity-50"
+            >
+              <RefreshCw className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`} />
+              Bulk System Scan
+            </button>
+          </div>
+          <p className="text-xs text-amber-700 mb-6 leading-relaxed">
+            This tool automatically resolves mismatches between Firebase Authentication and Firestore profiles. 
+            It fetches the <strong>true Auth UID</strong> directly from the system and re-syncs the Firestore record based on email.
+          </p>
+          
+          <form onSubmit={handleRepairAccount} className="flex flex-col md:flex-row items-end gap-4">
+            <div className="flex-1 space-y-1">
+              <label className="text-[10px] font-bold text-amber-900 uppercase ml-1">Email Address to Fix</label>
+              <input
+                type="email"
+                value={repairEmail}
+                onChange={(e) => setRepairEmail(e.target.value)}
+                placeholder="operator@example.com"
+                className="w-full px-4 py-3 bg-white border border-amber-200 rounded-2xl text-xs focus:ring-2 focus:ring-amber-500 outline-none"
+              />
+            </div>
+            <div className="flex gap-2">
+              <button
+                type="button"
+                onClick={() => setShowRepairTool(false)}
+                className="px-6 py-3 text-xs font-bold text-amber-700 hover:bg-amber-100 rounded-2xl transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                type="submit"
+                disabled={loading}
+                className="px-8 py-3 bg-amber-600 text-white text-xs font-bold rounded-2xl hover:bg-amber-700 transition-colors shadow-sm disabled:opacity-50"
+              >
+                {loading ? 'Running System Scan...' : 'Repair Account'}
+              </button>
+            </div>
+          </form>
+        </motion.div>
+      )}
 
       {error && (
         <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-2xl text-xs font-medium">
@@ -1057,7 +1265,7 @@ export default function UserManagement({ user }: UserManagementProps) {
               <table className="w-full text-left border-collapse hidden md:table">
                 <thead>
                   <tr className="border-b border-slate-100 text-slate-400 text-[10px] font-semibold uppercase tracking-wider">
-                    <th className="py-3 px-4">Operator Info</th>
+                    <th className="py-3 px-4">Operator Info & System ID</th>
                     <th className="py-3 px-4">Authority Level</th>
                     <th className="py-3 px-4">Scope Domain</th>
                     <th className="py-3 px-4">Activity Status</th>
@@ -1091,6 +1299,27 @@ export default function UserManagement({ user }: UserManagementProps) {
                                 )}
                               </div>
                               <div className="text-slate-400 font-mono text-[11px] mt-0.5">{u.email}</div>
+                              <div className="flex items-center gap-1 mt-1">
+                                <span className="text-[9px] font-bold text-slate-300 uppercase tracking-tighter">System ID:</span>
+                                <code className="text-[9px] font-mono text-slate-400 bg-slate-50 px-1 rounded border border-slate-100 select-all">
+                                  {u.id}
+                                </code>
+                                {isSuperAdmin && (
+                                  <button 
+                                    onClick={async () => {
+                                      if (confirm(`Surgical Action: Delete Firestore document ${u.id}? This will NOT delete the Auth account.`)) {
+                                        const { doc, deleteDoc } = await import('firebase/firestore');
+                                        const { db } = await import('../firebase/config');
+                                        await deleteDoc(doc(db, 'users', u.id));
+                                        fetchUsersList();
+                                      }
+                                    }}
+                                    className="text-[8px] text-red-400 hover:text-red-600 font-bold uppercase"
+                                  >
+                                    Delete Doc
+                                  </button>
+                                )}
+                              </div>
                             </div>
                           </div>
                         </td>

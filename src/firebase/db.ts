@@ -12,7 +12,8 @@ import {
   serverTimestamp,
   deleteDoc,
   runTransaction,
-  writeBatch
+  writeBatch,
+  limit
 } from 'firebase/firestore';
 import { db, auth } from './config';
 import { 
@@ -112,53 +113,89 @@ export async function updatePrivateEmploymentInfo(userId: string, data: PrivateE
 }
 
 export async function getUserProfile(userId: string): Promise<UserProfile | null> {
-  console.log('getUserProfile called for:', userId);
-  try {
-    const docRef = doc(db, 'users', userId);
-    console.log('getUserProfile executing getDoc for path: users/', userId);
-    const docSnap = await getDoc(docRef);
-    console.log('getUserProfile getDoc success, exists:', docSnap.exists());
-    if (docSnap.exists()) {
-      return { id: docSnap.id, ...(docSnap.data() as any) } as UserProfile;
-    }
-    return null;
-  } catch (error: any) {
-    console.error('getUserProfile failed:', error);
-    if (error.code === 'unavailable' || (error.message && error.message.toLowerCase().includes('offline'))) {
-      console.warn('User profile fetch failed: client offline.');
+  const trimmedUid = userId.trim();
+  console.log("AUTH UID:", JSON.stringify(trimmedUid));
+  console.log("AUTH UID LENGTH:", trimmedUid.length);
+  console.log("AUTH UID CHAR CODES:", [...trimmedUid].map(c => c.charCodeAt(0)).join(','));
+  console.log("QUERYING PATH: users/" + trimmedUid);
+  
+  let attempts = 0;
+  const maxAttempts = 3;
+  
+  while (attempts < maxAttempts) {
+    try {
+      const docRef = doc(db, 'users', trimmedUid);
+      const docSnap = await getDoc(docRef);
+      console.log("QUERY RESULT:", JSON.stringify(docSnap.exists() ? docSnap.data() : "NO DOCUMENT FOUND"));
+      
+      if (docSnap.exists()) {
+        const data = docSnap.data();
+        console.log('getUserProfile: Found profile for UID:', trimmedUid);
+        return { id: docSnap.id, ...(data as any) } as UserProfile;
+      }
+      
+      console.warn('getUserProfile: No document found at path:', docRef.path);
       return null;
+    } catch (error: any) {
+      attempts++;
+      console.warn(`getUserProfile attempt ${attempts} failed:`, error);
+      if (attempts >= maxAttempts) {
+        if (error.code === 'unavailable' || (error.message && error.message.toLowerCase().includes('offline'))) {
+          console.warn('User profile fetch failed: client offline.');
+          return null;
+        }
+        handleFirestoreError(error, OperationType.GET, 'users/' + userId);
+      }
+      // Wait before retrying to allow token sync
+      await new Promise(resolve => setTimeout(resolve, 150 * attempts));
     }
-    handleFirestoreError(error, OperationType.GET, 'users/' + userId);
   }
+  return null;
 }
 
 export async function getAllUsers(): Promise<UserProfile[]> {
+  console.log('getAllUsers: Fetching from "users" in database:', (db as any)._databaseId?.database || 'default');
   try {
     const colRef = collection(db, 'users');
     const querySnapshot = await getDocs(colRef);
     const users: UserProfile[] = [];
+    console.log(`getAllUsers: Successfully fetched ${querySnapshot.size} user documents.`);
     querySnapshot.forEach((doc) => {
-      users.push({ id: doc.id, ...(doc.data() as any) } as UserProfile);
+      const data = doc.data();
+      console.log(`getAllUsers: User [${doc.id}]:`, data);
+      users.push({ id: doc.id, ...(data as any) } as UserProfile);
     });
     return users;
   } catch (error) {
+    console.error('getAllUsers: FAILED:', error);
     handleFirestoreError(error, OperationType.LIST, 'users');
   }
 }
 
 export async function findUserProfileByEmail(email: string): Promise<UserProfile | null> {
-  try {
-    const colRef = collection(db, 'users');
-    const q = query(colRef, where('email', '==', email.toLowerCase().trim()));
-    const querySnapshot = await getDocs(q);
-    if (!querySnapshot.empty) {
-      const docSnap = querySnapshot.docs[0];
-      return { id: docSnap.id, ...(docSnap.data() as any) } as UserProfile;
+  let attempts = 0;
+  const maxAttempts = 3;
+  
+  while (attempts < maxAttempts) {
+    try {
+      const colRef = collection(db, 'users');
+      const q = query(colRef, where('email', '==', email.toLowerCase().trim()));
+      const querySnapshot = await getDocs(q);
+      if (!querySnapshot.empty) {
+        const docSnap = querySnapshot.docs[0];
+        return { id: docSnap.id, ...(docSnap.data() as any) } as UserProfile;
+      }
+      return null;
+    } catch (error: any) {
+      attempts++;
+      console.warn(`findUserProfileByEmail attempt ${attempts} failed:`, error);
+      if (attempts >= maxAttempts) {
+        handleFirestoreError(error, OperationType.LIST, 'users');
+      }
+      await new Promise(resolve => setTimeout(resolve, 150 * attempts));
     }
-    return null;
-  } catch (error) {
-    handleFirestoreError(error, OperationType.LIST, 'users');
   }
+  return null;
 }
 
 export async function deleteUserProfile(userId: string): Promise<void> {
@@ -171,42 +208,74 @@ export async function deleteUserProfile(userId: string): Promise<void> {
 }
 
 export async function createUserProfile(userId: string, data: Partial<UserProfile>): Promise<void> {
-  console.log('createUserProfile called for:', userId, 'with data:', data);
+  console.log('createUserProfile: STARTING write for UID:', userId, 'Data:', data);
   try {
     const docRef = doc(db, 'users', userId);
     const sanitizedData = sanitizeData(data);
-    console.log('createUserProfile executing setDoc with sanitized data...');
-    await setDoc(docRef, {
+    
+    const finalData = {
       ...sanitizedData,
       active: sanitizedData.active !== undefined ? sanitizedData.active : true,
       subBrandAccess: sanitizedData.subBrandAccess || ['SAT', 'GZ', 'RTX'],
       createdAt: sanitizedData.createdAt || Date.now()
-    }, { merge: true });
-    console.log('createUserProfile setDoc success.');
-  } catch (error) {
-    console.error('createUserProfile failed:', error);
+    };
+    
+    console.log('createUserProfile: Executing setDoc with merged data:', finalData);
+    await setDoc(docRef, finalData, { merge: true });
+    console.log('createUserProfile: SUCCESS for UID:', userId);
+  } catch (error: any) {
+    console.error('createUserProfile: FAILED for UID:', userId, 'Error:', error);
     handleFirestoreError(error, OperationType.CREATE, 'users/' + userId);
   }
 }
 
-export async function initializeUser(userId: string, data: Partial<UserProfile>): Promise<void> {
-  await runTransaction(db, async (transaction) => {
-    const usersCol = collection(db, 'users');
-    const usersSnapshot = await getDocs(usersCol);
-    const isFirstUser = usersSnapshot.size === 0;
+// Expose for manual repair if needed
+if (typeof window !== 'undefined') {
+  (window as any).createUserProfile = createUserProfile;
+}
 
-    const docRef = doc(db, 'users', userId);
-    const profile: UserProfile = {
-      ...data,
-      id: userId,
-      role: isFirstUser ? 'superadmin' : (data.role || 'staff'),
-      subBrandAccess: isFirstUser ? ['SAT', 'GZ', 'RTX'] : (data.subBrandAccess || []),
-      active: true,
-      createdAt: Date.now()
-    } as UserProfile;
-    
-    transaction.set(docRef, profile);
-  });
+export async function initializeUser(userId: string, data: Partial<UserProfile>): Promise<void> {
+  const sanitizedData = sanitizeData(data);
+  const usersCol = collection(db, 'users');
+  let isFirstUser = false;
+
+  let attempts = 0;
+  const maxAttempts = 3;
+  while (attempts < maxAttempts) {
+    try {
+      const q = query(usersCol, limit(1));
+      const usersSnapshot = await getDocs(q);
+      isFirstUser = usersSnapshot.empty;
+      break;
+    } catch (err: any) {
+      attempts++;
+      console.warn(`initializeUser: Failed checking first user (attempt ${attempts}):`, err);
+      if (attempts >= maxAttempts) {
+        console.warn("initializeUser: Defaulting isFirstUser to false due to persistent error.");
+        isFirstUser = false;
+      } else {
+        await new Promise(resolve => setTimeout(resolve, 150 * attempts));
+      }
+    }
+  }
+
+  const docRef = doc(db, 'users', userId);
+  const profile: UserProfile = {
+    ...sanitizedData,
+    id: userId,
+    role: isFirstUser ? 'superadmin' : (sanitizedData.role || 'staff'),
+    subBrandAccess: isFirstUser ? ['SAT', 'GZ', 'RTX'] : (sanitizedData.subBrandAccess || []),
+    active: true,
+    createdAt: Date.now()
+  } as UserProfile;
+  
+  try {
+    await setDoc(docRef, profile);
+    console.log("initializeUser: Successfully created user profile for UID:", userId);
+  } catch (error: any) {
+    console.error("initializeUser: Failed to setDoc profile for UID:", userId, error);
+    handleFirestoreError(error, OperationType.CREATE, 'users/' + userId);
+  }
 }
 
 export async function updateUserProfile(userId: string, data: Partial<UserProfile>): Promise<void> {

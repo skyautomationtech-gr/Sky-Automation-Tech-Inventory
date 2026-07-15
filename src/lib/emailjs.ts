@@ -39,7 +39,7 @@ export async function sendOTPEmail(email: string, otp: string, name: string = "U
           to_name: name,
           to_email: email,
           otp_code: otp,
-          reply_to: "skyautomationtech@gmail.com"
+          reply_to: "support@skyautomation.tech"
         }
       })
     });
@@ -91,7 +91,7 @@ export async function sendCredentialsEmail(
           to_email: email,
           temp_password: password,
           login_url: window.location.origin,
-          reply_to: "skyautomationtech@gmail.com"
+          reply_to: "support@skyautomation.tech"
         }
       })
     });

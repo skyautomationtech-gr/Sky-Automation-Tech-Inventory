@@ -22,7 +22,7 @@ interface SplashAndAuthProps {
 
 export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
   const [showSplash, setShowSplash] = useState(true);
-  const isLogin = true;
+  const [isLogin, setIsLogin] = useState(true);
   const [isForgotPassword, setIsForgotPassword] = useState(false);
   
   // Form fields
@@ -79,18 +79,95 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
         return;
       }
 
+      if (!isLogin) {
+        // Registration Flow
+        if (!fullName.trim()) {
+          setError('Please enter your full name for the operator profile.');
+          setLoading(false);
+          return;
+        }
+
+        const { createUserWithEmailAndPassword } = await import('firebase/auth');
+        console.log("REGISTRATION - Creating Auth user for:", email);
+        const userCredential = await createUserWithEmailAndPassword(firebaseAuth, email, password);
+        const userId = userCredential.user.uid;
+        
+        console.log("REGISTRATION - Initializing user profile document...");
+        await initializeUser(userId, {
+          name: fullName.trim(),
+          email: email.toLowerCase().trim(),
+          role: 'staff' // initializeUser automatically promotes first user to superadmin
+        });
+        
+        console.log("REGISTRATION - Success! Refreshing profile...");
+        const profile = await getUserProfile(userId);
+        if (profile) {
+          onAuthSuccess(profile);
+          setLoading(false);
+          return;
+        }
+      }
+
       // Standard Login
       try {
         const userCredential = await signInWithEmailAndPassword(firebaseAuth, email, password);
         
         const userId = userCredential.user.uid;
+        console.log("AUTH UID:", JSON.stringify(userId));
+        console.log("AUTH UID LENGTH:", userId.length);
+        console.log("QUERYING PATH: users/" + userId);
         
+        // Force token refresh/synchronization to ensure Auth is fully synchronized with Firestore
+        try {
+          await userCredential.user.getIdToken(true);
+        } catch (tokenErr) {
+          console.warn('SplashAndAuth: Failed to force token refresh (non-blocking):', tokenErr);
+        }
+        
+        // Brief delay to allow token propagation to Firestore
+        await new Promise(resolve => setTimeout(resolve, 300));
+
         // Get profile
         let profile = await getUserProfile(userId);
         
         if (!profile) {
-          await signOut(firebaseAuth);
+          console.warn('SplashAndAuth: Profile missing for UID:', userId, 'Attempting self-healing...');
+          try {
+            const { findUserProfileByEmail, createUserProfile, deleteUserProfile } = await import('../firebase/db');
+            
+            // Re-verify token synchronization is complete
+            try {
+              await userCredential.user.getIdToken(true);
+            } catch (tErr) {}
+            await new Promise(resolve => setTimeout(resolve, 300));
+
+            const orphanedProfile = await findUserProfileByEmail(email);
+            if (orphanedProfile) {
+              console.log('SplashAndAuth: AUTO-HEAL - Found profile for email at wrong ID:', orphanedProfile.id);
+              // Migrate data to correct UID
+              await createUserProfile(userId, { ...orphanedProfile, id: userId });
+              
+              // Try cleanup, but don't fail if permissions prevent it (only Super Admins can delete)
+              try {
+                await deleteUserProfile(orphanedProfile.id);
+                console.log('SplashAndAuth: AUTO-HEAL - Old record cleaned up.');
+              } catch (delErr) {
+                console.warn('SplashAndAuth: AUTO-HEAL - Cleanup skipped (Permission issue). Record remains at old ID but account is now usable.');
+              }
+
+              // Re-fetch
+              profile = await getUserProfile(userId);
+              console.log('SplashAndAuth: AUTO-HEAL SUCCESS - Profile migrated.');
+            }
+          } catch (healErr) {
+            console.error('SplashAndAuth: AUTO-HEAL FAILED:', healErr);
+          }
+        }
+
+        if (!profile) {
+          console.error('SplashAndAuth: CRITICAL - Profile missing for UID:', userId);
           setError('This account is not registered in the system. Please contact your Super Admin.');
+          await signOut(firebaseAuth);
           setLoading(false);
           return;
         }
@@ -310,6 +387,25 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
           ) : (
             /* GENERAL AUTH FORM */
             <form onSubmit={handleAuthSubmit} className="space-y-5">
+              {!isLogin && !isForgotPassword && (
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                    Full Name
+                  </label>
+                  <div className="mt-1 relative">
+                    <User className="absolute top-3.5 left-3 text-slate-500" size={18} />
+                    <input
+                      type="text"
+                      placeholder="Your Full Name"
+                      value={fullName}
+                      onChange={(e) => setFullName(e.target.value)}
+                      className="pl-10 w-full bg-slate-950 border border-slate-800 rounded-xl py-3 text-white placeholder-slate-600 focus:outline-hidden focus:ring-2 focus:ring-amber-400 focus:border-transparent text-sm"
+                      required
+                    />
+                  </div>
+                </div>
+              )}
+
               <div>
                 <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
                   Email Address
@@ -367,13 +463,15 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
                     ? 'Processing Network Request...' 
                     : isForgotPassword 
                       ? 'Send Recovery Code' 
-                      : 'Authenticate Identity'}
+                      : isLogin 
+                        ? 'Authenticate Identity' 
+                        : 'Register Operator Profile'}
                 </button>
               </div>
 
               {/* Toggle Login/Register */}
               <div className="text-center mt-4">
-                {isForgotPassword && (
+                {isForgotPassword ? (
                   <button
                     type="button"
                     onClick={() => {
@@ -382,6 +480,17 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
                     className="text-xs text-amber-500 hover:text-amber-400 hover:underline"
                   >
                     Return to Log In
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setIsLogin(!isLogin);
+                      setError('');
+                    }}
+                    className="text-xs text-amber-500 hover:text-amber-400 hover:underline"
+                  >
+                    {isLogin ? "Need a new account? Register Operator Profile" : "Already have an account? Sign In"}
                   </button>
                 )}
               </div>
