@@ -234,7 +234,7 @@ if (typeof window !== 'undefined') {
   (window as any).createUserProfile = createUserProfile;
 }
 
-export async function initializeUser(userId: string, data: Partial<UserProfile>): Promise<void> {
+export async function initializeUser(userId: string, data: Partial<UserProfile>): Promise<boolean> {
   const sanitizedData = sanitizeData(data);
   const usersCol = collection(db, 'users');
   let isFirstUser = false;
@@ -263,18 +263,21 @@ export async function initializeUser(userId: string, data: Partial<UserProfile>)
   const profile: UserProfile = {
     ...sanitizedData,
     id: userId,
-    role: isFirstUser ? 'superadmin' : (sanitizedData.role || 'staff'),
+    role: isFirstUser ? 'superadmin' : null as any,
     subBrandAccess: isFirstUser ? ['SAT', 'GZ', 'RTX'] : (sanitizedData.subBrandAccess || []),
-    active: true,
+    status: isFirstUser ? 'approved' : (sanitizedData.status || 'pending_approval'),
+    active: isFirstUser ? true : (sanitizedData.active ?? false),
     createdAt: Date.now()
   } as UserProfile;
   
   try {
     await setDoc(docRef, profile);
     console.log("initializeUser: Successfully created user profile for UID:", userId);
+    return isFirstUser;
   } catch (error: any) {
     console.error("initializeUser: Failed to setDoc profile for UID:", userId, error);
     handleFirestoreError(error, OperationType.CREATE, 'users/' + userId);
+    return isFirstUser;
   }
 }
 

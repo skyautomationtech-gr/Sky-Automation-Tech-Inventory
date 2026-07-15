@@ -14,7 +14,7 @@ import {
 import { auth as firebaseAuth } from '../firebase/config';
 import { sendOTPEmail } from '../lib/emailjs';
 import { UserProfile, UserRole } from '../types';
-import { ShieldCheck, Mail, Lock, User, KeyRound, Sparkles, Send, CheckCircle2 } from 'lucide-react';
+import { ShieldCheck, Mail, Lock, User, KeyRound, Sparkles, Send, CheckCircle2, Phone, Camera, Briefcase } from 'lucide-react';
 
 interface SplashAndAuthProps {
   onAuthSuccess: (user: UserProfile) => void;
@@ -30,6 +30,15 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
   const [password, setPassword] = useState('');
   const [fullName, setFullName] = useState('');
   const [role, setRole] = useState<UserRole>('staff');
+  
+  // Detailed Signup fields
+  const [phone, setPhone] = useState('');
+  const [confirmPassword, setConfirmPassword] = useState('');
+  const [requestedRole, setRequestedRole] = useState<'staff' | 'admin'>('staff');
+  const [requestedSubBrands, setRequestedSubBrands] = useState<string[]>([]);
+  const [designation, setDesignation] = useState('');
+  const [photoUrl, setPhotoUrl] = useState('');
+  const [signupSuccess, setSignupSuccess] = useState(false);
   
   // OTP State
   const [otpSent, setOtpSent] = useState(false);
@@ -55,6 +64,12 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
     setPassword('');
     setFullName('');
     setRole('staff');
+    setPhone('');
+    setConfirmPassword('');
+    setRequestedRole('staff');
+    setRequestedSubBrands([]);
+    setDesignation('');
+    setPhotoUrl('');
     setOtpSent(false);
     setGeneratedOtp('');
     setUserEnteredOtp('');
@@ -86,6 +101,21 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
           setLoading(false);
           return;
         }
+        if (!phone.trim()) {
+          setError('Please enter your phone number.');
+          setLoading(false);
+          return;
+        }
+        if (password !== confirmPassword) {
+          setError('Passwords do not match.');
+          setLoading(false);
+          return;
+        }
+        if (requestedSubBrands.length === 0) {
+          setError('Please select at least one sub-brand access request.');
+          setLoading(false);
+          return;
+        }
 
         const { createUserWithEmailAndPassword } = await import('firebase/auth');
         console.log("REGISTRATION - Creating Auth user for:", email);
@@ -93,19 +123,31 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
         const userId = userCredential.user.uid;
         
         console.log("REGISTRATION - Initializing user profile document...");
-        await initializeUser(userId, {
+        const isFirst = await initializeUser(userId, {
           name: fullName.trim(),
           email: email.toLowerCase().trim(),
-          role: 'staff' // initializeUser automatically promotes first user to superadmin
+          phone: phone.trim(),
+          requestedRole: requestedRole,
+          requestedSubBrandAccess: requestedSubBrands,
+          designation: designation.trim() || undefined,
+          photoUrl: photoUrl.trim() || undefined,
+          status: 'pending_approval',
+          active: false,
+          role: null as any,
+          subBrandAccess: []
         });
         
-        console.log("REGISTRATION - Success! Refreshing profile...");
-        const profile = await getUserProfile(userId);
-        if (profile) {
-          onAuthSuccess(profile);
-          setLoading(false);
-          return;
+        console.log("REGISTRATION - Signing out newly registered user...");
+        await signOut(firebaseAuth);
+        
+        if (isFirst) {
+          setInfoMessage('Congratulations! You are the first user in the system and have been auto-promoted to Super Admin. Please Sign In.');
+          setIsLogin(true);
+        } else {
+          setSignupSuccess(true);
         }
+        setLoading(false);
+        return;
       }
 
       // Standard Login
@@ -172,10 +214,25 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
           return;
         }
 
+        // Login behavior for pending/rejected accounts
+        if (profile.status === 'pending_approval') {
+          await signOut(firebaseAuth);
+          setError('Your account is still pending Super Admin approval.');
+          setLoading(false);
+          return;
+        }
+
+        if (profile.status === 'rejected') {
+          await signOut(firebaseAuth);
+          setError('Your registration request was not approved. Please contact your Super Admin.');
+          setLoading(false);
+          return;
+        }
+
         // Safety Check: Suspended Account
         if (profile.active === false) {
           await signOut(firebaseAuth);
-          setError('This account has been suspended. Please contact your Super Admin.');
+          setError('This account has been suspended or is inactive. Please contact your Super Admin.');
           setLoading(false);
           return;
         }
@@ -229,6 +286,20 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
             return;
           }
 
+          if (profile.status === 'pending_approval') {
+            await signOut(firebaseAuth);
+            setError('Your account is still pending Super Admin approval.');
+            setLoading(false);
+            return;
+          }
+
+          if (profile.status === 'rejected') {
+            await signOut(firebaseAuth);
+            setError('Your registration request was not approved. Please contact your Super Admin.');
+            setLoading(false);
+            return;
+          }
+
           if (profile.active === false) {
             await signOut(firebaseAuth);
             setError('This account has been suspended. Please contact your Super Admin.');
@@ -241,6 +312,24 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
           // If we had a profile loaded from login
           const profile = await getUserProfile(tempUserId);
           if (profile) {
+            if (profile.status === 'pending_approval') {
+              await signOut(firebaseAuth);
+              setError('Your account is still pending Super Admin approval.');
+              setLoading(false);
+              return;
+            }
+            if (profile.status === 'rejected') {
+              await signOut(firebaseAuth);
+              setError('Your registration request was not approved. Please contact your Super Admin.');
+              setLoading(false);
+              return;
+            }
+            if (profile.active === false) {
+              await signOut(firebaseAuth);
+              setError('This account has been suspended. Please contact your Super Admin.');
+              setLoading(false);
+              return;
+            }
             onAuthSuccess(profile);
           }
         }
@@ -310,25 +399,27 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
     <div className="min-h-screen bg-slate-950 flex flex-col justify-center py-12 px-4 sm:px-6 lg:px-8 relative overflow-hidden">
       <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] bg-amber-400/5 rounded-full blur-3xl pointer-events-none" />
 
-      <div className="sm:mx-auto sm:w-full sm:max-w-md relative z-10">
+      <div className={`sm:mx-auto sm:w-full transition-all duration-300 relative z-10 ${!isLogin && !isForgotPassword && !signupSuccess ? 'sm:max-w-xl' : 'sm:max-w-md'}`}>
         <div className="flex justify-center mb-4">
           <div className="w-16 h-16 bg-slate-900 rounded-2xl flex items-center justify-center border border-amber-400/20 shadow-lg">
             <span className="text-amber-400 font-bold text-2xl font-sans">SAT</span>
           </div>
         </div>
         <h2 className="text-center text-3xl font-extrabold text-white tracking-tight">
-          {otpSent ? 'Security Verification' : isForgotPassword ? 'Reset Password' : isLogin ? 'Sign In to Console' : 'Create Operator Account'}
+          {signupSuccess ? 'Request Submitted' : otpSent ? 'Security Verification' : isForgotPassword ? 'Reset Password' : isLogin ? 'Sign In to Console' : 'Register Operator Profile'}
         </h2>
         <p className="mt-2 text-center text-sm text-slate-400">
-          {otpSent 
-            ? 'Verify with the OTP sent to your email.' 
-            : isForgotPassword 
-              ? 'Enter your recovery email below.' 
-              : 'Sky Automation Tech Enterprise Ecosystem'}
+          {signupSuccess
+            ? 'Awaiting Super Admin Activation'
+            : otpSent 
+              ? 'Verify with the OTP sent to your email.' 
+              : isForgotPassword 
+                ? 'Enter your recovery email below.' 
+                : 'Sky Automation Tech Enterprise Ecosystem'}
         </p>
       </div>
 
-      <div className="mt-8 sm:mx-auto sm:w-full sm:max-w-md relative z-10">
+      <div className={`mt-8 sm:mx-auto sm:w-full transition-all duration-300 relative z-10 ${!isLogin && !isForgotPassword && !signupSuccess ? 'sm:max-w-xl' : 'sm:max-w-md'}`}>
         <div className="bg-slate-900/80 backdrop-blur-md py-8 px-4 shadow-2xl rounded-3xl border border-slate-800 sm:px-10">
           
           {error && (
@@ -345,8 +436,30 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
             </div>
           )}
 
-          {/* OTP FORM */}
-          {otpSent ? (
+          {signupSuccess ? (
+            /* REGISTRATION SUCCESS VIEW */
+            <div className="text-center space-y-6 py-4">
+              <div className="mx-auto w-16 h-16 bg-amber-400/10 rounded-full flex items-center justify-center border border-amber-400/30 text-amber-400 animate-pulse">
+                <CheckCircle2 size={36} />
+              </div>
+              <h3 className="text-xl font-bold text-white">Your Request Has Been Submitted</h3>
+              <p className="text-sm text-slate-300 leading-relaxed">
+                Please wait for Super Admin approval. You'll be notified once your account is activated and role/access permissions are configured.
+              </p>
+              <button
+                type="button"
+                onClick={() => {
+                  setSignupSuccess(false);
+                  setIsLogin(true);
+                  resetForm();
+                }}
+                className="w-full flex justify-center py-3 px-4 rounded-xl text-sm font-semibold text-slate-950 bg-amber-400 hover:bg-amber-500 transition-all duration-150"
+              >
+                Return to Sign In
+              </button>
+            </div>
+          ) : otpSent ? (
+            /* OTP FORM */
             <form onSubmit={handleVerifyOtp} className="space-y-6">
               <div>
                 <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
@@ -387,70 +500,252 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
           ) : (
             /* GENERAL AUTH FORM */
             <form onSubmit={handleAuthSubmit} className="space-y-5">
-              {!isLogin && !isForgotPassword && (
-                <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
-                    Full Name
-                  </label>
-                  <div className="mt-1 relative">
-                    <User className="absolute top-3.5 left-3 text-slate-500" size={18} />
-                    <input
-                      type="text"
-                      placeholder="Your Full Name"
-                      value={fullName}
-                      onChange={(e) => setFullName(e.target.value)}
-                      className="pl-10 w-full bg-slate-950 border border-slate-800 rounded-xl py-3 text-white placeholder-slate-600 focus:outline-hidden focus:ring-2 focus:ring-amber-400 focus:border-transparent text-sm"
-                      required
-                    />
+              {!isLogin && !isForgotPassword ? (
+                /* DETAILED SIGN UP FORM */
+                <div className="space-y-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                        Full Name <span className="text-red-400">*</span>
+                      </label>
+                      <div className="mt-1 relative">
+                        <User className="absolute top-3 left-3 text-slate-500" size={16} />
+                        <input
+                          type="text"
+                          placeholder="Your Full Name"
+                          value={fullName}
+                          onChange={(e) => setFullName(e.target.value)}
+                          className="pl-9 w-full bg-slate-950 border border-slate-800 rounded-xl py-2.5 text-white placeholder-slate-600 focus:outline-hidden focus:ring-2 focus:ring-amber-400 text-sm"
+                          required
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                        Phone Number <span className="text-red-400">*</span>
+                      </label>
+                      <div className="mt-1 relative">
+                        <Phone className="absolute top-3 left-3 text-slate-500" size={16} />
+                        <input
+                          type="tel"
+                          placeholder="+8801700000000"
+                          value={phone}
+                          onChange={(e) => setPhone(e.target.value)}
+                          className="pl-9 w-full bg-slate-950 border border-slate-800 rounded-xl py-2.5 text-white placeholder-slate-600 focus:outline-hidden focus:ring-2 focus:ring-amber-400 text-sm"
+                          required
+                        />
+                      </div>
+                    </div>
                   </div>
-                </div>
-              )}
 
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
-                  Email Address
-                </label>
-                <div className="mt-1 relative">
-                  <Mail className="absolute top-3.5 left-3 text-slate-500" size={18} />
-                  <input
-                    type="email"
-                    placeholder="email@skyautomation.com"
-                    value={email}
-                    onChange={(e) => setEmail(e.target.value)}
-                    className="pl-10 w-full bg-slate-950 border border-slate-800 rounded-xl py-3 text-white placeholder-slate-600 focus:outline-hidden focus:ring-2 focus:ring-amber-400 focus:border-transparent text-sm"
-                    required
-                  />
-                </div>
-              </div>
-
-              {!isForgotPassword && (
-                <div>
-                  <div className="flex justify-between items-center">
+                  <div>
                     <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
-                      Password
+                      Email Address <span className="text-red-400">*</span>
                     </label>
-                    {isLogin && (
-                      <button
-                        type="button"
-                        onClick={() => setIsForgotPassword(true)}
-                        className="text-xs text-amber-500 hover:text-amber-400 hover:underline"
-                      >
-                        Forgot?
-                      </button>
-                    )}
+                    <div className="mt-1 relative">
+                      <Mail className="absolute top-3 left-3 text-slate-500" size={16} />
+                      <input
+                        type="email"
+                        placeholder="email@skyautomation.com"
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        className="pl-9 w-full bg-slate-950 border border-slate-800 rounded-xl py-2.5 text-white placeholder-slate-600 focus:outline-hidden focus:ring-2 focus:ring-amber-400 text-sm"
+                        required
+                      />
+                    </div>
                   </div>
-                  <div className="mt-1 relative">
-                    <Lock className="absolute top-3.5 left-3 text-slate-500" size={18} />
-                    <input
-                      type="password"
-                      placeholder="••••••••"
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      className="pl-10 w-full bg-slate-950 border border-slate-800 rounded-xl py-3 text-white placeholder-slate-600 focus:outline-hidden focus:ring-2 focus:ring-amber-400 focus:border-transparent text-sm"
-                      required={!isForgotPassword}
-                    />
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                        Password <span className="text-red-400">*</span>
+                      </label>
+                      <div className="mt-1 relative">
+                        <Lock className="absolute top-3 left-3 text-slate-500" size={16} />
+                        <input
+                          type="password"
+                          placeholder="••••••••"
+                          value={password}
+                          onChange={(e) => setPassword(e.target.value)}
+                          className="pl-9 w-full bg-slate-950 border border-slate-800 rounded-xl py-2.5 text-white placeholder-slate-600 focus:outline-hidden focus:ring-2 focus:ring-amber-400 text-sm"
+                          required
+                        />
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                        Confirm Password <span className="text-red-400">*</span>
+                      </label>
+                      <div className="mt-1 relative">
+                        <Lock className="absolute top-3 left-3 text-slate-500" size={16} />
+                        <input
+                          type="password"
+                          placeholder="••••••••"
+                          value={confirmPassword}
+                          onChange={(e) => setConfirmPassword(e.target.value)}
+                          className="pl-9 w-full bg-slate-950 border border-slate-800 rounded-xl py-2.5 text-white placeholder-slate-600 focus:outline-hidden focus:ring-2 focus:ring-amber-400 text-sm"
+                          required
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                        Requested Role <span className="text-red-400">*</span>
+                      </label>
+                      <div className="mt-1">
+                        <select
+                          value={requestedRole}
+                          onChange={(e) => setRequestedRole(e.target.value as any)}
+                          className="w-full bg-slate-950 border border-slate-800 rounded-xl py-2.5 px-3 text-white focus:outline-hidden focus:ring-2 focus:ring-amber-400 text-sm"
+                        >
+                          <option value="staff">Operator (Staff)</option>
+                          <option value="admin">Manager (Admin)</option>
+                        </select>
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                        Designation / Position
+                      </label>
+                      <div className="mt-1 relative">
+                        <Briefcase className="absolute top-3 left-3 text-slate-500" size={16} />
+                        <input
+                          type="text"
+                          placeholder="e.g. Senior Executive"
+                          value={designation}
+                          onChange={(e) => setDesignation(e.target.value)}
+                          className="pl-9 w-full bg-slate-950 border border-slate-800 rounded-xl py-2.5 text-white placeholder-slate-600 focus:outline-hidden focus:ring-2 focus:ring-amber-400 text-sm"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                      Photo / Avatar URL (Optional)
+                    </label>
+                    <div className="mt-1 relative">
+                      <Camera className="absolute top-3 left-3 text-slate-500" size={16} />
+                      <input
+                        type="url"
+                        placeholder="https://example.com/avatar.jpg"
+                        value={photoUrl}
+                        onChange={(e) => setPhotoUrl(e.target.value)}
+                        className="pl-9 w-full bg-slate-950 border border-slate-800 rounded-xl py-2.5 text-white placeholder-slate-600 focus:outline-hidden focus:ring-2 focus:ring-amber-400 text-sm"
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                      Requested Sub-brand Access <span className="text-red-400">*</span>
+                    </label>
+                    <div className="mt-2 grid grid-cols-3 gap-2">
+                      {[
+                        { id: 'SAT', name: 'Sky Automation' },
+                        { id: 'GZ', name: 'GadgetZu' },
+                        { id: 'RTX', name: 'RTX Gadget' }
+                      ].map(brand => {
+                        const isSelected = requestedSubBrands.includes(brand.id);
+                        return (
+                          <button
+                            key={brand.id}
+                            type="button"
+                            onClick={() => {
+                              if (isSelected) {
+                                setRequestedSubBrands(requestedSubBrands.filter(b => b !== brand.id));
+                              } else {
+                                setRequestedSubBrands([...requestedSubBrands, brand.id]);
+                              }
+                            }}
+                            className={`py-2 px-1 text-center rounded-lg text-xs font-semibold transition-all duration-150 ${
+                              isSelected
+                                ? 'bg-amber-400/20 text-amber-300 border border-amber-400'
+                                : 'bg-slate-950 text-slate-400 border border-slate-800 hover:border-slate-700'
+                            }`}
+                          >
+                            {brand.name}
+                          </button>
+                        );
+                      })}
+                    </div>
                   </div>
                 </div>
+              ) : (
+                /* LOGIN FORM OR FORGOT PASSWORD FORM */
+                <>
+                  {isLogin && !isForgotPassword && (
+                    <div className="space-y-4">
+                      <div>
+                        <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                          Email Address
+                        </label>
+                        <div className="mt-1 relative">
+                          <Mail className="absolute top-3.5 left-3 text-slate-500" size={18} />
+                          <input
+                            type="email"
+                            placeholder="email@skyautomation.com"
+                            value={email}
+                            onChange={(e) => setEmail(e.target.value)}
+                            className="pl-10 w-full bg-slate-950 border border-slate-800 rounded-xl py-3 text-white placeholder-slate-600 focus:outline-hidden focus:ring-2 focus:ring-amber-400 focus:border-transparent text-sm"
+                            required
+                          />
+                        </div>
+                      </div>
+
+                      <div>
+                        <div className="flex justify-between items-center">
+                          <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                            Password
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() => setIsForgotPassword(true)}
+                            className="text-xs text-amber-500 hover:text-amber-400 hover:underline"
+                          >
+                            Forgot?
+                          </button>
+                        </div>
+                        <div className="mt-1 relative">
+                          <Lock className="absolute top-3.5 left-3 text-slate-500" size={18} />
+                          <input
+                            type="password"
+                            placeholder="••••••••"
+                            value={password}
+                            onChange={(e) => setPassword(e.target.value)}
+                            className="pl-10 w-full bg-slate-950 border border-slate-800 rounded-xl py-3 text-white placeholder-slate-600 focus:outline-hidden focus:ring-2 focus:ring-amber-400 focus:border-transparent text-sm"
+                            required
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  )}
+
+                  {isForgotPassword && (
+                    <div>
+                      <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                        Email Address
+                      </label>
+                      <div className="mt-1 relative">
+                        <Mail className="absolute top-3.5 left-3 text-slate-500" size={18} />
+                        <input
+                          type="email"
+                          placeholder="email@skyautomation.com"
+                          value={email}
+                          onChange={(e) => setEmail(e.target.value)}
+                          className="pl-10 w-full bg-slate-950 border border-slate-800 rounded-xl py-3 text-white placeholder-slate-600 focus:outline-hidden focus:ring-2 focus:ring-amber-400 focus:border-transparent text-sm"
+                          required
+                        />
+                      </div>
+                    </div>
+                  )}
+                </>
               )}
 
               <div className="pt-2">
@@ -465,7 +760,7 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
                       ? 'Send Recovery Code' 
                       : isLogin 
                         ? 'Authenticate Identity' 
-                        : 'Register Operator Profile'}
+                        : 'Submit Sign Up Request'}
                 </button>
               </div>
 
@@ -487,10 +782,11 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
                     onClick={() => {
                       setIsLogin(!isLogin);
                       setError('');
+                      setSignupSuccess(false);
                     }}
                     className="text-xs text-amber-500 hover:text-amber-400 hover:underline"
                   >
-                    {isLogin ? "Need a new account? Register Operator Profile" : "Already have an account? Sign In"}
+                    {isLogin ? "Need a new account? Sign Up" : "Already have an account? Sign In"}
                   </button>
                 )}
               </div>

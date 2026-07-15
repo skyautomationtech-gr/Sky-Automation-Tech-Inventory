@@ -17,6 +17,11 @@ export interface UserProfile {
   active?: boolean;
   createdAt?: number;
   
+  // Signup Approval Workflow
+  status?: 'pending_approval' | 'approved' | 'rejected';
+  requestedRole?: 'staff' | 'admin';
+  requestedSubBrandAccess?: string[];
+
   // Employment Info (Public part)
   designation?: string;
   joiningDate?: string;

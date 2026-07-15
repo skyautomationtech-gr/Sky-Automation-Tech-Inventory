@@ -62,11 +62,16 @@ service cloud.firestore {
         || (isAdmin() && request.resource.data.role == 'staff')
       );
       allow update: if isSuperAdmin()
-                    && (resource.data.role != 'superadmin' || request.resource.data.role == 'superadmin')
-                    || (isAdmin()
-                        && resource.data.role == 'staff'
-                        && request.resource.data.role == 'staff')
-                    || (request.auth.uid == userId && request.resource.data.role == resource.data.role);
+                    || (isSignedIn() && (
+                      // Protect key administrative / privilege fields from self-modification or non-superadmin updates
+                      request.resource.data.get('status', resource.data.get('status', 'pending_approval')) == resource.data.get('status', 'pending_approval') &&
+                      request.resource.data.get('active', resource.data.get('active', false)) == resource.data.get('active', false) &&
+                      request.resource.data.get('role', resource.data.get('role', 'staff')) == resource.data.get('role', 'staff') &&
+                      request.resource.data.get('subBrandAccess', resource.data.get('subBrandAccess', [])) == resource.data.get('subBrandAccess', []) &&
+                      
+                      // Allow updates to other fields for self or by an Admin for Staff
+                      (request.auth.uid == userId || (isAdmin() && resource.data.role == 'staff'))
+                    ));
       allow delete: if isSuperAdmin() && resource.data.role != 'superadmin';
 
       match /private/employment {

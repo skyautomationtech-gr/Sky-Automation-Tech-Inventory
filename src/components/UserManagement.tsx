@@ -38,7 +38,8 @@ import {
   EyeOff,
   RefreshCw,
   ShieldAlert,
-  Wrench
+  Wrench,
+  Trash2
 } from 'lucide-react';
 import { storage, auth } from '../firebase/config';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
@@ -76,6 +77,9 @@ export default function UserManagement({ user }: UserManagementProps) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
+
+  // Tab control
+  const [activeTab, setActiveTab] = useState<'registry' | 'pending'>('registry');
 
   // Form sections visibility
   const [showEmploymentInfo, setShowEmploymentInfo] = useState(false);
@@ -500,6 +504,76 @@ export default function UserManagement({ user }: UserManagementProps) {
     }
   };
 
+  const handleApproveUser = async (targetUser: UserProfile) => {
+    setError('');
+    setSuccess('');
+    setLoading(true);
+    try {
+      // Approve user: set status to 'approved' and active to true
+      // and set their initial sub-brand access to whatever they requested (or default SAT)
+      const finalBrands = targetUser.requestedSubBrandAccess || targetUser.subBrandAccess || ['SAT'];
+      const finalRole = targetUser.requestedRole || targetUser.role || 'staff';
+
+      await updateUserProfile(targetUser.id, {
+        status: 'approved',
+        active: true,
+        role: finalRole,
+        subBrandAccess: finalBrands
+      });
+
+      setSuccess(`Successfully approved registration request for ${targetUser.name}. They are now an active ${finalRole === 'admin' ? 'Manager (Admin)' : 'Operator (Staff)'}.`);
+      await fetchUsersList();
+    } catch (err: any) {
+      console.error('Error approving user:', err);
+      setError(err.message || 'Failed to approve operator request.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleRejectUser = async (targetUser: UserProfile) => {
+    if (!window.confirm(`Are you sure you want to REJECT the application from ${targetUser.name}?`)) {
+      return;
+    }
+    setError('');
+    setSuccess('');
+    setLoading(true);
+    try {
+      await updateUserProfile(targetUser.id, {
+        status: 'rejected',
+        active: false
+      });
+      setSuccess(`Rejected registration request for ${targetUser.name}.`);
+      await fetchUsersList();
+    } catch (err: any) {
+      console.error('Error rejecting user:', err);
+      setError(err.message || 'Failed to reject operator request.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const handleDeleteRequest = async (targetUserId: string) => {
+    if (!window.confirm('Are you sure you want to delete this registration request? The user can sign up again if needed.')) {
+      return;
+    }
+    setError('');
+    setSuccess('');
+    setLoading(true);
+    try {
+      const { doc, deleteDoc } = await import('firebase/firestore');
+      const { db } = await import('../firebase/config');
+      await deleteDoc(doc(db, 'users', targetUserId));
+      setSuccess('Successfully deleted registration request.');
+      await fetchUsersList();
+    } catch (err: any) {
+      console.error('Error deleting request:', err);
+      setError(err.message || 'Failed to delete registration request.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const handleUpdateUserRoleAndAccess = async (targetUserId: string) => {
     setError('');
     setSuccess('');
@@ -575,6 +649,10 @@ export default function UserManagement({ user }: UserManagementProps) {
 
   // Filter lists
   const filteredUsers = users.filter(u => {
+    // Hide registration requests from the main operator list
+    if (u.status === 'pending_approval' || u.status === 'rejected') {
+      return false;
+    }
     const matchesSearch = u.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
                           u.email.toLowerCase().includes(searchTerm.toLowerCase());
     
@@ -584,6 +662,8 @@ export default function UserManagement({ user }: UserManagementProps) {
 
     return matchesSearch && matchesRole && matchesStatus;
   });
+
+  const pendingUsers = users.filter(u => u.status === 'pending_approval');
 
   if (!canManageUsers) {
     return (
@@ -628,24 +708,30 @@ export default function UserManagement({ user }: UserManagementProps) {
           <div className="flex justify-between items-start">
             <div>
               <span className="text-xs text-slate-400 font-semibold uppercase tracking-wider">Operator Coverage</span>
-              <div className="text-3xl font-extrabold text-slate-900 mt-1 font-mono">{users.length}</div>
+              <div className="text-3xl font-extrabold text-slate-900 mt-1 font-mono">{users.filter(u => u.status !== 'pending_approval' && u.status !== 'rejected').length}</div>
             </div>
             <div className="bg-amber-100 p-2.5 rounded-2xl text-amber-600">
               <UserCheck size={20} />
             </div>
           </div>
 
-          <button
-            onClick={() => {
-              setError('');
-              setSuccess('');
-              setShowAddForm(!showAddForm);
-            }}
-            className="w-full mt-3 py-2.5 px-4 bg-slate-900 hover:bg-slate-800 text-amber-400 hover:text-amber-350 font-bold text-xs rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer shadow-xs"
-          >
-            <UserPlus size={14} />
-            {showAddForm ? 'Close Invitation Pane' : 'Invite New Operator'}
-          </button>
+          {isSuperAdmin && pendingUsers.length > 0 ? (
+            <button
+              onClick={() => {
+                setError('');
+                setSuccess('');
+                setActiveTab('pending');
+              }}
+              className="w-full mt-3 py-2.5 px-4 bg-amber-400 hover:bg-amber-500 text-slate-950 font-bold text-xs rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer shadow-xs animate-pulse"
+            >
+              <ShieldAlert size={14} />
+              {pendingUsers.length} Pending Approval{pendingUsers.length > 1 ? 's' : ''}
+            </button>
+          ) : (
+            <div className="text-slate-400 text-[10px] uppercase font-bold tracking-tight mt-3 text-center py-1 bg-slate-50 rounded-lg">
+              System Active & Guarded
+            </div>
+          )}
 
           {isSuperAdmin && (
             <button
@@ -727,8 +813,39 @@ export default function UserManagement({ user }: UserManagementProps) {
         </div>
       )}
 
+      {/* Tab Selection Header */}
+      {isSuperAdmin && (
+        <div className="flex border-b border-slate-100 gap-6 mb-4">
+          <button
+            onClick={() => setActiveTab('registry')}
+            className={`pb-3 text-sm font-bold transition-all relative ${
+              activeTab === 'registry' 
+                ? 'text-slate-900 border-b-2 border-amber-400 font-extrabold' 
+                : 'text-slate-400 hover:text-slate-600'
+            }`}
+          >
+            Active Operators Registry
+          </button>
+          <button
+            onClick={() => setActiveTab('pending')}
+            className={`pb-3 text-sm font-bold transition-all relative flex items-center gap-2 ${
+              activeTab === 'pending' 
+                ? 'text-slate-900 border-b-2 border-amber-400 font-extrabold' 
+                : 'text-slate-400 hover:text-slate-600'
+            }`}
+          >
+            Pending Approvals
+            {pendingUsers.length > 0 && (
+              <span className="bg-amber-400 text-slate-950 text-[10px] font-bold px-2 py-0.5 rounded-full animate-bounce">
+                {pendingUsers.length}
+              </span>
+            )}
+          </button>
+        </div>
+      )}
+
       {/* STEP / ACTION PANELS */}
-      {showAddForm && (
+      {showAddForm && false && (
         <div className="bg-white rounded-3xl border border-slate-100 shadow-md animate-fade-in overflow-hidden">
           <div className="p-6 md:p-8 space-y-8">
             <div className="flex justify-between items-start">
@@ -1215,7 +1332,9 @@ export default function UserManagement({ user }: UserManagementProps) {
       {/* FILTER & REGISTRY GRID */}
       <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm space-y-4">
         
-        {/* Filter Bar */}
+        {activeTab === 'registry' ? (
+          <>
+            {/* Filter Bar */}
         <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pb-4 border-b border-slate-100">
           <div className="relative w-full sm:w-72">
             <Search className="absolute top-2.5 left-3 text-slate-400" size={14} />
@@ -1528,6 +1647,104 @@ export default function UserManagement({ user }: UserManagementProps) {
             </>
           )}
         </div>
+          </>
+        ) : (
+          /* PENDING APPROVALS LIST */
+          <div className="space-y-4">
+            {pendingUsers.length === 0 ? (
+              <div className="py-12 text-center text-slate-400 italic text-xs">
+                No pending operator registration requests found.
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                {pendingUsers.map((u) => (
+                  <div key={u.id} className="bg-slate-50 border border-slate-200/60 rounded-3xl p-6 flex flex-col justify-between space-y-4 hover:border-slate-300 transition-all shadow-xs">
+                    <div className="flex items-start gap-4">
+                      {/* Avatar */}
+                      <div className="w-14 h-14 rounded-2xl bg-amber-100 border border-amber-200 flex-shrink-0 overflow-hidden flex items-center justify-center font-extrabold text-lg text-amber-800">
+                        {u.photoUrl ? (
+                          <img src={u.photoUrl} alt={u.name} referrerPolicy="no-referrer" className="w-full h-full object-cover" />
+                        ) : (
+                          u.name.charAt(0).toUpperCase()
+                        )}
+                      </div>
+
+                      {/* Details */}
+                      <div className="flex-1 space-y-1 min-w-0">
+                        <div className="flex items-center gap-2 flex-wrap">
+                          <h4 className="font-extrabold text-slate-900 text-sm truncate">{u.name}</h4>
+                          <span className={`text-[9px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${
+                            u.requestedRole === 'admin' ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-200 text-slate-700'
+                          }`}>
+                            Requested: {u.requestedRole === 'admin' ? 'Manager (Admin)' : 'Operator (Staff)'}
+                          </span>
+                        </div>
+                        <p className="text-slate-400 font-mono text-[11px] truncate">{u.email}</p>
+                        <p className="text-slate-600 text-xs flex items-center gap-1 font-medium">
+                          <span className="text-slate-400">Phone:</span> {u.phone}
+                        </p>
+                        {u.designation && (
+                          <p className="text-slate-600 text-xs">
+                            <span className="text-slate-400">Position:</span> {u.designation}
+                          </p>
+                        )}
+                        {u.createdAt && (
+                          <p className="text-[10px] text-slate-400">
+                            Requested: {new Date(u.createdAt).toLocaleString()}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Sub-brand list */}
+                    <div className="bg-white p-3 rounded-xl border border-slate-100">
+                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Requested Sub-brands:</p>
+                      <div className="flex gap-1.5 flex-wrap">
+                        {u.requestedSubBrandAccess && u.requestedSubBrandAccess.length > 0 ? (
+                          u.requestedSubBrandAccess.map((brand: string) => (
+                            <span key={brand} className="text-[10px] font-mono font-bold bg-slate-50 border border-slate-100 text-slate-600 py-0.5 px-2 rounded-lg">
+                              {brand === 'SAT' ? 'Sky Automation' : brand === 'GZ' ? 'GadgetZu' : 'RTX Gadget'}
+                            </span>
+                          ))
+                        ) : (
+                          <span className="text-[10px] italic text-slate-400">No brands selected</span>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Approve / Reject buttons */}
+                    <div className="flex gap-2 pt-2">
+                      <button
+                        onClick={() => handleApproveUser(u)}
+                        disabled={loading}
+                        className="flex-grow py-2 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl transition-all shadow-sm flex items-center justify-center gap-2 cursor-pointer"
+                      >
+                        <UserCheck size={14} />
+                        Approve Operator
+                      </button>
+                      <button
+                        onClick={() => handleRejectUser(u)}
+                        disabled={loading}
+                        className="py-2 px-4 bg-red-50 hover:bg-red-100 text-red-600 font-bold text-xs rounded-xl transition-all border border-red-100 flex items-center justify-center gap-1.5 cursor-pointer"
+                      >
+                        <UserX size={14} />
+                        Reject
+                      </button>
+                      <button
+                        onClick={() => handleDeleteRequest(u.id)}
+                        disabled={loading}
+                        className="py-2 px-3 hover:bg-slate-200 text-slate-400 hover:text-slate-600 font-bold text-xs rounded-xl transition-all flex items-center justify-center cursor-pointer"
+                        title="Delete registration request"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        )}
 
       </div>
 
