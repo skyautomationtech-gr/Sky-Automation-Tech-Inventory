@@ -26,6 +26,28 @@ import {
   PrivateEmploymentInfo
 } from '../types';
 
+// --- Data Sanitization Helper ---
+/**
+ * Recursively removes 'undefined' values from an object or array,
+ * replacing them with 'null' or omitting them to prevent Firestore errors.
+ */
+function sanitizeData(data: any): any {
+  if (data === undefined) return null;
+  if (data === null || typeof data !== 'object') return data;
+  
+  if (Array.isArray(data)) {
+    return data.map(v => sanitizeData(v));
+  }
+  
+  const sanitized: any = {};
+  for (const [key, value] of Object.entries(data)) {
+    if (value !== undefined) {
+      sanitized[key] = sanitizeData(value);
+    }
+  }
+  return sanitized;
+}
+
 enum OperationType {
   CREATE = 'create',
   UPDATE = 'update',
@@ -152,12 +174,13 @@ export async function createUserProfile(userId: string, data: Partial<UserProfil
   console.log('createUserProfile called for:', userId, 'with data:', data);
   try {
     const docRef = doc(db, 'users', userId);
-    console.log('createUserProfile executing setDoc...');
+    const sanitizedData = sanitizeData(data);
+    console.log('createUserProfile executing setDoc with sanitized data...');
     await setDoc(docRef, {
-      ...data,
-      active: data.active !== undefined ? data.active : true,
-      subBrandAccess: data.subBrandAccess || ['SAT', 'GZ', 'RTX'],
-      createdAt: data.createdAt || Date.now()
+      ...sanitizedData,
+      active: sanitizedData.active !== undefined ? sanitizedData.active : true,
+      subBrandAccess: sanitizedData.subBrandAccess || ['SAT', 'GZ', 'RTX'],
+      createdAt: sanitizedData.createdAt || Date.now()
     }, { merge: true });
     console.log('createUserProfile setDoc success.');
   } catch (error) {
@@ -190,8 +213,9 @@ export async function updateUserProfile(userId: string, data: Partial<UserProfil
   console.log('updateUserProfile called for:', userId, 'with data:', data);
   const docRef = doc(db, 'users', userId);
   try {
-    console.log('updateUserProfile executing updateDoc...');
-    await updateDoc(docRef, data as any);
+    const sanitizedData = sanitizeData(data);
+    console.log('updateUserProfile executing updateDoc with sanitized data:', sanitizedData);
+    await updateDoc(docRef, sanitizedData as any);
     console.log('updateUserProfile updateDoc success.');
   } catch (error) {
     console.error('updateUserProfile failed:', error);
@@ -232,10 +256,7 @@ export async function getCompanySettings(): Promise<CompanySettings | null> {
 export async function saveCompanySettings(settings: CompanySettings): Promise<void> {
   console.log('saveCompanySettings called with:', settings);
   const docRef = doc(db, 'settings', 'company');
-  // Remove undefined values to prevent Firestore error
-  const cleanSettings = Object.fromEntries(
-    Object.entries(settings).filter(([_, v]) => v !== undefined)
-  );
+  const cleanSettings = sanitizeData(settings);
   
   const operation = async () => {
     try {
@@ -277,7 +298,8 @@ export async function getCategories(): Promise<Category[]> {
 export async function addCategory(name: string, subCategories: string[]): Promise<Category> {
   try {
     const colRef = collection(db, 'categories');
-    const docRef = await addDoc(colRef, { name, subCategories });
+    const data = sanitizeData({ name, subCategories });
+    const docRef = await addDoc(colRef, data);
     return { id: docRef.id, name, subCategories };
   } catch (error) {
     handleFirestoreError(error, OperationType.CREATE, 'categories');
@@ -287,7 +309,8 @@ export async function addCategory(name: string, subCategories: string[]): Promis
 export async function updateCategory(id: string, name: string, subCategories: string[]): Promise<void> {
   try {
     const docRef = doc(db, 'categories', id);
-    await updateDoc(docRef, { name, subCategories });
+    const data = sanitizeData({ name, subCategories });
+    await updateDoc(docRef, data);
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, 'categories/' + id);
   }
@@ -379,10 +402,11 @@ export async function getProducts(includeArchived: boolean = false): Promise<Pro
 export async function addProduct(product: Omit<Product, 'id'>, userId: string, userName: string): Promise<string> {
   try {
     const colRef = collection(db, 'products');
-    const docRef = await addDoc(colRef, {
+    const sanitizedProduct = sanitizeData({
       ...product,
       createdAt: Date.now()
     });
+    const docRef = await addDoc(colRef, sanitizedProduct);
 
     // Create an initial stock log / opening stock entry for each variant that has quantity > 0
     const totalQty = product.variants.reduce((acc, v) => acc + (v.stock || 0), 0);
@@ -410,7 +434,8 @@ export async function addProduct(product: Omit<Product, 'id'>, userId: string, u
 export async function updateProduct(id: string, updatedFields: Partial<Product>): Promise<void> {
   try {
     const docRef = doc(db, 'products', id);
-    await updateDoc(docRef, updatedFields);
+    const sanitizedData = sanitizeData(updatedFields);
+    await updateDoc(docRef, sanitizedData);
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, 'products/' + id);
   }
@@ -466,10 +491,11 @@ export async function getStockLogs(productId?: string): Promise<StockLog[]> {
 export async function addStockLog(log: Omit<StockLog, 'id' | 'timestamp'>): Promise<void> {
   try {
     const logColRef = collection(db, 'stockLogs');
-    await addDoc(logColRef, {
+    const sanitizedData = sanitizeData({
       ...log,
       timestamp: Date.now()
     });
+    await addDoc(logColRef, sanitizedData);
   } catch (error) {
     console.error('Error logging stock transaction:', error);
     handleFirestoreError(error, OperationType.CREATE, 'stockLogs');

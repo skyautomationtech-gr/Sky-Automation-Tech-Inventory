@@ -333,12 +333,25 @@ export default function UserManagement({ user }: UserManagementProps) {
     } catch (err: any) {
       console.error('Add user error:', err);
       let errorMsg = err.message || 'Failed to provision user profile.';
-      try {
-        const parsed = JSON.parse(err.message);
-        errorMsg = `Firestore Error: ${parsed.error} (Path: ${parsed.path})`;
-      } catch (e) {
-        // Not JSON, keep original
+      
+      // Handle Firebase Auth specific errors
+      if (err.code === 'auth/email-already-in-use') {
+        errorMsg = 'An account with this email already exists in the system. Please use a different email or contact a Super Admin to manage existing accounts.';
+      } else if (err.code === 'auth/invalid-email') {
+        errorMsg = 'The email address provided is invalid. Please check for typos.';
+      } else if (err.code === 'auth/weak-password') {
+        errorMsg = 'The generated password is too weak. Please try a more complex one.';
+      } else {
+        // Handle Firestore sanitized errors (JSON)
+        try {
+          const parsed = JSON.parse(err.message);
+          errorMsg = `Cloud Database Error: ${parsed.error}`;
+          if (parsed.path) errorMsg += ` (at ${parsed.path})`;
+        } catch (e) {
+          // Not JSON, keep original errorMsg or err.message
+        }
       }
+      
       setError(errorMsg);
     } finally {
       setLoading(false);
