@@ -60,6 +60,7 @@ export interface Variant {
   color: string;
   model: string;
   stock: number;
+  barcodeValue?: string;
 }
 
 export interface Product {
@@ -77,6 +78,7 @@ export interface Product {
   variants: Variant[];
   archived: boolean;
   createdAt: number;
+  barcodeValue?: string;
 }
 
 export type StockLogType = 'in' | 'out' | 'adjustment';

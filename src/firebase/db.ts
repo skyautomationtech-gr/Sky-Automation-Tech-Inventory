@@ -929,3 +929,32 @@ export async function deleteSokolDemoData(): Promise<void> {
   }
   console.log('Finished deleting Sokol demo data.');
 }
+
+export interface ProductAttributes {
+  colors: string[];
+  sizes: string[];
+}
+
+export async function getProductAttributes(): Promise<ProductAttributes | null> {
+  try {
+    const docRef = doc(db, 'settings', 'productAttributes');
+    const docSnap = await getDoc(docRef);
+    if (docSnap.exists()) {
+      return docSnap.data() as ProductAttributes;
+    }
+    return null;
+  } catch (error) {
+    console.error('Error fetching product attributes:', error);
+    return null;
+  }
+}
+
+export async function saveProductAttributes(attributes: ProductAttributes): Promise<void> {
+  const docRef = doc(db, 'settings', 'productAttributes');
+  try {
+    await setDoc(docRef, sanitizeData(attributes), { merge: true });
+  } catch (error) {
+    console.error('saveProductAttributes failed:', error);
+  }
+}
+

@@ -261,7 +261,19 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
         }
       }
     } catch (err: any) {
-      setError(err.message || 'An error occurred during submission.');
+      console.error('Registration/submission error:', err);
+      const errorCode = err.code || '';
+      const errorMessage = err.message || '';
+      
+      if (errorCode === 'auth/email-already-in-use' || errorMessage.includes('email-already-in-use')) {
+        setError('This email is already registered in the system. If you already have an account, please Sign In. If you forgot your password, you can use the "Forgot Password" link.');
+      } else if (errorCode === 'auth/weak-password' || errorMessage.includes('weak-password')) {
+        setError('The password is too weak. Please choose a password with at least 6 characters.');
+      } else if (errorCode === 'auth/invalid-email' || errorMessage.includes('invalid-email')) {
+        setError('The email address is invalid. Please enter a valid email.');
+      } else {
+        setError(err.message || 'An error occurred during submission.');
+      }
     } finally {
       setLoading(false);
     }

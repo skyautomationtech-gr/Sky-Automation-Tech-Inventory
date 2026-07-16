@@ -22,6 +22,9 @@ import {
   Coins
 } from 'lucide-react';
 import { QRCodeSVG } from 'qrcode.react';
+import Barcode from './Barcode';
+import { generateBarcodePDF } from '../utils/barcodePdf';
+import JsBarcode from 'jsbarcode';
 import { Product, Variant, Category, Brand, UserProfile, StockLog } from '../types';
 import { 
   getProducts, 
@@ -34,7 +37,9 @@ import {
   getBrands, 
   addBrand, 
   deleteBrand,
-  getStockLogs
+  getStockLogs,
+  getProductAttributes,
+  saveProductAttributes
 } from '../firebase/db';
 
 interface ProductManagementProps {
@@ -109,6 +114,199 @@ export default function ProductManagement({
     { id: '1', color: 'Default', model: 'Standard', stock: 10 }
   ]);
 
+  // Enhanced form attributes, SKU, & submit status states
+  const [submitting, setSubmitting] = useState(false);
+  const [isSkuDirty, setIsSkuDirty] = useState(false);
+  
+  const DEFAULT_COLORS = ['Black', 'White', 'Blue', 'Red', 'Green', 'Gold', 'Silver', 'Rose Gold'];
+  const DEFAULT_SIZES = ['Standard', 'Small', 'Medium', 'Large', 'XL', '128GB', '256GB', '512GB'];
+  
+  const [availableColors, setAvailableColors] = useState<string[]>(DEFAULT_COLORS);
+  const [availableSizes, setAvailableSizes] = useState<string[]>(DEFAULT_SIZES);
+  
+  const [customColorValue, setCustomColorValue] = useState<{[key: string]: string}>({});
+  const [customSizeValue, setCustomSizeValue] = useState<{[key: string]: string}>({});
+  const [isCustomColorMode, setIsCustomColorMode] = useState<{[key: string]: boolean}>({});
+  const [isCustomSizeMode, setIsCustomSizeMode] = useState<{[key: string]: boolean}>({});
+
+  // Barcode & bulk printing states
+  const [selectedBarcodeTab, setSelectedBarcodeTab] = useState<'sku' | 'variants'>('sku');
+  const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
+
+  // Helper to download a single barcode as a PNG image using canvas
+  const downloadBarcodePng = (value: string, label: string) => {
+    const canvas = document.createElement('canvas');
+    try {
+      JsBarcode(canvas, value, {
+        format: 'CODE128',
+        width: 2.5,
+        height: 70,
+        displayValue: true,
+        fontSize: 13,
+        margin: 15,
+        background: '#ffffff',
+        lineColor: '#000000',
+      });
+      
+      const dataUrl = canvas.toDataURL('image/png');
+      const link = document.createElement('a');
+      link.href = dataUrl;
+      link.download = `barcode-${label.replace(/[^a-zA-Z0-9]/g, '_')}-${value}.png`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+    } catch (err) {
+      console.error('Failed to generate PNG download:', err);
+    }
+  };
+
+  // Helper to print sheet of barcodes for a single product (primary or variants)
+  const printProductLabelSheet = async (product: Product, mode: 'primary' | 'variants') => {
+    const itemsToPrint: { value: string; label: string; subLabel?: string }[] = [];
+    
+    if (mode === 'primary') {
+      // Print 24 copies of the primary barcode to fill a standard sheet
+      for (let i = 0; i < 24; i++) {
+        itemsToPrint.push({
+          value: product.barcodeValue || product.sku,
+          label: product.name,
+          subLabel: 'Primary SKU Code'
+        });
+      }
+    } else {
+      // Print copies for all variants. Fill the 24-slot sheet as much as possible
+      const repeatCount = Math.max(1, Math.floor(24 / (product.variants.length || 1)));
+      product.variants.forEach(v => {
+        const cleanColor = v.color.trim();
+        const cleanModel = v.model.trim();
+        const vColorCode = cleanColor.toUpperCase().replace(/[^A-Z0-9]/g, '-').replace(/-+/g, '-');
+        const vModelCode = cleanModel.toUpperCase().replace(/[^A-Z0-9]/g, '-').replace(/-+/g, '-');
+        const fallbackBarcode = `${product.sku}-${vColorCode}-${vModelCode}`;
+        
+        for (let i = 0; i < repeatCount; i++) {
+          itemsToPrint.push({
+            value: v.barcodeValue || fallbackBarcode,
+            label: product.name,
+            subLabel: `${v.color} / ${v.model}`
+          });
+        }
+      });
+    }
+
+    await generateBarcodePDF(itemsToPrint, `${product.name}_Labels`);
+  };
+
+  // Helper to bulk download barcode sheets for selected products
+  const handleBulkBarcodeDownload = async () => {
+    const selectedProducts = products.filter(p => selectedProductIds.includes(p.id));
+    if (selectedProducts.length === 0) return;
+
+    const itemsToPrint: { value: string; label: string; subLabel?: string }[] = [];
+    selectedProducts.forEach(product => {
+      if (product.variants && product.variants.length > 0) {
+        product.variants.forEach(v => {
+          const cleanColor = v.color.trim();
+          const cleanModel = v.model.trim();
+          const vColorCode = cleanColor.toUpperCase().replace(/[^A-Z0-9]/g, '-').replace(/-+/g, '-');
+          const vModelCode = cleanModel.toUpperCase().replace(/[^A-Z0-9]/g, '-').replace(/-+/g, '-');
+          const fallbackBarcode = `${product.sku}-${vColorCode}-${vModelCode}`;
+          
+          itemsToPrint.push({
+            value: v.barcodeValue || fallbackBarcode,
+            label: product.name,
+            subLabel: `${v.color} / ${v.model}`
+          });
+        });
+      } else {
+        itemsToPrint.push({
+          value: product.barcodeValue || product.sku,
+          label: product.name,
+          subLabel: 'Standard Unit'
+        });
+      }
+    });
+
+    await generateBarcodePDF(itemsToPrint, `Bulk_${selectedProducts.length}_Products`);
+  };
+
+  // Helper functions for custom attributes
+  const handleAddCustomColor = async (color: string) => {
+    const trimmed = color.trim();
+    if (trimmed && !availableColors.includes(trimmed)) {
+      const updated = [...availableColors, trimmed];
+      setAvailableColors(updated);
+      await saveProductAttributes({ colors: updated, sizes: availableSizes });
+    }
+  };
+
+  const handleAddCustomSize = async (size: string) => {
+    const trimmed = size.trim();
+    if (trimmed && !availableSizes.includes(trimmed)) {
+      const updated = [...availableSizes, trimmed];
+      setAvailableSizes(updated);
+      await saveProductAttributes({ colors: availableColors, sizes: updated });
+    }
+  };
+
+  // Helper function to dynamically generate SKU code
+  const generateSkuCode = (subBrand: string, category: string, brandName: string) => {
+    const div = subBrand || 'SAT';
+    
+    let cat = 'GEN';
+    if (category) {
+      const cleanCat = category.replace(/[^a-zA-Z ]/g, '');
+      const parts = cleanCat.split(/\s+/).filter(p => p.length > 0);
+      if (parts.length >= 2) {
+        cat = (parts[0].substring(0, 1) + parts[1].substring(0, 2)).toUpperCase();
+      } else {
+        cat = category.substring(0, 3).toUpperCase();
+      }
+    }
+
+    let brnd = 'UNK';
+    if (brandName) {
+      const cleanBrnd = brandName.replace(/[^a-zA-Z ]/g, '');
+      const parts = cleanBrnd.split(/\s+/).filter(p => p.length > 0);
+      if (parts.length >= 2) {
+        brnd = (parts[0].substring(0, 1) + parts[1].substring(0, 2)).toUpperCase();
+      } else {
+        brnd = brandName.substring(0, 3).toUpperCase();
+      }
+    }
+
+    const prefix = `${div}-${cat}-${brnd}-`;
+    const matchingProducts = products.filter(p => p.sku && p.sku.startsWith(prefix));
+    let nextNum = matchingProducts.length + 1;
+    
+    while (products.some(p => p.sku === `${prefix}${String(nextNum).padStart(3, '0')}`)) {
+      nextNum++;
+    }
+    
+    return `${prefix}${String(nextNum).padStart(3, '0')}`;
+  };
+
+  // Fetch product attributes on mount
+  useEffect(() => {
+    getProductAttributes().then(attrs => {
+      if (attrs) {
+        if (attrs.colors && attrs.colors.length > 0) {
+          setAvailableColors(attrs.colors);
+        }
+        if (attrs.sizes && attrs.sizes.length > 0) {
+          setAvailableSizes(attrs.sizes);
+        }
+      }
+    });
+  }, []);
+
+  // Auto generate SKU when brand/category/division changes
+  useEffect(() => {
+    if (!editModeProduct && !isSkuDirty) {
+      const generated = generateSkuCode(formSubBrand, formCategory, formBrand);
+      setFormSku(generated);
+    }
+  }, [formSubBrand, formCategory, formBrand, editModeProduct, isSkuDirty, products]);
+
   // Handle drawer auto-trigger
   useEffect(() => {
     if (initialAddMode) {
@@ -130,25 +328,38 @@ export default function ProductManagement({
   // Open Add Product Drawer
   const openAddDrawer = () => {
     setEditModeProduct(null);
+    setIsSkuDirty(false);
     setFormError('');
     setFormSuccess('');
     setFormName('');
-    setFormSku('');
-    setFormCategory(categories[0]?.name || '');
+    const initialCategory = categories[0]?.name || '';
+    const initialBrand = brands[0]?.name || '';
+    setFormCategory(initialCategory);
     setFormSubCategory('');
-    setFormBrand(brands[0]?.name || '');
+    setFormBrand(initialBrand);
     setFormSubBrand('SAT');
     setFormCostPrice(0);
     setFormSellingPrice(0);
     setFormReorderThreshold(5);
     setFormImages([]);
     setFormVariants([{ id: Date.now().toString(), color: 'Default', model: 'Standard', stock: 10 }]);
+    
+    // Clear custom mode maps
+    setCustomColorValue({});
+    setCustomSizeValue({});
+    setIsCustomColorMode({});
+    setIsCustomSizeMode({});
+    
+    // Generate initial SKU
+    const initialSku = generateSkuCode('SAT', initialCategory, initialBrand);
+    setFormSku(initialSku);
     setIsDrawerOpen(true);
   };
 
   // Open Edit Product Drawer
   const openEditDrawer = (product: Product) => {
     setEditModeProduct(product);
+    setIsSkuDirty(true);
     setFormError('');
     setFormSuccess('');
     setFormName(product.name);
@@ -162,6 +373,13 @@ export default function ProductManagement({
     setFormReorderThreshold(product.reorderThreshold);
     setFormImages(product.images || []);
     setFormVariants(product.variants.map(v => ({ ...v })));
+    
+    // Clear custom mode maps
+    setCustomColorValue({});
+    setCustomSizeValue({});
+    setIsCustomColorMode({});
+    setIsCustomSizeMode({});
+    
     setIsDrawerOpen(true);
   };
 
@@ -207,25 +425,73 @@ export default function ProductManagement({
 
   // SKU auto generation
   const handleAutoGenerateSku = () => {
-    const brandCode = formSubBrand;
-    const categoryCode = formCategory ? formCategory.substring(0, 3).toUpperCase() : 'GEN';
-    const randInt = Math.floor(1000 + Math.random() * 9000);
-    setFormSku(`${brandCode}-${categoryCode}-${randInt}`);
+    const generated = generateSkuCode(formSubBrand, formCategory, formBrand);
+    setFormSku(generated);
+    setIsSkuDirty(false);
   };
 
   // Form Submit (Add or Edit Product)
   const handleFormSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (submitting) return;
+
     setFormError('');
     setFormSuccess('');
     
     if (requireCheckIn && !requireCheckIn()) return;
-    if (!formName.trim() || !formSku.trim()) {
-      setFormError('Product Name and SKU are required.');
+
+    // Required fields validation
+    if (!formName.trim()) {
+      setFormError('Product Display Name is required.');
+      return;
+    }
+    if (!formSku.trim()) {
+      setFormError('SKU Code is required.');
+      return;
+    }
+    if (!formCategory) {
+      setFormError('Category is required.');
+      return;
+    }
+    if (!formBrand) {
+      setFormError('Brand is required.');
+      return;
+    }
+    if (!formSubBrand) {
+      setFormError('Division is required.');
+      return;
+    }
+    if (Number(formSellingPrice) <= 0) {
+      setFormError('Selling Price is required and must be greater than zero.');
       return;
     }
 
     const finalSku = formSku.trim().toUpperCase();
+
+    // SKU must be unique - check against existing active products
+    const isDuplicateSku = products.some(
+      p => p.sku.toUpperCase() === finalSku && 
+      (!editModeProduct || p.id !== editModeProduct.id) && 
+      !p.archived
+    );
+    if (isDuplicateSku) {
+      setFormError(`SKU Code "${finalSku}" is already assigned to another active product. SKU must be unique.`);
+      return;
+    }
+
+    // Validate variants
+    for (const v of formVariants) {
+      if (!v.color.trim()) {
+        setFormError('Please select or specify a Color/Finish for all variants.');
+        return;
+      }
+      if (!v.model.trim()) {
+        setFormError('Please select or specify a Model/Size for all variants.');
+        return;
+      }
+    }
+
+    setSubmitting(true);
 
     // Prepare payload
     const productPayload = {
@@ -239,9 +505,23 @@ export default function ProductManagement({
       sellingPrice: Number(formSellingPrice),
       reorderThreshold: Number(formReorderThreshold),
       images: formImages || [],
-      variants: formVariants,
+      variants: formVariants.map(v => {
+        const cleanColor = v.color.trim();
+        const cleanModel = v.model.trim();
+        const vColorCode = cleanColor.toUpperCase().replace(/[^A-Z0-9]/g, '-').replace(/-+/g, '-');
+        const vModelCode = cleanModel.toUpperCase().replace(/[^A-Z0-9]/g, '-').replace(/-+/g, '-');
+        const variantBarcodeValue = `${finalSku}-${vColorCode}-${vModelCode}`;
+        return {
+          ...v,
+          color: cleanColor,
+          model: cleanModel,
+          stock: Number(v.stock),
+          barcodeValue: variantBarcodeValue
+        };
+      }),
       archived: false,
-      createdAt: editModeProduct ? editModeProduct.createdAt : Date.now()
+      createdAt: editModeProduct ? editModeProduct.createdAt : Date.now(),
+      barcodeValue: finalSku
     };
 
     try {
@@ -252,16 +532,19 @@ export default function ProductManagement({
       } else {
         // Create new product
         await addProduct(productPayload, user?.id || 'demo', user?.name || 'Operator');
-        setFormSuccess('New product added to catalog!');
+        setFormSuccess('New product successfully published to catalog!');
       }
 
+      await onRefreshData();
+      
       setTimeout(() => {
         setIsDrawerOpen(false);
+        setSubmitting(false);
       }, 1500);
-      await onRefreshData();
     } catch (err: any) {
       console.error(err);
       setFormError(err.message || 'Failed to persist product record to cloud database.');
+      setSubmitting(false);
     }
   };
 
@@ -653,6 +936,20 @@ export default function ProductManagement({
                 <table className="w-full text-left border-collapse">
                   <thead>
                     <tr className="bg-slate-50 border-b border-slate-100 text-[10px] font-mono tracking-wider text-slate-400 uppercase">
+                      <th className="py-3 px-4 text-center font-bold w-10">
+                        <input
+                          type="checkbox"
+                          className="rounded border-slate-300 text-amber-500 focus:ring-amber-500 cursor-pointer size-3.5"
+                          checked={sortedProducts.length > 0 && selectedProductIds.length === sortedProducts.length}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setSelectedProductIds(sortedProducts.map(p => p.id));
+                            } else {
+                              setSelectedProductIds([]);
+                            }
+                          }}
+                        />
+                      </th>
                       <th className="py-3 px-4 font-bold">Image</th>
                       <th className="py-3 px-3 font-bold cursor-pointer hover:text-slate-900" onClick={() => toggleSort('name')}>
                         Product Info <ArrowUpDown size={10} className="inline ml-1" />
@@ -670,7 +967,7 @@ export default function ProductManagement({
                   <tbody className="divide-y divide-slate-100 text-xs text-slate-600">
                     {sortedProducts.length === 0 ? (
                       <tr>
-                        <td colSpan={6} className="py-10 text-center text-slate-400 italic">
+                        <td colSpan={7} className="py-10 text-center text-slate-400 italic">
                           No active gadget catalog records found.
                         </td>
                       </tr>
@@ -688,6 +985,20 @@ export default function ProductManagement({
                               selectedProduct?.id === product.id ? 'bg-amber-50/40' : ''
                             }`}
                           >
+                            <td className="py-3 px-4 w-10 text-center" onClick={(e) => e.stopPropagation()}>
+                              <input
+                                type="checkbox"
+                                className="rounded border-slate-300 text-amber-500 focus:ring-amber-500 cursor-pointer size-3.5"
+                                checked={selectedProductIds.includes(product.id)}
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    setSelectedProductIds([...selectedProductIds, product.id]);
+                                  } else {
+                                    setSelectedProductIds(selectedProductIds.filter(id => id !== product.id));
+                                  }
+                                }}
+                              />
+                            </td>
                             <td className="py-3 px-4">
                               <img 
                                 src={defaultImg} 
@@ -788,6 +1099,20 @@ export default function ProductManagement({
                         }`}
                       >
                         <div className="flex gap-3">
+                          <div className="flex items-center" onClick={(e) => e.stopPropagation()}>
+                            <input
+                              type="checkbox"
+                              className="rounded border-slate-300 text-amber-500 focus:ring-amber-500 cursor-pointer size-4"
+                              checked={selectedProductIds.includes(product.id)}
+                              onChange={(e) => {
+                                if (e.target.checked) {
+                                  setSelectedProductIds([...selectedProductIds, product.id]);
+                                } else {
+                                  setSelectedProductIds(selectedProductIds.filter(id => id !== product.id));
+                                }
+                              }}
+                            />
+                          </div>
                           <img 
                             src={defaultImg} 
                             alt={product.name} 
@@ -821,15 +1146,17 @@ export default function ProductManagement({
                         
                         <div className="flex gap-2 mt-4" onClick={(e) => e.stopPropagation()}>
                           <button
+                            type="button"
                             onClick={() => openEditDrawer(product)}
-                            className="flex-1 flex items-center justify-center gap-2 py-2 bg-slate-50 hover:bg-slate-100 text-slate-600 rounded-xl text-xs font-bold border border-slate-200"
+                            className="flex-1 flex items-center justify-center gap-2 py-2 bg-slate-50 hover:bg-slate-100 text-slate-600 rounded-xl text-xs font-bold border border-slate-200 cursor-pointer"
                           >
                             <Edit3 size={14} /> Edit
                           </button>
                           {!isStaff && (
                             <button
+                              type="button"
                               onClick={() => handleArchiveProduct(product)}
-                              className="flex-1 flex items-center justify-center gap-2 py-2 bg-red-50 hover:bg-red-100 text-red-600 rounded-xl text-xs font-bold border border-red-100"
+                              className="flex-1 flex items-center justify-center gap-2 py-2 bg-red-50 hover:bg-red-100 text-red-600 rounded-xl text-xs font-bold border border-red-100 cursor-pointer"
                             >
                               <Archive size={14} /> Archive
                             </button>
@@ -841,6 +1168,38 @@ export default function ProductManagement({
                 )}
               </div>
             </div>
+
+            {/* Bulk Barcode Printing Floating Action Bar */}
+            {selectedProductIds.length > 0 && (
+              <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 bg-slate-900 text-white py-3.5 px-5 rounded-2xl shadow-xl flex items-center gap-4 border border-slate-800 animate-in fade-in slide-in-from-bottom-4 duration-300 w-[90%] max-w-md">
+                <div className="flex-1 min-w-0">
+                  <span className="text-xs font-bold font-mono text-amber-400 block">
+                    {selectedProductIds.length} {selectedProductIds.length === 1 ? 'Product' : 'Products'} Selected
+                  </span>
+                  <span className="text-[9px] text-slate-400 block mt-0.5 truncate">
+                    Includes all physical product variants
+                  </span>
+                </div>
+                <div className="h-6 w-px bg-slate-700" />
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleBulkBarcodeDownload}
+                    className="px-3 py-1.5 bg-amber-400 hover:bg-amber-500 text-slate-950 font-bold text-xs rounded-xl flex items-center gap-1.5 transition-all shadow-md cursor-pointer"
+                  >
+                    <Tag size={12} />
+                    Download PDF
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setSelectedProductIds([])}
+                    className="text-slate-400 hover:text-white text-xs font-bold px-2 py-1 cursor-pointer"
+                  >
+                    Clear
+                  </button>
+                </div>
+              </div>
+            )}
 
           </div>
 
@@ -869,18 +1228,143 @@ export default function ProductManagement({
                   </button>
                 </div>
 
-                {/* QR Code section */}
-                <div className="bg-slate-50 p-6 lg:p-4 rounded-xl border border-slate-100 flex flex-col items-center text-center space-y-2">
-                  <QRCodeSVG 
-                    value={selectedProduct.sku} 
-                    size={140} 
-                    className="lg:size-[110px]"
-                    bgColor={"#f8fafc"} 
-                    fgColor={"#0f172a"} 
-                    level={"L"}
-                  />
-                  <p className="text-[10px] text-slate-400 font-mono tracking-wider uppercase">System Scannable Code</p>
+                {/* Advanced Scan & Label Station */}
+                <div className="bg-slate-50 rounded-2xl border border-slate-100 p-4 space-y-3 shadow-2xs">
+                  <div className="flex items-center justify-between border-b border-slate-100 pb-2">
+                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-500">Scan & Label Station</span>
+                    <div className="flex bg-slate-200/60 p-0.5 rounded-lg text-[10px] font-bold">
+                      <button 
+                        type="button"
+                        onClick={() => setSelectedBarcodeTab('sku')}
+                        className={`px-2.5 py-1 rounded-md transition-all cursor-pointer ${selectedBarcodeTab === 'sku' ? 'bg-white text-slate-900 shadow-3xs' : 'text-slate-500 hover:text-slate-900'}`}
+                      >
+                        SKU
+                      </button>
+                      <button 
+                        type="button"
+                        onClick={() => setSelectedBarcodeTab('variants')}
+                        className={`px-2.5 py-1 rounded-md transition-all cursor-pointer ${selectedBarcodeTab === 'variants' ? 'bg-white text-slate-900 shadow-3xs' : 'text-slate-500 hover:text-slate-900'}`}
+                      >
+                        Variants ({selectedProduct.variants?.length || 0})
+                      </button>
+                    </div>
+                  </div>
+
+                  {selectedBarcodeTab === 'sku' ? (
+                    <div className="space-y-4 flex flex-col items-center">
+                      <div className="bg-white p-4 rounded-xl border border-slate-150 flex flex-col items-center w-full">
+                        <div className="bg-white py-2 px-1 rounded-lg border border-slate-100 w-full flex justify-center">
+                          <Barcode 
+                            value={selectedProduct.barcodeValue || selectedProduct.sku} 
+                            height={45} 
+                            width={1.6} 
+                            fontSize={10}
+                            margin={5}
+                          />
+                        </div>
+                        <p className="text-[9px] text-slate-400 font-mono tracking-wider mt-1 uppercase text-center">{selectedProduct.barcodeValue || selectedProduct.sku}</p>
+                      </div>
+
+                      <div className="flex gap-2 w-full">
+                        <button
+                          type="button"
+                          onClick={() => downloadBarcodePng(selectedProduct.barcodeValue || selectedProduct.sku, selectedProduct.name)}
+                          className="flex-1 py-2 bg-white hover:bg-slate-50 border border-slate-200 rounded-xl text-[10px] font-bold text-slate-700 flex items-center justify-center gap-1.5 transition-colors shadow-3xs cursor-pointer"
+                          title="Download high-resolution PNG barcode image"
+                        >
+                          <Upload size={12} className="rotate-180 text-amber-500" />
+                          Download PNG
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => printProductLabelSheet(selectedProduct, 'primary')}
+                          className="flex-1 py-2 bg-amber-400 hover:bg-amber-500 rounded-xl text-[10px] font-bold text-slate-950 flex items-center justify-center gap-1.5 transition-colors shadow-3xs cursor-pointer"
+                          title="Generate printable Avery-style sheet with 24 labels"
+                        >
+                          <Tag size={12} className="text-slate-950" />
+                          Print 24-Label Sheet
+                        </button>
+                      </div>
+
+                      {/* Display QR code in collapsible or smaller block for maximum scannability coverage */}
+                      <div className="w-full border-t border-dashed border-slate-200 pt-3 flex items-center justify-between">
+                        <div className="text-[10px] text-slate-500 font-medium">
+                          <p className="font-bold text-slate-700">QR Code</p>
+                          <p className="text-[9px] text-slate-400">Perfect for phone cameras</p>
+                        </div>
+                        <div className="bg-white p-1.5 rounded-lg border border-slate-200">
+                          <QRCodeSVG 
+                            value={selectedProduct.sku} 
+                            size={44} 
+                            bgColor={"#ffffff"} 
+                            fgColor={"#0f172a"} 
+                            level={"L"}
+                          />
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {selectedProduct.variants && selectedProduct.variants.length > 0 ? (
+                        <>
+                          <div className="flex justify-between items-center bg-amber-50 border border-amber-100 p-2.5 rounded-xl">
+                            <span className="text-[9px] font-bold text-amber-800">Need labels for all variants?</span>
+                            <button
+                              type="button"
+                              onClick={() => printProductLabelSheet(selectedProduct, 'variants')}
+                              className="px-2.5 py-1 bg-amber-400 hover:bg-amber-500 rounded-lg text-[9px] font-bold text-slate-950 flex items-center gap-1 transition-all cursor-pointer"
+                            >
+                              <Tag size={10} />
+                              Print Variant Sheet
+                            </button>
+                          </div>
+
+                          <div className="max-h-[220px] overflow-y-auto pr-1 space-y-2.5">
+                            {selectedProduct.variants.map((v) => {
+                              const cleanColor = v.color.trim();
+                              const cleanModel = v.model.trim();
+                              const vColorCode = cleanColor.toUpperCase().replace(/[^A-Z0-9]/g, '-').replace(/-+/g, '-');
+                              const vModelCode = cleanModel.toUpperCase().replace(/[^A-Z0-9]/g, '-').replace(/-+/g, '-');
+                              const fallbackBarcode = `${selectedProduct.sku}-${vColorCode}-${vModelCode}`;
+                              const val = v.barcodeValue || fallbackBarcode;
+
+                              return (
+                                <div key={v.id} className="bg-white p-3 rounded-xl border border-slate-150 space-y-2 relative group">
+                                  <div className="flex justify-between items-start">
+                                    <div className="min-w-0 flex-1 pr-1">
+                                      <h5 className="text-[10px] font-bold text-slate-700 truncate">{v.color} • {v.model}</h5>
+                                      <p className="text-[8px] font-mono text-slate-400 uppercase tracking-tight truncate">{val}</p>
+                                    </div>
+                                    <button
+                                      type="button"
+                                      onClick={() => downloadBarcodePng(val, `${selectedProduct.name}_${v.color}_${v.model}`)}
+                                      className="p-1 bg-slate-50 hover:bg-amber-100 text-slate-500 hover:text-amber-700 rounded-lg transition-colors border border-slate-100 cursor-pointer"
+                                      title="Download Variant Barcode PNG"
+                                    >
+                                      <Upload size={11} className="rotate-180" />
+                                    </button>
+                                  </div>
+                                  <div className="bg-slate-50/50 p-1.5 rounded-lg border border-slate-100 flex justify-center">
+                                    <Barcode 
+                                      value={val} 
+                                      height={32} 
+                                      width={1.2} 
+                                      fontSize={8}
+                                      margin={3}
+                                    />
+                                  </div>
+                                </div>
+                              );
+                            })}
+                          </div>
+                        </>
+                      ) : (
+                        <p className="text-[10px] text-slate-400 italic text-center py-4">This product does not have any variants.</p>
+                      )}
+                    </div>
+                  )}
                 </div>
+
 
                 {/* Details list */}
                 <div className="text-xs space-y-2 divide-y divide-slate-100">
@@ -1140,19 +1624,38 @@ export default function ProductManagement({
                     <p className="font-semibold">{formSuccess}</p>
                   </div>
                 )}
+
+                {/* Form Progress Indicators (1, 2, 3, 4) */}
+                <div className="flex items-center justify-between bg-slate-50 p-3 rounded-2xl border border-slate-100">
+                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Form Progress</span>
+                  <div className="flex items-center gap-1.5">
+                    <span className={`w-5 h-5 flex items-center justify-center rounded-full text-[10px] font-bold transition-all ${formName.trim() && formSku.trim() ? 'bg-amber-400 text-slate-950 font-extrabold' : 'bg-slate-200 text-slate-500'}`}>1</span>
+                    <span className="text-slate-300 text-[10px]">➔</span>
+                    <span className={`w-5 h-5 flex items-center justify-center rounded-full text-[10px] font-bold transition-all ${Number(formSellingPrice) > 0 ? 'bg-amber-400 text-slate-950 font-extrabold' : 'bg-slate-200 text-slate-500'}`}>2</span>
+                    <span className="text-slate-300 text-[10px]">➔</span>
+                    <span className={`w-5 h-5 flex items-center justify-center rounded-full text-[10px] font-bold transition-all ${formVariants.length > 0 && formVariants.every(v => v.color && v.model) ? 'bg-amber-400 text-slate-950 font-extrabold' : 'bg-slate-200 text-slate-500'}`}>3</span>
+                    <span className="text-slate-300 text-[10px]">➔</span>
+                    <span className={`w-5 h-5 flex items-center justify-center rounded-full text-[10px] font-bold transition-all ${formImages.length > 0 ? 'bg-amber-400 text-slate-950 font-extrabold' : 'bg-slate-200 text-slate-500'}`}>4</span>
+                  </div>
+                </div>
                 
-                {/* Section 1: Core details */}
-                <div className="space-y-4">
+                {/* Section 1: Basic Info */}
+                <div className="bg-slate-50/50 p-4 rounded-2xl border border-slate-100 space-y-4 shadow-2xs">
+                  <div className="flex items-center gap-2 pb-2 border-b border-slate-100">
+                    <span className="w-5 h-5 flex items-center justify-center bg-slate-900 text-amber-400 rounded-full text-[10px] font-bold font-mono">1</span>
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700">Basic Info</h3>
+                  </div>
+
                   <div>
                     <label className="block text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-                      Product Display Name
+                      Product Display Name <span className="text-red-500">*</span>
                     </label>
                     <input
                       type="text"
                       required
                       value={formName}
                       onChange={(e) => setFormName(e.target.value)}
-                      className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-3 md:py-2 px-3 text-sm md:text-xs text-slate-800 focus:outline-hidden focus:ring-1 focus:ring-amber-400"
+                      className="mt-1 w-full bg-white border border-slate-200 rounded-xl py-3 md:py-2 px-3 text-sm md:text-xs text-slate-800 focus:outline-hidden focus:ring-1 focus:ring-amber-400"
                       placeholder="e.g. Joyroom JR-T03S Pro Earbuds"
                     />
                   </div>
@@ -1160,99 +1663,139 @@ export default function ProductManagement({
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
                       <label className="block text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-                        SKU Code Serial
-                      </label>
-                      <div className="flex gap-2 mt-1">
-                        <input
-                          type="text"
-                          required
-                          value={formSku}
-                          onChange={(e) => setFormSku(e.target.value)}
-                          className="flex-1 bg-slate-50 border border-slate-200 rounded-xl py-3 md:py-2 px-3 text-sm md:text-xs font-mono text-slate-800 focus:outline-hidden uppercase"
-                          placeholder="MODEL-001"
-                        />
-                        <button
-                          type="button"
-                          onClick={handleAutoGenerateSku}
-                          className="px-3 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl border border-slate-200 transition-colors"
-                          title="Generate SKU"
-                        >
-                          <Settings size={16} />
-                        </button>
-                      </div>
-                    </div>
-
-                    <div>
-                      <label className="block text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-                        Division
+                        Division <span className="text-red-500">*</span>
                       </label>
                       <select
                         value={formSubBrand}
                         onChange={(e) => setFormSubBrand(e.target.value as any)}
-                        className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-3 md:py-2 px-3 text-sm md:text-xs text-slate-800 focus:outline-hidden"
+                        className="mt-1 w-full bg-white border border-slate-200 rounded-xl py-3 md:py-2 px-3 text-sm md:text-xs text-slate-800 focus:outline-hidden focus:ring-1 focus:ring-amber-400"
                       >
                         <option value="SAT">SAT (Sky Auto)</option>
                         <option value="GZ">GadgetZu</option>
                         <option value="RTX">RTX Gadget</option>
                       </select>
                     </div>
+
+                    <div>
+                      <label className="block text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+                        SKU Code Serial <span className="text-red-500">*</span>
+                      </label>
+                      <div className="flex gap-1.5 mt-1">
+                        <input
+                          type="text"
+                          required
+                          value={formSku}
+                          onChange={(e) => {
+                            setFormSku(e.target.value);
+                            setIsSkuDirty(true);
+                          }}
+                          className="flex-1 bg-white border border-slate-200 rounded-xl py-3 md:py-2 px-3 text-sm md:text-xs font-mono text-slate-800 focus:outline-hidden uppercase focus:ring-1 focus:ring-amber-400"
+                          placeholder="MODEL-001"
+                        />
+                        <button
+                          type="button"
+                          onClick={handleAutoGenerateSku}
+                          className="px-2.5 bg-amber-400 hover:bg-amber-500 text-slate-950 font-bold rounded-xl border border-amber-300 transition-colors flex items-center justify-center"
+                          title="Regenerate SKU automatically"
+                        >
+                          <Settings size={14} className="animate-spin-slow text-slate-950" />
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+                        Category <span className="text-red-500">*</span>
+                      </label>
+                      <select
+                        value={formCategory}
+                        onChange={(e) => setFormCategory(e.target.value)}
+                        className="mt-1 w-full bg-white border border-slate-200 rounded-xl py-3 md:py-2 px-3 text-sm md:text-xs text-slate-800 focus:outline-hidden focus:ring-1 focus:ring-amber-400"
+                      >
+                        {categories.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-[10px] font-semibold uppercase tracking-wider text-slate-400">
+                        Brand <span className="text-red-500">*</span>
+                      </label>
+                      <select
+                        value={formBrand}
+                        onChange={(e) => setFormBrand(e.target.value)}
+                        className="mt-1 w-full bg-white border border-slate-200 rounded-xl py-3 md:py-2 px-3 text-sm md:text-xs text-slate-800 focus:outline-hidden focus:ring-1 focus:ring-amber-400"
+                      >
+                        {brands.map(b => <option key={b.id} value={b.name}>{b.name}</option>)}
+                      </select>
+                    </div>
                   </div>
                 </div>
 
-                {/* Section 2: Classification */}
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-                      Category
-                    </label>
-                    <select
-                      value={formCategory}
-                      onChange={(e) => setFormCategory(e.target.value)}
-                      className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-3 md:py-2 px-3 text-sm md:text-xs text-slate-800 focus:outline-hidden"
-                    >
-                      {categories.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
-                    </select>
+                {/* Section 2: Pricing & Thresholds */}
+                <div className="bg-amber-50/20 p-4 rounded-2xl border border-amber-100/50 space-y-4 shadow-2xs">
+                  <div className="flex items-center gap-2 pb-2 border-b border-amber-100/50">
+                    <span className="w-5 h-5 flex items-center justify-center bg-amber-400 text-slate-950 rounded-full text-[10px] font-bold font-mono">2</span>
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-amber-800 flex items-center gap-1.5">
+                      <Coins size={12} /> Pricing & Thresholds
+                    </h3>
                   </div>
-                  <div>
-                    <label className="block text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-                      Brand
-                    </label>
-                    <select
-                      value={formBrand}
-                      onChange={(e) => setFormBrand(e.target.value)}
-                      className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-3 md:py-2 px-3 text-sm md:text-xs text-slate-800 focus:outline-hidden"
-                    >
-                      {brands.map(b => <option key={b.id} value={b.name}>{b.name}</option>)}
-                    </select>
-                  </div>
-                </div>
 
-                {/* Section 3: Pricing */}
-                <div className="bg-amber-50/30 p-4 rounded-2xl border border-amber-100/50 space-y-4">
-                  <h4 className="text-[10px] font-bold text-amber-600 uppercase tracking-widest flex items-center gap-1.5">
-                    <Coins size={12} /> Pricing & Thresholds
-                  </h4>
                   <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-[9px] font-bold text-slate-500 uppercase">Cost (৳)</label>
-                      <input
-                        type="number"
-                        disabled={isStaff}
-                        value={formCostPrice}
-                        onChange={(e) => setFormCostPrice(Number(e.target.value))}
-                        className="mt-1 w-full bg-white border border-slate-200 rounded-xl py-3 md:py-2 px-3 text-sm md:text-xs text-slate-800 focus:outline-hidden font-mono"
-                      />
+                      <label className="block text-[9px] font-bold text-slate-500 uppercase">Cost Price</label>
+                      <div className="relative mt-1 flex rounded-xl shadow-2xs">
+                        <span className="inline-flex items-center rounded-l-xl border border-r-0 border-slate-200 bg-slate-50 px-3 text-slate-500 text-sm md:text-xs">
+                          ৳
+                        </span>
+                        <input
+                          type="number"
+                          disabled={isStaff}
+                          value={formCostPrice}
+                          onChange={(e) => setFormCostPrice(Number(e.target.value))}
+                          className="block w-full min-w-0 flex-1 rounded-none rounded-r-xl border border-slate-200 bg-white py-3 md:py-2 px-3 text-sm md:text-xs text-slate-800 focus:outline-hidden font-mono"
+                        />
+                      </div>
                     </div>
                     <div>
-                      <label className="block text-[9px] font-bold text-slate-500 uppercase">Selling (৳)</label>
-                      <input
-                        type="number"
-                        value={formSellingPrice}
-                        onChange={(e) => setFormSellingPrice(Number(e.target.value))}
-                        className="mt-1 w-full bg-white border border-slate-200 rounded-xl py-3 md:py-2 px-3 text-sm md:text-xs text-slate-800 focus:outline-hidden font-mono font-bold"
-                      />
+                      <label className="block text-[9px] font-bold text-slate-500 uppercase">Selling Price <span className="text-red-500">*</span></label>
+                      <div className="relative mt-1 flex rounded-xl shadow-2xs">
+                        <span className="inline-flex items-center rounded-l-xl border border-r-0 border-slate-200 bg-slate-50 px-3 text-slate-500 text-sm md:text-xs">
+                          ৳
+                        </span>
+                        <input
+                          type="number"
+                          value={formSellingPrice}
+                          onChange={(e) => setFormSellingPrice(Number(e.target.value))}
+                          className="block w-full min-w-0 flex-1 rounded-none rounded-r-xl border border-slate-200 bg-white py-3 md:py-2 px-3 text-sm md:text-xs text-slate-800 focus:outline-hidden font-mono font-bold"
+                        />
+                      </div>
                     </div>
                   </div>
+
+                  {/* Calculated profit margin percentage */}
+                  {Number(formSellingPrice) > 0 && (
+                    <div className="flex items-center justify-between text-[11px] font-bold p-2.5 bg-slate-50 border border-slate-150 rounded-xl">
+                      <span className="text-slate-500">Calculated Profit Margin:</span>
+                      {(() => {
+                        const marginPercent = Math.round(((Number(formSellingPrice) - Number(formCostPrice)) / Number(formSellingPrice)) * 100);
+                        return (
+                          <span className={marginPercent > 0 ? "text-emerald-600" : marginPercent < 0 ? "text-red-500" : "text-slate-500"}>
+                            {marginPercent}% {marginPercent > 0 ? "Profit" : marginPercent < 0 ? "Loss" : "Break-even"}
+                          </span>
+                        );
+                      })()}
+                    </div>
+                  )}
+
+                  {/* Warning: Selling price lower than cost price */}
+                  {Number(formSellingPrice) > 0 && Number(formSellingPrice) < Number(formCostPrice) && (
+                    <div className="bg-amber-50 border border-amber-200 text-amber-700 p-2.5 rounded-xl text-[10px] flex items-center gap-1.5 animate-pulse">
+                      <AlertCircle size={14} className="text-amber-500 flex-shrink-0" />
+                      <span>⚠ Selling price is lower than cost price</span>
+                    </div>
+                  )}
+
                   <div>
                     <label className="block text-[9px] font-bold text-slate-500 uppercase">Reorder Alert Level</label>
                     <input
@@ -1261,65 +1804,168 @@ export default function ProductManagement({
                       onChange={(e) => setFormReorderThreshold(Number(e.target.value))}
                       className="mt-1 w-full bg-white border border-slate-200 rounded-xl py-3 md:py-2 px-3 text-sm md:text-xs text-slate-800 focus:outline-hidden"
                     />
+                    <p className="text-[10px] text-slate-400 mt-1 italic font-sans">Suggested: 5-10 units</p>
                   </div>
                 </div>
 
-                {/* Section 4: Variants */}
-                <div className="space-y-3">
-                  <div className="flex justify-between items-center">
-                    <label className="text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-                      Variants & Stock
-                    </label>
+                {/* Section 3: Variants & Stock */}
+                <div className="bg-slate-50/50 p-4 rounded-2xl border border-slate-100 space-y-4 shadow-2xs">
+                  <div className="flex justify-between items-center pb-2 border-b border-slate-100">
+                    <div className="flex items-center gap-2">
+                      <span className="w-5 h-5 flex items-center justify-center bg-slate-900 text-amber-400 rounded-full text-[10px] font-bold font-mono">3</span>
+                      <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700">Variants & Stock</h3>
+                    </div>
                     <button
                       type="button"
                       onClick={addVariantField}
-                      className="text-[10px] font-bold text-[#008080] hover:underline flex items-center gap-1"
+                      className="text-[10px] font-bold text-[#008080] bg-[#008080]/5 hover:bg-[#008080]/10 px-2.5 py-1.5 rounded-lg border border-[#008080]/25 transition-colors flex items-center gap-1"
                     >
                       <Plus size={12} /> Add Variant
                     </button>
                   </div>
                   
-                  <div className="space-y-3">
-                    {formVariants.map((variant) => (
-                      <div key={variant.id} className="p-4 bg-slate-50 rounded-2xl border border-slate-100 space-y-3 relative group">
-                        {formVariants.length > 1 && (
-                          <button
-                            type="button"
-                            onClick={() => removeVariantField(variant.id)}
-                            className="absolute top-3 right-3 text-slate-300 hover:text-red-500 transition-colors"
-                          >
-                            <Trash2 size={16} />
-                          </button>
-                        )}
+                  <div className="space-y-4">
+                    {formVariants.map((variant, index) => (
+                      <div key={variant.id} className="p-4 bg-white rounded-2xl border border-slate-200 space-y-3 relative group shadow-2xs">
+                        <div className="flex justify-between items-center">
+                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                            Variant #{index + 1}
+                          </span>
+                          {formVariants.length > 1 && (
+                            <button
+                              type="button"
+                              onClick={() => removeVariantField(variant.id)}
+                              className="text-slate-300 hover:text-red-500 transition-colors"
+                              title="Remove Variant"
+                            >
+                              <Trash2 size={16} />
+                            </button>
+                          )}
+                        </div>
+
                         <div className="grid grid-cols-2 gap-3">
                           <div>
                             <label className="text-[9px] font-bold text-slate-400 uppercase">Color/Finish</label>
-                            <input
-                              type="text"
-                              value={variant.color}
-                              onChange={(e) => updateVariantValue(variant.id, 'color', e.target.value)}
-                              placeholder="e.g. Space Gray"
-                              className="mt-1 w-full bg-white border border-slate-200 rounded-xl py-2 px-3 text-xs"
-                            />
+                            {!isCustomColorMode[variant.id] ? (
+                              <select
+                                value={variant.color}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  if (val === '__add_custom__') {
+                                    setIsCustomColorMode(prev => ({ ...prev, [variant.id]: true }));
+                                    updateVariantValue(variant.id, 'color', '');
+                                  } else {
+                                    updateVariantValue(variant.id, 'color', val);
+                                  }
+                                }}
+                                className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800"
+                              >
+                                <option value="">-- Select Color --</option>
+                                {availableColors.map(c => <option key={c} value={c}>{c}</option>)}
+                                <option value="__add_custom__" className="text-amber-600 font-bold">+ Add custom color...</option>
+                              </select>
+                            ) : (
+                              <div className="mt-1 flex gap-1.5">
+                                <input
+                                  type="text"
+                                  placeholder="e.g. Matte Gray"
+                                  value={customColorValue[variant.id] || ''}
+                                  onChange={(e) => setCustomColorValue(prev => ({ ...prev, [variant.id]: e.target.value }))}
+                                  className="flex-grow bg-slate-50 border border-slate-200 rounded-xl py-1 px-2.5 text-xs focus:outline-hidden"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={async () => {
+                                    const customVal = (customColorValue[variant.id] || '').trim();
+                                    if (customVal) {
+                                      await handleAddCustomColor(customVal);
+                                      updateVariantValue(variant.id, 'color', customVal);
+                                      setIsCustomColorMode(prev => ({ ...prev, [variant.id]: false }));
+                                    }
+                                  }}
+                                  className="px-2 bg-amber-400 hover:bg-amber-500 font-bold rounded-lg text-[10px] text-slate-950 shadow-xs"
+                                >
+                                  Save
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setIsCustomColorMode(prev => ({ ...prev, [variant.id]: false }));
+                                    updateVariantValue(variant.id, 'color', '');
+                                  }}
+                                  className="px-1.5 bg-slate-100 hover:bg-slate-200 rounded-lg text-[10px] text-slate-500"
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            )}
                           </div>
+
                           <div>
                             <label className="text-[9px] font-bold text-slate-400 uppercase">Model/Size</label>
-                            <input
-                              type="text"
-                              value={variant.model}
-                              onChange={(e) => updateVariantValue(variant.id, 'model', e.target.value)}
-                              placeholder="e.g. 128GB"
-                              className="mt-1 w-full bg-white border border-slate-200 rounded-xl py-2 px-3 text-xs"
-                            />
+                            {!isCustomSizeMode[variant.id] ? (
+                              <select
+                                value={variant.model}
+                                onChange={(e) => {
+                                  const val = e.target.value;
+                                  if (val === '__add_custom__') {
+                                    setIsCustomSizeMode(prev => ({ ...prev, [variant.id]: true }));
+                                    updateVariantValue(variant.id, 'model', '');
+                                  } else {
+                                    updateVariantValue(variant.id, 'model', val);
+                                  }
+                                }}
+                                className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800"
+                              >
+                                <option value="">-- Select Size/Model --</option>
+                                {availableSizes.map(s => <option key={s} value={s}>{s}</option>)}
+                                <option value="__add_custom__" className="text-amber-600 font-bold">+ Add custom size...</option>
+                              </select>
+                            ) : (
+                              <div className="mt-1 flex gap-1.5">
+                                <input
+                                  type="text"
+                                  placeholder="e.g. 1TB"
+                                  value={customSizeValue[variant.id] || ''}
+                                  onChange={(e) => setCustomSizeValue(prev => ({ ...prev, [variant.id]: e.target.value }))}
+                                  className="flex-grow bg-slate-50 border border-slate-200 rounded-xl py-1 px-2.5 text-xs focus:outline-hidden"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={async () => {
+                                    const customVal = (customSizeValue[variant.id] || '').trim();
+                                    if (customVal) {
+                                      await handleAddCustomSize(customVal);
+                                      updateVariantValue(variant.id, 'model', customVal);
+                                      setIsCustomSizeMode(prev => ({ ...prev, [variant.id]: false }));
+                                    }
+                                  }}
+                                  className="px-2 bg-amber-400 hover:bg-amber-500 font-bold rounded-lg text-[10px] text-slate-950 shadow-xs"
+                                >
+                                  Save
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setIsCustomSizeMode(prev => ({ ...prev, [variant.id]: false }));
+                                    updateVariantValue(variant.id, 'model', '');
+                                  }}
+                                  className="px-1.5 bg-slate-100 hover:bg-slate-200 rounded-lg text-[10px] text-slate-500"
+                                >
+                                  Cancel
+                                </button>
+                              </div>
+                            )}
                           </div>
                         </div>
+
                         <div>
                           <label className="text-[9px] font-bold text-slate-400 uppercase">Initial Stock</label>
                           <input
                             type="number"
                             value={variant.stock}
                             onChange={(e) => updateVariantValue(variant.id, 'stock', Number(e.target.value))}
-                            className="mt-1 w-full bg-white border border-slate-200 rounded-xl py-2 px-3 text-xs font-mono font-bold"
+                            className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs font-mono font-bold text-slate-800"
                           />
                         </div>
                       </div>
@@ -1327,26 +1973,28 @@ export default function ProductManagement({
                   </div>
                 </div>
 
-                {/* Section 5: Photos */}
-                <div className="space-y-3">
-                  <label className="block text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-                    Product Photography
-                  </label>
+                {/* Section 4: Product Photography */}
+                <div className="bg-slate-50/50 p-4 rounded-2xl border border-slate-100 space-y-3 shadow-2xs">
+                  <div className="flex items-center gap-2 pb-2 border-b border-slate-100">
+                    <span className="w-5 h-5 flex items-center justify-center bg-slate-900 text-amber-400 rounded-full text-[10px] font-bold font-mono">4</span>
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700">Product Photography</h3>
+                  </div>
+
                   <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
                     {formImages.map((img, idx) => (
-                      <div key={idx} className="relative group aspect-square rounded-xl overflow-hidden border border-slate-200 bg-slate-50">
+                      <div key={idx} className="relative group aspect-square rounded-xl overflow-hidden border border-slate-200 bg-white">
                         <img src={img} alt="Preview" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
                         <button
                           type="button"
                           onClick={() => removeImage(idx)}
-                          className="absolute inset-0 flex items-center justify-center bg-black/40 text-white opacity-0 group-hover:opacity-100 transition-opacity"
+                          className="absolute inset-0 flex items-center justify-center bg-black/50 text-white opacity-0 group-hover:opacity-100 transition-opacity"
                         >
-                          <Trash2 size={20} />
+                          <Trash2 size={18} />
                         </button>
                       </div>
                     ))}
                     <label className="aspect-square rounded-xl border-2 border-dashed border-slate-200 hover:border-amber-400 hover:bg-amber-50 flex flex-col items-center justify-center text-slate-400 cursor-pointer transition-all">
-                      <Upload size={24} />
+                      <Upload size={20} />
                       <span className="text-[9px] font-bold mt-1 uppercase">Upload</span>
                       <input type="file" className="hidden" accept="image/*" multiple onChange={handleImageUpload} />
                     </label>
@@ -1355,20 +2003,29 @@ export default function ProductManagement({
 
               </form>
 
-              {/* Drawer Footer */}
+              {/* Drawer Sticky Footer with loading spinner and submit button */}
               <div className="p-5 md:p-6 border-t border-slate-100 bg-slate-50 flex gap-3">
                 <button
                   type="button"
+                  disabled={submitting}
                   onClick={() => setIsDrawerOpen(false)}
-                  className="flex-1 py-3.5 bg-white border border-slate-200 text-slate-600 font-bold rounded-xl text-xs hover:bg-slate-100 transition-all"
+                  className="flex-1 py-3.5 bg-white border border-slate-200 text-slate-600 font-bold rounded-xl text-xs hover:bg-slate-100 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   Cancel
                 </button>
                 <button
                   onClick={handleFormSubmit}
-                  className="flex-[2] py-3.5 bg-amber-400 hover:bg-amber-500 text-slate-950 font-bold rounded-xl text-xs transition-all shadow-md active:scale-95"
+                  disabled={submitting}
+                  className="flex-[2] py-3.5 bg-amber-400 hover:bg-amber-500 text-slate-950 font-bold rounded-xl text-xs transition-all shadow-md active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
                 >
-                  {editModeProduct ? 'Commit Updates' : 'Publish to Catalog'}
+                  {submitting ? (
+                    <>
+                      <div className="w-4 h-4 border-2 border-slate-950 border-t-transparent rounded-full animate-spin" />
+                      <span>Saving to Catalog...</span>
+                    </>
+                  ) : (
+                    <span>{editModeProduct ? 'Commit Updates' : 'Publish to Catalog'}</span>
+                  )}
                 </button>
               </div>
 
