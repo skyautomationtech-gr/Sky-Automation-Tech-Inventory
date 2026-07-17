@@ -48,8 +48,8 @@ export default function StockOperations({
   const [selectedVariantId, setSelectedVariantId] = useState('');
   
   // Fields for Operations
-  const [qty, setQty] = useState<number>(0);
-  const [costPrice, setCostPrice] = useState<number>(0);
+  const [qty, setQty] = useState<number | ''>('');
+  const [costPrice, setCostPrice] = useState<number | ''>('');
   const [supplierName, setSupplierName] = useState('');
   const [refNo, setRefNo] = useState('');
   const [dateStr, setDateStr] = useState(new Date().toISOString().split('T')[0]);
@@ -57,7 +57,7 @@ export default function StockOperations({
   // Reasons for out/adjust
   const [outReason, setOutReason] = useState<'Sale' | 'Damage' | 'Return' | 'Gift/Sample'>('Sale');
   const [adjustNote, setAdjustNote] = useState('');
-  const [physicalCount, setPhysicalCount] = useState<number>(0);
+  const [physicalCount, setPhysicalCount] = useState<number | ''>('');
 
   // Feedback states
   const [error, setError] = useState('');
@@ -95,13 +95,13 @@ export default function StockOperations({
   const resetForm = () => {
     setSelectedProductId('');
     setSelectedVariantId('');
-    setQty(0);
-    setCostPrice(0);
+    setQty('');
+    setCostPrice('');
     setSupplierName('');
     setRefNo('');
     setOutReason('Sale');
     setAdjustNote('');
-    setPhysicalCount(0);
+    setPhysicalCount('');
     setError('');
   };
 
@@ -488,8 +488,8 @@ export default function StockOperations({
                     </label>
                     <input
                       type="number"
-                      value={qty || ''}
-                      onChange={(e) => setQty(Number(e.target.value))}
+                      value={qty}
+                      onChange={(e) => setQty(e.target.value === '' ? '' : Number(e.target.value))}
                       className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 focus:outline-hidden"
                       required
                     />
@@ -500,8 +500,8 @@ export default function StockOperations({
                     </label>
                     <input
                       type="number"
-                      value={costPrice || ''}
-                      onChange={(e) => setCostPrice(Number(e.target.value))}
+                      value={costPrice}
+                      onChange={(e) => setCostPrice(e.target.value === '' ? '' : Number(e.target.value))}
                       className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 focus:outline-hidden"
                       required
                       disabled={isStaff}
@@ -523,8 +523,8 @@ export default function StockOperations({
                     </label>
                     <input
                       type="number"
-                      value={physicalCount || ''}
-                      onChange={(e) => setPhysicalCount(Number(e.target.value))}
+                      value={physicalCount}
+                      onChange={(e) => setPhysicalCount(e.target.value === '' ? '' : Number(e.target.value))}
                       className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 focus:outline-hidden"
                       required
                     />

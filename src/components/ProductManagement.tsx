@@ -37,9 +37,11 @@ import {
   getCategories, 
   addCategory, 
   deleteCategory,
+  updateCategory,
   getBrands, 
   addBrand, 
   deleteBrand,
+  updateBrand,
   getStockLogs,
   getProductAttributes,
   saveProductAttributes
@@ -67,7 +69,7 @@ export default function ProductManagement({
   const isStaff = user?.role === 'staff';
 
   // Sub tabs
-  const [activeSubTab, setActiveSubTab] = useState<'catalog' | 'categories' | 'brands'>('catalog');
+  const [activeSubTab, setActiveSubTab] = useState<'catalog' | 'categories' | 'brands' | 'pending'>('catalog');
 
   // List management states
   const [search, setSearch] = useState('');
@@ -92,6 +94,24 @@ export default function ProductManagement({
   const [deletingCatId, setDeletingCatId] = useState<string | null>(null);
   const [deletingBrandId, setDeletingBrandId] = useState<string | null>(null);
 
+  // Inline edit states for categories & brands
+  const [editingCatId, setEditingCatId] = useState<string | null>(null);
+  const [editingCatName, setEditingCatName] = useState<string>('');
+  const [editingBrandId, setEditingBrandId] = useState<string | null>(null);
+  const [editingBrandName, setEditingBrandName] = useState<string>('');
+
+  // Rejection state for products
+  const [rejectingProductId, setRejectingProductId] = useState<string | null>(null);
+  const [rejectionReasonText, setRejectionReasonText] = useState<string>('');
+
+  // Custom confirmation dialog state
+  const [confirmDialog, setConfirmDialog] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    onConfirm: () => void;
+  } | null>(null);
+
   // General Status State
   const [formError, setFormError] = useState('');
   const [formSuccess, setFormSuccess] = useState('');
@@ -105,22 +125,79 @@ export default function ProductManagement({
   // Form state
   const [formName, setFormName] = useState('');
   const [formSku, setFormSku] = useState('');
-  const [formCategory, setFormCategory] = useState('');
+  const [formMainCategory, setFormMainCategory] = useState('');
   const [formSubCategory, setFormSubCategory] = useState('');
+  const [formChildCategory, setFormChildCategory] = useState('');
+  const [formCategory, setFormCategory] = useState(''); // kept for backward compatibility/displays
   const [formBrand, setFormBrand] = useState('');
   const [formSubBrand, setFormSubBrand] = useState<'SAT' | 'GZ' | 'RTX'>('SAT');
-  const [formCostPrice, setFormCostPrice] = useState<number>(0);
-  const [formSellingPrice, setFormSellingPrice] = useState<number>(0);
-  const [formReorderThreshold, setFormReorderThreshold] = useState<number>(5);
+  const [formCostPrice, setFormCostPrice] = useState<number | ''>('');
+  const [formSellingPrice, setFormSellingPrice] = useState<number | ''>('');
+  const [formReorderThreshold, setFormReorderThreshold] = useState<number | ''>(5);
   const [formImages, setFormImages] = useState<string[]>([]);
   const [formVariants, setFormVariants] = useState<Variant[]>([
     { id: '1', color: 'Default', model: 'Standard', stock: 10 }
   ]);
 
+  // Category CRUD states
+  const [newCatLevel, setNewCatLevel] = useState<'main' | 'sub' | 'child'>('main');
+  const [newCatParentMainId, setNewCatParentMainId] = useState('');
+  const [newCatParentSubId, setNewCatParentSubId] = useState('');
+
+  // Rejection states
+  const [isRejectionModalOpen, setIsRejectionModalOpen] = useState(false);
+  const [rejectionReasonInput, setRejectionReasonInput] = useState('');
+  const [productToReject, setProductToReject] = useState<Product | null>(null);
+
   // Wizard state variables
   const [wizardStep, setWizardStep] = useState<number>(1);
   const [wizardMaxStep, setWizardMaxStep] = useState<number>(1);
   const [stepErrors, setStepErrors] = useState<{[key: string]: string}>({});
+
+  // Custom confirmation trigger
+  const showConfirm = (title: string, message: string, onConfirm: () => void) => {
+    setConfirmDialog({
+      isOpen: true,
+      title,
+      message,
+      onConfirm: () => {
+        onConfirm();
+        setConfirmDialog(null);
+      }
+    });
+  };
+
+  const handleUpdateCategory = async (id: string, name: string, level: 'main' | 'sub' | 'child', parentId: string | null) => {
+    if (!name.trim()) return;
+    setFormError('');
+    setFormSuccess('');
+    try {
+      await updateCategory(id, name.trim(), level, parentId);
+      setEditingCatId(null);
+      await onRefreshData();
+      setFormSuccess('Category renamed successfully!');
+      setTimeout(() => setFormSuccess(''), 3500);
+    } catch (err: any) {
+      setFormError(err.message || 'Failed to update category.');
+      setTimeout(() => setFormError(''), 3500);
+    }
+  };
+
+  const handleUpdateBrand = async (id: string, name: string) => {
+    if (!name.trim()) return;
+    setFormError('');
+    setFormSuccess('');
+    try {
+      await updateBrand(id, name.trim());
+      setEditingBrandId(null);
+      await onRefreshData();
+      setFormSuccess('Brand renamed successfully!');
+      setTimeout(() => setFormSuccess(''), 3500);
+    } catch (err: any) {
+      setFormError(err.message || 'Failed to update brand.');
+      setTimeout(() => setFormError(''), 3500);
+    }
+  };
 
   const validateStep = (step: number): boolean => {
     const errors: {[key: string]: string} = {};
@@ -132,17 +209,27 @@ export default function ProductManagement({
       if (!formSku.trim()) {
         errors.sku = 'SKU Code is required';
       }
-      if (!formCategory) {
-        errors.category = 'Category is required';
+      if (!formMainCategory) {
+        errors.mainCategory = 'Main Category is required';
+      }
+      if (!formSubCategory) {
+        errors.subCategory = 'Sub Category is required';
+      }
+      if (!formChildCategory) {
+        errors.childCategory = 'Child Category is required';
       }
       if (!formBrand) {
         errors.brand = 'Brand is required';
       }
     } else if (step === 2) {
-      if (Number(formCostPrice) < 0) {
-        errors.costPrice = 'Cost Price cannot be negative';
+      if (formCostPrice === '') {
+        errors.costPrice = 'Purchase Price is required';
+      } else if (Number(formCostPrice) < 0) {
+        errors.costPrice = 'Purchase Price cannot be negative';
       }
-      if (Number(formSellingPrice) <= 0) {
+      if (formSellingPrice === '') {
+        errors.sellingPrice = 'Selling Price is required';
+      } else if (Number(formSellingPrice) <= 0) {
         errors.sellingPrice = 'Selling Price must be greater than 0';
       }
       if (Number(formReorderThreshold) < 0) {
@@ -212,7 +299,9 @@ export default function ProductManagement({
     const isDirty = editModeProduct 
       ? (formName !== editModeProduct.name || 
          formSku !== editModeProduct.sku || 
-         formCategory !== editModeProduct.category || 
+         formMainCategory !== editModeProduct.mainCategory || 
+         formSubCategory !== editModeProduct.subCategory || 
+         formChildCategory !== editModeProduct.childCategory || 
          formBrand !== editModeProduct.brand || 
          formCostPrice !== editModeProduct.costPrice || 
          formSellingPrice !== editModeProduct.sellingPrice || 
@@ -221,9 +310,13 @@ export default function ProductManagement({
       : (formName.trim() !== '' || Number(formSellingPrice) > 0 || formImages.length > 0 || formVariants.some(v => v.color !== 'Default' || v.model !== 'Standard'));
 
     if (isDirty) {
-      if (window.confirm("Discard this product? Your progress will be lost.")) {
-        setIsDrawerOpen(false);
-      }
+      showConfirm(
+        "Discard Progress?",
+        "Are you sure you want to discard your changes? Your progress will be lost.",
+        () => {
+          setIsDrawerOpen(false);
+        }
+      );
     } else {
       setIsDrawerOpen(false);
     }
@@ -447,14 +540,20 @@ export default function ProductManagement({
     setFormError('');
     setFormSuccess('');
     setFormName('');
-    const initialCategory = categories[0]?.name || '';
-    const initialBrand = brands[0]?.name || '';
-    setFormCategory(initialCategory);
+    
+    // Initialize 3-level categories
+    const mainCats = categories.filter(c => c.level === 'main');
+    const initialMain = mainCats[0]?.name || '';
+    setFormMainCategory(initialMain);
     setFormSubCategory('');
+    setFormChildCategory('');
+    setFormCategory(initialMain);
+
+    const initialBrand = brands[0]?.name || '';
     setFormBrand(initialBrand);
     setFormSubBrand('SAT');
-    setFormCostPrice(0);
-    setFormSellingPrice(0);
+    setFormCostPrice('');
+    setFormSellingPrice('');
     setFormReorderThreshold(5);
     setFormImages([]);
     setFormVariants([{ id: Date.now().toString(), color: 'Default', model: 'Standard', stock: 10 }]);
@@ -471,7 +570,7 @@ export default function ProductManagement({
     setStepErrors({});
     
     // Generate initial SKU
-    const initialSku = generateSkuCode('SAT', initialCategory, initialBrand);
+    const initialSku = generateSkuCode('SAT', initialMain, initialBrand);
     setFormSku(initialSku);
     setIsDrawerOpen(true);
   };
@@ -484,8 +583,13 @@ export default function ProductManagement({
     setFormSuccess('');
     setFormName(product.name);
     setFormSku(product.sku);
-    setFormCategory(product.category);
+    
+    // Set 3-level categories for editing
+    setFormMainCategory(product.mainCategory || product.category || '');
     setFormSubCategory(product.subCategory || '');
+    setFormChildCategory(product.childCategory || '');
+    setFormCategory(product.category || '');
+
     setFormBrand(product.brand);
     setFormSubBrand(product.subBrand);
     setFormCostPrice(product.costPrice);
@@ -502,7 +606,7 @@ export default function ProductManagement({
     
     // Set wizard initial state
     setWizardStep(1);
-    setWizardMaxStep(4);
+    setWizardMaxStep(5);
     setStepErrors({});
     
     setIsDrawerOpen(true);
@@ -559,8 +663,8 @@ export default function ProductManagement({
   const handleFormSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
 
-    // If not on step 4, just run next step logic and do not submit yet!
-    if (wizardStep < 4) {
+    // If not on step 5, just run next step logic and do not submit yet!
+    if (wizardStep < 5) {
       handleNextStep();
       return;
     }
@@ -605,12 +709,31 @@ export default function ProductManagement({
 
     setSubmitting(true);
 
+    // Determine status for workflow
+    let finalStatus: 'pending_review' | 'approved' | 'rejected' = 'approved';
+    if (!editModeProduct) {
+      // New product
+      finalStatus = isStaff ? 'pending_review' : 'approved';
+    } else {
+      // Edit mode
+      const currentStatus = editModeProduct.status || 'approved';
+      if (currentStatus === 'rejected') {
+        // Rejected products are resubmitted for review
+        finalStatus = 'pending_review';
+      } else {
+        // Keep existing status
+        finalStatus = currentStatus;
+      }
+    }
+
     // Prepare payload
     const productPayload = {
       name: formName.trim(),
       sku: finalSku,
-      category: formCategory || '',
+      category: formMainCategory || '', // for backward compatibility/displays
+      mainCategory: formMainCategory || '',
       subCategory: formSubCategory || '',
+      childCategory: formChildCategory || '',
       brand: formBrand || '',
       subBrand: formSubBrand || '',
       costPrice: Number(formCostPrice),
@@ -633,18 +756,26 @@ export default function ProductManagement({
       }),
       archived: false,
       createdAt: editModeProduct ? editModeProduct.createdAt : Date.now(),
-      barcodeValue: finalSku
+      barcodeValue: finalSku,
+      status: finalStatus,
+      rejectionReason: finalStatus === 'pending_review' ? '' : (editModeProduct?.rejectionReason || '')
     };
 
     try {
       if (editModeProduct) {
         // Edit existing product
         await updateProduct(editModeProduct.id, productPayload);
-        setFormSuccess('Product details updated successfully!');
+        setFormSuccess(finalStatus === 'pending_review' && editModeProduct.status === 'rejected' 
+          ? 'Product details updated and resubmitted for approval successfully!'
+          : 'Product details updated successfully!'
+        );
       } else {
         // Create new product
         await addProduct(productPayload, user?.id || 'demo', user?.name || 'Operator');
-        setFormSuccess('New product successfully published to catalog!');
+        setFormSuccess(finalStatus === 'pending_review'
+          ? 'New product successfully submitted for review and approval!'
+          : 'New product successfully published to catalog!'
+        );
       }
 
       await onRefreshData();
@@ -664,13 +795,22 @@ export default function ProductManagement({
   const handleArchiveProduct = async (product: Product) => {
     if (requireCheckIn && !requireCheckIn()) return;
     if (isStaff) return; // restricted
-    if (confirm(`Are you sure you want to archive "${product.name}"?`)) {
-      await archiveProduct(product.id);
-      await onRefreshData();
-      if (selectedProduct?.id === product.id) {
-        setSelectedProduct(null);
+    showConfirm(
+      "Confirm Product Archival",
+      `Are you sure you want to archive "${product.name}"?`,
+      async () => {
+        try {
+          await archiveProduct(product.id);
+          await onRefreshData();
+          if (selectedProduct?.id === product.id) {
+            setSelectedProduct(null);
+          }
+        } catch (err: any) {
+          console.error("Archive product failed:", err);
+          setFormError(`Failed to archive product: ${err.message || err}`);
+        }
       }
-    }
+    );
   };
 
   // Category CRUD Handlers
@@ -683,11 +823,26 @@ export default function ProductManagement({
     if (!newCatName.trim()) return;
     
     try {
-      const subs = newCatSub.split(',').map(s => s.trim()).filter(s => s.length > 0);
-      await addCategory(newCatName.trim(), subs);
-      setFormSuccess(`Category "${newCatName}" created!`);
+      let parentId: string | null = null;
+      if (newCatLevel === 'sub') {
+        if (!newCatParentMainId) {
+          setFormError('Please select a Main Category parent.');
+          return;
+        }
+        parentId = newCatParentMainId;
+      } else if (newCatLevel === 'child') {
+        if (!newCatParentSubId) {
+          setFormError('Please select a Sub Category parent.');
+          return;
+        }
+        parentId = newCatParentSubId;
+      }
+
+      await addCategory(newCatName.trim(), newCatLevel, parentId);
+      setFormSuccess(`Category "${newCatName}" created under ${newCatLevel} level!`);
       setNewCatName('');
-      setNewCatSub('');
+      setNewCatParentMainId('');
+      setNewCatParentSubId('');
       await onRefreshData();
     } catch (err: any) {
       setFormError(err.message || 'Failed to create category.');
@@ -698,25 +853,37 @@ export default function ProductManagement({
     if (requireCheckIn && !requireCheckIn()) return;
     if (isStaff) return;
     
+    setFormError('');
+    setFormSuccess('');
+    
     // Check if category is in use
-    const inUse = products.some(p => p.category === name && !p.archived);
+    const inUse = products.some(p => 
+      (p.category === name || p.mainCategory === name || p.subCategory === name || p.childCategory === name) && 
+      !p.archived
+    );
     if (inUse) {
-      alert(`Cannot delete category "${name}" because it is currently in use by one or more products. Please reassign those products first.`);
+      setFormError(`Cannot delete category "${name}" because it or its child nodes are currently in use by active products. Please reassign those products first.`);
       return;
     }
     
-    if (confirm(`Are you sure you want to delete the category "${name}"?`)) {
-      setDeletingCatId(id);
-      try {
-        await deleteCategory(id);
-        await onRefreshData();
-      } catch (err: any) {
-        console.warn("Delete category failed:", err.message || err);
-        alert(`Failed to delete category: ${err.message || 'Permission denied'}`);
-      } finally {
-        setDeletingCatId(null);
+    showConfirm(
+      "Delete Category?",
+      `Are you sure you want to delete the category "${name}"? This will recursively delete all its nested sub and child categories.`,
+      async () => {
+        setDeletingCatId(id);
+        try {
+          await deleteCategory(id);
+          await onRefreshData();
+          setFormSuccess(`Successfully deleted category "${name}"`);
+          setTimeout(() => setFormSuccess(''), 3500);
+        } catch (err: any) {
+          console.warn("Delete category failed:", err.message || err);
+          setFormError(`Failed to delete category: ${err.message || 'Permission denied'}`);
+        } finally {
+          setDeletingCatId(null);
+        }
       }
-    }
+    );
   };
 
   // Brand CRUD Handlers
@@ -742,25 +909,34 @@ export default function ProductManagement({
     if (requireCheckIn && !requireCheckIn()) return;
     if (isStaff) return;
     
+    setFormError('');
+    setFormSuccess('');
+    
     // Check if brand is in use
     const inUse = products.some(p => p.brand === name && !p.archived);
     if (inUse) {
-      alert(`Cannot delete brand "${name}" because it is currently in use by one or more products. Please reassign those products first.`);
+      setFormError(`Cannot delete brand "${name}" because it is currently in use by one or more products. Please reassign those products first.`);
       return;
     }
     
-    if (confirm(`Are you sure you want to delete the brand "${name}"?`)) {
-      setDeletingBrandId(id);
-      try {
-        await deleteBrand(id);
-        await onRefreshData();
-      } catch (err: any) {
-        console.warn("Delete brand failed:", err.message || err);
-        alert(`Failed to delete brand: ${err.message || 'Permission denied'}`);
-      } finally {
-        setDeletingBrandId(null);
+    showConfirm(
+      "Delete Brand?",
+      `Are you sure you want to delete the brand "${name}"?`,
+      async () => {
+        setDeletingBrandId(id);
+        try {
+          await deleteBrand(id);
+          await onRefreshData();
+          setFormSuccess(`Successfully deleted brand "${name}"`);
+          setTimeout(() => setFormSuccess(''), 3500);
+        } catch (err: any) {
+          console.warn("Delete brand failed:", err.message || err);
+          setFormError(`Failed to delete brand: ${err.message || 'Permission denied'}`);
+        } finally {
+          setDeletingBrandId(null);
+        }
       }
-    }
+    );
   };
 
   // Bulk Import CSV Handler
@@ -932,6 +1108,23 @@ export default function ProductManagement({
           >
             Brands CRUD
           </button>
+          {!isStaff && (
+            <button
+              onClick={() => setActiveSubTab('pending')}
+              className={`pb-2.5 px-1 font-semibold text-sm transition-all border-b-2 cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
+                activeSubTab === 'pending'
+                  ? 'border-amber-400 text-slate-900 font-extrabold'
+                  : 'border-transparent text-slate-500 hover:text-slate-950'
+              }`}
+            >
+              Pending Products
+              {products.filter(p => p.status === 'pending_review' && !p.archived).length > 0 && (
+                <span className="px-1.5 py-0.5 bg-red-500 text-white text-[9px] font-black rounded-full leading-none">
+                  {products.filter(p => p.status === 'pending_review' && !p.archived).length}
+                </span>
+              )}
+            </button>
+          )}
         </div>
       </div>
 
@@ -1486,7 +1679,7 @@ export default function ProductManagement({
                   </div>
                   {!isStaff && (
                     <div className="flex justify-between pt-2">
-                      <span className="text-slate-400">Cost Price</span>
+                      <span className="text-slate-400">Purchase Price</span>
                       <span className="font-bold text-slate-800">৳ {selectedProduct.costPrice.toLocaleString()}</span>
                     </div>
                   )}
@@ -1578,12 +1771,90 @@ export default function ProductManagement({
             <h3 className="text-sm font-bold text-slate-950 font-sans">Add Category Record</h3>
             <form onSubmit={handleAddCategory} className="space-y-4">
               <div>
+                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">Category Hierarchy Level</label>
+                <div className="grid grid-cols-3 gap-2 mt-1">
+                  {(['main', 'sub', 'child'] as const).map((level) => (
+                    <button
+                      key={level}
+                      type="button"
+                      onClick={() => { setNewCatLevel(level); setNewCatParentMainId(''); setNewCatParentSubId(''); }}
+                      className={`py-1.5 px-3 text-xs font-bold rounded-xl transition-all border ${
+                        newCatLevel === level 
+                          ? 'bg-slate-900 text-amber-400 border-slate-900' 
+                          : 'bg-slate-50 text-slate-500 border-slate-200 hover:bg-slate-100'
+                      }`}
+                    >
+                      {level === 'main' ? 'Main' : level === 'sub' ? 'Sub' : 'Child'}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {newCatLevel === 'sub' && (
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">Parent Main Category</label>
+                  <select
+                    value={newCatParentMainId}
+                    onChange={(e) => setNewCatParentMainId(e.target.value)}
+                    className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800"
+                    required
+                  >
+                    <option value="">-- Select Main Category Parent --</option>
+                    {categories.filter(c => c.level === 'main' || !c.level).map(c => (
+                      <option key={c.id} value={c.id}>{c.name}</option>
+                    ))}
+                  </select>
+                </div>
+              )}
+
+              {newCatLevel === 'child' && (
+                <>
+                  <div>
+                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">Filter Parent by Main Category</label>
+                    <select
+                      value={newCatParentMainId}
+                      onChange={(e) => { setNewCatParentMainId(e.target.value); setNewCatParentSubId(''); }}
+                      className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800"
+                    >
+                      <option value="">-- All Main Categories --</option>
+                      {categories.filter(c => c.level === 'main' || !c.level).map(c => (
+                        <option key={c.id} value={c.id}>{c.name}</option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">Parent Sub Category</label>
+                    <select
+                      value={newCatParentSubId}
+                      onChange={(e) => setNewCatParentSubId(e.target.value)}
+                      className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800"
+                      required
+                    >
+                      <option value="">-- Select Sub Category Parent --</option>
+                      {categories.filter(c => {
+                        const matchesLevel = c.level === 'sub';
+                        const matchesParent = !newCatParentMainId || c.parentId === newCatParentMainId;
+                        return matchesLevel && matchesParent;
+                      }).map(c => {
+                        const mainParentName = categories.find(p => p.id === c.parentId)?.name || '';
+                        return (
+                          <option key={c.id} value={c.id}>
+                            {c.name} {mainParentName ? `(under ${mainParentName})` : ''}
+                          </option>
+                        );
+                      })}
+                    </select>
+                  </div>
+                </>
+              )}
+
+              <div>
                 <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
                   Category Name
                 </label>
                 <input
                   type="text"
-                  placeholder="e.g. Smart Glasses"
+                  placeholder={newCatLevel === 'main' ? "e.g. Audio" : newCatLevel === 'sub' ? "e.g. Earbuds" : "e.g. TWS"}
                   value={newCatName}
                   onChange={(e) => setNewCatName(e.target.value)}
                   className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 focus:outline-hidden"
@@ -1591,51 +1862,204 @@ export default function ProductManagement({
                 />
               </div>
 
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
-                  Sub-categories (Comma separated)
-                </label>
-                <input
-                  type="text"
-                  placeholder="e.g. Audio, Video, VR"
-                  value={newCatSub}
-                  onChange={(e) => setNewCatSub(e.target.value)}
-                  className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 focus:outline-hidden"
-                />
-              </div>
-
               <button
                 type="submit"
-                className="w-full bg-amber-400 hover:bg-amber-500 text-slate-950 font-bold py-2.5 rounded-xl text-xs transition-all shadow-md"
+                className="w-full bg-amber-400 hover:bg-amber-500 text-slate-950 font-bold py-2.5 rounded-xl text-xs transition-all shadow-md cursor-pointer"
               >
-                Create Category
+                Create {newCatLevel === 'main' ? 'Main' : newCatLevel === 'sub' ? 'Sub' : 'Child'} Category
               </button>
             </form>
           </div>
 
-          {/* List categories */}
+          {/* List categories tree */}
           <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-4">
-            <h3 className="text-sm font-bold text-slate-950 font-sans">Active Product Categories</h3>
-            <div className="space-y-2 max-h-[350px] overflow-y-auto">
-              {categories.map((cat) => (
-                <div key={cat.id} className="p-3 bg-slate-50 rounded-xl border border-slate-100 flex justify-between items-center">
-                  <div>
-                    <h4 className="text-xs font-bold text-slate-900">{cat.name}</h4>
-                    <p className="text-[10px] text-slate-500 font-mono mt-0.5">
-                      Subs: {cat.subCategories.join(', ') || 'None'}
-                    </p>
-                  </div>
-                  {!isStaff && (
-                    <button
-                      onClick={() => handleDeleteCategory(cat.id, cat.name)}
-                      disabled={deletingCatId === cat.id}
-                      className={`p-1 rounded-lg ${deletingCatId === cat.id ? 'text-slate-300 cursor-not-allowed' : 'text-slate-400 hover:text-red-500 hover:bg-red-50'}`}
-                    >
-                      {deletingCatId === cat.id ? <div className="w-3.5 h-3.5 border-2 border-red-400 border-t-transparent rounded-full animate-spin" /> : <Trash2 size={14} />}
-                    </button>
-                  )}
-                </div>
-              ))}
+            <h3 className="text-sm font-bold text-slate-950 font-sans">Active Product Categories Tree</h3>
+            <div className="space-y-3 max-h-[450px] overflow-y-auto pr-1">
+              {categories.filter(c => c.level === 'main' || !c.level).length === 0 ? (
+                <p className="text-xs text-slate-400 italic text-center py-8">No categories seeded or created yet.</p>
+              ) : (
+                categories.filter(c => c.level === 'main' || !c.level).map((mainCat) => {
+                  const subCats = categories.filter(c => c.level === 'sub' && c.parentId === mainCat.id);
+                  
+                  return (
+                    <div key={mainCat.id} className="border border-slate-100 rounded-xl p-3 bg-slate-50/50 space-y-2">
+                      <div className="flex justify-between items-center bg-slate-100 px-3 py-1.5 rounded-lg border border-slate-200">
+                        {editingCatId === mainCat.id ? (
+                          <div className="flex items-center gap-1.5 flex-grow">
+                            <input
+                              type="text"
+                              value={editingCatName}
+                              onChange={(e) => setEditingCatName(e.target.value)}
+                              className="bg-white border border-slate-300 rounded-md px-1.5 py-0.5 text-xs font-semibold text-slate-800 focus:outline-hidden"
+                            />
+                            <button
+                              onClick={() => handleUpdateCategory(mainCat.id, editingCatName, 'main', null)}
+                              className="p-1 text-emerald-600 hover:bg-emerald-50 rounded-md cursor-pointer"
+                            >
+                              <Check size={12} />
+                            </button>
+                            <button
+                              onClick={() => setEditingCatId(null)}
+                              className="p-1 text-slate-400 hover:bg-slate-50 rounded-md cursor-pointer"
+                            >
+                              <X size={12} />
+                            </button>
+                          </div>
+                        ) : (
+                          <>
+                            <span className="text-xs font-black text-slate-900 uppercase tracking-tight">📁 {mainCat.name}</span>
+                            {!isStaff && (
+                              <div className="flex items-center gap-1">
+                                <button
+                                  onClick={() => {
+                                    setEditingCatId(mainCat.id);
+                                    setEditingCatName(mainCat.name);
+                                  }}
+                                  className="p-1 rounded-md text-slate-400 hover:text-slate-600 hover:bg-slate-200/50 transition-all cursor-pointer"
+                                  title="Rename Category"
+                                >
+                                  <Edit3 size={12} />
+                                </button>
+                                <button
+                                  onClick={() => handleDeleteCategory(mainCat.id, mainCat.name)}
+                                  disabled={deletingCatId === mainCat.id}
+                                  className="p-1 rounded-md text-slate-400 hover:text-red-500 hover:bg-red-50 transition-all cursor-pointer"
+                                >
+                                  <Trash2 size={12} />
+                                </button>
+                              </div>
+                            )}
+                          </>
+                        )}
+                      </div>
+ 
+                      {/* Render Sub categories */}
+                      <div className="pl-4 space-y-2">
+                        {subCats.length === 0 ? (
+                          <p className="text-[10px] text-slate-400 italic pl-3">No nested sub-categories.</p>
+                        ) : (
+                          subCats.map((subCat) => {
+                            const childCats = categories.filter(c => c.level === 'child' && c.parentId === subCat.id);
+                            
+                            return (
+                              <div key={subCat.id} className="border-l-2 border-amber-200 pl-3 py-1 space-y-1">
+                                <div className="flex justify-between items-center group">
+                                  {editingCatId === subCat.id ? (
+                                    <div className="flex items-center gap-1.5 flex-grow">
+                                      <input
+                                        type="text"
+                                        value={editingCatName}
+                                        onChange={(e) => setEditingCatName(e.target.value)}
+                                        className="bg-white border border-slate-300 rounded-md px-1.5 py-0.5 text-xs font-semibold text-slate-800 focus:outline-hidden"
+                                      />
+                                      <button
+                                        onClick={() => handleUpdateCategory(subCat.id, editingCatName, 'sub', mainCat.id)}
+                                        className="p-1 text-emerald-600 hover:bg-emerald-50 rounded-md cursor-pointer"
+                                      >
+                                        <Check size={12} />
+                                      </button>
+                                      <button
+                                        onClick={() => setEditingCatId(null)}
+                                        className="p-1 text-slate-400 hover:bg-slate-50 rounded-md cursor-pointer"
+                                      >
+                                        <X size={12} />
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <>
+                                      <span className="text-xs font-bold text-slate-800">↳ 📂 {subCat.name}</span>
+                                      {!isStaff && (
+                                        <div className="flex items-center gap-1">
+                                          <button
+                                            onClick={() => {
+                                              setEditingCatId(subCat.id);
+                                              setEditingCatName(subCat.name);
+                                            }}
+                                            className="p-1 rounded-md text-slate-400 hover:text-slate-600 hover:bg-slate-200/50 transition-all cursor-pointer opacity-0 group-hover:opacity-100"
+                                            title="Rename Subcategory"
+                                          >
+                                            <Edit3 size={11} />
+                                          </button>
+                                          <button
+                                            onClick={() => handleDeleteCategory(subCat.id, subCat.name)}
+                                            disabled={deletingCatId === subCat.id}
+                                            className="p-1 rounded-md text-slate-400 hover:text-red-500 hover:bg-red-50 transition-all cursor-pointer"
+                                          >
+                                            <Trash2 size={10} />
+                                          </button>
+                                        </div>
+                                      )}
+                                    </>
+                                  )}
+                                </div>
+ 
+                                {/* Render Child categories */}
+                                <div className="pl-4 space-y-1">
+                                  {childCats.length === 0 ? (
+                                    <p className="text-[9px] text-slate-400 italic pl-3">No nested child-categories.</p>
+                                  ) : (
+                                    childCats.map((childCat) => (
+                                      <div key={childCat.id} className="flex justify-between items-center bg-white border border-slate-100 px-2 py-1 rounded-md group">
+                                        {editingCatId === childCat.id ? (
+                                          <div className="flex items-center gap-1.5 flex-grow">
+                                            <input
+                                              type="text"
+                                              value={editingCatName}
+                                              onChange={(e) => setEditingCatName(e.target.value)}
+                                              className="bg-white border border-slate-300 rounded-md px-1.5 py-0.5 text-xs font-semibold text-slate-800 focus:outline-hidden"
+                                            />
+                                            <button
+                                              onClick={() => handleUpdateCategory(childCat.id, editingCatName, 'child', subCat.id)}
+                                              className="p-1 text-emerald-600 hover:bg-emerald-50 rounded-md cursor-pointer"
+                                            >
+                                              <Check size={12} />
+                                            </button>
+                                            <button
+                                              onClick={() => setEditingCatId(null)}
+                                              className="p-1 text-slate-400 hover:bg-slate-50 rounded-md cursor-pointer"
+                                            >
+                                              <X size={12} />
+                                            </button>
+                                          </div>
+                                        ) : (
+                                          <>
+                                            <span className="text-[11px] font-medium text-slate-600">▪ {childCat.name}</span>
+                                            {!isStaff && (
+                                              <div className="flex items-center gap-1">
+                                                <button
+                                                  onClick={() => {
+                                                    setEditingCatId(childCat.id);
+                                                    setEditingCatName(childCat.name);
+                                                  }}
+                                                  className="p-0.5 rounded-md text-slate-400 hover:text-slate-600 hover:bg-slate-200/50 transition-all cursor-pointer opacity-0 group-hover:opacity-100"
+                                                  title="Rename Child Category"
+                                                >
+                                                  <Edit3 size={11} />
+                                                </button>
+                                                <button
+                                                  onClick={() => handleDeleteCategory(childCat.id, childCat.name)}
+                                                  disabled={deletingCatId === childCat.id}
+                                                  className="p-0.5 text-slate-400 hover:text-red-500 hover:bg-red-50 transition-all cursor-pointer"
+                                                >
+                                                  <Trash2 size={10} />
+                                                </button>
+                                              </div>
+                                            )}
+                                          </>
+                                        )}
+                                      </div>
+                                    ))
+                                  )}
+                                </div>
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
+                    </div>
+                  );
+                })
+              )}
             </div>
           </div>
 
@@ -1678,22 +2102,221 @@ export default function ProductManagement({
             <h3 className="text-sm font-bold text-slate-950 font-sans">Active Brand Catalog</h3>
             <div className="space-y-2 max-h-[350px] overflow-y-auto">
               {brands.map((brand) => (
-                <div key={brand.id} className="p-3 bg-slate-50 rounded-xl border border-slate-100 flex justify-between items-center">
-                  <h4 className="text-xs font-bold text-slate-900">{brand.name}</h4>
-                  {!isStaff && (
-                    <button
-                      onClick={() => handleDeleteBrand(brand.id, brand.name)}
-                      disabled={deletingBrandId === brand.id}
-                      className={`p-1 rounded-lg ${deletingBrandId === brand.id ? 'text-slate-300 cursor-not-allowed' : 'text-slate-400 hover:text-red-500 hover:bg-red-50'}`}
-                    >
-                      {deletingBrandId === brand.id ? <div className="w-3.5 h-3.5 border-2 border-red-400 border-t-transparent rounded-full animate-spin" /> : <Trash2 size={14} />}
-                    </button>
+                <div key={brand.id} className="p-3 bg-slate-50 rounded-xl border border-slate-100 flex justify-between items-center group">
+                  {editingBrandId === brand.id ? (
+                    <div className="flex items-center gap-1.5 flex-grow">
+                      <input
+                        type="text"
+                        value={editingBrandName}
+                        onChange={(e) => setEditingBrandName(e.target.value)}
+                        className="bg-white border border-slate-300 rounded-md px-1.5 py-0.5 text-xs font-semibold text-slate-800 focus:outline-hidden"
+                      />
+                      <button
+                        onClick={() => handleUpdateBrand(brand.id, editingBrandName)}
+                        className="p-1 text-emerald-600 hover:bg-emerald-50 rounded-md cursor-pointer"
+                      >
+                        <Check size={12} />
+                      </button>
+                      <button
+                        onClick={() => setEditingBrandId(null)}
+                        className="p-1 text-slate-400 hover:bg-slate-50 rounded-md cursor-pointer"
+                      >
+                        <X size={12} />
+                      </button>
+                    </div>
+                  ) : (
+                    <>
+                      <h4 className="text-xs font-bold text-slate-900">{brand.name}</h4>
+                      {!isStaff && (
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => {
+                              setEditingBrandId(brand.id);
+                              setEditingBrandName(brand.name);
+                            }}
+                            className="p-1 rounded-md text-slate-400 hover:text-slate-600 hover:bg-slate-200/50 transition-all cursor-pointer opacity-0 group-hover:opacity-100"
+                            title="Rename Brand"
+                          >
+                            <Edit3 size={12} />
+                          </button>
+                          <button
+                            onClick={() => handleDeleteBrand(brand.id, brand.name)}
+                            disabled={deletingBrandId === brand.id}
+                            className={`p-1 rounded-lg ${deletingBrandId === brand.id ? 'text-slate-300 cursor-not-allowed' : 'text-slate-400 hover:text-red-500 hover:bg-red-50'}`}
+                          >
+                            {deletingBrandId === brand.id ? <div className="w-3.5 h-3.5 border-2 border-red-400 border-t-transparent rounded-full animate-spin" /> : <Trash2 size={14} />}
+                          </button>
+                        </div>
+                      )}
+                    </>
                   )}
                 </div>
               ))}
             </div>
           </div>
 
+        </div>
+      )}
+
+      {/* SUB TAB: PENDING PRODUCTS FOR APPROVAL */}
+      {activeSubTab === 'pending' && !isStaff && (
+        <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-4">
+          <div className="border-b border-slate-100 pb-3 flex justify-between items-center">
+            <div>
+              <h3 className="text-sm font-bold text-slate-950 font-sans">Pending Products Approval Queue</h3>
+              <p className="text-[10px] text-slate-400 mt-0.5">Approve or reject products submitted by staff operators.</p>
+            </div>
+            <span className="px-2.5 py-1 bg-amber-50 text-amber-700 font-extrabold text-[10px] uppercase rounded-full border border-amber-100 font-mono">
+              {products.filter(p => p.status === 'pending_review' && !p.archived).length} Pending
+            </span>
+          </div>
+
+          <div className="space-y-4">
+            {products.filter(p => p.status === 'pending_review' && !p.archived).length === 0 ? (
+              <div className="py-12 text-center text-slate-400 italic flex flex-col items-center space-y-3">
+                <Check size={36} className="text-emerald-500 bg-emerald-50 p-2.5 rounded-full" />
+                <p className="text-xs font-semibold">All products approved! The queue is empty.</p>
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {products.filter(p => p.status === 'pending_review' && !p.archived).map((product) => {
+                  return (
+                    <div key={product.id} className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-3.5 relative shadow-3xs flex flex-col justify-between">
+                      <div className="space-y-3">
+                        <div className="flex justify-between items-start gap-2">
+                          <div>
+                            <span className="text-[9px] font-bold text-amber-600 bg-amber-50 border border-amber-100 px-1.5 py-0.5 rounded-md uppercase tracking-wider font-mono">
+                              {product.subBrand || 'SAT'}
+                            </span>
+                            <h4 className="text-xs font-black text-slate-900 mt-1.5">{product.name}</h4>
+                            <p className="text-[9px] font-mono font-bold text-slate-400 uppercase mt-0.5">SKU: {product.sku}</p>
+                          </div>
+                          {product.images?.[0] ? (
+                            <img src={product.images[0]} alt="Product" className="w-12 h-12 object-cover rounded-xl border border-slate-200" referrerPolicy="no-referrer" />
+                          ) : (
+                            <div className="w-12 h-12 bg-slate-100 border border-slate-200 rounded-xl flex items-center justify-center text-slate-300">
+                              <Tag size={16} />
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-y-2 gap-x-4 border-t border-slate-100 pt-2 text-[10px]">
+                          <div>
+                            <span className="text-slate-400 font-medium block">Category:</span>
+                            <span className="font-semibold text-slate-700 truncate block">{product.category}</span>
+                          </div>
+                          <div>
+                            <span className="text-slate-400 font-medium block">Brand:</span>
+                            <span className="font-semibold text-slate-700 truncate block">{product.brand}</span>
+                          </div>
+                          <div>
+                            <span className="text-slate-400 font-medium block">Purchase Price:</span>
+                            <span className="font-bold text-slate-800">৳ {product.costPrice.toLocaleString()}</span>
+                          </div>
+                          <div>
+                            <span className="text-slate-400 font-medium block">Selling Price:</span>
+                            <span className="font-bold text-slate-800">৳ {product.sellingPrice.toLocaleString()}</span>
+                          </div>
+                        </div>
+
+                        <div className="bg-white p-2.5 rounded-xl border border-slate-150 space-y-1.5">
+                          <span className="text-[9px] font-extrabold text-slate-400 uppercase tracking-wider block">Physical Variants ({product.variants?.length || 0})</span>
+                          <div className="max-h-[100px] overflow-y-auto space-y-1 pr-1">
+                            {product.variants?.map((v, idx) => (
+                              <div key={v.id || idx} className="flex justify-between items-center text-[9px] font-mono">
+                                <span className="font-semibold text-slate-600">{v.color} / {v.model}</span>
+                                <span className="font-black text-slate-800">{v.stock} pcs</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* Approval Controls */}
+                      <div className="border-t border-slate-150 pt-3 space-y-2">
+                        {rejectingProductId === product.id ? (
+                          <div className="space-y-2 p-2.5 bg-rose-50 border border-rose-100 rounded-xl">
+                            <label className="block text-[9px] font-bold text-rose-700 uppercase tracking-wider">Reason for Rejection</label>
+                            <input
+                              type="text"
+                              value={rejectionReasonText}
+                              onChange={(e) => setRejectionReasonText(e.target.value)}
+                              placeholder="e.g. Price mismatch or typo in variant details..."
+                              className="w-full bg-white border border-rose-200 rounded-lg py-1.5 px-2.5 text-[11px] text-slate-800 focus:outline-hidden"
+                            />
+                            <div className="flex gap-1.5 justify-end">
+                              <button
+                                type="button"
+                                onClick={() => {
+                                  setRejectingProductId(null);
+                                  setRejectionReasonText('');
+                                }}
+                                className="px-2.5 py-1 bg-slate-200 hover:bg-slate-300 rounded-md text-[9px] font-bold text-slate-600 cursor-pointer"
+                              >
+                                Cancel
+                              </button>
+                              <button
+                                type="button"
+                                onClick={async () => {
+                                  if (!rejectionReasonText.trim()) {
+                                    setFormError("Rejection reason is required.");
+                                    setTimeout(() => setFormError(''), 3000);
+                                    return;
+                                  }
+                                  try {
+                                    await updateProduct(product.id, { status: 'rejected', rejectionReason: rejectionReasonText.trim() });
+                                    await onRefreshData();
+                                    setRejectingProductId(null);
+                                    setRejectionReasonText('');
+                                    setFormSuccess(`Successfully rejected "${product.name}"`);
+                                    setTimeout(() => setFormSuccess(''), 3000);
+                                  } catch (err) {
+                                    setFormError(`Rejection failed`);
+                                    setTimeout(() => setFormError(''), 3000);
+                                  }
+                                }}
+                                className="px-2.5 py-1 bg-rose-500 hover:bg-rose-600 rounded-md text-[9px] font-bold text-white shadow-3xs cursor-pointer"
+                              >
+                                Confirm Reject
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <div className="flex gap-2">
+                            <button
+                              onClick={async () => {
+                                try {
+                                  await updateProduct(product.id, { status: 'approved' });
+                                  await onRefreshData();
+                                  setFormSuccess(`Successfully approved "${product.name}"`);
+                                  setTimeout(() => setFormSuccess(''), 3000);
+                                } catch (err) {
+                                  setFormError(`Approval failed`);
+                                  setTimeout(() => setFormError(''), 3000);
+                                }
+                              }}
+                              className="flex-grow py-1.5 bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-[10px] rounded-lg shadow-3xs cursor-pointer flex items-center justify-center gap-1"
+                            >
+                              <Check size={12} /> Approve
+                            </button>
+                            <button
+                              onClick={() => {
+                                setRejectingProductId(product.id);
+                                setRejectionReasonText('');
+                              }}
+                              className="flex-grow py-1.5 bg-rose-500 hover:bg-rose-600 text-white font-bold text-[10px] rounded-lg shadow-3xs cursor-pointer flex items-center justify-center gap-1"
+                            >
+                              <X size={12} /> Reject
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </div>
       )}
 
@@ -1747,10 +2370,10 @@ export default function ProductManagement({
                     {/* Active Progress Line */}
                     <div 
                       className="absolute top-[34px] left-4 h-0.5 bg-gradient-to-r from-amber-400 to-amber-500 rounded-full z-0 transition-all duration-500"
-                      style={{ width: `${((wizardMaxStep - 1) / 3) * (100 - (100 / 4))}%` }}
+                      style={{ width: `${((wizardMaxStep - 1) / 4) * (100 - (100 / 5))}%` }}
                     />
                     
-                    {[1, 2, 3, 4].map((step) => {
+                    {[1, 2, 3, 4, 5].map((step) => {
                       const isCompleted = step < wizardStep || (editModeProduct && wizardMaxStep >= step);
                       const isActive = step === wizardStep;
                       const isSelectable = step <= wizardMaxStep;
@@ -1760,6 +2383,7 @@ export default function ProductManagement({
                       else if (step === 2) stepTitle = "Pricing";
                       else if (step === 3) stepTitle = "Variants";
                       else if (step === 4) stepTitle = "Photography";
+                      else if (step === 5) stepTitle = "Review";
 
                       return (
                         <button
@@ -1794,19 +2418,20 @@ export default function ProductManagement({
                   <div className="sm:hidden space-y-2">
                     <div className="flex justify-between items-center px-1">
                       <span className="text-[9px] font-extrabold text-slate-400 uppercase tracking-widest font-mono">
-                        Step {wizardStep} of 4
+                        Step {wizardStep} of 5
                       </span>
                       <span className="text-xs font-black text-slate-800">
                         {wizardStep === 1 && "Basic Info"}
                         {wizardStep === 2 && "Pricing & Thresholds"}
                         {wizardStep === 3 && "Variants & Stock"}
-                        {wizardStep === 4 && "Photography & Preview"}
+                        {wizardStep === 4 && "Photography & Barcode"}
+                        {wizardStep === 5 && "Review & Submit"}
                       </span>
                     </div>
                     <div className="h-1 w-full bg-slate-100 rounded-full overflow-hidden">
                       <div 
                         className="h-full bg-gradient-to-r from-amber-400 to-amber-500 rounded-full transition-all duration-500"
-                        style={{ width: `${(wizardStep / 4) * 100}%` }}
+                        style={{ width: `${(wizardStep / 5) * 100}%` }}
                       />
                     </div>
                   </div>
@@ -1823,9 +2448,9 @@ export default function ProductManagement({
                   >
                     <div className="bg-slate-50 border border-slate-150 p-5 rounded-2xl space-y-4 shadow-3xs">
                       <div className="border-b border-slate-100 pb-3">
-                        <span className="text-[9px] font-extrabold text-amber-500 uppercase tracking-widest font-mono">Step 1 of 4</span>
+                        <span className="text-[9px] font-extrabold text-amber-500 uppercase tracking-widest font-mono">Step 1 of 5</span>
                         <h3 className="text-sm font-black text-slate-900 mt-1">Basic Info</h3>
-                        <p className="text-[10px] text-slate-400 mt-0.5 leading-relaxed">Identify the product name, company division division mapping, and unique SKU format.</p>
+                        <p className="text-[10px] text-slate-400 mt-0.5 leading-relaxed">Identify the product name, company division mapping, and unique SKU format.</p>
                       </div>
 
                       <div>
@@ -1852,7 +2477,7 @@ export default function ProductManagement({
                         )}
                       </div>
 
-                      <div className="grid grid-cols-2 gap-4">
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                         <div>
                           <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">
                             Division <span className="text-red-500">*</span>
@@ -1868,7 +2493,7 @@ export default function ProductManagement({
                           </select>
                         </div>
 
-                        <div>
+                        <div className="md:max-w-xs">
                           <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">
                             SKU Code Serial <span className="text-red-500">*</span>
                           </label>
@@ -1904,30 +2529,110 @@ export default function ProductManagement({
                         </div>
                       </div>
 
-                      <div className="grid grid-cols-2 gap-4">
-                        <div>
-                          <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">
-                            Category <span className="text-red-500">*</span>
-                          </label>
-                          <select
-                            value={formCategory}
-                            onChange={(e) => {
-                              setFormCategory(e.target.value);
-                              if (stepErrors.category) setStepErrors(prev => ({ ...prev, category: '' }));
-                            }}
-                            className={`w-full bg-white border rounded-xl py-2.5 px-3 text-xs text-slate-800 focus:outline-hidden focus:ring-4 transition-all cursor-pointer ${
-                              stepErrors.category
-                                ? 'border-red-350 focus:border-red-400 focus:ring-red-100'
-                                : 'border-slate-200 focus:border-amber-400 focus:ring-amber-400/10'
-                            }`}
-                          >
-                            {categories.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
-                          </select>
-                          {stepErrors.category && (
-                            <p className="text-[10px] font-semibold text-red-500 mt-1">{stepErrors.category}</p>
-                          )}
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                        <div className="space-y-3">
+                          <div>
+                            <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">
+                              Main Category <span className="text-red-500">*</span>
+                            </label>
+                            <select
+                              value={formMainCategory}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setFormMainCategory(val);
+                                setFormSubCategory('');
+                                setFormChildCategory('');
+                                setFormCategory(val); // backward compatibility
+                                if (stepErrors.mainCategory) setStepErrors(prev => ({ ...prev, mainCategory: '' }));
+                              }}
+                              className={`w-full bg-white border rounded-xl py-2.5 px-3 text-xs text-slate-800 focus:outline-hidden focus:ring-4 transition-all cursor-pointer ${
+                                stepErrors.mainCategory
+                                  ? 'border-red-350 focus:border-red-400 focus:ring-red-100'
+                                  : 'border-slate-200 focus:border-amber-400 focus:ring-amber-400/10'
+                              }`}
+                            >
+                              <option value="">-- Select Main --</option>
+                              {categories.filter(c => c.level === 'main' || !c.level).map(c => (
+                                <option key={c.id} value={c.name}>{c.name}</option>
+                              ))}
+                            </select>
+                            {stepErrors.mainCategory && (
+                              <p className="text-[10px] font-semibold text-red-500 mt-1">{stepErrors.mainCategory}</p>
+                            )}
+                          </div>
+
+                          <div>
+                            <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">
+                              Sub Category <span className="text-red-500">*</span>
+                            </label>
+                            <select
+                              value={formSubCategory}
+                              disabled={!formMainCategory}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setFormSubCategory(val);
+                                setFormChildCategory('');
+                                if (stepErrors.subCategory) setStepErrors(prev => ({ ...prev, subCategory: '' }));
+                              }}
+                              className={`w-full bg-white border rounded-xl py-2.5 px-3 text-xs text-slate-800 focus:outline-hidden focus:ring-4 transition-all cursor-pointer ${
+                                !formMainCategory ? 'opacity-50 cursor-not-allowed bg-slate-50' : ''
+                              } ${
+                                stepErrors.subCategory
+                                  ? 'border-red-350 focus:border-red-400 focus:ring-red-100'
+                                  : 'border-slate-200 focus:border-amber-400 focus:ring-amber-400/10'
+                              }`}
+                            >
+                              <option value="">{formMainCategory ? '-- Select Sub --' : 'Select Main first'}</option>
+                              {categories.filter(c => {
+                                const isSub = c.level === 'sub';
+                                const mainParentId = categories.find(p => p.name === formMainCategory && (p.level === 'main' || !p.level))?.id;
+                                return isSub && c.parentId === mainParentId;
+                              }).map(c => (
+                                <option key={c.id} value={c.name}>{c.name}</option>
+                              ))}
+                            </select>
+                            {stepErrors.subCategory && (
+                              <p className="text-[10px] font-semibold text-red-500 mt-1">{stepErrors.subCategory}</p>
+                            )}
+                          </div>
+
+                          <div>
+                            <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">
+                              Child Category <span className="text-red-500">*</span>
+                            </label>
+                            <select
+                              value={formChildCategory}
+                              disabled={!formSubCategory}
+                              onChange={(e) => {
+                                const val = e.target.value;
+                                setFormChildCategory(val);
+                                if (stepErrors.childCategory) setStepErrors(prev => ({ ...prev, childCategory: '' }));
+                              }}
+                              className={`w-full bg-white border rounded-xl py-2.5 px-3 text-xs text-slate-800 focus:outline-hidden focus:ring-4 transition-all cursor-pointer ${
+                                !formSubCategory ? 'opacity-50 cursor-not-allowed bg-slate-50' : ''
+                              } ${
+                                stepErrors.childCategory
+                                  ? 'border-red-350 focus:border-red-400 focus:ring-red-100'
+                                  : 'border-slate-200 focus:border-amber-400 focus:ring-amber-400/10'
+                              }`}
+                            >
+                              <option value="">{formSubCategory ? '-- Select Child --' : 'Select Sub first'}</option>
+                              {categories.filter(c => {
+                                const isChild = c.level === 'child';
+                                const mainParentId = categories.find(p => p.name === formMainCategory && (p.level === 'main' || !p.level))?.id;
+                                const subParentId = categories.find(s => s.name === formSubCategory && s.level === 'sub' && s.parentId === mainParentId)?.id;
+                                return isChild && c.parentId === subParentId;
+                              }).map(c => (
+                                <option key={c.id} value={c.name}>{c.name}</option>
+                              ))}
+                            </select>
+                            {stepErrors.childCategory && (
+                              <p className="text-[10px] font-semibold text-red-500 mt-1">{stepErrors.childCategory}</p>
+                            )}
+                          </div>
                         </div>
-                        <div>
+
+                        <div className="flex flex-col justify-start">
                           <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">
                             Brand <span className="text-red-500">*</span>
                           </label>
@@ -1965,14 +2670,14 @@ export default function ProductManagement({
                   >
                     <div className="bg-slate-50 border border-slate-150 p-5 rounded-2xl space-y-4 shadow-3xs">
                       <div className="border-b border-slate-100 pb-3">
-                        <span className="text-[9px] font-extrabold text-amber-500 uppercase tracking-widest font-mono">Step 2 of 4</span>
+                        <span className="text-[9px] font-extrabold text-amber-500 uppercase tracking-widest font-mono">Step 2 of 5</span>
                         <h3 className="text-sm font-black text-slate-900 mt-1">Pricing & Thresholds</h3>
                         <p className="text-[10px] text-slate-400 mt-0.5 leading-relaxed">Specify items' purchase costs, customer pricing structures, and inventory alarm ranges.</p>
                       </div>
 
                       <div className="grid grid-cols-2 gap-4">
                         <div>
-                          <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">Cost Price</label>
+                          <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">Purchase Price</label>
                           <div className="relative flex rounded-xl shadow-3xs">
                             <span className="inline-flex items-center rounded-l-xl border border-r-0 border-slate-200 bg-slate-100 px-3 text-slate-500 text-xs font-mono font-bold">
                               ৳
@@ -1982,7 +2687,7 @@ export default function ProductManagement({
                               disabled={isStaff}
                               value={formCostPrice}
                               onChange={(e) => {
-                                setFormCostPrice(Number(e.target.value));
+                                setFormCostPrice(e.target.value === '' ? '' : Number(e.target.value));
                                 if (stepErrors.costPrice) setStepErrors(prev => ({ ...prev, costPrice: '' }));
                               }}
                               className={`block w-full min-w-0 flex-1 rounded-none rounded-r-xl border bg-white py-2.5 px-3 text-xs text-slate-800 focus:outline-hidden font-mono focus:ring-4 transition-all ${
@@ -2009,7 +2714,7 @@ export default function ProductManagement({
                               type="number"
                               value={formSellingPrice}
                               onChange={(e) => {
-                                setFormSellingPrice(Number(e.target.value));
+                                setFormSellingPrice(e.target.value === '' ? '' : Number(e.target.value));
                                 if (stepErrors.sellingPrice) setStepErrors(prev => ({ ...prev, sellingPrice: '' }));
                               }}
                               className={`block w-full min-w-0 flex-1 rounded-none rounded-r-xl border bg-white py-2.5 px-3 text-xs text-slate-800 focus:outline-hidden font-mono font-bold focus:ring-4 transition-all ${
@@ -2025,24 +2730,34 @@ export default function ProductManagement({
                         </div>
                       </div>
 
-                      {/* Calculated profit margin percentage */}
+                      {/* Calculated profit display */}
                       {Number(formSellingPrice) > 0 && (
-                        <div className="flex items-center justify-between text-[11px] font-bold p-3 bg-white border border-slate-150 rounded-xl shadow-3xs">
-                          <span className="text-slate-500">Calculated Profit Margin:</span>
-                          {(() => {
-                            const marginPercent = Math.round(((Number(formSellingPrice) - Number(formCostPrice)) / Number(formSellingPrice)) * 100);
-                            return (
-                              <span className={`px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider ${
-                                marginPercent > 0 
-                                  ? "bg-emerald-50 text-emerald-700 border border-emerald-200" 
-                                  : marginPercent < 0 
-                                    ? "bg-red-50 text-red-700 border border-red-200" 
-                                    : "bg-slate-50 text-slate-700 border border-slate-200"
-                              }`}>
-                                {marginPercent}% {marginPercent > 0 ? "Profit" : marginPercent < 0 ? "Loss" : "Break-even"}
-                              </span>
-                            );
-                          })()}
+                        <div className="flex flex-col gap-2 p-3 bg-white border border-slate-150 rounded-xl shadow-3xs">
+                          <div className="flex items-center justify-between text-[11px] font-bold">
+                            <span className="text-slate-500">Calculated Profit (৳):</span>
+                            <span className={`font-black font-mono text-xs ${
+                              Number(formSellingPrice) - Number(formCostPrice) >= 0 ? "text-emerald-600" : "text-red-600"
+                            }`}>
+                              ৳{(Number(formSellingPrice) - Number(formCostPrice)).toLocaleString()}
+                            </span>
+                          </div>
+                          <div className="flex items-center justify-between text-[11px] font-bold border-t border-slate-100 pt-2">
+                            <span className="text-slate-500">Profit Margin:</span>
+                            {(() => {
+                              const marginPercent = Math.round(((Number(formSellingPrice) - Number(formCostPrice)) / Number(formSellingPrice)) * 100);
+                              return (
+                                <span className={`px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider ${
+                                  marginPercent > 0 
+                                    ? "bg-emerald-50 text-emerald-700 border border-emerald-200" 
+                                    : marginPercent < 0 
+                                      ? "bg-red-50 text-red-700 border border-red-200" 
+                                      : "bg-slate-50 text-slate-700 border border-slate-200"
+                                }`}>
+                                  {marginPercent}% {marginPercent > 0 ? "Profit" : marginPercent < 0 ? "Loss" : "Break-even"}
+                                </span>
+                              );
+                            })()}
+                          </div>
                         </div>
                       )}
 
@@ -2060,7 +2775,7 @@ export default function ProductManagement({
                           type="number"
                           value={formReorderThreshold}
                           onChange={(e) => {
-                            setFormReorderThreshold(Number(e.target.value));
+                            setFormReorderThreshold(e.target.value === '' ? '' : Number(e.target.value));
                             if (stepErrors.reorderThreshold) setStepErrors(prev => ({ ...prev, reorderThreshold: '' }));
                           }}
                           className={`w-full bg-white border rounded-xl py-2.5 px-3.5 text-xs text-slate-800 focus:outline-hidden focus:ring-4 transition-all ${
@@ -2087,7 +2802,7 @@ export default function ProductManagement({
                     <div className="bg-slate-50 border border-slate-150 p-5 rounded-2xl space-y-4 shadow-3xs">
                       <div className="flex justify-between items-center border-b border-slate-100 pb-3">
                         <div>
-                          <span className="text-[9px] font-extrabold text-amber-500 uppercase tracking-widest font-mono">Step 3 of 4</span>
+                          <span className="text-[9px] font-extrabold text-amber-500 uppercase tracking-widest font-mono">Step 3 of 5</span>
                           <h3 className="text-sm font-black text-slate-900 mt-1">Variants & Stock</h3>
                           <p className="text-[10px] text-slate-400 mt-0.5 leading-relaxed">Map all physical product sizes and colors.</p>
                         </div>
@@ -2261,7 +2976,7 @@ export default function ProductManagement({
                                 type="number"
                                 value={variant.stock}
                                 onChange={(e) => {
-                                  updateVariantValue(variant.id, 'stock', Number(e.target.value));
+                                  updateVariantValue(variant.id, 'stock', e.target.value === '' ? '' : Number(e.target.value));
                                   if (stepErrors[`variant-stock-${variant.id}`]) {
                                     setStepErrors(prev => ({ ...prev, [`variant-stock-${variant.id}`]: '' }));
                                   }
@@ -2290,7 +3005,7 @@ export default function ProductManagement({
                   >
                     <div className="bg-slate-50 border border-slate-150 p-5 rounded-2xl space-y-4 shadow-3xs">
                       <div className="border-b border-slate-100 pb-3">
-                        <span className="text-[9px] font-extrabold text-amber-500 uppercase tracking-widest font-mono">Step 4 of 4</span>
+                        <span className="text-[9px] font-extrabold text-amber-500 uppercase tracking-widest font-mono">Step 4 of 5</span>
                         <h3 className="text-sm font-black text-slate-900 mt-1">Product Photography & Barcode</h3>
                         <p className="text-[10px] text-slate-400 mt-0.5 leading-relaxed">Upload visual gadget images and review auto-generated barcode configurations.</p>
                       </div>
@@ -2337,6 +3052,104 @@ export default function ProductManagement({
                     </div>
                   </motion.div>
                 )}
+
+                {/* STEP 5: REVIEW & SUBMIT */}
+                {wizardStep === 5 && (
+                  <motion.div
+                    key="step-5"
+                    initial={{ opacity: 0, x: 15 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ duration: 0.25, ease: "easeOut" }}
+                    className="space-y-4"
+                  >
+                    <div className="bg-slate-50 border border-slate-150 p-5 rounded-2xl space-y-4 shadow-3xs text-xs">
+                      <div className="border-b border-slate-100 pb-3">
+                        <span className="text-[9px] font-extrabold text-amber-500 uppercase tracking-widest font-mono">Step 5 of 5</span>
+                        <h3 className="text-sm font-black text-slate-900 mt-1">Review & Submit</h3>
+                        <p className="text-[10px] text-slate-400 mt-0.5 leading-relaxed">Review the entered specs and variant information before submission.</p>
+                      </div>
+
+                      <div className="space-y-3">
+                        <div className="bg-white p-4 rounded-xl border border-slate-150 space-y-2.5">
+                          <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Basic Details</h4>
+                          <div className="grid grid-cols-2 gap-y-2 gap-x-4">
+                            <div>
+                              <span className="text-slate-400 font-medium block">Display Name:</span>
+                              <span className="font-bold text-slate-800">{formName}</span>
+                            </div>
+                            <div>
+                              <span className="text-slate-400 font-medium block">SKU Code:</span>
+                              <span className="font-mono font-black text-slate-900 uppercase">{formSku}</span>
+                            </div>
+                            <div>
+                              <span className="text-slate-400 font-medium block">Hierarchy:</span>
+                              <span className="font-semibold text-slate-700">
+                                {formMainCategory} → {formSubCategory} → {formChildCategory}
+                              </span>
+                            </div>
+                            <div>
+                              <span className="text-slate-400 font-medium block">Brand & Division:</span>
+                              <span className="font-semibold text-slate-700">{formBrand} ({formSubBrand})</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="bg-white p-4 rounded-xl border border-slate-150 space-y-2.5">
+                          <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Financial & Stock specs</h4>
+                          <div className="grid grid-cols-2 gap-y-2 gap-x-4">
+                            <div>
+                              <span className="text-slate-400 font-medium block">Purchase Price:</span>
+                              <span className="font-bold text-slate-800">৳{Number(formCostPrice).toLocaleString()}</span>
+                            </div>
+                            <div>
+                              <span className="text-slate-400 font-medium block">Selling Price:</span>
+                              <span className="font-bold text-slate-800">৳{Number(formSellingPrice).toLocaleString()}</span>
+                            </div>
+                            <div>
+                              <span className="text-slate-400 font-medium block">Live Profit (৳):</span>
+                              <span className={`font-black ${
+                                Number(formSellingPrice) - Number(formCostPrice) >= 0 ? "text-emerald-600" : "text-red-600"
+                              }`}>
+                                ৳{(Number(formSellingPrice) - Number(formCostPrice)).toLocaleString()}
+                              </span>
+                            </div>
+                            <div>
+                              <span className="text-slate-400 font-medium block">Alert Level:</span>
+                              <span className="font-semibold text-slate-700">{formReorderThreshold} units</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="bg-white p-4 rounded-xl border border-slate-150 space-y-2.5">
+                          <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Variants Configured</h4>
+                          <div className="space-y-1.5 max-h-[150px] overflow-y-auto">
+                            {formVariants.map((v, i) => (
+                              <div key={v.id} className="flex justify-between items-center bg-slate-50 p-2 rounded-lg border border-slate-100 text-[11px]">
+                                <span className="font-bold text-slate-700">
+                                  Variant #{i + 1}: {v.color} / {v.model}
+                                </span>
+                                <span className="font-mono text-slate-500">
+                                  {v.stock} pcs | Code: {formSku}-{v.color.toUpperCase().replace(/\s+/g, '')}-{v.model.toUpperCase().replace(/\s+/g, '')}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+
+                        {formImages.length > 0 && (
+                          <div className="bg-white p-4 rounded-xl border border-slate-150 space-y-2">
+                            <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Uploaded Images ({formImages.length})</h4>
+                            <div className="flex gap-2 overflow-x-auto py-1">
+                              {formImages.map((img, idx) => (
+                                <img key={idx} src={img} alt="Thumb" className="w-10 h-10 object-cover rounded-md border border-slate-200" referrerPolicy="no-referrer" />
+                              ))}
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  </motion.div>
+                )}
               </form>
 
               {/* Drawer Sticky Footer with Back/Next/Publish controls */}
@@ -2361,7 +3174,7 @@ export default function ProductManagement({
                   </button>
                 )}
 
-                {wizardStep < 4 ? (
+                {wizardStep < 5 ? (
                   <>
                     {wizardStep > 1 && (
                       <button
@@ -2405,7 +3218,7 @@ export default function ProductManagement({
                       ) : (
                         <>
                           <Check size={14} />
-                          <span>{editModeProduct ? 'Commit Updates' : 'Publish to Catalog'}</span>
+                          <span>{editModeProduct ? 'Commit Updates' : (user?.role === 'staff' ? 'Submit for Review' : 'Publish to Catalog')}</span>
                         </>
                       )}
                     </button>
@@ -2473,6 +3286,35 @@ export default function ProductManagement({
                 className="py-2 px-4 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs rounded-xl transition-all cursor-pointer"
               >
                 Done
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {confirmDialog?.isOpen && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs">
+          <div className="bg-white rounded-2xl border border-slate-150 p-6 max-w-sm w-full space-y-4 shadow-xl">
+            <div className="space-y-1.5">
+              <h3 className="text-sm font-black text-slate-950 font-sans">{confirmDialog.title}</h3>
+              <p className="text-xs text-slate-500 leading-relaxed font-sans">{confirmDialog.message}</p>
+            </div>
+            <div className="flex gap-2.5 justify-end">
+              <button
+                type="button"
+                onClick={() => setConfirmDialog(null)}
+                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl text-xs font-bold transition-all cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={() => {
+                  confirmDialog.onConfirm();
+                }}
+                className="px-4 py-2 bg-slate-900 hover:bg-slate-950 text-white rounded-xl text-xs font-bold transition-all shadow-md cursor-pointer"
+              >
+                Confirm
               </button>
             </div>
           </div>

@@ -67,8 +67,10 @@ export interface Product {
   id: string;
   name: string;
   sku: string;
-  category: string;
-  subCategory?: string;
+  category: string; // for backward compatibility/displays
+  mainCategory?: string; // name/id of 3-level main category
+  subCategory?: string; // name/id of 3-level sub category
+  childCategory?: string; // name/id of 3-level child category
   brand: string;
   subBrand: 'SAT' | 'GZ' | 'RTX'; // Sky Automation Tech, GadgetZu, RTX Gadget
   costPrice: number;
@@ -79,6 +81,8 @@ export interface Product {
   archived: boolean;
   createdAt: number;
   barcodeValue?: string;
+  status?: 'pending_review' | 'approved' | 'rejected';
+  rejectionReason?: string;
 }
 
 export type StockLogType = 'in' | 'out' | 'adjustment';
@@ -102,7 +106,8 @@ export interface StockLog {
 export interface Category {
   id: string;
   name: string;
-  subCategories: string[];
+  level: 'main' | 'sub' | 'child';
+  parentId: string | null;
 }
 
 export interface Brand {

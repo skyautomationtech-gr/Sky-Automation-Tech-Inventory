@@ -84,11 +84,11 @@ const MOCK_PRODUCTS: Product[] = [
 ];
 
 const MOCK_CATEGORIES: Category[] = [
-  { id: 'cat-1', name: 'Smart Phones', subCategories: ['Apple', 'Samsung', 'Xiaomi'] },
-  { id: 'cat-2', name: 'Adapters & Cables', subCategories: ['GaN Chargers', 'Type-C Cables'] },
-  { id: 'cat-3', name: 'Audio Gear', subCategories: ['Earbuds', 'Neckbands'] },
-  { id: 'cat-4', name: 'Power Banks', subCategories: ['Wireless Magsafe'] },
-  { id: 'cat-5', name: 'Smart Wearables', subCategories: ['Smartwatches'] }
+  { id: 'cat-1', name: 'Smart Phones', level: 'main', parentId: null },
+  { id: 'cat-2', name: 'Adapters & Cables', level: 'main', parentId: null },
+  { id: 'cat-3', name: 'Audio Gear', level: 'main', parentId: null },
+  { id: 'cat-4', name: 'Power Banks', level: 'main', parentId: null },
+  { id: 'cat-5', name: 'Smart Wearables', level: 'main', parentId: null }
 ];
 
 const MOCK_BRANDS: Brand[] = [

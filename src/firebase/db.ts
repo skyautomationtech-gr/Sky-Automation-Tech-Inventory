@@ -367,21 +367,21 @@ export async function getCategories(): Promise<Category[]> {
   }
 }
 
-export async function addCategory(name: string, subCategories: string[]): Promise<Category> {
+export async function addCategory(name: string, level: 'main' | 'sub' | 'child' = 'main', parentId: string | null = null): Promise<Category> {
   try {
     const colRef = collection(db, 'categories');
-    const data = sanitizeData({ name, subCategories });
+    const data = sanitizeData({ name, level, parentId });
     const docRef = await addDoc(colRef, data);
-    return { id: docRef.id, name, subCategories };
+    return { id: docRef.id, name, level, parentId };
   } catch (error) {
     handleFirestoreError(error, OperationType.CREATE, 'categories');
   }
 }
 
-export async function updateCategory(id: string, name: string, subCategories: string[]): Promise<void> {
+export async function updateCategory(id: string, name: string, level: 'main' | 'sub' | 'child' = 'main', parentId: string | null = null): Promise<void> {
   try {
     const docRef = doc(db, 'categories', id);
-    const data = sanitizeData({ name, subCategories });
+    const data = sanitizeData({ name, level, parentId });
     await updateDoc(docRef, data);
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, 'categories/' + id);
@@ -389,9 +389,25 @@ export async function updateCategory(id: string, name: string, subCategories: st
 }
 
 export async function deleteCategory(id: string): Promise<void> {
-  const docRef = doc(db, 'categories', id);
   try {
-    await deleteDoc(docRef);
+    const categories = await getCategories();
+    const idsToDelete = new Set<string>([id]);
+    
+    let addedNew = true;
+    while (addedNew) {
+      addedNew = false;
+      for (const cat of categories) {
+        if (cat.parentId && idsToDelete.has(cat.parentId) && !idsToDelete.has(cat.id)) {
+          idsToDelete.add(cat.id);
+          addedNew = true;
+        }
+      }
+    }
+
+    for (const deleteId of idsToDelete) {
+      const docRef = doc(db, 'categories', deleteId);
+      await deleteDoc(docRef);
+    }
   } catch (error) {
     console.error('deleteCategory failed:', error);
     throw error;
@@ -611,15 +627,40 @@ export async function seedInitialDataIfEmpty(): Promise<void> {
     const categories = await getCategories();
     if (categories.length === 0) {
       const defaults = [
-        { name: 'Smart Phones', subCategories: ['Apple', 'Samsung', 'Xiaomi', 'OnePlus'] },
-        { name: 'Adapters & Cables', subCategories: ['GaN Chargers', 'Type-C Cables', 'Lightning Cables', 'Car Chargers'] },
-        { name: 'Audio Gear', subCategories: ['Earbuds', 'Neckbands', 'Headphones', 'Bluetooth Speakers'] },
-        { name: 'Power Banks', subCategories: ['20000mAh', 'Wireless Magsafe', 'Fast Charging'] },
-        { name: 'Smart Wearables', subCategories: ['Smartwatches', 'Fitness Bands', 'Strap Accessories'] },
-        { name: 'Protective Gear', subCategories: ['Tempered Glass', 'Silicon Cases', 'Premium Covers'] }
+        {
+          main: "Audio",
+          subs: [
+            { sub: "Earbuds", children: ["TWS", "Wired", "Gaming Earbuds"] },
+            { sub: "Headphones", children: ["Over-Ear", "On-Ear", "Wireless ANC"] },
+            { sub: "Speakers", children: ["Bluetooth", "Soundbars", "Smart Speakers"] }
+          ]
+        },
+        {
+          main: "Power & Charging",
+          subs: [
+            { sub: "GaN Chargers", children: ["65W USB-C", "100W Dual-Port", "Desktop Chargers"] },
+            { sub: "Cables", children: ["Type-C to Type-C", "Lightning MFi", "Multi-Cables 3-in-1"] },
+            { sub: "Power Banks", children: ["20000mAh Power Delivery", "Wireless MagSafe", "Pocket Chargers"] }
+          ]
+        },
+        {
+          main: "Mobile Accessories",
+          subs: [
+            { sub: "Protective Cases", children: ["Silicon Back Cover", "Premium Rugged Armor", "Leather Wallet Case"] },
+            { sub: "Screen Protectors", children: ["Tempered Glass 9D", "Matte Gaming Film", "Privacy Protectors"] },
+            { sub: "Mounts & Stands", children: ["Car MagSafe Mount", "Desktop Stand", "Ring Holders"] }
+          ]
+        }
       ];
-      for (const cat of defaults) {
-        await addCategory(cat.name, cat.subCategories);
+
+      for (const item of defaults) {
+        const mainCat = await addCategory(item.main, "main", null);
+        for (const subItem of item.subs) {
+          const subCat = await addCategory(subItem.sub, "sub", mainCat.id);
+          for (const childName of subItem.children) {
+            await addCategory(childName, "child", subCat.id);
+          }
+        }
       }
     }
 
