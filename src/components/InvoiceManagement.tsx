@@ -246,7 +246,27 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
         scale: 2, // higher scale for printable quality
         useCORS: true,
         backgroundColor: '#ffffff',
-        logging: true
+        logging: true,
+        onclone: (clonedDoc) => {
+          const printArea = clonedDoc.getElementById('invoice-print-area');
+          if (printArea) {
+            // Apply simple standard colors to the print area to avoid oklch parsing
+            const allElements = printArea.querySelectorAll('*');
+            allElements.forEach((el) => {
+              const htmlEl = el as HTMLElement;
+              // Only override if it has a color or background color
+              if (htmlEl.style.color && htmlEl.style.color.includes('oklch')) {
+                 htmlEl.style.color = 'black';
+              }
+              if (htmlEl.style.backgroundColor && htmlEl.style.backgroundColor.includes('oklch')) {
+                 htmlEl.style.backgroundColor = 'transparent';
+              }
+            });
+            // Force the root to have standard colors
+            printArea.style.color = 'black';
+            printArea.style.backgroundColor = 'white';
+          }
+        }
       });
       
       const imgData = canvas.toDataURL('image/png');
