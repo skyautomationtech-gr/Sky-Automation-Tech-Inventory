@@ -250,16 +250,28 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
         onclone: (clonedDoc) => {
           const printArea = clonedDoc.getElementById('invoice-print-area');
           if (printArea) {
-            // Inject a style sheet to override ALL colors and background colors in the print area
-            // This is safer than iterating and checking each element's style property.
+            // Remove stylesheets that might contain oklch
+            const styleSheets = Array.from(clonedDoc.styleSheets);
+            styleSheets.forEach((sheet) => {
+              try {
+                const rules = Array.from(sheet.cssRules || []);
+                rules.forEach((rule) => {
+                  if (rule.cssText.includes('oklch')) {
+                    sheet.deleteRule(Array.from(sheet.cssRules).indexOf(rule));
+                  }
+                });
+              } catch (e) {
+                // Some stylesheets might be cross-origin and throw errors when accessed
+              }
+            });
+
+            // Inject a style sheet to force standard colors
             const style = clonedDoc.createElement('style');
             style.innerHTML = `
               #invoice-print-area, #invoice-print-area * {
                 color: #000000 !important;
                 background-color: #ffffff !important;
                 border-color: #000000 !important;
-                fill: #000000 !important;
-                stroke: #000000 !important;
               }
             `;
             clonedDoc.head.appendChild(style);
