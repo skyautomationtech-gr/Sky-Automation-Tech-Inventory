@@ -85,7 +85,7 @@ export interface Product {
   rejectionReason?: string;
 }
 
-export type StockLogType = 'in' | 'out' | 'adjustment';
+export type StockLogType = 'in' | 'out' | 'adjustment' | 'sale' | 'cancellation_restock' | 'return_restock';
 
 export interface StockLog {
   id: string;
@@ -101,6 +101,7 @@ export interface StockLog {
   afterQty: number;
   refNo?: string;
   supplierName?: string;
+  orderId?: string;
 }
 
 export interface Category {
@@ -125,3 +126,92 @@ export interface CompanySettings {
   };
   onboarded: boolean;
 }
+
+export interface Customer {
+  id: string;
+  name: string;
+  phone: string;
+  address?: string;
+  subBrand?: string;
+  notes?: string;
+  totalOrders: number;
+  lifetimeValue: number;
+  createdAt: number;
+}
+
+export type SalesChannel = 'Facebook' | 'TikTok' | 'Instagram' | 'Daraz' | 'CartUp' | 'Packly' | 'Direct/WhatsApp';
+export type CourierName = 'Steadfast (Outside Dhaka)' | 'CarryBee (Inside Dhaka)';
+export type PaymentMethod = 'Cash' | 'bKash' | 'Nagad' | 'Bank Transfer';
+export type PaymentStatus = 'Paid' | 'Due' | 'Partial';
+export type OrderStatus = 'Pending' | 'Confirmed' | 'Packed' | 'Shipped' | 'Delivered' | 'Returned/Cancelled';
+
+export interface OrderItem {
+  productId: string;
+  variantId: string;
+  productName: string;
+  variantLabel: string;
+  qty: number;
+  unitPrice: number;
+}
+
+export interface OrderStatusHistory {
+  status: OrderStatus;
+  timestamp: number;
+  changedBy: string;
+}
+
+export interface OrderPaymentHistory {
+  amount: number;
+  method: string;
+  date: number;
+  recordedBy: string;
+}
+
+export interface Order {
+  id: string;
+  customerId: string;
+  customerName: string;
+  customerPhone: string;
+  subBrand: 'SAT' | 'GZ' | 'RTX';
+  salesChannel: SalesChannel;
+  items: OrderItem[];
+  totalAmount: number;
+  courier: CourierName;
+  courierTrackingNumber?: string;
+  paymentMethod: PaymentMethod;
+  paymentStatus: PaymentStatus;
+  amountPaid: number;
+  amountDue: number;
+  status: OrderStatus;
+  statusHistory: OrderStatusHistory[];
+  deliveryAddress: string;
+  notes?: string;
+  createdBy: string;
+  createdAt: number;
+  invoiceId?: string;
+  paymentHistory?: OrderPaymentHistory[];
+}
+
+export interface Invoice {
+  id: string;
+  orderId: string;
+  invoiceNumber: string;
+  subBrand: 'SAT' | 'GZ' | 'RTX';
+  subBrandPrefix: string;
+  customerName: string;
+  customerPhone: string;
+  items: OrderItem[];
+  totalAmount: number;
+  amountPaid: number;
+  amountDue: number;
+  paymentStatus: PaymentStatus;
+  courier: CourierName;
+  courierTrackingNumber?: string;
+  generatedAt: number;
+  generatedBy: string;
+  voided: boolean;
+  voidedReason?: string;
+  voidedBy?: string;
+  voidedAt?: number;
+}
+

@@ -24,7 +24,13 @@ import {
   Brand, 
   CompanySettings, 
   Variant,
-  PrivateEmploymentInfo
+  PrivateEmploymentInfo,
+  Customer,
+  Order,
+  StockLogType,
+  OrderStatus,
+  Invoice,
+  PaymentStatus
 } from '../types';
 
 // --- Data Sanitization Helper ---
@@ -608,7 +614,8 @@ export async function seedInitialDataIfEmpty(): Promise<void> {
           stockIn: true,
           stockOut: true,
           stockAdjustment: true,
-          manageOrders: true
+          manageOrders: true,
+          voidInvoice: false
         },
         staff: {
           addProduct: false,
@@ -618,7 +625,8 @@ export async function seedInitialDataIfEmpty(): Promise<void> {
           stockIn: true,
           stockOut: true,
           stockAdjustment: false,
-          manageOrders: false
+          manageOrders: false,
+          voidInvoice: false
         }
       });
       console.log('Seeded rolePermissions default settings.');
@@ -998,4 +1006,502 @@ export async function saveProductAttributes(attributes: ProductAttributes): Prom
     console.error('saveProductAttributes failed:', error);
   }
 }
+
+// ==========================================
+// CUSTOMER & ORDER OPERATIONS
+// ==========================================
+
+export async function getCustomers(): Promise<Customer[]> {
+  try {
+    const colRef = collection(db, 'customers');
+    const q = query(colRef, orderBy('createdAt', 'desc'));
+    const snapshot = await getDocs(q);
+    const list: Customer[] = [];
+    snapshot.forEach(docSnap => {
+      list.push({ id: docSnap.id, ...docSnap.data() } as Customer);
+    });
+    return list;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, 'customers');
+  }
+}
+
+export async function addCustomer(customerData: Omit<Customer, 'id'>): Promise<string> {
+  try {
+    const colRef = collection(db, 'customers');
+    const sanitized = sanitizeData(customerData);
+    const docRef = await addDoc(colRef, sanitized);
+    return docRef.id;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, 'customers');
+  }
+}
+
+export async function updateCustomer(id: string, customerData: Partial<Customer>): Promise<void> {
+  try {
+    const docRef = doc(db, 'customers', id);
+    const sanitized = sanitizeData(customerData);
+    await updateDoc(docRef, sanitized);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, 'customers/' + id);
+  }
+}
+
+export async function getOrders(): Promise<Order[]> {
+  try {
+    const colRef = collection(db, 'orders');
+    const q = query(colRef, orderBy('createdAt', 'desc'));
+    const snapshot = await getDocs(q);
+    const list: Order[] = [];
+    snapshot.forEach(docSnap => {
+      list.push({ id: docSnap.id, ...docSnap.data() } as Order);
+    });
+    return list;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, 'orders');
+  }
+}
+
+export async function addOrder(orderData: Omit<Order, 'id'>): Promise<string> {
+  try {
+    const colRef = collection(db, 'orders');
+    const sanitized = sanitizeData(orderData);
+    const docRef = await addDoc(colRef, sanitized);
+    return docRef.id;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, 'orders');
+  }
+}
+
+export async function deleteOrder(id: string): Promise<void> {
+  try {
+    const docRef = doc(db, 'orders', id);
+    await deleteDoc(docRef);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, 'orders/' + id);
+  }
+}
+
+export async function recalculateCustomerStats(customerId: string): Promise<void> {
+  try {
+    const ordersCol = collection(db, 'orders');
+    const q = query(ordersCol, where('customerId', '==', customerId));
+    const snapshot = await getDocs(q);
+    
+    let totalOrders = 0;
+    let lifetimeValue = 0;
+    
+    snapshot.forEach(docSnap => {
+      const order = docSnap.data() as Order;
+      totalOrders++;
+      if (order.status !== 'Returned/Cancelled') {
+        lifetimeValue += order.totalAmount;
+      }
+    });
+    
+    const customerRef = doc(db, 'customers', customerId);
+    await updateDoc(customerRef, {
+      totalOrders,
+      lifetimeValue
+    });
+  } catch (err) {
+    console.error('recalculateCustomerStats failed:', err);
+  }
+}
+
+// Order Status machine & Stock sync helper
+export async function updateOrderAndHandleStock(
+  orderId: string,
+  updatedOrder: Order,
+  oldStatus: OrderStatus,
+  userId: string,
+  userName: string
+): Promise<void> {
+  try {
+    const orderDocRef = doc(db, 'orders', orderId);
+    
+    await runTransaction(db, async (transaction) => {
+      const newStatus = updatedOrder.status;
+      const isStockDeducted = (status: OrderStatus) => ['Confirmed', 'Packed', 'Shipped', 'Delivered'].includes(status);
+      
+      const shouldDeduct = !isStockDeducted(oldStatus) && isStockDeducted(newStatus);
+      const shouldRestore = isStockDeducted(oldStatus) && (newStatus === 'Returned/Cancelled');
+      
+      if (shouldDeduct) {
+        console.log(`Deducting stock for order ${orderId} during status change: ${oldStatus} -> ${newStatus}`);
+        for (const item of updatedOrder.items) {
+          const productRef = doc(db, 'products', item.productId);
+          const productSnap = await transaction.get(productRef);
+          
+          if (productSnap.exists()) {
+            const productData = productSnap.data() as Product;
+            const updatedVariants = productData.variants.map((v: Variant) => {
+              if (v.id === item.variantId) {
+                const beforeQty = v.stock;
+                const afterQty = Math.max(0, beforeQty - item.qty);
+                
+                // Write a stock log inside the transaction
+                const logRef = doc(collection(db, 'stockLogs'));
+                const stockLog: Omit<StockLog, 'id'> = {
+                  productId: item.productId,
+                  productName: productData.name,
+                  type: 'sale',
+                  qty: -item.qty,
+                  reason: 'Sale',
+                  userId,
+                  userName,
+                  timestamp: Date.now(),
+                  beforeQty,
+                  afterQty,
+                  orderId,
+                  refNo: `ORDER-${orderId}`
+                };
+                transaction.set(logRef, sanitizeData(stockLog));
+                
+                return { ...v, stock: afterQty };
+              }
+              return v;
+            });
+            transaction.update(productRef, { variants: updatedVariants });
+          }
+        }
+      } else if (shouldRestore) {
+        console.log(`Restoring stock for order ${orderId} during status change: ${oldStatus} -> ${newStatus}`);
+        for (const item of updatedOrder.items) {
+          const productRef = doc(db, 'products', item.productId);
+          const productSnap = await transaction.get(productRef);
+          
+          if (productSnap.exists()) {
+            const productData = productSnap.data() as Product;
+            const updatedVariants = productData.variants.map((v: Variant) => {
+              if (v.id === item.variantId) {
+                const beforeQty = v.stock;
+                const afterQty = beforeQty + item.qty;
+                
+                const typeStr: StockLogType = newStatus === 'Returned/Cancelled' ? 'return_restock' : 'cancellation_restock';
+                const reasonStr = newStatus === 'Returned/Cancelled' ? 'Return Restock' : 'Cancellation Restock';
+                
+                // Write a stock log inside the transaction
+                const logRef = doc(collection(db, 'stockLogs'));
+                const stockLog: Omit<StockLog, 'id'> = {
+                  productId: item.productId,
+                  productName: productData.name,
+                  type: typeStr,
+                  qty: item.qty,
+                  reason: reasonStr,
+                  userId,
+                  userName,
+                  timestamp: Date.now(),
+                  beforeQty,
+                  afterQty,
+                  orderId,
+                  refNo: `ORDER-RESTORE-${orderId}`
+                };
+                transaction.set(logRef, sanitizeData(stockLog));
+                
+                return { ...v, stock: afterQty };
+              }
+              return v;
+            });
+            transaction.update(productRef, { variants: updatedVariants });
+          }
+        }
+      }
+      
+      // Automatic Invoice Generation when status changes to 'Confirmed'
+      if (newStatus === 'Confirmed' && oldStatus !== 'Confirmed' && !updatedOrder.invoiceId) {
+        console.log(`Auto-generating invoice for order ${orderId} on confirmation...`);
+        // Fetch prefixes from settings
+        const companySettingsRef = doc(db, 'settings', 'company');
+        const companySettingsSnap = await transaction.get(companySettingsRef);
+        const prefixes = companySettingsSnap.exists() ? companySettingsSnap.data().prefixes : { SAT: 'SAT-INV', GZ: 'GZ-INV', RTX: 'RTX-INV' };
+        
+        // Fetch counters
+        const countersRef = doc(db, 'settings', 'invoiceCounters');
+        const countersSnap = await transaction.get(countersRef);
+        let satCounter = 0;
+        let gzCounter = 0;
+        let rtxCounter = 0;
+        if (countersSnap.exists()) {
+          const cData = countersSnap.data();
+          satCounter = cData.satCounter || 0;
+          gzCounter = cData.gzCounter || 0;
+          rtxCounter = cData.rtxCounter || 0;
+        }
+        
+        let prefix = 'INV';
+        let nextNum = 1;
+        const sub = updatedOrder.subBrand || 'SAT';
+        if (sub === 'SAT') {
+          prefix = prefixes?.SAT || 'SAT-INV';
+          satCounter++;
+          nextNum = satCounter;
+        } else if (sub === 'GZ') {
+          prefix = prefixes?.GZ || 'GZ-INV';
+          gzCounter++;
+          nextNum = gzCounter;
+        } else if (sub === 'RTX') {
+          prefix = prefixes?.RTX || 'RTX-INV';
+          rtxCounter++;
+          nextNum = rtxCounter;
+        }
+        
+        // Save counters
+        transaction.set(countersRef, {
+          satCounter,
+          gzCounter,
+          rtxCounter
+        }, { merge: true });
+        
+        const invoiceNum = `${prefix}-${String(nextNum).padStart(4, '0')}`;
+        const invoiceId = `INV-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+        const invoiceDocRef = doc(db, 'invoices', invoiceId);
+        
+        const invoiceData = {
+          id: invoiceId,
+          orderId: orderId,
+          invoiceNumber: invoiceNum,
+          subBrand: updatedOrder.subBrand,
+          subBrandPrefix: prefix,
+          customerName: updatedOrder.customerName,
+          customerPhone: updatedOrder.customerPhone,
+          items: updatedOrder.items,
+          totalAmount: updatedOrder.totalAmount,
+          amountPaid: updatedOrder.amountPaid,
+          amountDue: updatedOrder.amountDue,
+          paymentStatus: updatedOrder.paymentStatus,
+          courier: updatedOrder.courier,
+          courierTrackingNumber: updatedOrder.courierTrackingNumber || '',
+          generatedAt: Date.now(),
+          generatedBy: userId,
+          voided: false
+        };
+        
+        transaction.set(invoiceDocRef, sanitizeData(invoiceData));
+        updatedOrder.invoiceId = invoiceId;
+      }
+      
+      // Update the order itself
+      const sanitizedOrder = sanitizeData(updatedOrder);
+      delete sanitizedOrder.id;
+      transaction.update(orderDocRef, sanitizedOrder);
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, 'orders/' + orderId);
+  }
+}
+
+// ==========================================
+// INVOICE OPERATIONS
+// ==========================================
+
+export async function getInvoices(): Promise<Invoice[]> {
+  try {
+    const colRef = collection(db, 'invoices');
+    const q = query(colRef, orderBy('generatedAt', 'desc'));
+    const snapshot = await getDocs(q);
+    const list: Invoice[] = [];
+    snapshot.forEach(docSnap => {
+      list.push({ id: docSnap.id, ...docSnap.data() } as Invoice);
+    });
+    return list;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, 'invoices');
+  }
+}
+
+export async function generateInvoiceForOrder(orderId: string, userId: string): Promise<string> {
+  try {
+    const orderDocRef = doc(db, 'orders', orderId);
+    let invoiceIdResult = '';
+    
+    await runTransaction(db, async (transaction) => {
+      const orderSnap = await transaction.get(orderDocRef);
+      if (!orderSnap.exists()) {
+        throw new Error('Order not found');
+      }
+      
+      const order = orderSnap.data() as Order;
+      if (order.invoiceId) {
+        invoiceIdResult = order.invoiceId;
+        return; // already has one
+      }
+      
+      // Fetch prefixes
+      const companySettingsRef = doc(db, 'settings', 'company');
+      const companySettingsSnap = await transaction.get(companySettingsRef);
+      const prefixes = companySettingsSnap.exists() ? companySettingsSnap.data().prefixes : { SAT: 'SAT-INV', GZ: 'GZ-INV', RTX: 'RTX-INV' };
+      
+      // Fetch counters
+      const countersRef = doc(db, 'settings', 'invoiceCounters');
+      const countersSnap = await transaction.get(countersRef);
+      let satCounter = 0;
+      let gzCounter = 0;
+      let rtxCounter = 0;
+      if (countersSnap.exists()) {
+        const cData = countersSnap.data();
+        satCounter = cData.satCounter || 0;
+        gzCounter = cData.gzCounter || 0;
+        rtxCounter = cData.rtxCounter || 0;
+      }
+      
+      let prefix = 'INV';
+      let nextNum = 1;
+      const sub = order.subBrand || 'SAT';
+      if (sub === 'SAT') {
+        prefix = prefixes?.SAT || 'SAT-INV';
+        satCounter++;
+        nextNum = satCounter;
+      } else if (sub === 'GZ') {
+        prefix = prefixes?.GZ || 'GZ-INV';
+        gzCounter++;
+        nextNum = gzCounter;
+      } else if (sub === 'RTX') {
+        prefix = prefixes?.RTX || 'RTX-INV';
+        rtxCounter++;
+        nextNum = rtxCounter;
+      }
+      
+      // Save counters
+      transaction.set(countersRef, {
+        satCounter,
+        gzCounter,
+        rtxCounter
+      }, { merge: true });
+      
+      const invoiceNum = `${prefix}-${String(nextNum).padStart(4, '0')}`;
+      const invoiceId = `INV-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
+      const invoiceDocRef = doc(db, 'invoices', invoiceId);
+      
+      const invoiceData = {
+        id: invoiceId,
+        orderId: orderId,
+        invoiceNumber: invoiceNum,
+        subBrand: order.subBrand,
+        subBrandPrefix: prefix,
+        customerName: order.customerName,
+        customerPhone: order.customerPhone,
+        items: order.items,
+        totalAmount: order.totalAmount,
+        amountPaid: order.amountPaid,
+        amountDue: order.amountDue,
+        paymentStatus: order.paymentStatus,
+        courier: order.courier,
+        courierTrackingNumber: order.courierTrackingNumber || '',
+        generatedAt: Date.now(),
+        generatedBy: userId,
+        voided: false
+      };
+      
+      transaction.set(invoiceDocRef, sanitizeData(invoiceData));
+      transaction.update(orderDocRef, { invoiceId: invoiceId });
+      
+      invoiceIdResult = invoiceId;
+    });
+    
+    return invoiceIdResult;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `orders/${orderId}/generateInvoice`);
+  }
+}
+
+export async function voidInvoiceRecord(
+  invoiceId: string, 
+  voidedReason: string, 
+  userId: string, 
+  userName: string
+): Promise<void> {
+  try {
+    const invoiceRef = doc(db, 'invoices', invoiceId);
+    await runTransaction(db, async (transaction) => {
+      const invoiceSnap = await transaction.get(invoiceRef);
+      if (!invoiceSnap.exists()) {
+        throw new Error('Invoice not found');
+      }
+      
+      const invoice = invoiceSnap.data() as Invoice;
+      if (invoice.voided) {
+        throw new Error('Invoice is already voided');
+      }
+      
+      // Update invoice
+      transaction.update(invoiceRef, {
+        voided: true,
+        voidedReason,
+        voidedBy: userName,
+        voidedAt: Date.now()
+      });
+      
+      // Update order - remove the invoiceId link
+      const orderRef = doc(db, 'orders', invoice.orderId);
+      const orderSnap = await transaction.get(orderRef);
+      if (orderSnap.exists()) {
+        transaction.update(orderRef, { invoiceId: '' });
+      }
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, `invoices/${invoiceId}/void`);
+  }
+}
+
+export async function recordOrderPayment(
+  orderId: string,
+  amount: number,
+  method: string,
+  userId: string,
+  userName: string
+): Promise<void> {
+  try {
+    const orderRef = doc(db, 'orders', orderId);
+    await runTransaction(db, async (transaction) => {
+      const orderSnap = await transaction.get(orderRef);
+      if (!orderSnap.exists()) {
+        throw new Error('Order not found');
+      }
+      
+      const order = orderSnap.data() as Order;
+      const paymentHistory = order.paymentHistory || [];
+      const newHistoryEntry = {
+        amount,
+        method,
+        date: Date.now(),
+        recordedBy: userName
+      };
+      
+      const updatedHistory = [...paymentHistory, newHistoryEntry];
+      const newAmountPaid = (order.amountPaid || 0) + amount;
+      const newAmountDue = Math.max(0, order.totalAmount - newAmountPaid);
+      
+      let newPaymentStatus: PaymentStatus = 'Partial';
+      if (newAmountDue <= 0) {
+        newPaymentStatus = 'Paid';
+      } else if (newAmountPaid === 0) {
+        newPaymentStatus = 'Due';
+      }
+      
+      transaction.update(orderRef, {
+        paymentHistory: updatedHistory,
+        amountPaid: newAmountPaid,
+        amountDue: newAmountDue,
+        paymentStatus: newPaymentStatus
+      });
+      
+      // Update active invoice if exists
+      if (order.invoiceId) {
+        const invoiceRef = doc(db, 'invoices', order.invoiceId);
+        const invoiceSnap = await transaction.get(invoiceRef);
+        if (invoiceSnap.exists() && !invoiceSnap.data().voided) {
+          transaction.update(invoiceRef, {
+            amountPaid: newAmountPaid,
+            amountDue: newAmountDue,
+            paymentStatus: newPaymentStatus
+          });
+        }
+      }
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, `orders/${orderId}/recordPayment`);
+  }
+}
+
 

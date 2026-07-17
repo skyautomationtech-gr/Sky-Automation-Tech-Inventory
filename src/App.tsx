@@ -25,6 +25,10 @@ import ProductManagement from './components/ProductManagement';
 import StockOperations from './components/StockOperations';
 import UserManagement from './components/UserManagement';
 import AttendanceLog from './components/AttendanceLog';
+import CustomerManagement from './components/CustomerManagement';
+import OrderManagement from './components/OrderManagement';
+import InvoiceManagement from './components/InvoiceManagement';
+import DuePayments from './components/DuePayments';
 
 // Mock/Fallback Data in case of Firestore permission/network errors
 const MOCK_PRODUCTS: Product[] = [
@@ -453,6 +457,26 @@ export default function App() {
         {/* Tab 4: User Management View */}
         {currentTab === 'users' && (
           <UserManagement user={user} />
+        )}
+
+        {/* Tab Customers: Customer Directory View */}
+        {currentTab === 'customers' && (
+          <CustomerManagement user={user} requireCheckIn={requireCheckIn} />
+        )}
+
+        {/* Tab Orders: Order Desk View */}
+        {currentTab === 'orders' && (
+          <OrderManagement user={user} requireCheckIn={requireCheckIn} />
+        )}
+
+        {/* Tab Invoices: Invoice Desk View */}
+        {currentTab === 'invoices' && (
+          <InvoiceManagement user={user} requireCheckIn={requireCheckIn} />
+        )}
+
+        {/* Tab Receivables: Due Payments View */}
+        {currentTab === 'receivables' && (
+          <DuePayments user={user} requireCheckIn={requireCheckIn} />
         )}
 
         {/* Tab Attendance: Attendance Log View */}

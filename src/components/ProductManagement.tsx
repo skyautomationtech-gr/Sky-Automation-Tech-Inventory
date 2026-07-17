@@ -296,6 +296,7 @@ export default function ProductManagement({
   };
 
   const handleCancelForm = () => {
+    console.log("CANCEL FUNCTION CALLED");
     const isDirty = editModeProduct 
       ? (formName !== editModeProduct.name || 
          formSku !== editModeProduct.sku || 
@@ -662,6 +663,7 @@ export default function ProductManagement({
   // Form Submit (Add or Edit Product)
   const handleFormSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+    console.log("SUBMIT FUNCTION CALLED", {wizardStep, formName, formSku, formMainCategory, formSubCategory, formChildCategory, formBrand, formCostPrice, formSellingPrice, formVariants});
 
     // If not on step 5, just run next step logic and do not submit yet!
     if (wizardStep < 5) {
@@ -3206,8 +3208,12 @@ export default function ProductManagement({
                       Cancel
                     </button>
                     <button
-                      type="submit"
+                      type="button"
                       disabled={submitting}
+                      onClick={(e) => {
+                        console.log("BUTTON CLICKED - RAW EVENT");
+                        handleFormSubmit(e as any);
+                      }}
                       className="flex-grow py-3 bg-amber-400 hover:bg-amber-500 text-slate-950 font-bold rounded-xl text-xs transition-all shadow-md active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 cursor-pointer"
                     >
                       {submitting ? (

@@ -37,7 +37,87 @@
       "type": "object",
       "properties": {
         "companyName": { "type": "string" },
-        "onboarded": { "type": "boolean" }
+        "onboarded": { "type": "boolean" },
+        "prefixes": { "type": "object" }
+      }
+    },
+    "InvoiceCounters": {
+      "title": "InvoiceCounters",
+      "description": "Counters for automatic sequential invoice number generation per sub-brand",
+      "type": "object",
+      "properties": {
+        "satCounter": { "type": "number" },
+        "gzCounter": { "type": "number" },
+        "rtxCounter": { "type": "number" }
+      }
+    },
+    "Customer": {
+      "title": "Customer",
+      "description": "Customer Directory record",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "phone": { "type": "string" },
+        "address": { "type": "string" },
+        "subBrand": { "type": "string" },
+        "notes": { "type": "string" },
+        "totalOrders": { "type": "number" },
+        "lifetimeValue": { "type": "number" },
+        "createdAt": { "type": "number" }
+      }
+    },
+    "Order": {
+      "title": "Order",
+      "description": "Order records with payment tracking and items",
+      "type": "object",
+      "properties": {
+        "customerId": { "type": "string" },
+        "customerName": { "type": "string" },
+        "customerPhone": { "type": "string" },
+        "subBrand": { "type": "string" },
+        "salesChannel": { "type": "string" },
+        "items": { "type": "array" },
+        "totalAmount": { "type": "number" },
+        "courier": { "type": "string" },
+        "courierTrackingNumber": { "type": "string" },
+        "paymentMethod": { "type": "string" },
+        "paymentStatus": { "type": "string" },
+        "amountPaid": { "type": "number" },
+        "amountDue": { "type": "number" },
+        "status": { "type": "string" },
+        "statusHistory": { "type": "array" },
+        "deliveryAddress": { "type": "string" },
+        "notes": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "createdAt": { "type": "number" },
+        "invoiceId": { "type": "string" },
+        "paymentHistory": { "type": "array" }
+      }
+    },
+    "Invoice": {
+      "title": "Invoice",
+      "description": "Generated immutable invoice record",
+      "type": "object",
+      "properties": {
+        "orderId": { "type": "string" },
+        "invoiceNumber": { "type": "string" },
+        "subBrand": { "type": "string" },
+        "subBrandPrefix": { "type": "string" },
+        "customerName": { "type": "string" },
+        "customerPhone": { "type": "string" },
+        "items": { "type": "array" },
+        "totalAmount": { "type": "number" },
+        "amountPaid": { "type": "number" },
+        "amountDue": { "type": "number" },
+        "paymentStatus": { "type": "string" },
+        "courier": { "type": "string" },
+        "courierTrackingNumber": { "type": "string" },
+        "generatedAt": { "type": "number" },
+        "generatedBy": { "type": "string" },
+        "voided": { "type": "boolean" },
+        "voidedReason": { "type": "string" },
+        "voidedBy": { "type": "string" },
+        "voidedAt": { "type": "number" }
       }
     }
   },
@@ -53,6 +133,22 @@
     "/settings/company": {
       "schema": "CompanySettings",
       "description": "Company settings document"
+    },
+    "/settings/invoiceCounters": {
+      "schema": "InvoiceCounters",
+      "description": "Invoice sequential counters document"
+    },
+    "/customers/{customerId}": {
+      "schema": "Customer",
+      "description": "Customers collection"
+    },
+    "/orders/{orderId}": {
+      "schema": "Order",
+      "description": "Orders collection"
+    },
+    "/invoices/{invoiceId}": {
+      "schema": "Invoice",
+      "description": "Invoices collection"
     }
   }
 }

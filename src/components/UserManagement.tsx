@@ -845,7 +845,7 @@ export default function UserManagement({ user }: UserManagementProps) {
       )}
 
       {/* STEP / ACTION PANELS */}
-      {showAddForm && false && (
+      {showAddForm && (
         <div className="bg-white rounded-3xl border border-slate-100 shadow-md animate-fade-in overflow-hidden">
           <div className="p-6 md:p-8 space-y-8">
             <div className="flex justify-between items-start">

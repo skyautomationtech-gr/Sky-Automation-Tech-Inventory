@@ -131,7 +131,12 @@ service cloud.firestore {
     match /invoices/{invoiceId} {
       allow read: if isSignedIn();
       allow create: if isActive() && (isSuperAdmin() || hasPermission('manageOrders'));
-      allow update: if false;
+      allow update: if isActive() && (isSuperAdmin() || hasPermission('voidInvoice')) && 
+                    request.resource.data.voided == true && 
+                    resource.data.voided == false &&
+                    request.resource.data.invoiceNumber == resource.data.invoiceNumber &&
+                    request.resource.data.totalAmount == resource.data.totalAmount &&
+                    request.resource.data.orderId == resource.data.orderId;
       allow delete: if isSuperAdmin();
     }
 

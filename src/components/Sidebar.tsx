@@ -9,7 +9,11 @@ import {
   X, 
   ShieldCheck, 
   UserCircle,
-  Users
+  Users,
+  ShoppingBag,
+  Contact,
+  Receipt,
+  Coins
 } from 'lucide-react';
 import { UserProfile } from '../types';
 
@@ -39,6 +43,10 @@ export default function Sidebar({
     { id: 'dashboard', name: 'Dashboard', icon: LayoutDashboard },
     { id: 'products', name: 'Products & Brands', icon: Package },
     { id: 'stock', name: 'Stock Operations', icon: ArrowUpDown },
+    { id: 'orders', name: 'Order Desk', icon: ShoppingBag },
+    { id: 'invoices', name: 'Invoice Desk', icon: Receipt },
+    { id: 'receivables', name: 'Due Payments', icon: Coins },
+    { id: 'customers', name: 'Customer Directory', icon: Contact },
     ...(isSuperAdmin ? [{ id: 'attendance', name: 'Attendance Log', icon: Users }] : []),
     ...(isPrivileged ? [{ id: 'users', name: 'Staff Permissions', icon: ShieldCheck }] : []),
     { id: 'settings', name: 'Company Settings', icon: Settings },
