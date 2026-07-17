@@ -369,7 +369,7 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
         {/* Logo Container */}
         <div className="flex flex-col items-center">
           <div className="w-28 h-28 bg-slate-900 rounded-3xl flex items-center justify-center border border-amber-400/30 shadow-[0_0_50px_rgba(251,191,36,0.15)] mb-6 animate-bounce">
-            <span className="text-amber-400 font-bold text-4xl font-sans tracking-widest">SAT</span>
+            <img src="/logo.png" alt="Company Logo" className="w-20 h-20 object-contain" />
           </div>
           
           <h1 className="text-3xl md:text-4xl font-extrabold text-white font-sans tracking-tight">
@@ -414,7 +414,7 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
       <div className={`sm:mx-auto sm:w-full transition-all duration-300 relative z-10 ${!isLogin && !isForgotPassword && !signupSuccess ? 'sm:max-w-xl' : 'sm:max-w-md'}`}>
         <div className="flex justify-center mb-4">
           <div className="w-16 h-16 bg-slate-900 rounded-2xl flex items-center justify-center border border-amber-400/20 shadow-lg">
-            <span className="text-amber-400 font-bold text-2xl font-sans">SAT</span>
+            <img src="/logo.png" alt="Company Logo" className="w-12 h-12 object-contain" />
           </div>
         </div>
         <h2 className="text-center text-3xl font-extrabold text-white tracking-tight">

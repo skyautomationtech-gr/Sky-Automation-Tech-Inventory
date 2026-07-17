@@ -608,14 +608,17 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                 <div className="space-y-8">
                   {/* Print Invoice Top Header */}
                   <div className="border-b border-black pb-6 flex justify-between items-start">
-                    <div>
-                      <span className="text-[10px] font-mono tracking-widest font-black uppercase">
-                        {selectedInvoice.subBrand === 'SAT' ? 'SKY AUTOMATION TECH' : selectedInvoice.subBrand === 'GZ' ? 'GADGETZU' : 'RTX GADGET'}
-                      </span>
-                      <h1 className="text-3xl font-black tracking-tighter uppercase mt-1">OFFICIAL INVOICE</h1>
-                      <div className="text-xs mt-2 space-y-0.5 font-mono">
-                        <p className="font-bold">Issued By: {selectedInvoice.subBrand === 'SAT' ? 'Sky Automation Tech' : selectedInvoice.subBrand === 'GZ' ? 'GadgetZu' : 'RTX Gadget'}</p>
-                        <p className="text-slate-600">Email: skyautomationtech@gmail.com</p>
+                    <div className="flex items-center gap-4">
+                      <img src="/logo.png" alt="Company Logo" className="w-16 h-16 object-contain" />
+                      <div>
+                        <span className="text-[10px] font-mono tracking-widest font-black uppercase">
+                          {selectedInvoice.subBrand === 'SAT' ? 'SKY AUTOMATION TECH' : selectedInvoice.subBrand === 'GZ' ? 'GADGETZU' : 'RTX GADGET'}
+                        </span>
+                        <h1 className="text-3xl font-black tracking-tighter uppercase mt-1">OFFICIAL INVOICE</h1>
+                        <div className="text-xs mt-2 space-y-0.5 font-mono">
+                          <p className="font-bold">Issued By: {selectedInvoice.subBrand === 'SAT' ? 'Sky Automation Tech' : selectedInvoice.subBrand === 'GZ' ? 'GadgetZu' : 'RTX Gadget'}</p>
+                          <p className="text-slate-600">Email: skyautomationtech@gmail.com</p>
+                        </div>
                       </div>
                     </div>
 

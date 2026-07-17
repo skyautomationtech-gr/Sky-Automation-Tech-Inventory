@@ -391,9 +391,7 @@ export default function App() {
               <Menu size={20} />
             </button>
             <div className="flex items-center gap-2">
-              <div className="w-6 h-6 bg-[#D4AF37] rounded flex items-center justify-center font-bold text-slate-950 text-[10px]">
-                SAT
-              </div>
+              <img src="/logo.png" alt="Company Logo" className="w-6 h-6 rounded object-contain" />
               <h1 className="text-white font-bold tracking-tight text-xs uppercase">
                 {companySettings?.companyName || 'Sky Automation'}
               </h1>

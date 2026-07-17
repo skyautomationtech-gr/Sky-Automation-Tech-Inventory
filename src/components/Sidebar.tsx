@@ -77,9 +77,7 @@ export default function Sidebar({
         {/* Brand Header */}
         <div className="p-4 lg:p-6 border-b border-slate-800 flex items-center justify-center lg:justify-start">
           <div className="flex items-center gap-3">
-            <div className="w-10 h-10 lg:w-8 lg:h-8 bg-[#D4AF37] rounded flex items-center justify-center font-bold text-slate-950 text-sm shadow-[0_0_12px_rgba(212,175,55,0.2)] flex-shrink-0">
-              SAT
-            </div>
+            <img src="/logo.png" alt="Company Logo" className="w-10 h-10 lg:w-8 lg:h-8 rounded object-contain" />
             <div className="hidden lg:block">
               <h1 className="text-white font-black tracking-tight text-sm leading-tight uppercase">
                 Sky Automation
