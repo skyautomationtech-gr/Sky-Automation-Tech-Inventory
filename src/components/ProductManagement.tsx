@@ -715,7 +715,7 @@ export default function ProductManagement({
     let finalStatus: 'pending_review' | 'approved' | 'rejected' = 'approved';
     if (!editModeProduct) {
       // New product
-      finalStatus = isStaff ? 'pending_review' : 'approved';
+      finalStatus = 'pending_review';
     } else {
       // Edit mode
       const currentStatus = editModeProduct.status || 'approved';
