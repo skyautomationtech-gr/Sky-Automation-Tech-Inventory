@@ -69,8 +69,8 @@ service cloud.firestore {
                       request.resource.data.get('role', resource.data.get('role', 'staff')) == resource.data.get('role', 'staff') &&
                       request.resource.data.get('subBrandAccess', resource.data.get('subBrandAccess', [])) == resource.data.get('subBrandAccess', []) &&
                       
-                      // Allow updates to other fields for self or by an Admin for Staff
-                      (request.auth.uid == userId || (isAdmin() && resource.data.role == 'staff'))
+                      // Allow updates to other fields for self or by an Admin for non-superadmin users
+                      (request.auth.uid == userId || (isAdmin() && resource.data.role != 'superadmin'))
                     ));
       allow delete: if isSuperAdmin() && resource.data.role != 'superadmin';
 

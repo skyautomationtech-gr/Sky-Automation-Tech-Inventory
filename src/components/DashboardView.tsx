@@ -85,12 +85,15 @@ export default function DashboardView({
 
   const isCheckedIn = user?.currentSessionStatus === 'checked_in';
   
+  // Filter approved products for dashboard metrics and display
+  const approvedProducts = products.filter(product => product.status === 'approved');
+
   // Dynamic stats calculation
   let totalStockUnits = 0;
   let totalStockValue = 0;
   let lowStockCount = 0;
 
-  products.forEach(product => {
+  approvedProducts.forEach(product => {
     const productQty = product.variants.reduce((sum, v) => sum + (v.stock || 0), 0);
     totalStockUnits += productQty;
     
@@ -103,7 +106,7 @@ export default function DashboardView({
   });
 
   // Top 4 products to display in the Bento preview
-  const recentProducts = products.slice(0, 4);
+  const recentProducts = approvedProducts.slice(0, 4);
 
   // Sub-brand badge styler
   const getSubBrandBadge = (subBrand: string) => {

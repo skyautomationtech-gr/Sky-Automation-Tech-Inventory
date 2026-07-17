@@ -1011,7 +1011,8 @@ export default function ProductManagement({
             images: [],
             variants: [{ id: Date.now().toString() + i, color: 'Default', model: 'Standard', stock: 10 }],
             archived: false,
-            createdAt: Date.now()
+            createdAt: Date.now(),
+            status: 'pending_review'
           };
 
           await addProduct(productPayload, user?.id || 'csv-import', user?.name || 'CSV Bulk Agent');
@@ -1047,7 +1048,10 @@ export default function ProductManagement({
       matchesStock = totalQty === 0;
     }
 
-    return matchesSearch && matchesCategory && matchesBrand && matchesSubBrand && matchesStock;
+    const matchesStatus = product.status === 'approved';
+    const matchesArchived = !product.archived;
+    
+    return matchesSearch && matchesCategory && matchesBrand && matchesSubBrand && matchesStock && matchesStatus && matchesArchived;
   });
 
   // Sort
