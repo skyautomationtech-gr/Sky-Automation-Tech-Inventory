@@ -245,7 +245,8 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
       const canvas = await html2canvas(element, {
         scale: 2, // higher scale for printable quality
         useCORS: true,
-        backgroundColor: '#ffffff'
+        backgroundColor: '#ffffff',
+        logging: true
       });
       
       const imgData = canvas.toDataURL('image/png');
@@ -275,7 +276,7 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
       setSuccess('PDF generated and downloaded successfully!');
     } catch (err) {
       console.error('PDF Generation Error:', err);
-      setError('Could not generate PDF download file.');
+      setError(`PDF Generation Error: ${err instanceof Error ? err.message : 'Unknown error occurred'}`);
     } finally {
       setLoading(false);
     }
