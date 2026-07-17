@@ -19,8 +19,11 @@ import {
   AlertCircle,
   Check,
   FolderPlus,
-  Coins
+  Coins,
+  ArrowLeft,
+  ArrowRight
 } from 'lucide-react';
+import { motion } from 'motion/react';
 import { QRCodeSVG } from 'qrcode.react';
 import Barcode from './Barcode';
 import { generateBarcodePDF } from '../utils/barcodePdf';
@@ -113,6 +116,118 @@ export default function ProductManagement({
   const [formVariants, setFormVariants] = useState<Variant[]>([
     { id: '1', color: 'Default', model: 'Standard', stock: 10 }
   ]);
+
+  // Wizard state variables
+  const [wizardStep, setWizardStep] = useState<number>(1);
+  const [wizardMaxStep, setWizardMaxStep] = useState<number>(1);
+  const [stepErrors, setStepErrors] = useState<{[key: string]: string}>({});
+
+  const validateStep = (step: number): boolean => {
+    const errors: {[key: string]: string} = {};
+    
+    if (step === 1) {
+      if (!formName.trim()) {
+        errors.name = 'Product Display Name is required';
+      }
+      if (!formSku.trim()) {
+        errors.sku = 'SKU Code is required';
+      }
+      if (!formCategory) {
+        errors.category = 'Category is required';
+      }
+      if (!formBrand) {
+        errors.brand = 'Brand is required';
+      }
+    } else if (step === 2) {
+      if (Number(formCostPrice) < 0) {
+        errors.costPrice = 'Cost Price cannot be negative';
+      }
+      if (Number(formSellingPrice) <= 0) {
+        errors.sellingPrice = 'Selling Price must be greater than 0';
+      }
+      if (Number(formReorderThreshold) < 0) {
+        errors.reorderThreshold = 'Reorder threshold cannot be negative';
+      }
+    } else if (step === 3) {
+      if (formVariants.length === 0) {
+        errors.variants = 'At least one variant configuration is required';
+      } else {
+        formVariants.forEach((v, idx) => {
+          if (!v.color || !v.color.trim()) {
+            errors[`variant-color-${v.id || idx}`] = `Color/Finish is required for Variant #${idx + 1}`;
+          }
+          if (!v.model || !v.model.trim()) {
+            errors[`variant-model-${v.id || idx}`] = `Model/Size is required for Variant #${idx + 1}`;
+          }
+          if (v.stock < 0) {
+            errors[`variant-stock-${v.id || idx}`] = `Stock cannot be negative for Variant #${idx + 1}`;
+          }
+        });
+      }
+    }
+    
+    setStepErrors(errors);
+    return Object.keys(errors).length === 0;
+  };
+
+  const handleNextStep = () => {
+    if (validateStep(wizardStep)) {
+      const nextStep = wizardStep + 1;
+      setWizardStep(nextStep);
+      setWizardMaxStep(prev => Math.max(prev, nextStep));
+      setStepErrors({});
+    }
+  };
+
+  const handlePrevStep = () => {
+    if (wizardStep > 1) {
+      setWizardStep(wizardStep - 1);
+      setStepErrors({});
+    }
+  };
+
+  const handleJumpToStep = (step: number) => {
+    // Only allow jumping back, or jumping forward if the steps between are fully validated
+    if (step < wizardStep) {
+      setWizardStep(step);
+      setStepErrors({});
+    } else if (step <= wizardMaxStep) {
+      // Validate all intermediate steps
+      let allValid = true;
+      for (let s = 1; s < step; s++) {
+        if (!validateStep(s)) {
+          allValid = false;
+          setWizardStep(s);
+          break;
+        }
+      }
+      if (allValid) {
+        setWizardStep(step);
+        setStepErrors({});
+      }
+    }
+  };
+
+  const handleCancelForm = () => {
+    const isDirty = editModeProduct 
+      ? (formName !== editModeProduct.name || 
+         formSku !== editModeProduct.sku || 
+         formCategory !== editModeProduct.category || 
+         formBrand !== editModeProduct.brand || 
+         formCostPrice !== editModeProduct.costPrice || 
+         formSellingPrice !== editModeProduct.sellingPrice || 
+         formReorderThreshold !== editModeProduct.reorderThreshold || 
+         formImages.length !== (editModeProduct.images?.length || 0))
+      : (formName.trim() !== '' || Number(formSellingPrice) > 0 || formImages.length > 0 || formVariants.some(v => v.color !== 'Default' || v.model !== 'Standard'));
+
+    if (isDirty) {
+      if (window.confirm("Discard this product? Your progress will be lost.")) {
+        setIsDrawerOpen(false);
+      }
+    } else {
+      setIsDrawerOpen(false);
+    }
+  };
 
   // Enhanced form attributes, SKU, & submit status states
   const [submitting, setSubmitting] = useState(false);
@@ -350,6 +465,11 @@ export default function ProductManagement({
     setIsCustomColorMode({});
     setIsCustomSizeMode({});
     
+    // Set wizard initial state
+    setWizardStep(1);
+    setWizardMaxStep(1);
+    setStepErrors({});
+    
     // Generate initial SKU
     const initialSku = generateSkuCode('SAT', initialCategory, initialBrand);
     setFormSku(initialSku);
@@ -379,6 +499,11 @@ export default function ProductManagement({
     setCustomSizeValue({});
     setIsCustomColorMode({});
     setIsCustomSizeMode({});
+    
+    // Set wizard initial state
+    setWizardStep(1);
+    setWizardMaxStep(4);
+    setStepErrors({});
     
     setIsDrawerOpen(true);
   };
@@ -433,38 +558,36 @@ export default function ProductManagement({
   // Form Submit (Add or Edit Product)
   const handleFormSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
+
+    // If not on step 4, just run next step logic and do not submit yet!
+    if (wizardStep < 4) {
+      handleNextStep();
+      return;
+    }
+
     if (submitting) return;
 
     setFormError('');
     setFormSuccess('');
+
+    // Full validation check
+    if (!validateStep(1)) {
+      setFormError('Please complete Step 1 with correct inputs before submitting.');
+      setWizardStep(1);
+      return;
+    }
+    if (!validateStep(2)) {
+      setFormError('Please complete Step 2 with correct inputs before submitting.');
+      setWizardStep(2);
+      return;
+    }
+    if (!validateStep(3)) {
+      setFormError('Please complete Step 3 with correct inputs before submitting.');
+      setWizardStep(3);
+      return;
+    }
     
     if (requireCheckIn && !requireCheckIn()) return;
-
-    // Required fields validation
-    if (!formName.trim()) {
-      setFormError('Product Display Name is required.');
-      return;
-    }
-    if (!formSku.trim()) {
-      setFormError('SKU Code is required.');
-      return;
-    }
-    if (!formCategory) {
-      setFormError('Category is required.');
-      return;
-    }
-    if (!formBrand) {
-      setFormError('Brand is required.');
-      return;
-    }
-    if (!formSubBrand) {
-      setFormError('Division is required.');
-      return;
-    }
-    if (Number(formSellingPrice) <= 0) {
-      setFormError('Selling Price is required and must be greater than zero.');
-      return;
-    }
 
     const finalSku = formSku.trim().toUpperCase();
 
@@ -476,19 +599,8 @@ export default function ProductManagement({
     );
     if (isDuplicateSku) {
       setFormError(`SKU Code "${finalSku}" is already assigned to another active product. SKU must be unique.`);
+      setWizardStep(1);
       return;
-    }
-
-    // Validate variants
-    for (const v of formVariants) {
-      if (!v.color.trim()) {
-        setFormError('Please select or specify a Color/Finish for all variants.');
-        return;
-      }
-      if (!v.model.trim()) {
-        setFormError('Please select or specify a Model/Size for all variants.');
-        return;
-      }
     }
 
     setSubmitting(true);
@@ -1588,29 +1700,29 @@ export default function ProductManagement({
       {/* DRAWER FOR ADDING / EDITING PRODUCTS */}
       {isDrawerOpen && (
         <div className="fixed inset-0 z-50 overflow-hidden" role="dialog" aria-modal="true">
-          <div className="absolute inset-0 bg-black/60 backdrop-blur-xs transition-opacity" onClick={() => setIsDrawerOpen(false)} />
+          <div className="absolute inset-0 bg-slate-950/60 backdrop-blur-xs transition-opacity" onClick={handleCancelForm} />
           
           <div className="absolute inset-y-0 right-0 max-w-full flex pl-0 md:pl-10">
             <div className="w-screen md:max-w-md bg-white text-slate-900 shadow-2xl flex flex-col justify-between">
               
               {/* Drawer Header */}
-              <div className="p-5 md:p-6 border-b border-slate-100 flex justify-between items-center bg-slate-50">
+              <div className="p-5 md:p-6 border-b border-slate-100 flex justify-between items-center bg-slate-900 text-white">
                 <div>
-                  <h2 className="text-sm font-bold uppercase tracking-wider text-slate-500">
-                    {editModeProduct ? 'Edit Gadget Record' : 'Add New Gadget to Catalog'}
+                  <h2 className="text-xs font-black uppercase tracking-widest text-amber-400">
+                    {editModeProduct ? 'Update Catalog Record' : 'Publish New Gadget'}
                   </h2>
-                  <p className="text-[10px] md:text-xs text-slate-400 mt-0.5">Specify complete variant, pricing & brand context.</p>
+                  <p className="text-[10px] text-slate-300 mt-0.5">Define variant details, thresholds & branding specs.</p>
                 </div>
                 <button
-                  onClick={() => setIsDrawerOpen(false)}
-                  className="p-2 text-slate-400 hover:text-slate-900 hover:bg-slate-100 rounded-full"
+                  onClick={handleCancelForm}
+                  className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-full cursor-pointer transition-colors"
                 >
-                  <X size={20} />
+                  <X size={18} />
                 </button>
               </div>
 
               {/* Drawer Scrollable Content */}
-              <form onSubmit={handleFormSubmit} className="flex-1 overflow-y-auto p-5 md:p-6 space-y-6">
+              <form onSubmit={handleFormSubmit} className="flex-grow overflow-y-auto p-5 md:p-6 space-y-6">
                 {formError && (
                   <div className="bg-red-50 border border-red-200 text-red-600 p-4 rounded-xl text-xs flex items-start gap-2">
                     <AlertCircle size={16} className="text-red-500 flex-shrink-0" />
@@ -1625,408 +1737,680 @@ export default function ProductManagement({
                   </div>
                 )}
 
-                {/* Form Progress Indicators (1, 2, 3, 4) */}
-                <div className="flex items-center justify-between bg-slate-50 p-3 rounded-2xl border border-slate-100">
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Form Progress</span>
-                  <div className="flex items-center gap-1.5">
-                    <span className={`w-5 h-5 flex items-center justify-center rounded-full text-[10px] font-bold transition-all ${formName.trim() && formSku.trim() ? 'bg-amber-400 text-slate-950 font-extrabold' : 'bg-slate-200 text-slate-500'}`}>1</span>
-                    <span className="text-slate-300 text-[10px]">➔</span>
-                    <span className={`w-5 h-5 flex items-center justify-center rounded-full text-[10px] font-bold transition-all ${Number(formSellingPrice) > 0 ? 'bg-amber-400 text-slate-950 font-extrabold' : 'bg-slate-200 text-slate-500'}`}>2</span>
-                    <span className="text-slate-300 text-[10px]">➔</span>
-                    <span className={`w-5 h-5 flex items-center justify-center rounded-full text-[10px] font-bold transition-all ${formVariants.length > 0 && formVariants.every(v => v.color && v.model) ? 'bg-amber-400 text-slate-950 font-extrabold' : 'bg-slate-200 text-slate-500'}`}>3</span>
-                    <span className="text-slate-300 text-[10px]">➔</span>
-                    <span className={`w-5 h-5 flex items-center justify-center rounded-full text-[10px] font-bold transition-all ${formImages.length > 0 ? 'bg-amber-400 text-slate-950 font-extrabold' : 'bg-slate-200 text-slate-500'}`}>4</span>
+                {/* Step Indicator */}
+                <div className="mb-6">
+                  {/* Desktop Indicator */}
+                  <div className="hidden sm:flex items-center justify-between relative px-2 py-4">
+                    {/* Progress Line Background */}
+                    <div className="absolute top-[34px] left-4 right-4 h-0.5 bg-slate-100 rounded-full z-0" />
+                    
+                    {/* Active Progress Line */}
+                    <div 
+                      className="absolute top-[34px] left-4 h-0.5 bg-gradient-to-r from-amber-400 to-amber-500 rounded-full z-0 transition-all duration-500"
+                      style={{ width: `${((wizardMaxStep - 1) / 3) * (100 - (100 / 4))}%` }}
+                    />
+                    
+                    {[1, 2, 3, 4].map((step) => {
+                      const isCompleted = step < wizardStep || (editModeProduct && wizardMaxStep >= step);
+                      const isActive = step === wizardStep;
+                      const isSelectable = step <= wizardMaxStep;
+                      
+                      let stepTitle = "";
+                      if (step === 1) stepTitle = "Basic Info";
+                      else if (step === 2) stepTitle = "Pricing";
+                      else if (step === 3) stepTitle = "Variants";
+                      else if (step === 4) stepTitle = "Photography";
+
+                      return (
+                        <button
+                          key={step}
+                          type="button"
+                          disabled={!isSelectable}
+                          onClick={() => handleJumpToStep(step)}
+                          className={`relative z-10 flex flex-col items-center group transition-all focus:outline-hidden ${
+                            isSelectable ? 'cursor-pointer' : 'cursor-not-allowed opacity-40'
+                          }`}
+                        >
+                          <div className={`size-7 rounded-full flex items-center justify-center font-black text-[10px] transition-all border ${
+                            isActive 
+                              ? 'bg-slate-900 text-amber-400 border-slate-900 scale-110 ring-4 ring-amber-400/20' 
+                              : isCompleted 
+                                ? 'bg-amber-400 text-slate-950 border-amber-400 font-extrabold' 
+                                : 'bg-white text-slate-400 border-slate-200 hover:border-slate-300'
+                          }`}>
+                            {isCompleted ? '✓' : step}
+                          </div>
+                          <span className={`text-[9px] font-black tracking-widest uppercase mt-2 transition-colors ${
+                            isActive ? 'text-slate-900' : isCompleted ? 'text-slate-700' : 'text-slate-400'
+                          }`}>
+                            {stepTitle}
+                          </span>
+                        </button>
+                      );
+                    })}
+                  </div>
+
+                  {/* Mobile Indicator */}
+                  <div className="sm:hidden space-y-2">
+                    <div className="flex justify-between items-center px-1">
+                      <span className="text-[9px] font-extrabold text-slate-400 uppercase tracking-widest font-mono">
+                        Step {wizardStep} of 4
+                      </span>
+                      <span className="text-xs font-black text-slate-800">
+                        {wizardStep === 1 && "Basic Info"}
+                        {wizardStep === 2 && "Pricing & Thresholds"}
+                        {wizardStep === 3 && "Variants & Stock"}
+                        {wizardStep === 4 && "Photography & Preview"}
+                      </span>
+                    </div>
+                    <div className="h-1 w-full bg-slate-100 rounded-full overflow-hidden">
+                      <div 
+                        className="h-full bg-gradient-to-r from-amber-400 to-amber-500 rounded-full transition-all duration-500"
+                        style={{ width: `${(wizardStep / 4) * 100}%` }}
+                      />
+                    </div>
                   </div>
                 </div>
-                
-                {/* Section 1: Basic Info */}
-                <div className="bg-slate-50/50 p-4 rounded-2xl border border-slate-100 space-y-4 shadow-2xs">
-                  <div className="flex items-center gap-2 pb-2 border-b border-slate-100">
-                    <span className="w-5 h-5 flex items-center justify-center bg-slate-900 text-amber-400 rounded-full text-[10px] font-bold font-mono">1</span>
-                    <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700">Basic Info</h3>
-                  </div>
 
-                  <div>
-                    <label className="block text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-                      Product Display Name <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      required
-                      value={formName}
-                      onChange={(e) => setFormName(e.target.value)}
-                      className="mt-1 w-full bg-white border border-slate-200 rounded-xl py-3 md:py-2 px-3 text-sm md:text-xs text-slate-800 focus:outline-hidden focus:ring-1 focus:ring-amber-400"
-                      placeholder="e.g. Joyroom JR-T03S Pro Earbuds"
-                    />
-                  </div>
+                {/* STEP 1: BASIC INFO */}
+                {wizardStep === 1 && (
+                  <motion.div
+                    key="step-1"
+                    initial={{ opacity: 0, x: 15 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ duration: 0.25, ease: "easeOut" }}
+                    className="space-y-4"
+                  >
+                    <div className="bg-slate-50 border border-slate-150 p-5 rounded-2xl space-y-4 shadow-3xs">
+                      <div className="border-b border-slate-100 pb-3">
+                        <span className="text-[9px] font-extrabold text-amber-500 uppercase tracking-widest font-mono">Step 1 of 4</span>
+                        <h3 className="text-sm font-black text-slate-900 mt-1">Basic Info</h3>
+                        <p className="text-[10px] text-slate-400 mt-0.5 leading-relaxed">Identify the product name, company division division mapping, and unique SKU format.</p>
+                      </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-                        Division <span className="text-red-500">*</span>
-                      </label>
-                      <select
-                        value={formSubBrand}
-                        onChange={(e) => setFormSubBrand(e.target.value as any)}
-                        className="mt-1 w-full bg-white border border-slate-200 rounded-xl py-3 md:py-2 px-3 text-sm md:text-xs text-slate-800 focus:outline-hidden focus:ring-1 focus:ring-amber-400"
-                      >
-                        <option value="SAT">SAT (Sky Auto)</option>
-                        <option value="GZ">GadgetZu</option>
-                        <option value="RTX">RTX Gadget</option>
-                      </select>
-                    </div>
-
-                    <div>
-                      <label className="block text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-                        SKU Code Serial <span className="text-red-500">*</span>
-                      </label>
-                      <div className="flex gap-1.5 mt-1">
+                      <div>
+                        <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">
+                          Product Display Name <span className="text-red-500">*</span>
+                        </label>
                         <input
                           type="text"
                           required
-                          value={formSku}
+                          value={formName}
                           onChange={(e) => {
-                            setFormSku(e.target.value);
-                            setIsSkuDirty(true);
+                            setFormName(e.target.value);
+                            if (stepErrors.name) setStepErrors(prev => ({ ...prev, name: '' }));
                           }}
-                          className="flex-1 bg-white border border-slate-200 rounded-xl py-3 md:py-2 px-3 text-sm md:text-xs font-mono text-slate-800 focus:outline-hidden uppercase focus:ring-1 focus:ring-amber-400"
-                          placeholder="MODEL-001"
+                          className={`w-full bg-white border rounded-xl py-2.5 px-3.5 text-xs text-slate-800 focus:outline-hidden focus:ring-4 transition-all ${
+                            stepErrors.name 
+                              ? 'border-red-350 focus:border-red-400 focus:ring-red-100' 
+                              : 'border-slate-200 focus:border-amber-400 focus:ring-amber-400/10'
+                          }`}
+                          placeholder="e.g. Joyroom JR-T03S Pro Earbuds"
                         />
-                        <button
-                          type="button"
-                          onClick={handleAutoGenerateSku}
-                          className="px-2.5 bg-amber-400 hover:bg-amber-500 text-slate-950 font-bold rounded-xl border border-amber-300 transition-colors flex items-center justify-center"
-                          title="Regenerate SKU automatically"
-                        >
-                          <Settings size={14} className="animate-spin-slow text-slate-950" />
-                        </button>
+                        {stepErrors.name && (
+                          <p className="text-[10px] font-semibold text-red-500 mt-1">{stepErrors.name}</p>
+                        )}
                       </div>
-                    </div>
-                  </div>
 
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-                        Category <span className="text-red-500">*</span>
-                      </label>
-                      <select
-                        value={formCategory}
-                        onChange={(e) => setFormCategory(e.target.value)}
-                        className="mt-1 w-full bg-white border border-slate-200 rounded-xl py-3 md:py-2 px-3 text-sm md:text-xs text-slate-800 focus:outline-hidden focus:ring-1 focus:ring-amber-400"
-                      >
-                        {categories.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-[10px] font-semibold uppercase tracking-wider text-slate-400">
-                        Brand <span className="text-red-500">*</span>
-                      </label>
-                      <select
-                        value={formBrand}
-                        onChange={(e) => setFormBrand(e.target.value)}
-                        className="mt-1 w-full bg-white border border-slate-200 rounded-xl py-3 md:py-2 px-3 text-sm md:text-xs text-slate-800 focus:outline-hidden focus:ring-1 focus:ring-amber-400"
-                      >
-                        {brands.map(b => <option key={b.id} value={b.name}>{b.name}</option>)}
-                      </select>
-                    </div>
-                  </div>
-                </div>
-
-                {/* Section 2: Pricing & Thresholds */}
-                <div className="bg-amber-50/20 p-4 rounded-2xl border border-amber-100/50 space-y-4 shadow-2xs">
-                  <div className="flex items-center gap-2 pb-2 border-b border-amber-100/50">
-                    <span className="w-5 h-5 flex items-center justify-center bg-amber-400 text-slate-950 rounded-full text-[10px] font-bold font-mono">2</span>
-                    <h3 className="text-xs font-bold uppercase tracking-wider text-amber-800 flex items-center gap-1.5">
-                      <Coins size={12} /> Pricing & Thresholds
-                    </h3>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-[9px] font-bold text-slate-500 uppercase">Cost Price</label>
-                      <div className="relative mt-1 flex rounded-xl shadow-2xs">
-                        <span className="inline-flex items-center rounded-l-xl border border-r-0 border-slate-200 bg-slate-50 px-3 text-slate-500 text-sm md:text-xs">
-                          ৳
-                        </span>
-                        <input
-                          type="number"
-                          disabled={isStaff}
-                          value={formCostPrice}
-                          onChange={(e) => setFormCostPrice(Number(e.target.value))}
-                          className="block w-full min-w-0 flex-1 rounded-none rounded-r-xl border border-slate-200 bg-white py-3 md:py-2 px-3 text-sm md:text-xs text-slate-800 focus:outline-hidden font-mono"
-                        />
-                      </div>
-                    </div>
-                    <div>
-                      <label className="block text-[9px] font-bold text-slate-500 uppercase">Selling Price <span className="text-red-500">*</span></label>
-                      <div className="relative mt-1 flex rounded-xl shadow-2xs">
-                        <span className="inline-flex items-center rounded-l-xl border border-r-0 border-slate-200 bg-slate-50 px-3 text-slate-500 text-sm md:text-xs">
-                          ৳
-                        </span>
-                        <input
-                          type="number"
-                          value={formSellingPrice}
-                          onChange={(e) => setFormSellingPrice(Number(e.target.value))}
-                          className="block w-full min-w-0 flex-1 rounded-none rounded-r-xl border border-slate-200 bg-white py-3 md:py-2 px-3 text-sm md:text-xs text-slate-800 focus:outline-hidden font-mono font-bold"
-                        />
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Calculated profit margin percentage */}
-                  {Number(formSellingPrice) > 0 && (
-                    <div className="flex items-center justify-between text-[11px] font-bold p-2.5 bg-slate-50 border border-slate-150 rounded-xl">
-                      <span className="text-slate-500">Calculated Profit Margin:</span>
-                      {(() => {
-                        const marginPercent = Math.round(((Number(formSellingPrice) - Number(formCostPrice)) / Number(formSellingPrice)) * 100);
-                        return (
-                          <span className={marginPercent > 0 ? "text-emerald-600" : marginPercent < 0 ? "text-red-500" : "text-slate-500"}>
-                            {marginPercent}% {marginPercent > 0 ? "Profit" : marginPercent < 0 ? "Loss" : "Break-even"}
-                          </span>
-                        );
-                      })()}
-                    </div>
-                  )}
-
-                  {/* Warning: Selling price lower than cost price */}
-                  {Number(formSellingPrice) > 0 && Number(formSellingPrice) < Number(formCostPrice) && (
-                    <div className="bg-amber-50 border border-amber-200 text-amber-700 p-2.5 rounded-xl text-[10px] flex items-center gap-1.5 animate-pulse">
-                      <AlertCircle size={14} className="text-amber-500 flex-shrink-0" />
-                      <span>⚠ Selling price is lower than cost price</span>
-                    </div>
-                  )}
-
-                  <div>
-                    <label className="block text-[9px] font-bold text-slate-500 uppercase">Reorder Alert Level</label>
-                    <input
-                      type="number"
-                      value={formReorderThreshold}
-                      onChange={(e) => setFormReorderThreshold(Number(e.target.value))}
-                      className="mt-1 w-full bg-white border border-slate-200 rounded-xl py-3 md:py-2 px-3 text-sm md:text-xs text-slate-800 focus:outline-hidden"
-                    />
-                    <p className="text-[10px] text-slate-400 mt-1 italic font-sans">Suggested: 5-10 units</p>
-                  </div>
-                </div>
-
-                {/* Section 3: Variants & Stock */}
-                <div className="bg-slate-50/50 p-4 rounded-2xl border border-slate-100 space-y-4 shadow-2xs">
-                  <div className="flex justify-between items-center pb-2 border-b border-slate-100">
-                    <div className="flex items-center gap-2">
-                      <span className="w-5 h-5 flex items-center justify-center bg-slate-900 text-amber-400 rounded-full text-[10px] font-bold font-mono">3</span>
-                      <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700">Variants & Stock</h3>
-                    </div>
-                    <button
-                      type="button"
-                      onClick={addVariantField}
-                      className="text-[10px] font-bold text-[#008080] bg-[#008080]/5 hover:bg-[#008080]/10 px-2.5 py-1.5 rounded-lg border border-[#008080]/25 transition-colors flex items-center gap-1"
-                    >
-                      <Plus size={12} /> Add Variant
-                    </button>
-                  </div>
-                  
-                  <div className="space-y-4">
-                    {formVariants.map((variant, index) => (
-                      <div key={variant.id} className="p-4 bg-white rounded-2xl border border-slate-200 space-y-3 relative group shadow-2xs">
-                        <div className="flex justify-between items-center">
-                          <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
-                            Variant #{index + 1}
-                          </span>
-                          {formVariants.length > 1 && (
-                            <button
-                              type="button"
-                              onClick={() => removeVariantField(variant.id)}
-                              className="text-slate-300 hover:text-red-500 transition-colors"
-                              title="Remove Variant"
-                            >
-                              <Trash2 size={16} />
-                            </button>
-                          )}
-                        </div>
-
-                        <div className="grid grid-cols-2 gap-3">
-                          <div>
-                            <label className="text-[9px] font-bold text-slate-400 uppercase">Color/Finish</label>
-                            {!isCustomColorMode[variant.id] ? (
-                              <select
-                                value={variant.color}
-                                onChange={(e) => {
-                                  const val = e.target.value;
-                                  if (val === '__add_custom__') {
-                                    setIsCustomColorMode(prev => ({ ...prev, [variant.id]: true }));
-                                    updateVariantValue(variant.id, 'color', '');
-                                  } else {
-                                    updateVariantValue(variant.id, 'color', val);
-                                  }
-                                }}
-                                className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800"
-                              >
-                                <option value="">-- Select Color --</option>
-                                {availableColors.map(c => <option key={c} value={c}>{c}</option>)}
-                                <option value="__add_custom__" className="text-amber-600 font-bold">+ Add custom color...</option>
-                              </select>
-                            ) : (
-                              <div className="mt-1 flex gap-1.5">
-                                <input
-                                  type="text"
-                                  placeholder="e.g. Matte Gray"
-                                  value={customColorValue[variant.id] || ''}
-                                  onChange={(e) => setCustomColorValue(prev => ({ ...prev, [variant.id]: e.target.value }))}
-                                  className="flex-grow bg-slate-50 border border-slate-200 rounded-xl py-1 px-2.5 text-xs focus:outline-hidden"
-                                />
-                                <button
-                                  type="button"
-                                  onClick={async () => {
-                                    const customVal = (customColorValue[variant.id] || '').trim();
-                                    if (customVal) {
-                                      await handleAddCustomColor(customVal);
-                                      updateVariantValue(variant.id, 'color', customVal);
-                                      setIsCustomColorMode(prev => ({ ...prev, [variant.id]: false }));
-                                    }
-                                  }}
-                                  className="px-2 bg-amber-400 hover:bg-amber-500 font-bold rounded-lg text-[10px] text-slate-950 shadow-xs"
-                                >
-                                  Save
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setIsCustomColorMode(prev => ({ ...prev, [variant.id]: false }));
-                                    updateVariantValue(variant.id, 'color', '');
-                                  }}
-                                  className="px-1.5 bg-slate-100 hover:bg-slate-200 rounded-lg text-[10px] text-slate-500"
-                                >
-                                  Cancel
-                                </button>
-                              </div>
-                            )}
-                          </div>
-
-                          <div>
-                            <label className="text-[9px] font-bold text-slate-400 uppercase">Model/Size</label>
-                            {!isCustomSizeMode[variant.id] ? (
-                              <select
-                                value={variant.model}
-                                onChange={(e) => {
-                                  const val = e.target.value;
-                                  if (val === '__add_custom__') {
-                                    setIsCustomSizeMode(prev => ({ ...prev, [variant.id]: true }));
-                                    updateVariantValue(variant.id, 'model', '');
-                                  } else {
-                                    updateVariantValue(variant.id, 'model', val);
-                                  }
-                                }}
-                                className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800"
-                              >
-                                <option value="">-- Select Size/Model --</option>
-                                {availableSizes.map(s => <option key={s} value={s}>{s}</option>)}
-                                <option value="__add_custom__" className="text-amber-600 font-bold">+ Add custom size...</option>
-                              </select>
-                            ) : (
-                              <div className="mt-1 flex gap-1.5">
-                                <input
-                                  type="text"
-                                  placeholder="e.g. 1TB"
-                                  value={customSizeValue[variant.id] || ''}
-                                  onChange={(e) => setCustomSizeValue(prev => ({ ...prev, [variant.id]: e.target.value }))}
-                                  className="flex-grow bg-slate-50 border border-slate-200 rounded-xl py-1 px-2.5 text-xs focus:outline-hidden"
-                                />
-                                <button
-                                  type="button"
-                                  onClick={async () => {
-                                    const customVal = (customSizeValue[variant.id] || '').trim();
-                                    if (customVal) {
-                                      await handleAddCustomSize(customVal);
-                                      updateVariantValue(variant.id, 'model', customVal);
-                                      setIsCustomSizeMode(prev => ({ ...prev, [variant.id]: false }));
-                                    }
-                                  }}
-                                  className="px-2 bg-amber-400 hover:bg-amber-500 font-bold rounded-lg text-[10px] text-slate-950 shadow-xs"
-                                >
-                                  Save
-                                </button>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    setIsCustomSizeMode(prev => ({ ...prev, [variant.id]: false }));
-                                    updateVariantValue(variant.id, 'model', '');
-                                  }}
-                                  className="px-1.5 bg-slate-100 hover:bg-slate-200 rounded-lg text-[10px] text-slate-500"
-                                >
-                                  Cancel
-                                </button>
-                              </div>
-                            )}
-                          </div>
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">
+                            Division <span className="text-red-500">*</span>
+                          </label>
+                          <select
+                            value={formSubBrand}
+                            onChange={(e) => setFormSubBrand(e.target.value as any)}
+                            className="w-full bg-white border border-slate-200 rounded-xl py-2.5 px-3 text-xs text-slate-800 focus:outline-hidden focus:border-amber-400 focus:ring-4 focus:ring-amber-400/10 transition-all cursor-pointer"
+                          >
+                            <option value="SAT">SAT (Sky Auto)</option>
+                            <option value="GZ">GadgetZu</option>
+                            <option value="RTX">RTX Gadget</option>
+                          </select>
                         </div>
 
                         <div>
-                          <label className="text-[9px] font-bold text-slate-400 uppercase">Initial Stock</label>
-                          <input
-                            type="number"
-                            value={variant.stock}
-                            onChange={(e) => updateVariantValue(variant.id, 'stock', Number(e.target.value))}
-                            className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs font-mono font-bold text-slate-800"
+                          <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">
+                            SKU Code Serial <span className="text-red-500">*</span>
+                          </label>
+                          <div className="flex gap-1.5">
+                            <input
+                              type="text"
+                              required
+                              value={formSku}
+                              onChange={(e) => {
+                                setFormSku(e.target.value);
+                                setIsSkuDirty(true);
+                                if (stepErrors.sku) setStepErrors(prev => ({ ...prev, sku: '' }));
+                              }}
+                              className={`flex-1 bg-white border rounded-xl py-2.5 px-3 text-xs font-mono text-slate-800 focus:outline-hidden uppercase focus:ring-4 transition-all ${
+                                stepErrors.sku
+                                  ? 'border-red-350 focus:border-red-400 focus:ring-red-100'
+                                  : 'border-slate-200 focus:border-amber-400 focus:ring-amber-400/10'
+                              }`}
+                              placeholder="MODEL-001"
+                            />
+                            <button
+                              type="button"
+                              onClick={handleAutoGenerateSku}
+                              className="px-2.5 bg-amber-400 hover:bg-amber-500 text-slate-950 font-bold rounded-xl border border-amber-350 transition-all flex items-center justify-center cursor-pointer shadow-3xs"
+                              title="Regenerate SKU automatically"
+                            >
+                              <Settings size={14} className="animate-spin-slow text-slate-950" />
+                            </button>
+                          </div>
+                          {stepErrors.sku && (
+                            <p className="text-[10px] font-semibold text-red-500 mt-1">{stepErrors.sku}</p>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">
+                            Category <span className="text-red-500">*</span>
+                          </label>
+                          <select
+                            value={formCategory}
+                            onChange={(e) => {
+                              setFormCategory(e.target.value);
+                              if (stepErrors.category) setStepErrors(prev => ({ ...prev, category: '' }));
+                            }}
+                            className={`w-full bg-white border rounded-xl py-2.5 px-3 text-xs text-slate-800 focus:outline-hidden focus:ring-4 transition-all cursor-pointer ${
+                              stepErrors.category
+                                ? 'border-red-350 focus:border-red-400 focus:ring-red-100'
+                                : 'border-slate-200 focus:border-amber-400 focus:ring-amber-400/10'
+                            }`}
+                          >
+                            {categories.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
+                          </select>
+                          {stepErrors.category && (
+                            <p className="text-[10px] font-semibold text-red-500 mt-1">{stepErrors.category}</p>
+                          )}
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">
+                            Brand <span className="text-red-500">*</span>
+                          </label>
+                          <select
+                            value={formBrand}
+                            onChange={(e) => {
+                              setFormBrand(e.target.value);
+                              if (stepErrors.brand) setStepErrors(prev => ({ ...prev, brand: '' }));
+                            }}
+                            className={`w-full bg-white border rounded-xl py-2.5 px-3 text-xs text-slate-800 focus:outline-hidden focus:ring-4 transition-all cursor-pointer ${
+                              stepErrors.brand
+                                ? 'border-red-350 focus:border-red-400 focus:ring-red-100'
+                                : 'border-slate-200 focus:border-amber-400 focus:ring-amber-400/10'
+                            }`}
+                          >
+                            {brands.map(b => <option key={b.id} value={b.name}>{b.name}</option>)}
+                          </select>
+                          {stepErrors.brand && (
+                            <p className="text-[10px] font-semibold text-red-500 mt-1">{stepErrors.brand}</p>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  </motion.div>
+                )}
+
+                {/* STEP 2: PRICING & THRESHOLDS */}
+                {wizardStep === 2 && (
+                  <motion.div
+                    key="step-2"
+                    initial={{ opacity: 0, x: 15 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ duration: 0.25, ease: "easeOut" }}
+                    className="space-y-4"
+                  >
+                    <div className="bg-slate-50 border border-slate-150 p-5 rounded-2xl space-y-4 shadow-3xs">
+                      <div className="border-b border-slate-100 pb-3">
+                        <span className="text-[9px] font-extrabold text-amber-500 uppercase tracking-widest font-mono">Step 2 of 4</span>
+                        <h3 className="text-sm font-black text-slate-900 mt-1">Pricing & Thresholds</h3>
+                        <p className="text-[10px] text-slate-400 mt-0.5 leading-relaxed">Specify items' purchase costs, customer pricing structures, and inventory alarm ranges.</p>
+                      </div>
+
+                      <div className="grid grid-cols-2 gap-4">
+                        <div>
+                          <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">Cost Price</label>
+                          <div className="relative flex rounded-xl shadow-3xs">
+                            <span className="inline-flex items-center rounded-l-xl border border-r-0 border-slate-200 bg-slate-100 px-3 text-slate-500 text-xs font-mono font-bold">
+                              ৳
+                            </span>
+                            <input
+                              type="number"
+                              disabled={isStaff}
+                              value={formCostPrice}
+                              onChange={(e) => {
+                                setFormCostPrice(Number(e.target.value));
+                                if (stepErrors.costPrice) setStepErrors(prev => ({ ...prev, costPrice: '' }));
+                              }}
+                              className={`block w-full min-w-0 flex-1 rounded-none rounded-r-xl border bg-white py-2.5 px-3 text-xs text-slate-800 focus:outline-hidden font-mono focus:ring-4 transition-all ${
+                                stepErrors.costPrice
+                                  ? 'border-red-350 focus:border-red-400 focus:ring-red-100'
+                                  : 'border-slate-200 focus:border-amber-400 focus:ring-amber-400/10'
+                              }`}
+                            />
+                          </div>
+                          {stepErrors.costPrice && (
+                            <p className="text-[10px] font-semibold text-red-500 mt-1">{stepErrors.costPrice}</p>
+                          )}
+                        </div>
+                        
+                        <div>
+                          <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">
+                            Selling Price <span className="text-red-500">*</span>
+                          </label>
+                          <div className="relative flex rounded-xl shadow-3xs">
+                            <span className="inline-flex items-center rounded-l-xl border border-r-0 border-slate-200 bg-slate-100 px-3 text-slate-500 text-xs font-mono font-bold">
+                              ৳
+                            </span>
+                            <input
+                              type="number"
+                              value={formSellingPrice}
+                              onChange={(e) => {
+                                setFormSellingPrice(Number(e.target.value));
+                                if (stepErrors.sellingPrice) setStepErrors(prev => ({ ...prev, sellingPrice: '' }));
+                              }}
+                              className={`block w-full min-w-0 flex-1 rounded-none rounded-r-xl border bg-white py-2.5 px-3 text-xs text-slate-800 focus:outline-hidden font-mono font-bold focus:ring-4 transition-all ${
+                                stepErrors.sellingPrice
+                                  ? 'border-red-350 focus:border-red-400 focus:ring-red-100'
+                                  : 'border-slate-200 focus:border-amber-400 focus:ring-amber-400/10'
+                              }`}
+                            />
+                          </div>
+                          {stepErrors.sellingPrice && (
+                            <p className="text-[10px] font-semibold text-red-500 mt-1">{stepErrors.sellingPrice}</p>
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Calculated profit margin percentage */}
+                      {Number(formSellingPrice) > 0 && (
+                        <div className="flex items-center justify-between text-[11px] font-bold p-3 bg-white border border-slate-150 rounded-xl shadow-3xs">
+                          <span className="text-slate-500">Calculated Profit Margin:</span>
+                          {(() => {
+                            const marginPercent = Math.round(((Number(formSellingPrice) - Number(formCostPrice)) / Number(formSellingPrice)) * 100);
+                            return (
+                              <span className={`px-2.5 py-1 rounded-lg text-[10px] font-black uppercase tracking-wider ${
+                                marginPercent > 0 
+                                  ? "bg-emerald-50 text-emerald-700 border border-emerald-200" 
+                                  : marginPercent < 0 
+                                    ? "bg-red-50 text-red-700 border border-red-200" 
+                                    : "bg-slate-50 text-slate-700 border border-slate-200"
+                              }`}>
+                                {marginPercent}% {marginPercent > 0 ? "Profit" : marginPercent < 0 ? "Loss" : "Break-even"}
+                              </span>
+                            );
+                          })()}
+                        </div>
+                      )}
+
+                      {/* Warning: Selling price lower than cost price */}
+                      {Number(formSellingPrice) > 0 && Number(formSellingPrice) < Number(formCostPrice) && (
+                        <div className="bg-amber-50 border border-amber-200 text-amber-700 p-2.5 rounded-xl text-[10px] flex items-center gap-1.5 animate-pulse">
+                          <AlertCircle size={14} className="text-amber-500 flex-shrink-0" />
+                          <span className="font-bold">Selling price is lower than purchase cost.</span>
+                        </div>
+                      )}
+
+                      <div>
+                        <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">Reorder Alert Level</label>
+                        <input
+                          type="number"
+                          value={formReorderThreshold}
+                          onChange={(e) => {
+                            setFormReorderThreshold(Number(e.target.value));
+                            if (stepErrors.reorderThreshold) setStepErrors(prev => ({ ...prev, reorderThreshold: '' }));
+                          }}
+                          className={`w-full bg-white border rounded-xl py-2.5 px-3.5 text-xs text-slate-800 focus:outline-hidden focus:ring-4 transition-all ${
+                            stepErrors.reorderThreshold
+                              ? 'border-red-350 focus:border-red-400 focus:ring-red-100'
+                              : 'border-slate-200 focus:border-amber-400 focus:ring-amber-400/10'
+                          }`}
+                        />
+                        <p className="text-[10px] text-slate-400 mt-1 italic leading-tight">Recommended: 5-10 units. An alert triggers when physical variant stock falls below this number.</p>
+                      </div>
+                    </div>
+                  </motion.div>
+                )}
+
+                {/* STEP 3: VARIANTS & STOCK */}
+                {wizardStep === 3 && (
+                  <motion.div
+                    key="step-3"
+                    initial={{ opacity: 0, x: 15 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ duration: 0.25, ease: "easeOut" }}
+                    className="space-y-4"
+                  >
+                    <div className="bg-slate-50 border border-slate-150 p-5 rounded-2xl space-y-4 shadow-3xs">
+                      <div className="flex justify-between items-center border-b border-slate-100 pb-3">
+                        <div>
+                          <span className="text-[9px] font-extrabold text-amber-500 uppercase tracking-widest font-mono">Step 3 of 4</span>
+                          <h3 className="text-sm font-black text-slate-900 mt-1">Variants & Stock</h3>
+                          <p className="text-[10px] text-slate-400 mt-0.5 leading-relaxed">Map all physical product sizes and colors.</p>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={addVariantField}
+                          className="text-[10px] font-bold text-slate-950 bg-amber-400 hover:bg-amber-500 px-3 py-1.5 rounded-lg border border-amber-350 transition-all flex items-center gap-1 shadow-3xs cursor-pointer"
+                        >
+                          <Plus size={12} /> Add Variant
+                        </button>
+                      </div>
+
+                      {stepErrors.variants && (
+                        <p className="text-xs font-bold text-red-600 bg-red-50 p-3 rounded-xl border border-red-100">{stepErrors.variants}</p>
+                      )}
+
+                      <div className="space-y-4 max-h-[380px] overflow-y-auto pr-1">
+                        {formVariants.map((variant, index) => (
+                          <div key={variant.id} className="p-4 bg-white rounded-2xl border border-slate-200 space-y-3 relative group shadow-3xs">
+                            <div className="flex justify-between items-center">
+                              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">
+                                Variant #{index + 1}
+                              </span>
+                              {formVariants.length > 1 && (
+                                <button
+                                  type="button"
+                                  onClick={() => removeVariantField(variant.id)}
+                                  className="text-slate-300 hover:text-red-500 transition-colors cursor-pointer"
+                                  title="Remove Variant"
+                                >
+                                  <Trash2 size={15} />
+                                </button>
+                              )}
+                            </div>
+
+                            <div className="grid grid-cols-2 gap-3">
+                              <div>
+                                <label className="text-[9px] font-bold text-slate-500 uppercase">Color/Finish</label>
+                                {!isCustomColorMode[variant.id] ? (
+                                  <select
+                                    value={variant.color}
+                                    onChange={(e) => {
+                                      const val = e.target.value;
+                                      if (val === '__add_custom__') {
+                                        setIsCustomColorMode(prev => ({ ...prev, [variant.id]: true }));
+                                        updateVariantValue(variant.id, 'color', '');
+                                      } else {
+                                        updateVariantValue(variant.id, 'color', val);
+                                      }
+                                      if (stepErrors[`variant-color-${variant.id}`]) {
+                                        setStepErrors(prev => ({ ...prev, [`variant-color-${variant.id}`]: '' }));
+                                      }
+                                    }}
+                                    className={`mt-1 w-full bg-slate-50 border rounded-xl py-2 px-3 text-xs text-slate-800 cursor-pointer ${
+                                      stepErrors[`variant-color-${variant.id}`] ? 'border-red-300 focus:ring-red-100' : 'border-slate-200 focus:ring-amber-400/10'
+                                    }`}
+                                  >
+                                    <option value="">-- Select Color --</option>
+                                    {availableColors.map(c => <option key={c} value={c}>{c}</option>)}
+                                    <option value="__add_custom__" className="text-amber-600 font-bold">+ Add custom color...</option>
+                                  </select>
+                                ) : (
+                                  <div className="mt-1 flex gap-1.5">
+                                    <input
+                                      type="text"
+                                      placeholder="e.g. Matte Gray"
+                                      value={customColorValue[variant.id] || ''}
+                                      onChange={(e) => setCustomColorValue(prev => ({ ...prev, [variant.id]: e.target.value }))}
+                                      className="flex-grow bg-slate-50 border border-slate-200 rounded-xl py-1 px-2.5 text-xs focus:outline-hidden"
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={async () => {
+                                        const customVal = (customColorValue[variant.id] || '').trim();
+                                        if (customVal) {
+                                          await handleAddCustomColor(customVal);
+                                          updateVariantValue(variant.id, 'color', customVal);
+                                          setIsCustomColorMode(prev => ({ ...prev, [variant.id]: false }));
+                                        }
+                                      }}
+                                      className="px-2 bg-amber-400 hover:bg-amber-500 font-bold rounded-lg text-[10px] text-slate-950 shadow-xs cursor-pointer"
+                                    >
+                                      Save
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setIsCustomColorMode(prev => ({ ...prev, [variant.id]: false }));
+                                        updateVariantValue(variant.id, 'color', '');
+                                      }}
+                                      className="px-1.5 bg-slate-100 hover:bg-slate-200 rounded-lg text-[10px] text-slate-500 cursor-pointer"
+                                    >
+                                      Cancel
+                                    </button>
+                                  </div>
+                                )}
+                                {stepErrors[`variant-color-${variant.id}`] && (
+                                  <p className="text-[9px] font-semibold text-red-500 mt-1">{stepErrors[`variant-color-${variant.id}`]}</p>
+                                )}
+                              </div>
+
+                              <div>
+                                <label className="text-[9px] font-bold text-slate-500 uppercase">Model/Size</label>
+                                {!isCustomSizeMode[variant.id] ? (
+                                  <select
+                                    value={variant.model}
+                                    onChange={(e) => {
+                                      const val = e.target.value;
+                                      if (val === '__add_custom__') {
+                                        setIsCustomSizeMode(prev => ({ ...prev, [variant.id]: true }));
+                                        updateVariantValue(variant.id, 'model', '');
+                                      } else {
+                                        updateVariantValue(variant.id, 'model', val);
+                                      }
+                                      if (stepErrors[`variant-model-${variant.id}`]) {
+                                        setStepErrors(prev => ({ ...prev, [`variant-model-${variant.id}`]: '' }));
+                                      }
+                                    }}
+                                    className={`mt-1 w-full bg-slate-50 border rounded-xl py-2 px-3 text-xs text-slate-800 cursor-pointer ${
+                                      stepErrors[`variant-model-${variant.id}`] ? 'border-red-300 focus:ring-red-100' : 'border-slate-200 focus:ring-amber-400/10'
+                                    }`}
+                                  >
+                                    <option value="">-- Select Size/Model --</option>
+                                    {availableSizes.map(s => <option key={s} value={s}>{s}</option>)}
+                                    <option value="__add_custom__" className="text-amber-600 font-bold">+ Add custom size...</option>
+                                  </select>
+                                ) : (
+                                  <div className="mt-1 flex gap-1.5">
+                                    <input
+                                      type="text"
+                                      placeholder="e.g. 1TB"
+                                      value={customSizeValue[variant.id] || ''}
+                                      onChange={(e) => setCustomSizeValue(prev => ({ ...prev, [variant.id]: e.target.value }))}
+                                      className="flex-grow bg-slate-50 border border-slate-200 rounded-xl py-1 px-2.5 text-xs focus:outline-hidden"
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={async () => {
+                                        const customVal = (customSizeValue[variant.id] || '').trim();
+                                        if (customVal) {
+                                          await handleAddCustomSize(customVal);
+                                          updateVariantValue(variant.id, 'model', customVal);
+                                          setIsCustomSizeMode(prev => ({ ...prev, [variant.id]: false }));
+                                        }
+                                      }}
+                                      className="px-2 bg-amber-400 hover:bg-amber-500 font-bold rounded-lg text-[10px] text-slate-950 shadow-xs cursor-pointer"
+                                    >
+                                      Save
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={() => {
+                                        setIsCustomSizeMode(prev => ({ ...prev, [variant.id]: false }));
+                                        updateVariantValue(variant.id, 'model', '');
+                                      }}
+                                      className="px-1.5 bg-slate-100 hover:bg-slate-200 rounded-lg text-[10px] text-slate-500 cursor-pointer"
+                                    >
+                                      Cancel
+                                    </button>
+                                  </div>
+                                )}
+                                {stepErrors[`variant-model-${variant.id}`] && (
+                                  <p className="text-[9px] font-semibold text-red-500 mt-1">{stepErrors[`variant-model-${variant.id}`]}</p>
+                                )}
+                              </div>
+                            </div>
+
+                            <div>
+                              <label className="text-[9px] font-bold text-slate-500 uppercase">Initial Stock</label>
+                              <input
+                                type="number"
+                                value={variant.stock}
+                                onChange={(e) => {
+                                  updateVariantValue(variant.id, 'stock', Number(e.target.value));
+                                  if (stepErrors[`variant-stock-${variant.id}`]) {
+                                    setStepErrors(prev => ({ ...prev, [`variant-stock-${variant.id}`]: '' }));
+                                  }
+                                }}
+                                className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs font-mono font-bold text-slate-800 focus:outline-hidden focus:ring-4 focus:ring-amber-400/10 transition-all"
+                              />
+                              {stepErrors[`variant-stock-${variant.id}`] && (
+                                <p className="text-[9px] font-semibold text-red-500 mt-1">{stepErrors[`variant-stock-${variant.id}`]}</p>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  </motion.div>
+                )}
+
+                {/* STEP 4: PHOTOGRAPHY & PREVIEW */}
+                {wizardStep === 4 && (
+                  <motion.div
+                    key="step-4"
+                    initial={{ opacity: 0, x: 15 }}
+                    animate={{ opacity: 1, x: 0 }}
+                    transition={{ duration: 0.25, ease: "easeOut" }}
+                    className="space-y-4"
+                  >
+                    <div className="bg-slate-50 border border-slate-150 p-5 rounded-2xl space-y-4 shadow-3xs">
+                      <div className="border-b border-slate-100 pb-3">
+                        <span className="text-[9px] font-extrabold text-amber-500 uppercase tracking-widest font-mono">Step 4 of 4</span>
+                        <h3 className="text-sm font-black text-slate-900 mt-1">Product Photography & Barcode</h3>
+                        <p className="text-[10px] text-slate-400 mt-0.5 leading-relaxed">Upload visual gadget images and review auto-generated barcode configurations.</p>
+                      </div>
+
+                      <div className="space-y-2">
+                        <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">Photography Assets</label>
+                        <div className="grid grid-cols-4 gap-2">
+                          {formImages.map((img, idx) => (
+                            <div key={idx} className="relative group aspect-square rounded-xl overflow-hidden border border-slate-200 bg-white shadow-3xs">
+                              <img src={img} alt="Preview" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
+                              <button
+                                type="button"
+                                onClick={() => removeImage(idx)}
+                                className="absolute inset-0 flex items-center justify-center bg-slate-950/60 text-white opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer duration-200"
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            </div>
+                          ))}
+                          <label className="aspect-square rounded-xl border-2 border-dashed border-slate-250 hover:border-amber-400 hover:bg-amber-50 flex flex-col items-center justify-center text-slate-400 cursor-pointer transition-all">
+                            <Upload size={18} />
+                            <span className="text-[8px] font-extrabold mt-1 uppercase tracking-wider">Upload</span>
+                            <input type="file" className="hidden" accept="image/*" multiple onChange={handleImageUpload} />
+                          </label>
+                        </div>
+                      </div>
+
+                      {/* Barcode Tag live rendering preview */}
+                      <div className="border-t border-slate-200 pt-3.5 space-y-2">
+                        <div className="flex justify-between items-center">
+                          <span className="text-[10px] font-extrabold text-slate-500 uppercase tracking-widest font-mono">Live Barcode Tag Preview</span>
+                          <span className="text-[9px] font-mono font-bold text-amber-500 bg-amber-50 border border-amber-100 px-1.5 py-0.5 rounded-md uppercase tracking-wider">{formSku || 'TEMP-SKU'}</span>
+                        </div>
+                        <div className="bg-white p-4 rounded-xl border border-slate-150 flex flex-col items-center justify-center shadow-3xs">
+                          <Barcode 
+                            value={formSku || 'TEMP-SKU-CODE'} 
+                            height={44} 
+                            width={1.4} 
+                            fontSize={9} 
+                            margin={5} 
                           />
                         </div>
                       </div>
-                    ))}
-                  </div>
-                </div>
-
-                {/* Section 4: Product Photography */}
-                <div className="bg-slate-50/50 p-4 rounded-2xl border border-slate-100 space-y-3 shadow-2xs">
-                  <div className="flex items-center gap-2 pb-2 border-b border-slate-100">
-                    <span className="w-5 h-5 flex items-center justify-center bg-slate-900 text-amber-400 rounded-full text-[10px] font-bold font-mono">4</span>
-                    <h3 className="text-xs font-bold uppercase tracking-wider text-slate-700">Product Photography</h3>
-                  </div>
-
-                  <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
-                    {formImages.map((img, idx) => (
-                      <div key={idx} className="relative group aspect-square rounded-xl overflow-hidden border border-slate-200 bg-white">
-                        <img src={img} alt="Preview" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-                        <button
-                          type="button"
-                          onClick={() => removeImage(idx)}
-                          className="absolute inset-0 flex items-center justify-center bg-black/50 text-white opacity-0 group-hover:opacity-100 transition-opacity"
-                        >
-                          <Trash2 size={18} />
-                        </button>
-                      </div>
-                    ))}
-                    <label className="aspect-square rounded-xl border-2 border-dashed border-slate-200 hover:border-amber-400 hover:bg-amber-50 flex flex-col items-center justify-center text-slate-400 cursor-pointer transition-all">
-                      <Upload size={20} />
-                      <span className="text-[9px] font-bold mt-1 uppercase">Upload</span>
-                      <input type="file" className="hidden" accept="image/*" multiple onChange={handleImageUpload} />
-                    </label>
-                  </div>
-                </div>
-
+                    </div>
+                  </motion.div>
+                )}
               </form>
 
-              {/* Drawer Sticky Footer with loading spinner and submit button */}
-              <div className="p-5 md:p-6 border-t border-slate-100 bg-slate-50 flex gap-3">
-                <button
-                  type="button"
-                  disabled={submitting}
-                  onClick={() => setIsDrawerOpen(false)}
-                  className="flex-1 py-3.5 bg-white border border-slate-200 text-slate-600 font-bold rounded-xl text-xs hover:bg-slate-100 transition-all disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={handleFormSubmit}
-                  disabled={submitting}
-                  className="flex-[2] py-3.5 bg-amber-400 hover:bg-amber-500 text-slate-950 font-bold rounded-xl text-xs transition-all shadow-md active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-                >
-                  {submitting ? (
-                    <>
-                      <div className="w-4 h-4 border-2 border-slate-950 border-t-transparent rounded-full animate-spin" />
-                      <span>Saving to Catalog...</span>
-                    </>
-                  ) : (
-                    <span>{editModeProduct ? 'Commit Updates' : 'Publish to Catalog'}</span>
-                  )}
-                </button>
+              {/* Drawer Sticky Footer with Back/Next/Publish controls */}
+              <div className="p-5 md:p-6 border-t border-slate-150 bg-slate-50 flex items-center justify-between gap-3">
+                {wizardStep > 1 ? (
+                  <button
+                    type="button"
+                    disabled={submitting}
+                    onClick={handlePrevStep}
+                    className="px-4 py-3 bg-white border border-slate-250 text-slate-700 font-bold rounded-xl text-xs hover:bg-slate-50 transition-all flex items-center gap-1.5 shadow-2xs cursor-pointer disabled:opacity-50"
+                  >
+                    <ArrowLeft size={14} /> Back
+                  </button>
+                ) : (
+                  <button
+                    type="button"
+                    disabled={submitting}
+                    onClick={handleCancelForm}
+                    className="px-4 py-3 bg-white border border-slate-250 text-slate-500 hover:text-slate-800 font-bold rounded-xl text-xs hover:bg-slate-50 transition-all cursor-pointer"
+                  >
+                    Cancel
+                  </button>
+                )}
+
+                {wizardStep < 4 ? (
+                  <>
+                    {wizardStep > 1 && (
+                      <button
+                        type="button"
+                        disabled={submitting}
+                        onClick={handleCancelForm}
+                        className="px-4 py-3 text-slate-500 hover:text-slate-800 font-bold text-xs transition-all cursor-pointer"
+                      >
+                        Cancel
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      disabled={submitting}
+                      onClick={handleNextStep}
+                      className="flex-grow py-3 bg-slate-900 hover:bg-slate-950 text-white font-bold rounded-xl text-xs transition-all shadow-md flex items-center justify-center gap-1.5 cursor-pointer ml-auto"
+                    >
+                      Continue <ArrowRight size={14} />
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <button
+                      type="button"
+                      disabled={submitting}
+                      onClick={handleCancelForm}
+                      className="px-4 py-3 text-slate-500 hover:text-slate-800 font-bold text-xs transition-all cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={submitting}
+                      className="flex-grow py-3 bg-amber-400 hover:bg-amber-500 text-slate-950 font-bold rounded-xl text-xs transition-all shadow-md active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 cursor-pointer"
+                    >
+                      {submitting ? (
+                        <>
+                          <div className="w-4 h-4 border-2 border-slate-950 border-t-transparent rounded-full animate-spin" />
+                          <span>Publishing...</span>
+                        </>
+                      ) : (
+                        <>
+                          <Check size={14} />
+                          <span>{editModeProduct ? 'Commit Updates' : 'Publish to Catalog'}</span>
+                        </>
+                      )}
+                    </button>
+                  </>
+                )}
               </div>
 
             </div>
