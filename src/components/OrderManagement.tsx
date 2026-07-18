@@ -22,8 +22,10 @@ import {
   CreditCard,
   Edit,
   Activity,
-  UserCheck
+  UserCheck,
+  QrCode
 } from 'lucide-react';
+import { BarcodeScanner } from './BarcodeScanner';
 import { Order, Customer, Product, Variant, UserProfile, OrderItem, OrderStatusHistory, OrderStatus } from '../types';
 import { 
   getOrders, 
@@ -41,9 +43,16 @@ import {
 interface OrderManagementProps {
   user: UserProfile | null;
   requireCheckIn?: () => boolean;
+  initialOrderId?: string | null;
+  clearInitialOrderId?: () => void;
 }
 
-export default function OrderManagement({ user, requireCheckIn }: OrderManagementProps) {
+export default function OrderManagement({ 
+  user, 
+  requireCheckIn,
+  initialOrderId,
+  clearInitialOrderId
+}: OrderManagementProps) {
   // Lists
   const [orders, setOrders] = useState<Order[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
@@ -102,6 +111,7 @@ export default function OrderManagement({ user, requireCheckIn }: OrderManagemen
   const [orderAmountPaid, setOrderAmountPaid] = useState<number>(0);
 
   const [submitting, setSubmitting] = useState(false);
+  const [showScanner, setShowScanner] = useState(false);
 
   // Partial Payment and Manual Invoice States
   const [showPaymentModal, setShowPaymentModal] = useState(false);
@@ -140,6 +150,18 @@ export default function OrderManagement({ user, requireCheckIn }: OrderManagemen
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (initialOrderId && orders.length > 0) {
+      const o = orders.find(x => x.id === initialOrderId);
+      if (o) {
+        setSelectedOrder(o);
+      }
+      if (clearInitialOrderId) {
+        clearInitialOrderId();
+      }
+    }
+  }, [initialOrderId, orders, clearInitialOrderId]);
 
   // Helper validation
   const validateBdPhone = (phone: string) => {
@@ -670,7 +692,32 @@ export default function OrderManagement({ user, requireCheckIn }: OrderManagemen
                   onChange={(e) => setSearchQuery(e.target.value)}
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 pl-10 pr-4 text-xs text-slate-800 focus:outline-hidden"
                 />
+                <button
+                  onClick={() => setShowScanner(true)}
+                  className="absolute top-1.5 right-1.5 p-1.5 bg-slate-100 rounded-lg hover:bg-slate-200"
+                >
+                  <QrCode size={16} className="text-slate-600" />
+                </button>
               </div>
+              {showScanner && (
+                <BarcodeScanner
+                  onScan={(text) => {
+                    setShowScanner(false);
+                    if (text.startsWith('INV:')) {
+                      const invId = text.substring(4);
+                      const order = orders.find(o => o.id === invId || o.invoiceId === invId);
+                      if (order) {
+                        setSelectedOrder(order);
+                      } else {
+                        setError('Order not found for this Invoice QR.');
+                      }
+                    } else {
+                      setSearchQuery(text);
+                    }
+                  }}
+                  onCancel={() => setShowScanner(false)}
+                />
+              )}
               <select
                 value={statusFilter}
                 onChange={(e) => setStatusFilter(e.target.value)}

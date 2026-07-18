@@ -13,15 +13,18 @@ import {
   Clock,
   LogOut,
   LogIn,
-  MessageSquare
+  MessageSquare,
+  Search,
+  QrCode
 } from 'lucide-react';
-import { Product, UserProfile } from '../types';
-import { checkInUser, checkOutUser, getTodayAttendance } from '../firebase/db';
+import { Product, UserProfile, Order, Customer } from '../types';
+import { checkInUser, checkOutUser, getTodayAttendance, getOrders, getCustomers } from '../firebase/db';
+import { BarcodeScanner } from './BarcodeScanner';
 
 interface DashboardViewProps {
   products: Product[];
   user: UserProfile | null;
-  onNavigateToTab: (tab: string, subAction?: string) => void;
+  onNavigateToTab: (tab: string, subAction?: string, initialId?: string | null) => void;
   onUserUpdate: () => void;
 }
 
@@ -36,6 +39,88 @@ export default function DashboardView({
   const [attendanceRecords, setAttendanceRecords] = useState<any[]>([]);
   const [loadingAttendance, setLoadingAttendance] = useState(false);
   const [processingAttendance, setProcessingAttendance] = useState(false);
+
+  // Search and scan states
+  const [searchQuery, setSearchQuery] = useState('');
+  const [searchResults, setSearchResults] = useState<any[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [showScanner, setShowScanner] = useState(false);
+  const [allOrders, setAllOrders] = useState<Order[]>([]);
+  const [allCustomers, setAllCustomers] = useState<Customer[]>([]);
+
+  useEffect(() => {
+    const fetchSearchData = async () => {
+      try {
+        const [orders, customers] = await Promise.all([getOrders(), getCustomers()]);
+        setAllOrders(orders);
+        setAllCustomers(customers);
+      } catch (err) {
+        console.error("Error fetching search data", err);
+      }
+    };
+    fetchSearchData();
+  }, []);
+
+  useEffect(() => {
+    if (!searchQuery.trim()) {
+      setSearchResults([]);
+      return;
+    }
+    const timer = setTimeout(() => {
+      performSearch(searchQuery);
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [searchQuery, allOrders, allCustomers, products]);
+
+  const performSearch = (query: string) => {
+    setIsSearching(true);
+    const q = query.toLowerCase();
+    const results: any[] = [];
+    
+    // Search Products
+    products.forEach(p => {
+      if (p.name.toLowerCase().includes(q) || p.sku.toLowerCase().includes(q)) {
+        results.push({ type: 'product', item: p });
+      }
+    });
+
+    // Search Orders
+    allOrders.forEach(o => {
+      if (o.id.toLowerCase().includes(q) || o.invoiceId?.toLowerCase().includes(q) || o.customerName.toLowerCase().includes(q) || o.customerPhone.toLowerCase().includes(q)) {
+        results.push({ type: 'order', item: o });
+      }
+    });
+
+    // Search Customers
+    allCustomers.forEach(c => {
+      if (c.name.toLowerCase().includes(q) || c.phone.toLowerCase().includes(q)) {
+        results.push({ type: 'customer', item: c });
+      }
+    });
+
+    setSearchResults(results.slice(0, 15));
+    setIsSearching(false);
+  };
+
+  const handleScan = (text: string) => {
+    setShowScanner(false);
+    if (text.startsWith('INV:')) {
+      const invId = text.substring(4);
+      const order = allOrders.find(o => o.id === invId || o.invoiceId === invId);
+      if (order) {
+        onNavigateToTab('orders', undefined, order.id);
+      } else {
+        alert('No match found for this scan');
+      }
+    } else {
+      const p = products.find(prod => prod.variants.some(v => v.barcodeValue === text) || prod.sku === text);
+      if (p) {
+        onNavigateToTab('products', undefined, p.id);
+      } else {
+        alert('No match found for this scan');
+      }
+    }
+  };
 
   useEffect(() => {
     if (user?.id) {
@@ -156,6 +241,80 @@ export default function DashboardView({
           </div>
         </div>
       </div>
+
+      {/* Global Search and Scan Bar */}
+      <div className="relative z-40 flex flex-col md:flex-row items-center gap-3">
+        <div className="relative w-full">
+          <div className="absolute inset-y-0 left-0 pl-4 flex items-center pointer-events-none">
+            <Search size={18} className="text-slate-400" />
+          </div>
+          <input
+            type="text"
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search products, orders, or customers..."
+            className="w-full pl-11 pr-4 py-3.5 bg-white border border-slate-200 rounded-2xl text-sm focus:outline-hidden focus:ring-2 focus:ring-[#D4AF37] focus:border-transparent shadow-sm transition-all text-slate-800 font-medium"
+          />
+          {/* Dropdown Results */}
+          {searchQuery.trim() !== '' && (
+            <div className="absolute top-full left-0 right-0 mt-2 bg-white rounded-2xl shadow-xl border border-slate-200 overflow-hidden max-h-96 overflow-y-auto">
+              {isSearching ? (
+                <div className="p-6 text-center text-slate-500 text-sm">Searching...</div>
+              ) : searchResults.length > 0 ? (
+                <div className="flex flex-col">
+                  {searchResults.map((res, i) => (
+                    <button
+                      key={i}
+                      onClick={() => {
+                        setSearchQuery('');
+                        onNavigateToTab(`${res.type}s`, undefined, res.item.id);
+                      }}
+                      className="flex items-start text-left px-4 py-3 border-b border-slate-50 hover:bg-slate-50 transition-colors last:border-0"
+                    >
+                      {res.type === 'product' && (
+                        <div>
+                          <p className="text-sm font-bold text-slate-900">{res.item.name}</p>
+                          <p className="text-xs text-slate-500 font-mono mt-0.5">SKU: {res.item.sku}</p>
+                        </div>
+                      )}
+                      {res.type === 'order' && (
+                        <div>
+                          <p className="text-sm font-bold text-slate-900">Order #{res.item.id.slice(0,8)}</p>
+                          <p className="text-xs text-slate-500 mt-0.5">{res.item.customerName}</p>
+                        </div>
+                      )}
+                      {res.type === 'customer' && (
+                        <div>
+                          <p className="text-sm font-bold text-slate-900">{res.item.name}</p>
+                          <p className="text-xs text-slate-500 mt-0.5">{res.item.phone}</p>
+                        </div>
+                      )}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="p-6 text-center text-slate-500 text-sm">
+                  No results found for '{searchQuery}'. Try checking the spelling.
+                </div>
+              )}
+            </div>
+          )}
+        </div>
+        <button
+          onClick={() => setShowScanner(true)}
+          className="shrink-0 flex items-center justify-center bg-[#16161b] hover:bg-black text-[#D4AF37] p-3.5 rounded-2xl shadow-sm transition-all active:scale-95"
+          title="Scan Barcode / QR Code"
+        >
+          <QrCode size={22} />
+        </button>
+      </div>
+      
+      {showScanner && (
+        <BarcodeScanner
+          onScan={handleScan}
+          onCancel={() => setShowScanner(false)}
+        />
+      )}
 
       {/* Check In / Check Out Widget */}
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">

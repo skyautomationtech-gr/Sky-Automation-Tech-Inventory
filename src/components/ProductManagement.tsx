@@ -26,6 +26,7 @@ import {
 import { motion } from 'motion/react';
 import { QRCodeSVG } from 'qrcode.react';
 import Barcode from './Barcode';
+import { BarcodeScanner } from './BarcodeScanner';
 import { generateBarcodePDF } from '../utils/barcodePdf';
 import JsBarcode from 'jsbarcode';
 import { Product, Variant, Category, Brand, UserProfile, StockLog } from '../types';
@@ -55,6 +56,8 @@ interface ProductManagementProps {
   onRefreshData: () => Promise<void>;
   initialAddMode?: boolean; // opens drawer automatically if navigated from dashboard
   requireCheckIn?: () => boolean;
+  initialProductId?: string | null;
+  clearInitialProductId?: () => void;
 }
 
 export default function ProductManagement({
@@ -64,7 +67,9 @@ export default function ProductManagement({
   user,
   onRefreshData,
   initialAddMode = false,
-  requireCheckIn
+  requireCheckIn,
+  initialProductId,
+  clearInitialProductId
 }: ProductManagementProps) {
   const isStaff = user?.role === 'staff';
 
@@ -73,6 +78,7 @@ export default function ProductManagement({
 
   // List management states
   const [search, setSearch] = useState('');
+  const [showScanner, setShowScanner] = useState(false);
   const [filterCategory, setFilterCategory] = useState('');
   const [filterBrand, setFilterBrand] = useState('');
   const [filterSubBrand, setFilterSubBrand] = useState('');
@@ -522,6 +528,18 @@ export default function ProductManagement({
       openAddDrawer();
     }
   }, [initialAddMode]);
+
+  useEffect(() => {
+    if (initialProductId) {
+      const p = products.find(p => p.id === initialProductId);
+      if (p) {
+        setSelectedProduct(p);
+      }
+      if (clearInitialProductId) {
+        clearInitialProductId();
+      }
+    }
+  }, [initialProductId, products, clearInitialProductId]);
 
   // Fetch product logs on product selection
   useEffect(() => {
@@ -999,12 +1017,12 @@ export default function ProductManagement({
           const pSelling = sellingPriceIdx !== -1 ? Number(cols[sellingPriceIdx]) || 0 : 0;
           const pReorder = reorderIdx !== -1 ? Number(cols[reorderIdx]) || 5 : 5;
 
-          const productPayload = {
+          const productPayload: Omit<Product, 'id'> = {
             name: pName,
             sku: pSku.toUpperCase(),
             category: pCategory,
             brand: pBrand,
-            subBrand: pSubBrand,
+            subBrand: pSubBrand as 'SAT' | 'GZ' | 'RTX',
             costPrice: pCost,
             sellingPrice: pSelling,
             reorderThreshold: pReorder,
@@ -1189,7 +1207,22 @@ export default function ProductManagement({
                   onChange={(e) => setSearch(e.target.value)}
                   className="pl-9 w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 md:py-2 text-xs focus:outline-hidden focus:ring-1 focus:ring-amber-400"
                 />
+                <button
+                  onClick={() => setShowScanner(true)}
+                  className="absolute top-2 right-2 p-1.5 bg-slate-100 rounded-lg hover:bg-slate-200"
+                >
+                  <QrCode size={16} className="text-slate-600" />
+                </button>
               </div>
+              {showScanner && (
+                <BarcodeScanner
+                  onScan={(text) => {
+                    setSearch(text);
+                    setShowScanner(false);
+                  }}
+                  onCancel={() => setShowScanner(false)}
+                />
+              )}
 
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-2">
                 

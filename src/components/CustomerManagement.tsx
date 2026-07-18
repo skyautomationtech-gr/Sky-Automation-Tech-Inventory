@@ -23,9 +23,16 @@ import { getCustomers, addCustomer, updateCustomer, getOrders } from '../firebas
 interface CustomerManagementProps {
   user: UserProfile | null;
   requireCheckIn?: () => boolean;
+  initialCustomerId?: string | null;
+  clearInitialCustomerId?: () => void;
 }
 
-export default function CustomerManagement({ user, requireCheckIn }: CustomerManagementProps) {
+export default function CustomerManagement({ 
+  user, 
+  requireCheckIn,
+  initialCustomerId,
+  clearInitialCustomerId
+}: CustomerManagementProps) {
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
@@ -75,6 +82,18 @@ export default function CustomerManagement({ user, requireCheckIn }: CustomerMan
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    if (initialCustomerId && customers.length > 0) {
+      const c = customers.find(x => x.id === initialCustomerId);
+      if (c) {
+        setSelectedCustomer(c);
+      }
+      if (clearInitialCustomerId) {
+        clearInitialCustomerId();
+      }
+    }
+  }, [initialCustomerId, customers, clearInitialCustomerId]);
 
   // Bangladesh format validation
   const validateBdPhone = (phone: string) => {

@@ -120,6 +120,11 @@ export default function App() {
   const [dataLoading, setDataLoading] = useState(false);
   const [showCheckInModal, setShowCheckInModal] = useState(false);
 
+  // Deep-linking search target states
+  const [initialProductId, setInitialProductId] = useState<string | null>(null);
+  const [initialOrderId, setInitialOrderId] = useState<string | null>(null);
+  const [initialCustomerId, setInitialCustomerId] = useState<string | null>(null);
+
   // Sub-action passing (e.g., automatically opening add product drawer)
   const [initialProductAddMode, setInitialProductAddMode] = useState(false);
   const [initialStockAction, setInitialStockAction] = useState('in');
@@ -250,18 +255,40 @@ export default function App() {
   };
 
   // Safe navigation from quick actions
-  const navigateToTab = (tab: string, subAction?: string) => {
+  const navigateToTab = (tab: string, subAction?: string, initialId?: string | null) => {
     setCurrentTab(tab);
-    if (tab === 'products' && subAction === 'add') {
-      setInitialProductAddMode(true);
+    if (tab === 'products') {
+      if (subAction === 'add') {
+        setInitialProductAddMode(true);
+      } else {
+        setInitialProductAddMode(false);
+      }
+      setInitialProductId(initialId || null);
     } else {
       setInitialProductAddMode(false);
+      setInitialProductId(null);
     }
 
-    if (tab === 'stock' && subAction === 'in') {
-      setInitialStockAction('in');
+    if (tab === 'stock') {
+      if (subAction === 'in') {
+        setInitialStockAction('in');
+      } else {
+        setInitialStockAction('ledger');
+      }
     } else {
       setInitialStockAction('ledger');
+    }
+
+    if (tab === 'orders') {
+      setInitialOrderId(initialId || null);
+    } else {
+      setInitialOrderId(null);
+    }
+
+    if (tab === 'customers') {
+      setInitialCustomerId(initialId || null);
+    } else {
+      setInitialCustomerId(null);
     }
   };
 
@@ -438,6 +465,8 @@ export default function App() {
             onRefreshData={refreshApplicationData}
             initialAddMode={initialProductAddMode}
             requireCheckIn={requireCheckIn}
+            initialProductId={initialProductId}
+            clearInitialProductId={() => setInitialProductId(null)}
           />
         )}
 
@@ -459,12 +488,22 @@ export default function App() {
 
         {/* Tab Customers: Customer Directory View */}
         {currentTab === 'customers' && (
-          <CustomerManagement user={user} requireCheckIn={requireCheckIn} />
+          <CustomerManagement 
+            user={user} 
+            requireCheckIn={requireCheckIn} 
+            initialCustomerId={initialCustomerId}
+            clearInitialCustomerId={() => setInitialCustomerId(null)}
+          />
         )}
 
         {/* Tab Orders: Order Desk View */}
         {currentTab === 'orders' && (
-          <OrderManagement user={user} requireCheckIn={requireCheckIn} />
+          <OrderManagement 
+            user={user} 
+            requireCheckIn={requireCheckIn} 
+            initialOrderId={initialOrderId}
+            clearInitialOrderId={() => setInitialOrderId(null)}
+          />
         )}
 
         {/* Tab Invoices: Invoice Desk View */}

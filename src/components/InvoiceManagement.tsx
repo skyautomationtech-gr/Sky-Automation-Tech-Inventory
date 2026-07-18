@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { QRCodeSVG } from 'qrcode.react';
 import { 
   Search, 
   Receipt, 
@@ -623,6 +624,9 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                     </div>
 
                     <div className="text-right font-mono text-xs space-y-1">
+                      <div className="flex items-center justify-end gap-2 mb-2">
+                        <QRCodeSVG value={`INV:${selectedInvoice.invoiceNumber}`} size={60} />
+                      </div>
                       <div className="border border-black p-2 text-center bg-black text-white rounded-sm">
                         <p className="text-[9px] font-bold uppercase tracking-wider">INVOICE NUMBER</p>
                         <p className="text-sm font-black tracking-tight">{selectedInvoice.invoiceNumber}</p>

@@ -11,8 +11,10 @@ import {
   Plus, 
   AlertCircle,
   Clock,
-  Coins
+  Coins,
+  QrCode
 } from 'lucide-react';
+import { BarcodeScanner } from './BarcodeScanner';
 import { Product, Variant, StockLog, StockLogType, UserProfile } from '../types';
 import { addStockLog, updateProduct, getStockLogs } from '../firebase/db';
 
@@ -63,6 +65,7 @@ export default function StockOperations({
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [showScanner, setShowScanner] = useState(false);
 
   // Refresh active logs list
   const refreshLedger = async () => {
@@ -103,6 +106,23 @@ export default function StockOperations({
     setAdjustNote('');
     setPhysicalCount('');
     setError('');
+  };
+
+  const handleScan = (text: string) => {
+    let found = false;
+    for (const p of products) {
+      const v = p.variants.find(v => v.barcodeValue === text);
+      if (v) {
+        setSelectedProductId(p.id);
+        setSelectedVariantId(v.id);
+        found = true;
+        break;
+      }
+    }
+    if (!found) {
+      setError('No product found for scanned barcode.');
+    }
+    setShowScanner(false);
   };
 
   // Run Transaction
@@ -444,18 +464,33 @@ export default function StockOperations({
                 <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
                   Select Product
                 </label>
-                <select
-                  value={selectedProductId}
-                  onChange={(e) => setSelectedProductId(e.target.value)}
-                  className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-2.5 text-xs text-slate-700 focus:outline-hidden"
-                  required
-                >
-                  <option value="">-- Choose Gadget --</option>
-                  {products.map(p => (
-                    <option key={p.id} value={p.id}>{p.name} [{p.sku}]</option>
-                  ))}
-                </select>
+                <div className="flex gap-2">
+                  <select
+                    value={selectedProductId}
+                    onChange={(e) => setSelectedProductId(e.target.value)}
+                    className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-2.5 text-xs text-slate-700 focus:outline-hidden"
+                    required
+                  >
+                    <option value="">-- Choose Gadget --</option>
+                    {products.map(p => (
+                      <option key={p.id} value={p.id}>{p.name} [{p.sku}]</option>
+                    ))}
+                  </select>
+                  <button
+                    type="button"
+                    onClick={() => setShowScanner(true)}
+                    className="mt-1 p-2 bg-slate-100 hover:bg-slate-200 rounded-xl"
+                  >
+                    <QrCode size={16} />
+                  </button>
+                </div>
               </div>
+              {showScanner && (
+                <BarcodeScanner
+                  onScan={handleScan}
+                  onCancel={() => setShowScanner(false)}
+                />
+              )}
 
               {/* Variant selector */}
               {selectedProduct && (
