@@ -8,8 +8,9 @@ interface BarcodePrintItem {
 }
 
 /**
- * Generates an A4 PDF containing a grid of barcode labels (3 columns x 8 rows = 24 labels per page).
- * Sized nicely for common adhesive sticker sheets (~60mm x 33mm each).
+ * Generates an A4 PDF containing a grid of barcode labels (4 columns x 9 rows = 36 labels per page).
+ * Each individual label is sized exactly to 1.5 inches x 1 inch (38.1mm x 25.4mm).
+ * Sized perfectly for standard small sticker label printing at 100% scale.
  */
 export async function generateBarcodePDF(
   items: BarcodePrintItem[],
@@ -22,19 +23,22 @@ export async function generateBarcodePDF(
   });
 
   // A4 dimensions: 210 x 297 mm
-  const pageWidth = 210;
-  const pageHeight = 297;
-  
-  // Grid configuration: 3 columns x 8 rows = 24 labels per page
-  const cols = 3;
-  const rows = 8;
-  const marginX = 8;
-  const marginY = 12;
-  const gapX = 4;
-  const gapY = 4;
-  
-  const labelWidth = (pageWidth - (marginX * 2) - (gapX * (cols - 1))) / cols; // ~62mm
-  const labelHeight = (pageHeight - (marginY * 2) - (gapY * (rows - 1))) / rows; // ~31mm
+  // 1.5 inches = 38.1 mm
+  // 1.0 inch = 25.4 mm
+  const labelWidth = 38.1;
+  const labelHeight = 25.4;
+
+  // Grid configuration: 4 columns x 9 rows = 36 labels per page
+  const cols = 4;
+  const rows = 9;
+
+  // Margin and Gaps calculated to perfectly center the 4x9 grid on A4 (210 x 297 mm)
+  // Total width: 4 * 38.1 + 3 * 9.2 = 152.4 + 27.6 = 180 mm -> marginX = 15 mm (Total 210 mm)
+  // Total height: 9 * 25.4 + 8 * 3.55 = 228.6 + 28.4 = 257 mm -> marginY = 20 mm (Total 297 mm)
+  const marginX = 15;
+  const marginY = 20;
+  const gapX = 9.2;
+  const gapY = 3.55;
 
   let currentIndex = 0;
 
@@ -55,9 +59,9 @@ export async function generateBarcodePDF(
     const x = marginX + colIndex * (labelWidth + gapX);
     const y = marginY + rowIndex * (labelHeight + gapY);
 
-    // Draw a subtle border around the label as a cutting/alignment guide
-    doc.setDrawColor(220, 225, 230);
-    doc.setLineWidth(0.1);
+    // Draw a very subtle border around the label as an alignment/cut guide for the sticker sheet
+    doc.setDrawColor(230, 235, 240);
+    doc.setLineWidth(0.08);
     doc.rect(x, y, labelWidth, labelHeight);
 
     // Render barcode to an in-memory canvas to get base64 JPEG image
@@ -65,48 +69,48 @@ export async function generateBarcodePDF(
     try {
       JsBarcode(canvas, item.value, {
         format: 'CODE128',
-        width: 2.5,
-        height: 70,
-        displayValue: false, // We render the human-readable text manually for perfect control
+        width: 3.5, // Thicker bars for maximum scannability
+        height: 100,
+        displayValue: false, // Rendered manually for perfect sizing/control
         margin: 0,
         background: '#ffffff',
       });
       const imgData = canvas.toDataURL('image/jpeg', 1.0);
       
-      // Draw product display name on the sticker
+      // 1. Draw product display name on the sticker (centered, bold, small)
       doc.setFont('Helvetica', 'bold');
-      doc.setFontSize(7.5);
+      doc.setFontSize(6.5);
       doc.setTextColor(15, 23, 42); // Slate 900
       
-      // Truncate name if it's too long
+      // Truncate name if it's too long to fit one line
       let displayName = item.label;
-      if (displayName.length > 32) {
-        displayName = displayName.substring(0, 30) + '...';
+      if (displayName.length > 25) {
+        displayName = displayName.substring(0, 23) + '...';
       }
-      doc.text(displayName, x + 3, y + 4.5);
+      doc.text(displayName, x + labelWidth / 2, y + 3.8, { align: 'center' });
 
-      // Draw sub-label (Variant properties like Color & Model)
+      // 2. Draw sub-label (Variant properties like Color / Model)
       if (item.subLabel) {
         doc.setFont('Helvetica', 'normal');
-        doc.setFontSize(6.5);
+        doc.setFontSize(5.0);
         doc.setTextColor(100, 116, 139); // Slate 500
         let displaySub = item.subLabel;
-        if (displaySub.length > 38) {
-          displaySub = displaySub.substring(0, 35) + '...';
+        if (displaySub.length > 30) {
+          displaySub = displaySub.substring(0, 27) + '...';
         }
-        doc.text(displaySub, x + 3, y + 7.5);
+        doc.text(displaySub, x + labelWidth / 2, y + 6.2, { align: 'center' });
       }
 
-      // Draw Barcode Image
-      const barcodeY = y + (item.subLabel ? 9 : 6);
-      const barcodeHeight = labelHeight - (item.subLabel ? 14.5 : 11.5);
-      doc.addImage(imgData, 'JPEG', x + 3, barcodeY, labelWidth - 6, barcodeHeight);
+      // 3. Draw Barcode Image (take majority of the middle area, wide, tall enough)
+      const barcodeY = y + (item.subLabel ? 7.5 : 5.2);
+      const barcodeHeight = 14.0;
+      doc.addImage(imgData, 'JPEG', x + 2.0, barcodeY, labelWidth - 4.0, barcodeHeight);
 
-      // Draw Human-readable SKU/Barcode text at the very bottom
-      doc.setFont('Courier', 'normal');
-      doc.setFontSize(7);
+      // 4. Draw Human-readable SKU/Barcode text below the bars (standard barcode convention)
+      doc.setFont('Courier', 'bold');
+      doc.setFontSize(6.0);
       doc.setTextColor(30, 41, 59); // Slate 800
-      doc.text(item.value, x + labelWidth / 2, y + labelHeight - 1.5, { align: 'center' });
+      doc.text(item.value, x + labelWidth / 2, y + labelHeight - 1.6, { align: 'center' });
       
     } catch (err) {
       console.error('Error generating barcode for PDF:', err);
@@ -116,5 +120,5 @@ export async function generateBarcodePDF(
   }
 
   const sanitizedTitle = title.toLowerCase().replace(/[^a-z0-9]/g, '_');
-  doc.save(`${sanitizedTitle}_barcodes.pdf`);
+  doc.save(`${sanitizedTitle}_barcodes_1_5x1_in.pdf`);
 }

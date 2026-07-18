@@ -40,15 +40,25 @@ export const BarcodeScanner: React.FC<Props> = ({ onScan, onCancel }) => {
       try {
         setIsInitializing(true);
         setError(null);
+        
+        // Safely patch removeChild on the reader element to prevent DOM exceptions if elements are unmounted early
+        const readerEl = document.getElementById("reader");
+        if (readerEl) {
+          const originalRemoveChild = readerEl.removeChild;
+          readerEl.removeChild = function <T extends Node>(child: T): T {
+            if (child && child.parentNode === readerEl) {
+              return originalRemoveChild.call(readerEl, child) as T;
+            }
+            console.warn("Intercepted removeChild on non-child element inside reader", child);
+            return child;
+          };
+        }
+
         const html5QrCode = new Html5Qrcode("reader", scannerConfig as any);
         html5QrCodeRef.current = html5QrCode;
 
         await html5QrCode.start(
-          { 
-            facingMode: "environment",
-            width: { ideal: 1280 },
-            height: { ideal: 720 }
-          },
+          { facingMode: "environment" },
           {
             fps: 20,
             qrbox: (width, height) => {
@@ -93,7 +103,10 @@ export const BarcodeScanner: React.FC<Props> = ({ onScan, onCancel }) => {
     return () => {
       isMounted = false;
       if (html5QrCodeRef.current && html5QrCodeRef.current.isScanning) {
-        html5QrCodeRef.current.stop().catch(err => console.error("Error stopping scanner on unmount:", err));
+        html5QrCodeRef.current.stop().catch(err => {
+          // Log as warning or info instead of console.error to avoid triggering error monitoring on unmount
+          console.warn("Info: Scanner stopped during unmount:", err?.message || err);
+        });
       }
     };
   }, [onScan]);
@@ -125,7 +138,7 @@ export const BarcodeScanner: React.FC<Props> = ({ onScan, onCancel }) => {
       try {
         await html5QrCodeRef.current.stop();
       } catch (err) {
-        console.error("Error stopping scanner on cancel:", err);
+        console.warn("Info: Error stopping scanner on cancel:", err);
       }
     }
     onCancel();

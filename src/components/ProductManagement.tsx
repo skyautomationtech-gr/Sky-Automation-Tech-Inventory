@@ -360,20 +360,64 @@ export default function ProductManagement({
   const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
 
   // Helper to download a single barcode as a PNG image using canvas
-  const downloadBarcodePng = (value: string, label: string) => {
+  const downloadBarcodePng = (value: string, label: string, subLabel?: string) => {
     const canvas = document.createElement('canvas');
+    canvas.width = 450;  // 1.5 inches @ 300 DPI
+    canvas.height = 300; // 1.0 inches @ 300 DPI
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
     try {
-      JsBarcode(canvas, value, {
+      // 1. White Background with adequate margin
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, 450, 300);
+
+      // 2. Product name (small bold text at the top)
+      ctx.font = 'bold 22px Helvetica, Arial, sans-serif';
+      ctx.fillStyle = '#0f172a'; // Slate 900
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'top';
+
+      let displayName = label;
+      if (displayName.length > 25) {
+        displayName = displayName.substring(0, 23) + '...';
+      }
+      ctx.fillText(displayName, 225, 25);
+
+      // 3. Variant info (e.g. "Black / Standard") - smaller text below product name
+      if (subLabel) {
+        ctx.font = '16px Helvetica, Arial, sans-serif';
+        ctx.fillStyle = '#64748b'; // Slate 500
+        let displaySub = subLabel;
+        if (displaySub.length > 30) {
+          displaySub = displaySub.substring(0, 27) + '...';
+        }
+        ctx.fillText(displaySub, 225, 55);
+      }
+
+      // 4. Barcode image
+      const tempCanvas = document.createElement('canvas');
+      JsBarcode(tempCanvas, value, {
         format: 'CODE128',
-        width: 2.5,
-        height: 70,
-        displayValue: true,
-        fontSize: 13,
-        margin: 15,
+        width: 3.5, // Thick bars for perfect scannability
+        height: 100,
+        displayValue: false, // Rendered manually
+        margin: 0,
         background: '#ffffff',
-        lineColor: '#000000',
       });
-      
+
+      // Draw the barcode image wide as possible (with 20px padding left/right) and centered
+      const barcodeWidth = 410; // 450 - 20 * 2
+      const barcodeHeight = 145;
+      const barcodeX = 20;
+      const barcodeY = subLabel ? 85 : 70;
+      ctx.drawImage(tempCanvas, barcodeX, barcodeY, barcodeWidth, barcodeHeight);
+
+      // 5. Short code below the barcode (Courier/Monospace, Slate 800)
+      ctx.font = 'bold 20px "Courier New", Courier, monospace';
+      ctx.fillStyle = '#1e293b';
+      ctx.fillText(value, 225, 255);
+
       const dataUrl = canvas.toDataURL('image/png');
       const link = document.createElement('a');
       link.href = dataUrl;
@@ -1759,7 +1803,7 @@ export default function ProductManagement({
                       <div className="flex gap-2 w-full">
                         <button
                           type="button"
-                          onClick={() => downloadBarcodePng(selectedProduct.barcodeValue || selectedProduct.sku, selectedProduct.name)}
+                          onClick={() => downloadBarcodePng(selectedProduct.barcodeValue || selectedProduct.sku, selectedProduct.name, 'Primary SKU Code')}
                           className="flex-1 py-2 bg-white hover:bg-slate-50 border border-slate-200 rounded-xl text-[10px] font-bold text-slate-700 flex items-center justify-center gap-1.5 transition-colors shadow-3xs cursor-pointer"
                           title="Download high-resolution PNG barcode image"
                         >
@@ -1828,7 +1872,7 @@ export default function ProductManagement({
                                     </div>
                                     <button
                                       type="button"
-                                      onClick={() => downloadBarcodePng(val, `${selectedProduct.name}_${v.color}_${v.model}`)}
+                                      onClick={() => downloadBarcodePng(val, selectedProduct.name, `${v.color} / ${v.model}`)}
                                       className="p-1 bg-slate-50 hover:bg-amber-100 text-slate-500 hover:text-amber-700 rounded-lg transition-colors border border-slate-100 cursor-pointer"
                                       title="Download Variant Barcode PNG"
                                     >

@@ -17,7 +17,7 @@ import {
   migrateProductBarcodes
 } from './firebase/db';
 import { UserProfile, Product, Category, Brand, CompanySettings, ProductColor, ProductModel } from './types';
-import { Menu } from 'lucide-react';
+import { Menu, AlertTriangle, Sparkles, RefreshCw } from 'lucide-react';
 
 // Import Modular Components
 import SplashAndAuth from './components/SplashAndAuth';
@@ -109,6 +109,64 @@ const MOCK_BRANDS: Brand[] = [
 export default function App() {
   const [user, setUser] = useState<UserProfile | null>(null);
   const [authChecking, setAuthChecking] = useState(true);
+  const [isQuotaExceeded, setIsQuotaExceeded] = useState(false);
+  const [isOfflineDemoMode, setIsOfflineDemoMode] = useState(false);
+
+  const checkIfQuotaError = (err: any): boolean => {
+    const msg = err?.message || String(err);
+    const lowerMsg = msg.toLowerCase();
+    return (
+      lowerMsg.includes('quota limit exceeded') ||
+      lowerMsg.includes('quota exceeded') ||
+      lowerMsg.includes('free daily read units') ||
+      lowerMsg.includes('resource-exhausted') ||
+      lowerMsg.includes('resource_exhausted') ||
+      lowerMsg.includes('over_quota') ||
+      lowerMsg.includes('quota_exceeded')
+    );
+  };
+
+  const enterOfflineDemoMode = () => {
+    setIsOfflineDemoMode(true);
+    setIsQuotaExceeded(false);
+    
+    setUser({
+      id: 'offline-operator',
+      email: 'offline@demo.com',
+      name: 'Offline Demo Operator',
+      role: 'superadmin',
+      pin: '0000',
+      active: true,
+      currentSessionStatus: 'checked_in',
+      currentSessionDate: new Date().toISOString().split('T')[0],
+      currentSessionId: 'offline-sess',
+    });
+    
+    setCompanySettings({
+      companyName: 'Sky Automation Demo Workspace',
+      address: '123 Demo Street, Suite 101',
+      phone: '555-0199',
+      onboarded: true,
+    });
+    
+    setIsOnboarding(false);
+    
+    setProducts(MOCK_PRODUCTS);
+    setCategories(MOCK_CATEGORIES);
+    setBrands(MOCK_BRANDS);
+    setProductColors([
+      { id: 'c-1', name: 'Black' },
+      { id: 'c-2', name: 'White' },
+      { id: 'c-3', name: 'Purple' },
+      { id: 'c-4', name: 'Space Black' }
+    ]);
+    setProductModels([
+      { id: 'm-1', name: 'Standard' },
+      { id: 'm-2', name: 'UK Plug' },
+      { id: 'm-3', name: 'US Plug' },
+      { id: 'm-4', name: 'NFC Edition' }
+    ]);
+  };
   
   // App structure states
   const [companySettings, setCompanySettings] = useState<CompanySettings | null>(null);
@@ -163,12 +221,19 @@ export default function App() {
             setUser(profile);
             
             // Check onboarding
-            const settings = await getCompanySettings();
-            if (settings && settings.onboarded) {
-              setCompanySettings(settings);
-              setIsOnboarding(false);
-            } else {
-              setIsOnboarding(true);
+            try {
+              const settings = await getCompanySettings();
+              if (settings && settings.onboarded) {
+                setCompanySettings(settings);
+                setIsOnboarding(false);
+              } else {
+                setIsOnboarding(true);
+              }
+            } catch (settingsErr: any) {
+              if (checkIfQuotaError(settingsErr)) {
+                setIsQuotaExceeded(true);
+              }
+              throw settingsErr;
             }
           } else {
             // If no profile found, do NOT sign out automatically.
@@ -182,8 +247,13 @@ export default function App() {
           setCompanySettings(null);
           setIsOnboarding(false);
         }
-      } catch (err) {
-        console.error('Error in onAuthStateChanged:', err);
+      } catch (err: any) {
+        if (checkIfQuotaError(err)) {
+          console.warn('Info: Quota Exceeded in onAuthStateChanged:', err);
+          setIsQuotaExceeded(true);
+        } else {
+          console.error('Error in onAuthStateChanged:', err);
+        }
         setUser(null);
       } finally {
         setAuthChecking(false);
@@ -214,8 +284,11 @@ export default function App() {
       setBrands(brandsList);
       setProductColors(colorsList);
       setProductModels(modelsList);
-    } catch (error) {
+    } catch (error: any) {
       console.warn("Firestore access error:", error);
+      if (checkIfQuotaError(error)) {
+        setIsQuotaExceeded(true);
+      }
       // Fallback
       setProducts([]);
       setCategories([]);
@@ -230,13 +303,19 @@ export default function App() {
   // Fetch user profile again
   const refreshUserProfile = async () => {
     if (user?.id) {
-      const profile = await getUserProfile(user.id);
-      if (profile) setUser(profile);
+      try {
+        const profile = await getUserProfile(user.id);
+        if (profile) setUser(profile);
+      } catch (error: any) {
+        if (checkIfQuotaError(error)) {
+          setIsQuotaExceeded(true);
+        }
+      }
     }
   };
 
   useEffect(() => {
-    if (user && !isOnboarding) {
+    if (user && !isOnboarding && !isOfflineDemoMode) {
       refreshApplicationData();
     }
   }, [user, isOnboarding]);
@@ -244,12 +323,20 @@ export default function App() {
   // Handle Auth success from Login Screen
   const handleAuthSuccess = async (profile: UserProfile) => {
     setUser(profile);
-    const settings = await getCompanySettings();
-    if (settings && settings.onboarded) {
-      setCompanySettings(settings);
-      setIsOnboarding(false);
-    } else {
-      setIsOnboarding(true);
+    try {
+      const settings = await getCompanySettings();
+      if (settings && settings.onboarded) {
+        setCompanySettings(settings);
+        setIsOnboarding(false);
+      } else {
+        setIsOnboarding(true);
+      }
+    } catch (error: any) {
+      if (checkIfQuotaError(error)) {
+        setIsQuotaExceeded(true);
+      } else {
+        setIsOnboarding(true);
+      }
     }
   };
 
@@ -395,6 +482,65 @@ export default function App() {
     );
   }
 
+  // Quota Exceeded Gate
+  if (isQuotaExceeded && !isOfflineDemoMode) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex flex-col justify-center items-center p-6 text-center select-none relative overflow-hidden">
+        {/* Subtle decorative background glow */}
+        <div className="absolute -top-40 -left-40 w-96 h-96 rounded-full bg-amber-500/10 blur-3xl" />
+        <div className="absolute -bottom-40 -right-40 w-96 h-96 rounded-full bg-amber-500/10 blur-3xl" />
+        
+        <div className="max-w-md w-full bg-slate-900 border border-amber-500/30 rounded-2xl p-8 shadow-2xl relative z-10">
+          <div className="w-16 h-16 bg-amber-500/10 border border-amber-500/30 rounded-2xl flex items-center justify-center mx-auto mb-6 text-amber-400 animate-pulse">
+            <AlertTriangle size={32} />
+          </div>
+          
+          <h2 className="text-2xl font-bold text-white tracking-tight mb-3">
+            Firestore Quota Exceeded
+          </h2>
+          
+          <p className="text-xs font-mono text-slate-400 uppercase tracking-wider mb-6">
+            Database Limit Reached
+          </p>
+
+          <div className="text-slate-300 text-sm space-y-4 mb-8 text-left leading-relaxed">
+            <p>
+              The Firestore database free-tier daily read/write limit has been exceeded for this project.
+            </p>
+            <p className="bg-slate-950/60 p-3 rounded-lg border border-slate-800 text-xs font-mono text-slate-400 break-words">
+              Error: Free daily read units per project (free tier database) limit exceeded.
+            </p>
+            <p>
+              This is a standard cloud resource guard. Quotas automatically reset daily at midnight Pacific Time.
+            </p>
+          </div>
+
+          <div className="flex flex-col gap-3">
+            <button
+              onClick={enterOfflineDemoMode}
+              className="w-full py-3 bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold rounded-xl flex items-center justify-center gap-2 transition-all cursor-pointer shadow-lg shadow-amber-500/10"
+            >
+              <Sparkles size={16} />
+              Enter Offline Demo Mode
+            </button>
+            
+            <button
+              onClick={() => {
+                setIsQuotaExceeded(false);
+                setAuthChecking(true);
+                window.location.reload();
+              }}
+              className="w-full py-3 bg-slate-800 hover:bg-slate-750 text-slate-200 border border-slate-700 font-semibold rounded-xl flex items-center justify-center gap-2 transition-all cursor-pointer"
+            >
+              <RefreshCw size={14} />
+              Retry Connection
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   // Auth Guard
   if (!user) {
     return <SplashAndAuth onAuthSuccess={handleAuthSuccess} />;
@@ -451,6 +597,30 @@ export default function App() {
 
         <main className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8 pt-20 lg:pt-8 bg-slate-50">
           
+          {/* Offline Mode Banner */}
+          {isOfflineDemoMode && (
+            <div className="mb-6 bg-amber-500/10 border border-amber-500/20 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-3xs">
+              <div className="flex items-start gap-3">
+                <div className="p-2 bg-amber-500/15 border border-amber-500/30 rounded-lg text-amber-500 shrink-0">
+                  <Sparkles size={18} />
+                </div>
+                <div>
+                  <h4 className="text-sm font-semibold text-amber-800">Offline Demo Mode Active</h4>
+                  <p className="text-xs text-amber-700/80 mt-0.5">
+                    Viewing local workspace because Firestore quota is temporarily fully utilized. All features are fully functional.
+                  </p>
+                </div>
+              </div>
+              <button
+                onClick={() => window.location.reload()}
+                className="self-start sm:self-center px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold rounded-lg flex items-center gap-1.5 transition-all cursor-pointer shrink-0"
+              >
+                <RefreshCw size={12} />
+                Check Sync Status
+              </button>
+            </div>
+          )}
+
           {/* Loading Indicator - Desktop Only */}
           {dataLoading && (
             <div className="hidden lg:flex fixed top-4 right-4 bg-slate-900 border border-amber-400/20 text-white font-mono text-[10px] px-3 py-1.5 rounded-lg items-center gap-2 shadow-lg z-50">
