@@ -1,6 +1,25 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { Html5Qrcode } from 'html5-qrcode';
+import { Html5Qrcode, Html5QrcodeSupportedFormats } from 'html5-qrcode';
 import { X, Image, AlertCircle, RefreshCw } from 'lucide-react';
+
+const scannerConfig = {
+  formatsToSupport: [
+    Html5QrcodeSupportedFormats.QR_CODE,
+    Html5QrcodeSupportedFormats.CODE_128,
+    Html5QrcodeSupportedFormats.CODE_39,
+    Html5QrcodeSupportedFormats.CODE_93,
+    Html5QrcodeSupportedFormats.CODABAR,
+    Html5QrcodeSupportedFormats.EAN_13,
+    Html5QrcodeSupportedFormats.EAN_8,
+    Html5QrcodeSupportedFormats.UPC_A,
+    Html5QrcodeSupportedFormats.UPC_E,
+    Html5QrcodeSupportedFormats.ITF
+  ],
+  experimentalFeatures: {
+    useBarCodeDetectorIfSupported: true
+  },
+  verbose: false
+};
 
 interface Props {
   onScan: (decodedText: string) => void;
@@ -21,22 +40,27 @@ export const BarcodeScanner: React.FC<Props> = ({ onScan, onCancel }) => {
       try {
         setIsInitializing(true);
         setError(null);
-        const html5QrCode = new Html5Qrcode("reader");
+        const html5QrCode = new Html5Qrcode("reader", scannerConfig as any);
         html5QrCodeRef.current = html5QrCode;
 
         await html5QrCode.start(
-          { facingMode: "environment" },
+          { 
+            facingMode: "environment",
+            width: { ideal: 1280 },
+            height: { ideal: 720 }
+          },
           {
-            fps: 15,
+            fps: 20,
             qrbox: (width, height) => {
-              // Custom scanning region box size
+              // Custom scanning region box size optimized for linear/1D barcodes and QR codes
               return {
-                width: Math.min(width * 0.8, 250),
-                height: Math.min(height * 0.6, 150)
+                width: Math.min(width * 0.85, 280),
+                height: Math.min(height * 0.4, 110)
               };
             }
           },
           (decodedText) => {
+            console.log("SCAN DETECTED:", decodedText);
             if (isMounted) {
               html5QrCode.stop().then(() => {
                 onScan(decodedText);
@@ -83,11 +107,12 @@ export const BarcodeScanner: React.FC<Props> = ({ onScan, onCancel }) => {
       // Create or use existing scanner instance to parse file
       let scanner = html5QrCodeRef.current;
       if (!scanner) {
-        scanner = new Html5Qrcode("reader");
+        scanner = new Html5Qrcode("reader", scannerConfig as any);
         html5QrCodeRef.current = scanner;
       }
 
       const decodedText = await scanner.scanFile(file, true);
+      console.log("SCAN FILE DETECTED:", decodedText);
       onScan(decodedText);
     } catch (err) {
       console.error("File scanning error:", err);
@@ -162,7 +187,7 @@ export const BarcodeScanner: React.FC<Props> = ({ onScan, onCancel }) => {
         {/* Custom Visual Overlay Guides (Visible while camera is active) */}
         {isCameraActive && (
           <div className="absolute inset-0 pointer-events-none flex items-center justify-center p-6">
-            <div className="relative w-[240px] h-[160px] flex items-center justify-center">
+            <div className="relative w-[280px] h-[110px] flex items-center justify-center">
               {/* Gold Corner Brackets */}
               <div className="absolute top-0 left-0 w-8 h-8 border-t-[3px] border-l-[3px] border-[#D4AF37] rounded-tl-xl"></div>
               <div className="absolute top-0 right-0 w-8 h-8 border-t-[3px] border-r-[3px] border-[#D4AF37] rounded-tr-xl"></div>
