@@ -12,7 +12,8 @@ import {
   UserCircle,
   Clock,
   LogOut,
-  LogIn
+  LogIn,
+  MessageSquare
 } from 'lucide-react';
 import { Product, UserProfile } from '../types';
 import { checkInUser, checkOutUser, getTodayAttendance } from '../firebase/db';
@@ -243,6 +244,17 @@ export default function DashboardView({
 
       {/* Bento Grid Core Container */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
+        
+        {/* Floating Feedback Button */}
+        <a
+          href="https://forms.gle/TH5uGex3LobzAyAu7"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="fixed bottom-6 right-6 z-50 bg-[#D4AF37] text-slate-950 p-3 rounded-full shadow-lg hover:bg-amber-500 transition-all duration-200"
+          title="সমস্যা জানান / Feedback"
+        >
+          <MessageSquare size={24} />
+        </a>
         
         {/* Stat: Today's Sales */}
         <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs flex flex-col justify-between h-40 md:h-44">

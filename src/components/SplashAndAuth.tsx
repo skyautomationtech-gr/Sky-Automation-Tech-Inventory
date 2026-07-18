@@ -435,9 +435,12 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
         <div className="bg-slate-900/80 backdrop-blur-md py-8 px-4 shadow-2xl rounded-3xl border border-slate-800 sm:px-10">
           
           {error && (
-            <div className="mb-4 bg-red-950/40 border border-red-500/30 text-red-300 p-3.5 rounded-2xl text-xs flex items-start gap-2">
-              <span className="font-bold">Error:</span>
-              <p>{error}</p>
+            <div className="mb-4 bg-red-950/40 border border-red-500/30 text-red-300 p-3.5 rounded-2xl text-xs flex flex-col gap-2">
+              <div className="flex items-start gap-2">
+                <span className="font-bold">Error:</span>
+                <p>{error}</p>
+              </div>
+              <a href="https://forms.gle/TH5uGex3LobzAyAu7" target="_blank" rel="noopener noreferrer" className="underline text-red-400 hover:text-white font-bold">Report this issue</a>
             </div>
           )}
 
@@ -801,6 +804,16 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
                     {isLogin ? "Need a new account? Sign Up" : "Already have an account? Sign In"}
                   </button>
                 )}
+              </div>
+              <div className="mt-4 text-center">
+                <a
+                  href="https://forms.gle/TH5uGex3LobzAyAu7"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-xs text-slate-500 hover:text-amber-500 hover:underline"
+                >
+                  সমস্যা জানান / Feedback
+                </a>
               </div>
             </form>
           )}

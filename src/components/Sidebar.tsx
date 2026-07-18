@@ -13,7 +13,8 @@ import {
   ShoppingBag,
   Contact,
   Receipt,
-  Coins
+  Coins,
+  MessageSquare
 } from 'lucide-react';
 import { UserProfile } from '../types';
 
@@ -117,6 +118,15 @@ export default function Sidebar({
                 );
               })}
             </nav>
+            <a
+              href="https://forms.gle/TH5uGex3LobzAyAu7"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="w-full flex items-center justify-center lg:justify-start gap-3 px-3 py-3 lg:py-2 rounded-xl lg:rounded-lg transition-all duration-200 font-sans text-sm text-slate-400 hover:bg-slate-900 hover:text-[#D4AF37]"
+            >
+              <MessageSquare size={18} className="lg:size-4" />
+              <span className="hidden lg:block truncate">সমস্যা জানান</span>
+            </a>
           </div>
 
           <div className="hidden lg:block">
