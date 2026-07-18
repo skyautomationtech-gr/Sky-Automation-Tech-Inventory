@@ -13,7 +13,8 @@ import {
   saveCompanySettings,
   promoteUserToSuperAdmin,
   clearSampleData,
-  seedInitialDataIfEmpty
+  seedInitialDataIfEmpty,
+  migrateProductBarcodes
 } from './firebase/db';
 import { UserProfile, Product, Category, Brand, CompanySettings, ProductColor, ProductModel } from './types';
 import { Menu } from 'lucide-react';
@@ -197,6 +198,9 @@ export default function App() {
     setDataLoading(true);
     try {
       await seedInitialDataIfEmpty();
+      
+      // Auto-heal / migrate legacy long barcodes to short unique IDs
+      await migrateProductBarcodes();
       
       // Retrieve collections
       const prodsList = await getProducts();

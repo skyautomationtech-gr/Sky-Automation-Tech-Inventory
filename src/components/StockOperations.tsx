@@ -111,6 +111,14 @@ export default function StockOperations({
   const handleScan = (text: string) => {
     let found = false;
     for (const p of products) {
+      if (p.barcodeValue === text) {
+        setSelectedProductId(p.id);
+        if (p.variants.length > 0) {
+          setSelectedVariantId(p.variants[0].id);
+        }
+        found = true;
+        break;
+      }
       const v = p.variants.find(v => v.barcodeValue === text);
       if (v) {
         setSelectedProductId(p.id);

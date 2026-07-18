@@ -16,8 +16,8 @@ interface BarcodeProps {
 export default function Barcode({
   value,
   format = 'CODE128',
-  width = 1.5,
-  height = 50,
+  width = 2.5,
+  height = 70,
   displayValue = true,
   fontSize = 11,
   margin = 8,

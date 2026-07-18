@@ -65,8 +65,8 @@ export async function generateBarcodePDF(
     try {
       JsBarcode(canvas, item.value, {
         format: 'CODE128',
-        width: 2,
-        height: 50,
+        width: 2.5,
+        height: 70,
         displayValue: false, // We render the human-readable text manually for perfect control
         margin: 0,
         background: '#ffffff',

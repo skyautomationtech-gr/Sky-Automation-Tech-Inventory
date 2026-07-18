@@ -51,7 +51,8 @@ import {
   deleteProductColor,
   addProductModel,
   updateProductModel,
-  deleteProductModel
+  deleteProductModel,
+  getUniqueBarcodeValue
 } from '../firebase/db';
 
 interface ProductManagementProps {
@@ -748,6 +749,46 @@ export default function ProductManagement({
       }
     }
 
+    // Generate short unique codes for barcode values if they don't exist or are legacy long formats
+    const generatedInSession = new Set<string>();
+    const needsMigration = (val: string | undefined, originalSku?: string): boolean => {
+      if (!val) return true;
+      if (originalSku && val === originalSku) return true;
+      if (val.includes('-') && val.length > 10) return true;
+      return false;
+    };
+
+    let mainBarcodeValue = editModeProduct?.barcodeValue;
+    if (needsMigration(mainBarcodeValue, finalSku)) {
+      mainBarcodeValue = getUniqueBarcodeValue(products, generatedInSession);
+      generatedInSession.add(mainBarcodeValue);
+    }
+
+    const updatedVariants = formVariants.map(v => {
+      const cleanColor = v.color.trim();
+      const cleanModel = v.model.trim();
+      const vColorCode = cleanColor.toUpperCase().replace(/[^A-Z0-9]/g, '-').replace(/-+/g, '-');
+      const vModelCode = cleanModel.toUpperCase().replace(/[^A-Z0-9]/g, '-').replace(/-+/g, '-');
+      const oldLongBarcodeValue = `${finalSku}-${vColorCode}-${vModelCode}`;
+
+      // Get existing variant to reuse its barcode value if it exists and is valid
+      const existingV = editModeProduct?.variants?.find(ev => ev.id === v.id || (ev.color === cleanColor && ev.model === cleanModel));
+      let vBarcodeValue = v.barcodeValue || existingV?.barcodeValue;
+
+      if (needsMigration(vBarcodeValue, oldLongBarcodeValue) || needsMigration(vBarcodeValue, finalSku)) {
+        vBarcodeValue = getUniqueBarcodeValue(products, generatedInSession);
+        generatedInSession.add(vBarcodeValue);
+      }
+
+      return {
+        ...v,
+        color: cleanColor,
+        model: cleanModel,
+        stock: Number(v.stock),
+        barcodeValue: vBarcodeValue
+      };
+    });
+
     // Prepare payload
     const productPayload = {
       name: formName.trim(),
@@ -762,23 +803,10 @@ export default function ProductManagement({
       sellingPrice: Number(formSellingPrice),
       reorderThreshold: Number(formReorderThreshold),
       images: formImages || [],
-      variants: formVariants.map(v => {
-        const cleanColor = v.color.trim();
-        const cleanModel = v.model.trim();
-        const vColorCode = cleanColor.toUpperCase().replace(/[^A-Z0-9]/g, '-').replace(/-+/g, '-');
-        const vModelCode = cleanModel.toUpperCase().replace(/[^A-Z0-9]/g, '-').replace(/-+/g, '-');
-        const variantBarcodeValue = `${finalSku}-${vColorCode}-${vModelCode}`;
-        return {
-          ...v,
-          color: cleanColor,
-          model: cleanModel,
-          stock: Number(v.stock),
-          barcodeValue: variantBarcodeValue
-        };
-      }),
+      variants: updatedVariants,
       archived: false,
       createdAt: editModeProduct ? editModeProduct.createdAt : Date.now(),
-      barcodeValue: finalSku,
+      barcodeValue: mainBarcodeValue,
       status: finalStatus,
       rejectionReason: finalStatus === 'pending_review' ? '' : (editModeProduct?.rejectionReason || '')
     };
@@ -1719,8 +1747,8 @@ export default function ProductManagement({
                         <div className="bg-white py-2 px-1 rounded-lg border border-slate-100 w-full flex justify-center">
                           <Barcode 
                             value={selectedProduct.barcodeValue || selectedProduct.sku} 
-                            height={45} 
-                            width={1.6} 
+                            height={70} 
+                            width={2.5} 
                             fontSize={10}
                             margin={5}
                           />
@@ -1810,8 +1838,8 @@ export default function ProductManagement({
                                   <div className="bg-slate-50/50 p-1.5 rounded-lg border border-slate-100 flex justify-center">
                                     <Barcode 
                                       value={val} 
-                                      height={32} 
-                                      width={1.2} 
+                                      height={55} 
+                                      width={2.0} 
                                       fontSize={8}
                                       margin={3}
                                     />

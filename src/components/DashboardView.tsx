@@ -113,7 +113,7 @@ export default function DashboardView({
         alert('No match found for this scan');
       }
     } else {
-      const p = products.find(prod => prod.variants.some(v => v.barcodeValue === text) || prod.sku === text);
+      const p = products.find(prod => prod.variants.some(v => v.barcodeValue === text) || prod.barcodeValue === text || prod.sku === text);
       if (p) {
         onNavigateToTab('products', undefined, p.id);
       } else {

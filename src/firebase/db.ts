@@ -637,6 +637,94 @@ export async function archiveProduct(id: string): Promise<void> {
   await updateDoc(docRef, { archived: true });
 }
 
+export function getUniqueBarcodeValue(products: Product[], generatedInSession?: Set<string>): string {
+  const usedCodes = new Set<string>();
+  products.forEach(p => {
+    if (p.barcodeValue) usedCodes.add(p.barcodeValue.toUpperCase());
+    p.variants?.forEach(v => {
+      if (v.barcodeValue) usedCodes.add(v.barcodeValue.toUpperCase());
+    });
+  });
+  if (generatedInSession) {
+    generatedInSession.forEach(code => usedCodes.add(code.toUpperCase()));
+  }
+
+  const chars = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
+  let code = '';
+  do {
+    code = '';
+    for (let i = 0; i < 8; i++) {
+      code += chars.charAt(Math.floor(Math.random() * chars.length));
+    }
+  } while (usedCodes.has(code));
+
+  return code;
+}
+
+export async function migrateProductBarcodes(): Promise<void> {
+  try {
+    console.log('migrateProductBarcodes: Starting migration check...');
+    const products = await getProducts(true);
+    const generatedInSession = new Set<string>();
+    
+    const needsMigration = (val: string | undefined, originalSku?: string): boolean => {
+      if (!val) return true;
+      if (originalSku && val === originalSku) return true;
+      if (val.includes('-') && val.length > 10) return true;
+      return false;
+    };
+
+    let updatedCount = 0;
+
+    for (const p of products) {
+      let productChanged = false;
+      let newProductBarcode = p.barcodeValue;
+
+      if (needsMigration(p.barcodeValue, p.sku)) {
+        newProductBarcode = getUniqueBarcodeValue(products, generatedInSession);
+        generatedInSession.add(newProductBarcode);
+        productChanged = true;
+      }
+
+      const updatedVariants = p.variants.map(v => {
+        const cleanColor = v.color.trim();
+        const cleanModel = v.model.trim();
+        const vColorCode = cleanColor.toUpperCase().replace(/[^A-Z0-9]/g, '-').replace(/-+/g, '-');
+        const vModelCode = cleanModel.toUpperCase().replace(/[^A-Z0-9]/g, '-').replace(/-+/g, '-');
+        const oldLongBarcodeValue = `${p.sku}-${vColorCode}-${vModelCode}`;
+
+        if (needsMigration(v.barcodeValue, oldLongBarcodeValue) || needsMigration(v.barcodeValue, p.sku)) {
+          const newVariantBarcode = getUniqueBarcodeValue(products, generatedInSession);
+          generatedInSession.add(newVariantBarcode);
+          productChanged = true;
+          return {
+            ...v,
+            barcodeValue: newVariantBarcode
+          };
+        }
+        return v;
+      });
+
+      if (productChanged) {
+        console.log(`migrateProductBarcodes: Migrating product "${p.name}" [SKU: ${p.sku}] with new barcodes.`);
+        await updateProduct(p.id, {
+          barcodeValue: newProductBarcode,
+          variants: updatedVariants
+        });
+        updatedCount++;
+      }
+    }
+
+    if (updatedCount > 0) {
+      console.log(`migrateProductBarcodes: Successfully migrated ${updatedCount} products.`);
+    } else {
+      console.log('migrateProductBarcodes: All products up-to-date. No migration needed.');
+    }
+  } catch (error) {
+    console.error('migrateProductBarcodes: Migration failed:', error);
+  }
+}
+
 // ==========================================
 // STOCK LOG OPERATIONS
 // ==========================================
