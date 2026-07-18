@@ -29,7 +29,7 @@ import Barcode from './Barcode';
 import { BarcodeScanner } from './BarcodeScanner';
 import { generateBarcodePDF } from '../utils/barcodePdf';
 import JsBarcode from 'jsbarcode';
-import { Product, Variant, Category, Brand, UserProfile, StockLog } from '../types';
+import { Product, Variant, Category, Brand, UserProfile, StockLog, ProductColor, ProductModel } from '../types';
 import { 
   getProducts, 
   addProduct, 
@@ -45,13 +45,21 @@ import {
   updateBrand,
   getStockLogs,
   getProductAttributes,
-  saveProductAttributes
+  saveProductAttributes,
+  addProductColor,
+  updateProductColor,
+  deleteProductColor,
+  addProductModel,
+  updateProductModel,
+  deleteProductModel
 } from '../firebase/db';
 
 interface ProductManagementProps {
   products: Product[];
   categories: Category[];
   brands: Brand[];
+  productColors: ProductColor[];
+  productModels: ProductModel[];
   user: UserProfile | null;
   onRefreshData: () => Promise<void>;
   initialAddMode?: boolean; // opens drawer automatically if navigated from dashboard
@@ -64,6 +72,8 @@ export default function ProductManagement({
   products,
   categories,
   brands,
+  productColors,
+  productModels,
   user,
   onRefreshData,
   initialAddMode = false,
@@ -74,7 +84,7 @@ export default function ProductManagement({
   const isStaff = user?.role === 'staff';
 
   // Sub tabs
-  const [activeSubTab, setActiveSubTab] = useState<'catalog' | 'categories' | 'brands' | 'pending'>('catalog');
+  const [activeSubTab, setActiveSubTab] = useState<'catalog' | 'categories' | 'brands' | 'attributes' | 'pending'>('catalog');
 
   // List management states
   const [search, setSearch] = useState('');
@@ -100,6 +110,13 @@ export default function ProductManagement({
   const [deletingCatId, setDeletingCatId] = useState<string | null>(null);
   const [deletingBrandId, setDeletingBrandId] = useState<string | null>(null);
 
+  // Attributes states
+  const [newColorName, setNewColorName] = useState('');
+  const [newColorHex, setNewColorHex] = useState('#000000');
+  const [newModelName, setNewModelName] = useState('');
+  const [deletingColorId, setDeletingColorId] = useState<string | null>(null);
+  const [deletingModelId, setDeletingModelId] = useState<string | null>(null);
+  
   // Inline edit states for categories & brands
   const [editingCatId, setEditingCatId] = useState<string | null>(null);
   const [editingCatName, setEditingCatName] = useState<string>('');
@@ -329,17 +346,10 @@ export default function ProductManagement({
     }
   };
 
-  // Enhanced form attributes, SKU, & submit status states
-  const [submitting, setSubmitting] = useState(false);
   const [isSkuDirty, setIsSkuDirty] = useState(false);
   
-  const DEFAULT_COLORS = ['Black', 'White', 'Blue', 'Red', 'Green', 'Gold', 'Silver', 'Rose Gold'];
-  const DEFAULT_SIZES = ['Standard', 'Small', 'Medium', 'Large', 'XL', '128GB', '256GB', '512GB'];
-  
-  const [availableColors, setAvailableColors] = useState<string[]>(DEFAULT_COLORS);
-  const [availableSizes, setAvailableSizes] = useState<string[]>(DEFAULT_SIZES);
-  
   const [customColorValue, setCustomColorValue] = useState<{[key: string]: string}>({});
+  const [submitting, setSubmitting] = useState(false);
   const [customSizeValue, setCustomSizeValue] = useState<{[key: string]: string}>({});
   const [isCustomColorMode, setIsCustomColorMode] = useState<{[key: string]: boolean}>({});
   const [isCustomSizeMode, setIsCustomSizeMode] = useState<{[key: string]: boolean}>({});
@@ -447,22 +457,27 @@ export default function ProductManagement({
   // Helper functions for custom attributes
   const handleAddCustomColor = async (color: string) => {
     const trimmed = color.trim();
-    if (trimmed && !availableColors.includes(trimmed)) {
-      const updated = [...availableColors, trimmed];
-      setAvailableColors(updated);
-      await saveProductAttributes({ colors: updated, sizes: availableSizes });
+    if (trimmed && !productColors.find(c => c.name.toLowerCase() === trimmed.toLowerCase())) {
+      try {
+        await addProductColor(trimmed, '#000000');
+        await onRefreshData();
+      } catch (err) {
+        console.error("Failed to add custom color", err);
+      }
     }
   };
 
   const handleAddCustomSize = async (size: string) => {
     const trimmed = size.trim();
-    if (trimmed && !availableSizes.includes(trimmed)) {
-      const updated = [...availableSizes, trimmed];
-      setAvailableSizes(updated);
-      await saveProductAttributes({ colors: availableColors, sizes: updated });
+    if (trimmed && !productModels.find(m => m.name.toLowerCase() === trimmed.toLowerCase())) {
+      try {
+        await addProductModel(trimmed);
+        await onRefreshData();
+      } catch (err) {
+        console.error("Failed to add custom size", err);
+      }
     }
   };
-
   // Helper function to dynamically generate SKU code
   const generateSkuCode = (subBrand: string, category: string, brandName: string) => {
     const div = subBrand || 'SAT';
@@ -500,19 +515,6 @@ export default function ProductManagement({
     return `${prefix}${String(nextNum).padStart(3, '0')}`;
   };
 
-  // Fetch product attributes on mount
-  useEffect(() => {
-    getProductAttributes().then(attrs => {
-      if (attrs) {
-        if (attrs.colors && attrs.colors.length > 0) {
-          setAvailableColors(attrs.colors);
-        }
-        if (attrs.sizes && attrs.sizes.length > 0) {
-          setAvailableSizes(attrs.sizes);
-        }
-      }
-    });
-  }, []);
 
   // Auto generate SKU when brand/category/division changes
   useEffect(() => {
@@ -959,6 +961,111 @@ export default function ProductManagement({
     );
   };
 
+  const handleAddColor = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setFormError('');
+    setFormSuccess('');
+    
+    if (requireCheckIn && !requireCheckIn()) return;
+    if (!newColorName.trim()) return;
+    
+    try {
+      await addProductColor(newColorName.trim(), newColorHex);
+      setFormSuccess(`Color "${newColorName}" created!`);
+      setNewColorName('');
+      setNewColorHex('#000000');
+      await onRefreshData();
+      setTimeout(() => setFormSuccess(''), 3000);
+    } catch (err: any) {
+      setFormError(`Failed to create color: ${err.message || 'Permission denied'}`);
+    }
+  };
+
+  const handleDeleteColor = async (id: string, name: string) => {
+    if (requireCheckIn && !requireCheckIn()) return;
+    if (isStaff) return;
+    
+    setFormError('');
+    setFormSuccess('');
+    
+    // Check if color is in use
+    const inUse = products.some(p => p.variants.some(v => v.color === name) && !p.archived);
+    if (inUse) {
+      setFormError(`Cannot delete color "${name}" because it is currently in use by one or more products.`);
+      return;
+    }
+    
+    showConfirm(
+      "Delete Color?",
+      `Are you sure you want to delete the color "${name}"?`,
+      async () => {
+        setDeletingColorId(id);
+        try {
+          await deleteProductColor(id);
+          await onRefreshData();
+          setFormSuccess(`Successfully deleted color "${name}"`);
+          setTimeout(() => setFormSuccess(''), 3500);
+        } catch (err: any) {
+          setFormError(`Failed to delete color: ${err.message || 'Permission denied'}`);
+        } finally {
+          setDeletingColorId(null);
+        }
+      }
+    );
+  };
+
+  const handleAddModel = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setFormError('');
+    setFormSuccess('');
+    
+    if (requireCheckIn && !requireCheckIn()) return;
+    if (!newModelName.trim()) return;
+    
+    try {
+      await addProductModel(newModelName.trim());
+      setFormSuccess(`Model/Size "${newModelName}" created!`);
+      setNewModelName('');
+      await onRefreshData();
+      setTimeout(() => setFormSuccess(''), 3000);
+    } catch (err: any) {
+      setFormError(`Failed to create model: ${err.message || 'Permission denied'}`);
+    }
+  };
+
+  const handleDeleteModel = async (id: string, name: string) => {
+    if (requireCheckIn && !requireCheckIn()) return;
+    if (isStaff) return;
+    
+    setFormError('');
+    setFormSuccess('');
+    
+    // Check if model is in use
+    const inUse = products.some(p => p.variants.some(v => v.model === name) && !p.archived);
+    if (inUse) {
+      setFormError(`Cannot delete model/size "${name}" because it is currently in use by one or more products.`);
+      return;
+    }
+    
+    showConfirm(
+      "Delete Model/Size?",
+      `Are you sure you want to delete the model/size "${name}"?`,
+      async () => {
+        setDeletingModelId(id);
+        try {
+          await deleteProductModel(id);
+          await onRefreshData();
+          setFormSuccess(`Successfully deleted model/size "${name}"`);
+          setTimeout(() => setFormSuccess(''), 3500);
+        } catch (err: any) {
+          setFormError(`Failed to delete model: ${err.message || 'Permission denied'}`);
+        } finally {
+          setDeletingModelId(null);
+        }
+      }
+    );
+  };
+
   // Bulk Import CSV Handler
   const handleCsvImport = async (e: React.ChangeEvent<HTMLInputElement>) => {
     if (requireCheckIn && !requireCheckIn()) {
@@ -1132,6 +1239,18 @@ export default function ProductManagement({
           >
             Brands CRUD
           </button>
+          {!isStaff && (
+            <button
+              onClick={() => setActiveSubTab('attributes')}
+              className={`pb-2.5 px-1 font-semibold text-sm transition-all border-b-2 cursor-pointer whitespace-nowrap ${
+                activeSubTab === 'attributes'
+                  ? 'border-amber-400 text-slate-900 font-extrabold'
+                  : 'border-transparent text-slate-500 hover:text-slate-950'
+              }`}
+            >
+              Attributes CRUD
+            </button>
+          )}
           {!isStaff && (
             <button
               onClick={() => setActiveSubTab('pending')}
@@ -2198,6 +2317,127 @@ export default function ProductManagement({
       )}
 
       {/* SUB TAB: PENDING PRODUCTS FOR APPROVAL */}
+      {/* SUB TAB: ATTRIBUTES CRUD */}
+      {activeSubTab === 'attributes' && !isStaff && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
+          {/* Colors Management */}
+          <div className="space-y-6">
+            <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-4">
+              <h3 className="text-sm font-bold text-slate-950 font-sans">Add Color Record</h3>
+              <form onSubmit={handleAddColor} className="space-y-4">
+                <div className="grid grid-cols-4 gap-4">
+                  <div className="col-span-3">
+                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">Color Name</label>
+                    <input
+                      type="text"
+                      required
+                      value={newColorName}
+                      onChange={(e) => setNewColorName(e.target.value)}
+                      placeholder="e.g. Space Black"
+                      className="mt-1 w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-[#D4AF37] transition-all"
+                    />
+                  </div>
+                  <div className="col-span-1">
+                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">Color Hex</label>
+                    <input
+                      type="color"
+                      value={newColorHex}
+                      onChange={(e) => setNewColorHex(e.target.value)}
+                      className="mt-1 w-full h-10 p-1 bg-slate-50 border border-slate-200 rounded-lg cursor-pointer focus:outline-hidden focus:ring-2 focus:ring-[#D4AF37]"
+                    />
+                  </div>
+                </div>
+                <button
+                  type="submit"
+                  disabled={!newColorName.trim()}
+                  className="w-full flex items-center justify-center gap-2 bg-[#16161b] hover:bg-black text-[#D4AF37] p-2.5 rounded-lg text-sm font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Plus size={16} /> Add Color
+                </button>
+              </form>
+            </div>
+            <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-4">
+              <h3 className="text-sm font-bold text-slate-950 font-sans">Active Product Colors</h3>
+              {productColors.length === 0 ? (
+                <div className="text-center py-6 text-slate-400 text-sm">No colors added yet.</div>
+              ) : (
+                <div className="space-y-2">
+                  {productColors.sort((a,b) => a.name.localeCompare(b.name)).map((c) => (
+                    <div key={c.id} className="flex items-center justify-between p-3 border border-slate-100 rounded-lg hover:border-slate-300 transition-colors bg-white">
+                      <div className="flex items-center gap-3">
+                        <div className="w-5 h-5 rounded-full border border-slate-200 shadow-sm" style={{ backgroundColor: c.hexCode || '#000000' }} />
+                        <span className="text-sm font-bold text-slate-700">{c.name}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => handleDeleteColor(c.id, c.name)}
+                          disabled={deletingColorId === c.id}
+                          className="p-1.5 text-slate-400 hover:text-red-500 transition-colors disabled:opacity-50"
+                          title="Delete Color"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+          {/* Models Management */}
+          <div className="space-y-6">
+            <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-4">
+              <h3 className="text-sm font-bold text-slate-950 font-sans">Add Model/Size Record</h3>
+              <form onSubmit={handleAddModel} className="space-y-4">
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">Model/Size Name</label>
+                  <input
+                    type="text"
+                    required
+                    value={newModelName}
+                    onChange={(e) => setNewModelName(e.target.value)}
+                    placeholder="e.g. 256GB / XL / Standard"
+                    className="mt-1 w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-[#D4AF37] transition-all"
+                  />
+                </div>
+                <button
+                  type="submit"
+                  disabled={!newModelName.trim()}
+                  className="w-full flex items-center justify-center gap-2 bg-[#16161b] hover:bg-black text-[#D4AF37] p-2.5 rounded-lg text-sm font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Plus size={16} /> Add Model/Size
+                </button>
+              </form>
+            </div>
+            <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-4">
+              <h3 className="text-sm font-bold text-slate-950 font-sans">Active Product Models & Sizes</h3>
+              {productModels.length === 0 ? (
+                <div className="text-center py-6 text-slate-400 text-sm">No models/sizes added yet.</div>
+              ) : (
+                <div className="space-y-2">
+                  {productModels.sort((a,b) => a.name.localeCompare(b.name)).map((m) => (
+                    <div key={m.id} className="flex items-center justify-between p-3 border border-slate-100 rounded-lg hover:border-slate-300 transition-colors bg-white">
+                      <div className="flex items-center gap-3">
+                        <span className="text-sm font-bold text-slate-700">{m.name}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => handleDeleteModel(m.id, m.name)}
+                          disabled={deletingModelId === m.id}
+                          className="p-1.5 text-slate-400 hover:text-red-500 transition-colors disabled:opacity-50"
+                          title="Delete Model/Size"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
       {activeSubTab === 'pending' && !isStaff && (
         <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-4">
           <div className="border-b border-slate-100 pb-3 flex justify-between items-center">
@@ -2900,7 +3140,7 @@ export default function ProductManagement({
                                     }`}
                                   >
                                     <option value="">-- Select Color --</option>
-                                    {availableColors.map(c => <option key={c} value={c}>{c}</option>)}
+                                    {productColors.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
                                     <option value="__add_custom__" className="text-amber-600 font-bold">+ Add custom color...</option>
                                   </select>
                                 ) : (
@@ -2965,7 +3205,7 @@ export default function ProductManagement({
                                     }`}
                                   >
                                     <option value="">-- Select Size/Model --</option>
-                                    {availableSizes.map(s => <option key={s} value={s}>{s}</option>)}
+                                    {productModels.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
                                     <option value="__add_custom__" className="text-amber-600 font-bold">+ Add custom size...</option>
                                   </select>
                                 ) : (

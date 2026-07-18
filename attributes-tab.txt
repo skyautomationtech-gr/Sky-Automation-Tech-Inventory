@@ -1,0 +1,141 @@
+      {/* SUB TAB: ATTRIBUTES CRUD */}
+      {activeSubTab === 'attributes' && !isStaff && (
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
+          
+          {/* Colors Management */}
+          <div className="space-y-6">
+            <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-4">
+              <h3 className="text-sm font-bold text-slate-950 font-sans">Add Color Record</h3>
+              <form onSubmit={handleAddColor} className="space-y-4">
+                <div className="grid grid-cols-4 gap-4">
+                  <div className="col-span-3">
+                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                      Color Name
+                    </label>
+                    <input
+                      type="text"
+                      required
+                      value={newColorName}
+                      onChange={(e) => setNewColorName(e.target.value)}
+                      placeholder="e.g. Space Black"
+                      className="mt-1 w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-[#D4AF37] transition-all"
+                    />
+                  </div>
+                  <div className="col-span-1">
+                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                      Color Hex
+                    </label>
+                    <input
+                      type="color"
+                      value={newColorHex}
+                      onChange={(e) => setNewColorHex(e.target.value)}
+                      className="mt-1 w-full h-10 p-1 bg-slate-50 border border-slate-200 rounded-lg cursor-pointer focus:outline-hidden focus:ring-2 focus:ring-[#D4AF37]"
+                    />
+                  </div>
+                </div>
+                
+                <button
+                  type="submit"
+                  disabled={!newColorName.trim()}
+                  className="w-full flex items-center justify-center gap-2 bg-[#16161b] hover:bg-black text-[#D4AF37] p-2.5 rounded-lg text-sm font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Plus size={16} /> Add Color
+                </button>
+              </form>
+            </div>
+
+            <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-4">
+              <h3 className="text-sm font-bold text-slate-950 font-sans">Active Product Colors</h3>
+              {productColors.length === 0 ? (
+                <div className="text-center py-6 text-slate-400 text-sm">
+                  No colors added yet.
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {productColors.sort((a,b) => a.name.localeCompare(b.name)).map((c) => (
+                    <div key={c.id} className="flex items-center justify-between p-3 border border-slate-100 rounded-lg hover:border-slate-300 transition-colors bg-white">
+                      <div className="flex items-center gap-3">
+                        <div 
+                          className="w-5 h-5 rounded-full border border-slate-200 shadow-sm"
+                          style={{ backgroundColor: c.hexCode || '#000000' }}
+                        />
+                        <span className="text-sm font-bold text-slate-700">{c.name}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => handleDeleteColor(c.id, c.name)}
+                          disabled={deletingColorId === c.id}
+                          className="p-1.5 text-slate-400 hover:text-red-500 transition-colors disabled:opacity-50"
+                          title="Delete Color"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* Models Management */}
+          <div className="space-y-6">
+            <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-4">
+              <h3 className="text-sm font-bold text-slate-950 font-sans">Add Model/Size Record</h3>
+              <form onSubmit={handleAddModel} className="space-y-4">
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                    Model/Size Name
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={newModelName}
+                    onChange={(e) => setNewModelName(e.target.value)}
+                    placeholder="e.g. 256GB / XL / Standard"
+                    className="mt-1 w-full p-2.5 bg-slate-50 border border-slate-200 rounded-lg text-sm focus:bg-white focus:outline-hidden focus:ring-2 focus:ring-[#D4AF37] transition-all"
+                  />
+                </div>
+                
+                <button
+                  type="submit"
+                  disabled={!newModelName.trim()}
+                  className="w-full flex items-center justify-center gap-2 bg-[#16161b] hover:bg-black text-[#D4AF37] p-2.5 rounded-lg text-sm font-bold transition-all disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Plus size={16} /> Add Model/Size
+                </button>
+              </form>
+            </div>
+
+            <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-4">
+              <h3 className="text-sm font-bold text-slate-950 font-sans">Active Product Models & Sizes</h3>
+              {productModels.length === 0 ? (
+                <div className="text-center py-6 text-slate-400 text-sm">
+                  No models/sizes added yet.
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {productModels.sort((a,b) => a.name.localeCompare(b.name)).map((m) => (
+                    <div key={m.id} className="flex items-center justify-between p-3 border border-slate-100 rounded-lg hover:border-slate-300 transition-colors bg-white">
+                      <div className="flex items-center gap-3">
+                        <span className="text-sm font-bold text-slate-700">{m.name}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => handleDeleteModel(m.id, m.name)}
+                          disabled={deletingModelId === m.id}
+                          className="p-1.5 text-slate-400 hover:text-red-500 transition-colors disabled:opacity-50"
+                          title="Delete Model/Size"
+                        >
+                          <Trash2 size={16} />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+
+        </div>
+      )}

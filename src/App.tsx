@@ -8,12 +8,14 @@ import {
   getProducts, 
   getCategories, 
   getBrands,
+  getProductColors,
+  getProductModels,
   saveCompanySettings,
   promoteUserToSuperAdmin,
   clearSampleData,
   seedInitialDataIfEmpty
 } from './firebase/db';
-import { UserProfile, Product, Category, Brand, CompanySettings } from './types';
+import { UserProfile, Product, Category, Brand, CompanySettings, ProductColor, ProductModel } from './types';
 import { Menu } from 'lucide-react';
 
 // Import Modular Components
@@ -117,6 +119,8 @@ export default function App() {
   const [products, setProducts] = useState<Product[]>([]);
   const [categories, setCategories] = useState<Category[]>([]);
   const [brands, setBrands] = useState<Brand[]>([]);
+  const [productColors, setProductColors] = useState<ProductColor[]>([]);
+  const [productModels, setProductModels] = useState<ProductModel[]>([]);
   const [dataLoading, setDataLoading] = useState(false);
   const [showCheckInModal, setShowCheckInModal] = useState(false);
 
@@ -198,16 +202,22 @@ export default function App() {
       const prodsList = await getProducts();
       const catsList = await getCategories();
       const brandsList = await getBrands();
+      const colorsList = await getProductColors();
+      const modelsList = await getProductModels();
 
       setProducts(prodsList);
       setCategories(catsList);
       setBrands(brandsList);
+      setProductColors(colorsList);
+      setProductModels(modelsList);
     } catch (error) {
       console.warn("Firestore access error:", error);
       // Fallback
       setProducts([]);
       setCategories([]);
       setBrands([]);
+      setProductColors([]);
+      setProductModels([]);
     } finally {
       setDataLoading(false);
     }
@@ -461,6 +471,8 @@ export default function App() {
             products={products} 
             categories={categories} 
             brands={brands} 
+            productColors={productColors}
+            productModels={productModels}
             user={user} 
             onRefreshData={refreshApplicationData}
             initialAddMode={initialProductAddMode}

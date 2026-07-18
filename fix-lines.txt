@@ -1,0 +1,11 @@
+    } else {
+      setIsDrawerOpen(false);
+    }
+  };
+
+  const [isSkuDirty, setIsSkuDirty] = useState(false);
+  
+  const [customColorValue, setCustomColorValue] = useState<{[key: string]: string}>({});
+  const [customSizeValue, setCustomSizeValue] = useState<{[key: string]: string}>({});
+  const [isCustomColorMode, setIsCustomColorMode] = useState<{[key: string]: boolean}>({});
+  const [isCustomSizeMode, setIsCustomSizeMode] = useState<{[key: string]: boolean}>({});

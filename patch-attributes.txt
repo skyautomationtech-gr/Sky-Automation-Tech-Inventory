@@ -1,0 +1,24 @@
+  // Helper functions for custom attributes
+  const handleAddCustomColor = async (color: string) => {
+    const trimmed = color.trim();
+    if (trimmed && !productColors.find(c => c.name.toLowerCase() === trimmed.toLowerCase())) {
+      try {
+        await addProductColor(trimmed, '#000000');
+        await onRefreshData();
+      } catch (err) {
+        console.error("Failed to add custom color", err);
+      }
+    }
+  };
+
+  const handleAddCustomSize = async (size: string) => {
+    const trimmed = size.trim();
+    if (trimmed && !productModels.find(m => m.name.toLowerCase() === trimmed.toLowerCase())) {
+      try {
+        await addProductModel(trimmed);
+        await onRefreshData();
+      } catch (err) {
+        console.error("Failed to add custom size", err);
+      }
+    }
+  };

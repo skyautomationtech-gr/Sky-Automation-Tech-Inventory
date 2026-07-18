@@ -30,7 +30,9 @@ import {
   StockLogType,
   OrderStatus,
   Invoice,
-  PaymentStatus
+  PaymentStatus,
+  ProductColor,
+  ProductModel
 } from '../types';
 
 // --- Data Sanitization Helper ---
@@ -464,6 +466,101 @@ export async function deleteBrand(id: string): Promise<void> {
     await deleteDoc(docRef);
   } catch (error) {
     console.error('deleteBrand failed:', error);
+    throw error;
+  }
+}
+
+// ==========================================
+// PRODUCT COLORS & MODELS
+// ==========================================
+export async function getProductColors(): Promise<ProductColor[]> {
+  try {
+    const colRef = collection(db, 'productColors');
+    const querySnapshot = await getDocs(colRef);
+    const colors: ProductColor[] = [];
+    querySnapshot.forEach((doc) => {
+      colors.push({ id: doc.id, ...(doc.data() as any) } as ProductColor);
+    });
+    return colors;
+  } catch (error) {
+    console.error('Error fetching colors:', error);
+    return [];
+  }
+}
+
+export async function addProductColor(name: string, hexCode?: string): Promise<ProductColor> {
+  try {
+    const colRef = collection(db, 'productColors');
+    const data: any = { name };
+    if (hexCode) data.hexCode = hexCode;
+    const docRef = await addDoc(colRef, data);
+    return { id: docRef.id, name, hexCode };
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, 'productColors');
+  }
+}
+
+export async function updateProductColor(id: string, name: string, hexCode?: string): Promise<void> {
+  try {
+    const docRef = doc(db, 'productColors', id);
+    const data: any = { name };
+    if (hexCode !== undefined) data.hexCode = hexCode;
+    await updateDoc(docRef, data);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, 'productColors/' + id);
+  }
+}
+
+export async function deleteProductColor(id: string): Promise<void> {
+  const docRef = doc(db, 'productColors', id);
+  try {
+    await deleteDoc(docRef);
+  } catch (error) {
+    console.error('deleteProductColor failed:', error);
+    throw error;
+  }
+}
+
+export async function getProductModels(): Promise<ProductModel[]> {
+  try {
+    const colRef = collection(db, 'productModels');
+    const querySnapshot = await getDocs(colRef);
+    const models: ProductModel[] = [];
+    querySnapshot.forEach((doc) => {
+      models.push({ id: doc.id, ...(doc.data() as any) } as ProductModel);
+    });
+    return models;
+  } catch (error) {
+    console.error('Error fetching models:', error);
+    return [];
+  }
+}
+
+export async function addProductModel(name: string): Promise<ProductModel> {
+  try {
+    const colRef = collection(db, 'productModels');
+    const docRef = await addDoc(colRef, { name });
+    return { id: docRef.id, name };
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, 'productModels');
+  }
+}
+
+export async function updateProductModel(id: string, name: string): Promise<void> {
+  try {
+    const docRef = doc(db, 'productModels', id);
+    await updateDoc(docRef, { name });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, 'productModels/' + id);
+  }
+}
+
+export async function deleteProductModel(id: string): Promise<void> {
+  const docRef = doc(db, 'productModels', id);
+  try {
+    await deleteDoc(docRef);
+  } catch (error) {
+    console.error('deleteProductModel failed:', error);
     throw error;
   }
 }

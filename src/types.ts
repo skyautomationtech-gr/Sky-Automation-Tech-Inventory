@@ -116,6 +116,17 @@ export interface Brand {
   name: string;
 }
 
+export interface ProductColor {
+  id: string;
+  name: string;
+  hexCode?: string;
+}
+
+export interface ProductModel {
+  id: string;
+  name: string;
+}
+
 export interface CompanySettings {
   companyName: string;
   logoUrl?: string;

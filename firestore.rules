@@ -95,6 +95,16 @@ service cloud.firestore {
       allow delete: if isSuperAdmin() || (hasPermission('manageCategories') && isAdmin());
     }
 
+    match /productColors/{colorId} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isSuperAdmin() || hasPermission('manageCategories');
+    }
+
+    match /productModels/{modelId} {
+      allow read: if isSignedIn();
+      allow create, update, delete: if isSuperAdmin() || hasPermission('manageCategories');
+    }
+
     match /brands/{brandId} {
       allow read: if isSignedIn();
       allow create, update: if isSuperAdmin() || hasPermission('manageCategories');
