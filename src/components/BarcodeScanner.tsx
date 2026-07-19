@@ -16,7 +16,7 @@ const scannerConfig = {
     Html5QrcodeSupportedFormats.ITF
   ],
   experimentalFeatures: {
-    useBarCodeDetectorIfSupported: true
+    useBarCodeDetectorIfSupported: false // Disabled native browser BarcodeDetector to prevent experimental API failures in sandboxed iframes
   },
   verbose: false
 };
@@ -32,6 +32,7 @@ export const BarcodeScanner: React.FC<Props> = ({ onScan, onCancel }) => {
   const [error, setError] = useState<string | null>(null);
   const [isCameraActive, setIsCameraActive] = useState<boolean>(false);
   const [isInitializing, setIsInitializing] = useState<boolean>(true);
+  const [frameCount, setFrameCount] = useState<number>(0);
 
   useEffect(() => {
     let isMounted = true;
@@ -40,6 +41,7 @@ export const BarcodeScanner: React.FC<Props> = ({ onScan, onCancel }) => {
       try {
         setIsInitializing(true);
         setError(null);
+        setFrameCount(0);
         
         // Safely patch removeChild on the reader element to prevent DOM exceptions if elements are unmounted early
         const readerEl = document.getElementById("reader");
@@ -57,10 +59,18 @@ export const BarcodeScanner: React.FC<Props> = ({ onScan, onCancel }) => {
         const html5QrCode = new Html5Qrcode("reader", scannerConfig as any);
         html5QrCodeRef.current = html5QrCode;
 
+        // Custom camera video constraints to solve over-zooming and blurry camera issues
+        const cameraConfig: MediaTrackConstraints = {
+          facingMode: "environment",
+          width: { ideal: 1280 },
+          height: { ideal: 720 },
+          aspectRatio: { ideal: 1.7777777778 } // Request standard 16:9 widescreen to prevent cropped views
+        };
+
         await html5QrCode.start(
-          { facingMode: "environment" },
+          cameraConfig,
           {
-            fps: 20,
+            fps: 25, // High frame rate for fast detection
             qrbox: (width, height) => {
               // Custom scanning region box size optimized for linear/1D barcodes and QR codes
               return {
@@ -80,7 +90,10 @@ export const BarcodeScanner: React.FC<Props> = ({ onScan, onCancel }) => {
             }
           },
           () => {
-            // Noise handler
+            // Noise handler / decode attempt fail callback. Called on every frame that doesn't yield a barcode.
+            if (isMounted) {
+              setFrameCount(prev => prev + 1);
+            }
           }
         );
 
@@ -117,12 +130,20 @@ export const BarcodeScanner: React.FC<Props> = ({ onScan, onCancel }) => {
 
     try {
       setError(null);
-      // Create or use existing scanner instance to parse file
-      let scanner = html5QrCodeRef.current;
-      if (!scanner) {
-        scanner = new Html5Qrcode("reader", scannerConfig as any);
-        html5QrCodeRef.current = scanner;
+      
+      // Stop active camera scan first to avoid resource conflicts
+      if (html5QrCodeRef.current && html5QrCodeRef.current.isScanning) {
+        try {
+          await html5QrCodeRef.current.stop();
+          setIsCameraActive(false);
+        } catch (stopErr) {
+          console.warn("Could not stop camera before file scan:", stopErr);
+        }
       }
+
+      // Create a fresh scanner instance to parse file
+      const scanner = new Html5Qrcode("reader", scannerConfig as any);
+      html5QrCodeRef.current = scanner;
 
       const decodedText = await scanner.scanFile(file, true);
       console.log("SCAN FILE DETECTED:", decodedText);
@@ -160,10 +181,19 @@ export const BarcodeScanner: React.FC<Props> = ({ onScan, onCancel }) => {
           animation: scan 2.5s ease-in-out infinite;
         }
         #reader video {
-          object-fit: cover !important;
+          object-fit: contain !important;
           width: 100% !important;
           height: 100% !important;
-          border-radius: 1rem;
+          border-radius: 1.5rem;
+          background-color: #0c0c0f !important;
+        }
+        /* Hide html5-qrcode's default borders/corners to prevent duplicate overlapping frames */
+        div[id^="reader__border"] {
+          display: none !important;
+          border: none !important;
+        }
+        #reader {
+          border: none !important;
         }
       `}</style>
 
@@ -192,8 +222,8 @@ export const BarcodeScanner: React.FC<Props> = ({ onScan, onCancel }) => {
         </button>
       </div>
 
-      {/* Camera Viewfinder Box */}
-      <div className="relative w-full max-w-sm aspect-square bg-[#121217] rounded-3xl border border-slate-800 overflow-hidden flex flex-col items-center justify-center shadow-2xl my-8">
+      {/* Camera Viewfinder Box (Optimized aspect-[4/3] to fit standard camera dimensions without stretching) */}
+      <div className="relative w-full max-w-sm aspect-[4/3] bg-[#121217] rounded-3xl border border-slate-800 overflow-hidden flex flex-col items-center justify-center shadow-2xl my-8">
         {/* Actual Live Feed div */}
         <div id="reader" className="absolute inset-0 w-full h-full"></div>
 
@@ -210,6 +240,14 @@ export const BarcodeScanner: React.FC<Props> = ({ onScan, onCancel }) => {
               {/* Laser Scanning Line */}
               <div className="absolute left-0 w-full h-[2.5px] bg-[#D4AF37] shadow-[0_0_12px_#D4AF37] scan-laser"></div>
             </div>
+          </div>
+        )}
+
+        {/* Live Active Scanning Frame Counter Debug Indicator */}
+        {isCameraActive && (
+          <div className="absolute bottom-3 left-1/2 -translate-x-1/2 bg-slate-900/90 backdrop-blur-xs border border-[#D4AF37]/30 px-3 py-1 rounded-full text-[10px] font-mono text-[#D4AF37] flex items-center gap-1.5 z-20 shadow-md">
+            <span className="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse shrink-0"></span>
+            <span>Scanning Active: Frame {frameCount}</span>
           </div>
         )}
 
