@@ -71,11 +71,13 @@ export const BarcodeScanner: React.FC<Props> = ({ onScan, onCancel }) => {
           { facingMode: "environment" },
           {
             fps: 10, // Lower frame rate to allow camera to autofocus properly between frames
-            qrbox: (width, height) => {
-              // Custom scanning region box size optimized for linear/1D barcodes and QR codes
+            qrbox: (videoWidth, videoHeight) => {
+              // The qrbox dimensions must be relative to the actual video feed resolution.
+              // We use 80% of the video width and 40% of the video height to ensure
+              // the library analyzes the majority of the visible frame.
               return {
-                width: Math.min(width * 0.9, 300),
-                height: Math.min(height * 0.5, 120)
+                width: Math.round(videoWidth * 0.8),
+                height: Math.round(videoHeight * 0.4)
               };
             },
             videoConstraints: cameraConfig
@@ -185,10 +187,11 @@ export const BarcodeScanner: React.FC<Props> = ({ onScan, onCancel }) => {
           border-radius: 1.5rem;
           background-color: #0c0c0f !important;
         }
-        /* Hide html5-qrcode's default borders/corners to prevent duplicate overlapping frames */
+        /* Style html5-qrcode's default borders/corners to match our theme (Gold) */
         div[id^="reader__border"] {
-          display: none !important;
-          border: none !important;
+          border-color: #D4AF37 !important;
+          border-width: 3px !important;
+          border-radius: 8px !important;
         }
         #reader {
           border: none !important;
@@ -225,18 +228,12 @@ export const BarcodeScanner: React.FC<Props> = ({ onScan, onCancel }) => {
         {/* Actual Live Feed div */}
         <div id="reader" className="absolute inset-0 w-full h-full"></div>
 
-        {/* Custom Visual Overlay Guides (Visible while camera is active) */}
+        {/* Laser Scanning Line (Centered on the scanner's auto-generated box) */}
         {isCameraActive && (
           <div className="absolute inset-0 pointer-events-none flex items-center justify-center p-6">
-            <div className="relative w-[280px] h-[110px] flex items-center justify-center">
-              {/* Gold Corner Brackets */}
-              <div className="absolute top-0 left-0 w-8 h-8 border-t-[3px] border-l-[3px] border-[#D4AF37] rounded-tl-xl"></div>
-              <div className="absolute top-0 right-0 w-8 h-8 border-t-[3px] border-r-[3px] border-[#D4AF37] rounded-tr-xl"></div>
-              <div className="absolute bottom-0 left-0 w-8 h-8 border-b-[3px] border-l-[3px] border-[#D4AF37] rounded-bl-xl"></div>
-              <div className="absolute bottom-0 right-0 w-8 h-8 border-b-[3px] border-r-[3px] border-[#D4AF37] rounded-br-xl"></div>
-
+            <div className="relative w-full h-full flex items-center justify-center max-w-[80%] max-h-[40%]">
               {/* Laser Scanning Line */}
-              <div className="absolute left-0 w-full h-[2.5px] bg-[#D4AF37] shadow-[0_0_12px_#D4AF37] scan-laser"></div>
+              <div className="absolute left-0 w-full h-[2.5px] bg-[#D4AF37] shadow-[0_0_12px_#D4AF37] scan-laser z-10"></div>
             </div>
           </div>
         )}
