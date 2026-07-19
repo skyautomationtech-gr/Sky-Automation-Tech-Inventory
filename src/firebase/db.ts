@@ -32,7 +32,8 @@ import {
   Invoice,
   PaymentStatus,
   ProductColor,
-  ProductModel
+  ProductModel,
+  Expense
 } from '../types';
 
 // --- Data Sanitization Helper ---
@@ -670,7 +671,7 @@ export async function deleteProduct(id: string): Promise<void> {
   }
 }
 
-export function getUniqueBarcodeValue(products: Product[], generatedInSession?: Set<string>): string {
+export function getUniqueBarcodeValue(prefix: string, products: Product[], generatedInSession?: Set<string>): string {
   const usedCodes = new Set<string>();
   products.forEach(p => {
     if (p.barcodeValue) usedCodes.add(p.barcodeValue.toUpperCase());
@@ -684,17 +685,19 @@ export function getUniqueBarcodeValue(products: Product[], generatedInSession?: 
 
   const chars = '23456789ABCDEFGHJKLMNPQRSTUVWXYZ';
   let code = '';
+  const safePrefix = (prefix || 'PRD').substring(0, 4).toUpperCase();
   do {
-    code = '';
-    for (let i = 0; i < 8; i++) {
-      code += chars.charAt(Math.floor(Math.random() * chars.length));
+    let suffix = '';
+    for (let i = 0; i < 4; i++) {
+      suffix += chars.charAt(Math.floor(Math.random() * chars.length));
     }
+    code = `${safePrefix}-${suffix}`;
   } while (usedCodes.has(code));
 
   return code;
 }
 
-export async function migrateProductBarcodes(): Promise<void> {
+export async function migrateProductBarcodes(): Promise<number> {
   try {
     console.log('migrateProductBarcodes: Starting migration check...');
     const products = await getProducts(true);
@@ -704,17 +707,17 @@ export async function migrateProductBarcodes(): Promise<void> {
       if (!val) return true;
       if (originalSku && val === originalSku) return true;
       if (val.includes('-') && val.length > 10) return true;
+      if (!val.includes('-')) return true;
       return false;
     };
 
     let updatedCount = 0;
-
     for (const p of products) {
       let productChanged = false;
       let newProductBarcode = p.barcodeValue;
 
       if (needsMigration(p.barcodeValue, p.sku)) {
-        newProductBarcode = getUniqueBarcodeValue(products, generatedInSession);
+        newProductBarcode = getUniqueBarcodeValue(p.subBrand || 'PRD', products, generatedInSession);
         generatedInSession.add(newProductBarcode);
         productChanged = true;
       }
@@ -727,7 +730,7 @@ export async function migrateProductBarcodes(): Promise<void> {
         const oldLongBarcodeValue = `${p.sku}-${vColorCode}-${vModelCode}`;
 
         if (needsMigration(v.barcodeValue, oldLongBarcodeValue) || needsMigration(v.barcodeValue, p.sku)) {
-          const newVariantBarcode = getUniqueBarcodeValue(products, generatedInSession);
+          const newVariantBarcode = getUniqueBarcodeValue(p.subBrand || 'PRD', products, generatedInSession);
           generatedInSession.add(newVariantBarcode);
           productChanged = true;
           return {
@@ -753,8 +756,10 @@ export async function migrateProductBarcodes(): Promise<void> {
     } else {
       console.log('migrateProductBarcodes: All products up-to-date. No migration needed.');
     }
+    return updatedCount;
   } catch (error) {
     console.error('migrateProductBarcodes: Migration failed:', error);
+    return 0;
   }
 }
 
@@ -1853,5 +1858,52 @@ export async function recordOrderPayment(
     handleFirestoreError(error, OperationType.UPDATE, `orders/${orderId}/recordPayment`);
   }
 }
+
+export async function getExpenses(): Promise<Expense[]> {
+  try {
+    const colRef = collection(db, 'expenses');
+    const q = query(colRef, orderBy('date', 'desc'), orderBy('createdAt', 'desc'));
+    const snapshot = await getDocs(q);
+    const expenses: Expense[] = [];
+    snapshot.forEach(docSnap => {
+      expenses.push({ id: docSnap.id, ...docSnap.data() } as Expense);
+    });
+    return expenses;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, 'expenses');
+    return [];
+  }
+}
+
+export async function addExpense(expenseData: Omit<Expense, 'id'>): Promise<string> {
+  try {
+    const colRef = collection(db, 'expenses');
+    const sanitized = sanitizeData(expenseData);
+    const docRef = await addDoc(colRef, sanitized);
+    return docRef.id;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, 'expenses');
+  }
+}
+
+export async function updateExpense(id: string, updates: Partial<Expense>): Promise<void> {
+  try {
+    const docRef = doc(db, 'expenses', id);
+    const sanitized = sanitizeData(updates);
+    await updateDoc(docRef, sanitized);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, 'expenses/' + id);
+  }
+}
+
+export async function deleteExpense(id: string): Promise<void> {
+  try {
+    const docRef = doc(db, 'expenses', id);
+    await deleteDoc(docRef);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, 'expenses/' + id);
+  }
+}
+
 
 

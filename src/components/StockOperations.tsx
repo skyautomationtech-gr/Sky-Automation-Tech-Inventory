@@ -214,7 +214,8 @@ export default function StockOperations({
         beforeQty: currentStock,
         afterQty: newStock,
         refNo: refNo || '',
-        supplierName: activeAction === 'in' ? supplierName || '' : ''
+        supplierName: activeAction === 'in' ? supplierName || '' : '',
+        purchasePrice: activeAction === 'in' ? (costPrice !== '' ? Number(costPrice) : selectedProduct.costPrice) : undefined
       });
 
       setSuccess(`Successfully executed inventory transaction! Stock updated.`);

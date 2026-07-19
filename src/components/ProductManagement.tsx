@@ -802,12 +802,13 @@ export default function ProductManagement({
       if (!val) return true;
       if (originalSku && val === originalSku) return true;
       if (val.includes('-') && val.length > 10) return true;
+      if (!val.includes('-')) return true;
       return false;
     };
 
     let mainBarcodeValue = editModeProduct?.barcodeValue;
     if (needsMigration(mainBarcodeValue, finalSku)) {
-      mainBarcodeValue = getUniqueBarcodeValue(products, generatedInSession);
+      mainBarcodeValue = getUniqueBarcodeValue(formSubBrand, products, generatedInSession);
       generatedInSession.add(mainBarcodeValue);
     }
 
@@ -823,7 +824,7 @@ export default function ProductManagement({
       let vBarcodeValue = v.barcodeValue || existingV?.barcodeValue;
 
       if (needsMigration(vBarcodeValue, oldLongBarcodeValue) || needsMigration(vBarcodeValue, finalSku)) {
-        vBarcodeValue = getUniqueBarcodeValue(products, generatedInSession);
+        vBarcodeValue = getUniqueBarcodeValue(formSubBrand, products, generatedInSession);
         generatedInSession.add(vBarcodeValue);
       }
 

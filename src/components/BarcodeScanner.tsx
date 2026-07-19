@@ -60,22 +60,22 @@ export const BarcodeScanner: React.FC<Props> = ({ onScan, onCancel }) => {
         html5QrCodeRef.current = html5QrCode;
 
         // Custom camera video constraints to solve over-zooming and blurry camera issues
+        // Removing explicit width/height/aspectRatio forces to allow the native sensor resolution and aspect ratio (usually portrait on mobile).
+        // Forcing a 16:9 aspect ratio on a portrait screen causes the browser to severely crop and "zoom in" the feed.
         const cameraConfig: MediaTrackConstraints = {
           facingMode: "environment",
-          width: { ideal: 1280 },
-          height: { ideal: 720 },
-          aspectRatio: { ideal: 1.7777777778 } // Request standard 16:9 widescreen to prevent cropped views
+          advanced: [{ zoom: 1 } as any]
         };
 
         await html5QrCode.start(
           { facingMode: "environment" },
           {
-            fps: 25, // High frame rate for fast detection
+            fps: 10, // Lower frame rate to allow camera to autofocus properly between frames
             qrbox: (width, height) => {
               // Custom scanning region box size optimized for linear/1D barcodes and QR codes
               return {
-                width: Math.min(width * 0.85, 280),
-                height: Math.min(height * 0.4, 110)
+                width: Math.min(width * 0.9, 300),
+                height: Math.min(height * 0.5, 120)
               };
             },
             videoConstraints: cameraConfig
@@ -182,9 +182,6 @@ export const BarcodeScanner: React.FC<Props> = ({ onScan, onCancel }) => {
           animation: scan 2.5s ease-in-out infinite;
         }
         #reader video {
-          object-fit: contain !important;
-          width: 100% !important;
-          height: 100% !important;
           border-radius: 1.5rem;
           background-color: #0c0c0f !important;
         }
@@ -223,8 +220,8 @@ export const BarcodeScanner: React.FC<Props> = ({ onScan, onCancel }) => {
         </button>
       </div>
 
-      {/* Camera Viewfinder Box (Optimized aspect-[4/3] to fit standard camera dimensions without stretching) */}
-      <div className="relative w-full max-w-sm aspect-[4/3] bg-[#121217] rounded-3xl border border-slate-800 overflow-hidden flex flex-col items-center justify-center shadow-2xl my-8">
+      {/* Camera Viewfinder Box (Optimized aspect-[3/4] to fit standard mobile camera dimensions without stretching) */}
+      <div className="relative w-full max-w-sm aspect-[3/4] bg-[#121217] rounded-3xl border border-slate-800 overflow-hidden flex flex-col items-center justify-center shadow-2xl my-8">
         {/* Actual Live Feed div */}
         <div id="reader" className="absolute inset-0 w-full h-full"></div>
 

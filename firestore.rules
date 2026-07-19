@@ -170,6 +170,10 @@ service cloud.firestore {
       allow write: if isActive() && (isSuperAdmin() || hasPermission('manageCategories'));
     }
 
+    match /expenses/{expenseId} {
+      allow read, write: if isActive() && isSuperAdmin();
+    }
+
     match /{document=**} {
       allow read, write: if false;
     }

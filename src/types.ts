@@ -108,6 +108,7 @@ export interface StockLog {
   refNo?: string;
   supplierName?: string;
   orderId?: string;
+  purchasePrice?: number;
 }
 
 export interface Category {
@@ -230,5 +231,19 @@ export interface Invoice {
   voidedReason?: string;
   voidedBy?: string;
   voidedAt?: number;
+}
+
+export type ExpenseCategory = 'Rent' | 'Salary' | 'Utility Bill' | 'Marketing' | 'Courier/Delivery Charge' | 'Office Supplies' | 'Maintenance' | 'Other';
+
+export interface Expense {
+  id: string;
+  category: ExpenseCategory;
+  amount: number;
+  date: string; // YYYY-MM-DD
+  subBrand?: 'SAT' | 'GZ' | 'RTX' | '';
+  notes?: string;
+  receiptUrl?: string;
+  createdBy: string;
+  createdAt: number;
 }
 

@@ -17,7 +17,7 @@ export async function generateBarcodePDF(
   title: string = "Barcode_Labels"
 ) {
   const doc = new jsPDF({
-    orientation: 'portrait',
+    orientation: 'p',
     unit: 'mm',
     format: 'a4',
   });
@@ -87,7 +87,8 @@ export async function generateBarcodePDF(
       if (displayName.length > 25) {
         displayName = displayName.substring(0, 23) + '...';
       }
-      doc.text(displayName, x + labelWidth / 2, y + 3.8, { align: 'center' });
+      const titleWidth = doc.getTextWidth(displayName);
+      doc.text(displayName, x + (labelWidth - titleWidth) / 2, y + 3.8);
 
       // 2. Draw sub-label (Variant properties like Color / Model)
       if (item.subLabel) {
@@ -98,19 +99,21 @@ export async function generateBarcodePDF(
         if (displaySub.length > 30) {
           displaySub = displaySub.substring(0, 27) + '...';
         }
-        doc.text(displaySub, x + labelWidth / 2, y + 6.2, { align: 'center' });
+        const subWidth = doc.getTextWidth(displaySub);
+        doc.text(displaySub, x + (labelWidth - subWidth) / 2, y + 6.2);
       }
 
       // 3. Draw Barcode Image (take majority of the middle area, wide, tall enough)
       const barcodeY = y + (item.subLabel ? 7.5 : 5.2);
       const barcodeHeight = 14.0;
-      doc.addImage(imgData, 'JPEG', x + 2.0, barcodeY, labelWidth - 4.0, barcodeHeight);
+      doc.addImage(imgData, 'JPEG', x + 2.0, barcodeY, labelWidth - 4.0, barcodeHeight, undefined, 'FAST', 0);
 
       // 4. Draw Human-readable SKU/Barcode text below the bars (standard barcode convention)
       doc.setFont('Courier', 'bold');
       doc.setFontSize(6.0);
       doc.setTextColor(30, 41, 59); // Slate 800
-      doc.text(item.value, x + labelWidth / 2, y + labelHeight - 1.6, { align: 'center' });
+      const codeWidth = doc.getTextWidth(item.value);
+      doc.text(item.value, x + (labelWidth - codeWidth) / 2, y + labelHeight - 1.6);
       
     } catch (err) {
       console.error('Error generating barcode for PDF:', err);
