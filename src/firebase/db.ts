@@ -650,8 +650,24 @@ export async function updateProduct(id: string, updatedFields: Partial<Product>)
 }
 
 export async function archiveProduct(id: string): Promise<void> {
+  console.log(`[db.ts] archiveProduct called for id: ${id}. Setting archived: true (boolean).`);
   const docRef = doc(db, 'products', id);
-  await updateDoc(docRef, { archived: true });
+  try {
+    await updateDoc(docRef, { archived: true });
+    console.log(`[db.ts] archiveProduct successfully updated Firestore doc products/${id} with { archived: true }.`);
+  } catch (error) {
+    console.error(`[db.ts] archiveProduct failed for id: ${id}:`, error);
+    throw error;
+  }
+}
+
+export async function deleteProduct(id: string): Promise<void> {
+  const docRef = doc(db, 'products', id);
+  try {
+    await deleteDoc(docRef);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, 'products/' + id);
+  }
 }
 
 export function getUniqueBarcodeValue(products: Product[], generatedInSession?: Set<string>): string {

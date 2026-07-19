@@ -284,7 +284,7 @@ export default function App() {
       await migrateProductBarcodes();
       
       // Retrieve collections
-      const prodsList = await getProducts();
+      const prodsList = await getProducts(true);
       const catsList = await getCategories();
       const brandsList = await getBrands();
       const colorsList = await getProductColors();
@@ -670,7 +670,7 @@ export default function App() {
         {/* Tab 3: Stock Operations View */}
         {currentTab === 'stock' && (
           <StockOperations 
-            products={products} 
+            products={products.filter(p => !p.archived)} 
             user={user} 
             onRefreshData={refreshApplicationData}
             initialAction={initialStockAction}

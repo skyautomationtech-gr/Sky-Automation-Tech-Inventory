@@ -110,7 +110,7 @@ export default function DashboardView({
     
     // Search Products
     products.forEach(p => {
-      if (p.name.toLowerCase().includes(q) || p.sku.toLowerCase().includes(q)) {
+      if (!p.archived && (p.name.toLowerCase().includes(q) || p.sku.toLowerCase().includes(q))) {
         results.push({ type: 'product', item: p });
       }
     });
@@ -144,7 +144,7 @@ export default function DashboardView({
         alert('No match found for this scan');
       }
     } else {
-      const p = products.find(prod => prod.variants.some(v => v.barcodeValue === text) || prod.barcodeValue === text || prod.sku === text);
+      const p = products.find(prod => !prod.archived && (prod.variants.some(v => v.barcodeValue === text) || prod.barcodeValue === text || prod.sku === text));
       if (p) {
         onNavigateToTab('products', undefined, p.id);
       } else {
@@ -203,7 +203,7 @@ export default function DashboardView({
   const isCheckedIn = user?.currentSessionStatus === 'checked_in';
   
   // Filter approved products for dashboard metrics and display
-  const approvedProducts = products.filter(product => product.status === 'approved');
+  const approvedProducts = products.filter(product => product.status === 'approved' && !product.archived);
 
   // Dynamic stats calculation
   let totalStockUnits = 0;

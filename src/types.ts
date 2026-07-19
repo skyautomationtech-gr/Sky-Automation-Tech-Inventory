@@ -86,6 +86,9 @@ export interface Product {
   barcodeValue?: string;
   status?: 'pending_review' | 'approved' | 'rejected';
   rejectionReason?: string;
+  deletionStatus?: 'pending_approval' | null;
+  deletionRequestedBy?: string;
+  deletionRequestedAt?: number;
 }
 
 export type StockLogType = 'in' | 'out' | 'adjustment' | 'sale' | 'cancellation_restock' | 'return_restock';

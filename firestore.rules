@@ -114,8 +114,15 @@ service cloud.firestore {
     match /products/{productId} {
       allow read: if isSignedIn();
       allow create: if isActive() && (isSuperAdmin() || hasPermission('addProduct'));
-      allow update: if isActive() && (isSuperAdmin() || hasPermission('editProduct'));
-      allow delete: if isSuperAdmin() || (isActive() && hasPermission('deleteProduct'));
+      allow update: if isActive() && (
+        isSuperAdmin() || (
+          hasPermission('editProduct') && (
+            (request.resource.data.get('deletionStatus', null) == resource.data.get('deletionStatus', null)) ||
+            (request.resource.data.get('deletionStatus', null) == 'pending_approval' && isAdmin())
+          )
+        )
+      );
+      allow delete: if isSuperAdmin();
     }
 
     match /stockLogs/{logId} {

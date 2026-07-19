@@ -35,6 +35,7 @@ import {
   addProduct, 
   updateProduct, 
   archiveProduct, 
+  deleteProduct,
   getCategories, 
   addCategory, 
   deleteCategory,
@@ -44,6 +45,8 @@ import {
   deleteBrand,
   updateBrand,
   getStockLogs,
+  getOrders,
+  getInvoices,
   getProductAttributes,
   saveProductAttributes,
   addProductColor,
@@ -85,7 +88,7 @@ export default function ProductManagement({
   const isStaff = user?.role === 'staff';
 
   // Sub tabs
-  const [activeSubTab, setActiveSubTab] = useState<'catalog' | 'categories' | 'brands' | 'attributes' | 'pending'>('catalog');
+  const [activeSubTab, setActiveSubTab] = useState<'catalog' | 'categories' | 'brands' | 'attributes' | 'pending' | 'archive' | 'deletion_requests'>('catalog');
 
   // List management states
   const [search, setSearch] = useState('');
@@ -899,12 +902,138 @@ export default function ProductManagement({
           if (selectedProduct?.id === product.id) {
             setSelectedProduct(null);
           }
+          setFormSuccess(`Successfully archived "${product.name}".`);
+          setTimeout(() => setFormSuccess(''), 3000);
         } catch (err: any) {
           console.error("Archive product failed:", err);
           setFormError(`Failed to archive product: ${err.message || err}`);
         }
       }
     );
+  };
+
+  const handleUnarchiveProduct = async (product: Product) => {
+    if (requireCheckIn && !requireCheckIn()) return;
+    try {
+      await updateProduct(product.id, { archived: false });
+      await onRefreshData();
+      setFormSuccess(`Successfully restored "${product.name}" to catalog.`);
+      setTimeout(() => setFormSuccess(''), 3000);
+    } catch (err: any) {
+      console.error("Unarchive product failed:", err);
+      setFormError(`Failed to restore product: ${err.message || err}`);
+    }
+  };
+
+  const checkProductReferences = async (productId: string): Promise<{ ordersCount: number, invoicesCount: number, logsCount: number }> => {
+    try {
+      console.log(`[checkProductReferences] Checking references for product: ${productId}`);
+      const [allOrders, allInvoices, allLogs] = await Promise.all([
+        getOrders(),
+        getInvoices(),
+        getStockLogs(productId)
+      ]);
+
+      const ordersCount = (allOrders || []).filter(o => o.items?.some(item => item.productId === productId)).length;
+      const invoicesCount = (allInvoices || []).filter(i => i.items?.some(item => item.productId === productId)).length;
+      const logsCount = (allLogs || []).length;
+
+      console.log(`[checkProductReferences] product ${productId} referenced in: ${ordersCount} orders, ${invoicesCount} invoices, ${logsCount} stock logs.`);
+      return { ordersCount, invoicesCount, logsCount };
+    } catch (error) {
+      console.error("[checkProductReferences] Error checking product references:", error);
+      return { ordersCount: 0, invoicesCount: 0, logsCount: 0 };
+    }
+  };
+
+  const executePermanentDelete = async (product: Product, successCallback: () => void) => {
+    try {
+      console.log(`[executePermanentDelete] Checking references for product: ${product.name} (${product.id})`);
+      const { ordersCount, invoicesCount, logsCount } = await checkProductReferences(product.id);
+      
+      const isReferenced = ordersCount > 0 || invoicesCount > 0 || logsCount > 0;
+      
+      if (isReferenced) {
+        const warningDetails: string[] = [];
+        if (ordersCount > 0) warningDetails.push(`${ordersCount} order(s)`);
+        if (invoicesCount > 0) warningDetails.push(`${invoicesCount} invoice(s)`);
+        if (logsCount > 0) warningDetails.push(`${logsCount} stock log(s)`);
+        
+        const warningMessage = `This product is referenced in ${warningDetails.join(', ')}. Permanently deleting it may cause those historical records to show incomplete/missing product info. Delete anyway?`;
+        
+        showConfirm(
+          "Warning: Historical References Found!",
+          warningMessage,
+          async () => {
+            try {
+              console.log("[executePermanentDelete] Super Admin confirmed delete despite warning.");
+              await deleteProduct(product.id);
+              successCallback();
+            } catch (err: any) {
+              setFormError(`Failed to delete product: ${err.message || err}`);
+              setTimeout(() => setFormError(''), 3000);
+            }
+          }
+        );
+      } else {
+        // No references, delete directly
+        await deleteProduct(product.id);
+        successCallback();
+      }
+    } catch (err: any) {
+      setFormError(`Failed during deletion check: ${err.message || err}`);
+      setTimeout(() => setFormError(''), 3000);
+    }
+  };
+
+  const handleDeleteClick = (product: Product) => {
+    console.log("ARCHIVE DELETE CLICKED", product.id);
+    if (requireCheckIn && !requireCheckIn()) {
+      console.log("[handleDeleteClick] requireCheckIn returned false, blocking deletion click.");
+      return;
+    }
+    console.log("[handleDeleteClick] checked in successfully. User role:", user?.role);
+    if (user?.role === 'superadmin') {
+      showConfirm(
+        "Permanently Delete Product?",
+        `Are you sure you want to permanently delete "${product.name}"? This action cannot be undone.`,
+        async () => {
+          console.log("[handleDeleteClick] superadmin confirmed direct permanent delete of:", product.id);
+          await executePermanentDelete(product, async () => {
+            await onRefreshData();
+            if (selectedProduct?.id === product.id) {
+              setSelectedProduct(null);
+            }
+            setFormSuccess(`Permanently deleted "${product.name}".`);
+            setTimeout(() => setFormSuccess(''), 3000);
+          });
+        }
+      );
+    } else if (user?.role === 'admin') {
+      showConfirm(
+        "Submit Deletion Request?",
+        `Are you sure you want to submit a deletion request for "${product.name}"? This product will be marked as "Deletion Pending" until a Super Admin approves it.`,
+        async () => {
+          try {
+            console.log("[handleDeleteClick] admin confirmed submit deletion request for:", product.id);
+            await updateProduct(product.id, { 
+              deletionStatus: 'pending_approval',
+              deletionRequestedBy: user?.name || user?.email || 'Admin',
+              deletionRequestedAt: Date.now()
+            });
+            await onRefreshData();
+            setFormSuccess(`Deletion request submitted for "${product.name}".`);
+            setTimeout(() => setFormSuccess(''), 3000);
+          } catch (err: any) {
+            console.error("Submit deletion request failed:", err);
+            setFormError(`Failed to submit deletion request: ${err.message || err}`);
+            setTimeout(() => setFormError(''), 3000);
+          }
+        }
+      );
+    } else {
+      console.warn("[handleDeleteClick] User role is not superadmin or admin. Blocked action.", user?.role);
+    }
   };
 
   // Category CRUD Handlers
@@ -1340,6 +1469,38 @@ export default function ProductManagement({
               )}
             </button>
           )}
+          <button
+            onClick={() => setActiveSubTab('archive')}
+            className={`pb-2.5 px-1 font-semibold text-sm transition-all border-b-2 cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
+              activeSubTab === 'archive'
+                ? 'border-amber-400 text-slate-900 font-extrabold'
+                : 'border-transparent text-slate-500 hover:text-slate-950'
+            }`}
+          >
+            Archive
+            {products.filter(p => p.archived).length > 0 && (
+              <span className="px-1.5 py-0.5 bg-slate-500 text-white text-[9px] font-black rounded-full leading-none">
+                {products.filter(p => p.archived).length}
+              </span>
+            )}
+          </button>
+          {user?.role === 'superadmin' && (
+            <button
+              onClick={() => setActiveSubTab('deletion_requests')}
+              className={`pb-2.5 px-1 font-semibold text-sm transition-all border-b-2 cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
+                activeSubTab === 'deletion_requests'
+                  ? 'border-amber-400 text-slate-900 font-extrabold'
+                  : 'border-transparent text-slate-500 hover:text-slate-950'
+              }`}
+            >
+              Deletion Requests
+              {products.filter(p => p.deletionStatus === 'pending_approval').length > 0 && (
+                <span className="px-1.5 py-0.5 bg-rose-500 text-white text-[9px] font-black rounded-full leading-none animate-pulse">
+                  {products.filter(p => p.deletionStatus === 'pending_approval').length}
+                </span>
+              )}
+            </button>
+          )}
         </div>
       </div>
 
@@ -1545,13 +1706,18 @@ export default function ProductManagement({
                             <td className="py-3 px-3 min-w-[150px]">
                               <p className="font-bold text-slate-900 leading-tight">{product.name}</p>
                               <p className="text-[10px] text-slate-400 font-mono mt-0.5">{product.sku}</p>
-                              <div className="flex gap-1.5 mt-1">
+                              <div className="flex flex-wrap gap-1.5 mt-1">
                                 <span className="bg-slate-100 text-slate-500 text-[9px] font-mono font-bold px-1 rounded">
                                   {product.brand}
                                 </span>
                                 <span className="bg-slate-100 text-slate-500 text-[9px] font-mono font-bold px-1 rounded">
                                   {product.category}
                                 </span>
+                                {product.deletionStatus === 'pending_approval' && (
+                                  <span className="bg-rose-100 text-rose-700 text-[9px] font-mono font-bold px-1.5 py-0.5 rounded animate-pulse">
+                                    Deletion Pending
+                                  </span>
+                                )}
                               </div>
                             </td>
                             <td className="py-3 px-3 text-center">
@@ -1589,18 +1755,25 @@ export default function ProductManagement({
                               <div className="flex gap-1.5 justify-center" onClick={(e) => e.stopPropagation()}>
                                 <button
                                   onClick={() => openEditDrawer(product)}
-                                  className="p-1 text-slate-400 hover:text-slate-900 hover:bg-slate-100 rounded"
+                                  className="p-1 text-slate-400 hover:text-slate-900 hover:bg-slate-100 rounded cursor-pointer transition-colors"
                                   title="Edit Product"
                                 >
                                   <Edit3 size={14} />
                                 </button>
-                                {!isStaff && (
+                                <button
+                                  onClick={() => handleArchiveProduct(product)}
+                                  className="p-1 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded cursor-pointer transition-colors"
+                                  title="Archive Product"
+                                >
+                                  <Archive size={14} />
+                                </button>
+                                {(user?.role === 'admin' || user?.role === 'superadmin') && (
                                   <button
-                                    onClick={() => handleArchiveProduct(product)}
-                                    className="p-1 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded"
-                                    title="Archive Product"
+                                    onClick={() => handleDeleteClick(product)}
+                                    className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded cursor-pointer transition-colors"
+                                    title={user?.role === 'superadmin' ? "Permanently Delete Product" : "Submit Deletion Request"}
                                   >
-                                    <Archive size={14} />
+                                    <Trash2 size={14} />
                                   </button>
                                 )}
                               </div>
@@ -1664,6 +1837,13 @@ export default function ProductManagement({
                               </span>
                             </div>
                             <p className="text-[10px] text-slate-400 font-mono mt-0.5">{product.sku}</p>
+                            {product.deletionStatus === 'pending_approval' && (
+                              <div className="mt-1">
+                                <span className="bg-rose-100 text-rose-700 text-[9px] font-mono font-bold px-1.5 py-0.5 rounded animate-pulse">
+                                  Deletion Pending
+                                </span>
+                              </div>
+                            )}
                             
                             <div className="flex items-center justify-between mt-3">
                               <div className="flex items-center gap-2">
@@ -1683,17 +1863,24 @@ export default function ProductManagement({
                           <button
                             type="button"
                             onClick={() => openEditDrawer(product)}
-                            className="flex-1 flex items-center justify-center gap-2 py-2 bg-slate-50 hover:bg-slate-100 text-slate-600 rounded-xl text-xs font-bold border border-slate-200 cursor-pointer"
+                            className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-slate-50 hover:bg-slate-100 text-slate-600 rounded-xl text-xs font-bold border border-slate-200 cursor-pointer transition-colors"
                           >
                             <Edit3 size={14} /> Edit
                           </button>
-                          {!isStaff && (
+                          <button
+                            type="button"
+                            onClick={() => handleArchiveProduct(product)}
+                            className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-slate-50 hover:bg-slate-100 text-slate-600 rounded-xl text-xs font-bold border border-slate-200 cursor-pointer transition-colors"
+                          >
+                            <Archive size={14} /> Archive
+                          </button>
+                          {(user?.role === 'admin' || user?.role === 'superadmin') && (
                             <button
                               type="button"
-                              onClick={() => handleArchiveProduct(product)}
-                              className="flex-1 flex items-center justify-center gap-2 py-2 bg-red-50 hover:bg-red-100 text-red-600 rounded-xl text-xs font-bold border border-red-100 cursor-pointer"
+                              onClick={() => handleDeleteClick(product)}
+                              className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-xl text-xs font-bold border border-rose-100 cursor-pointer transition-colors"
                             >
-                              <Archive size={14} /> Archive
+                              <Trash2 size={14} /> Delete
                             </button>
                           )}
                         </div>
@@ -2666,6 +2853,204 @@ export default function ProductManagement({
                   );
                 })}
               </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* SUB TAB: ARCHIVE */}
+      {activeSubTab === 'archive' && (
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden p-6 space-y-4">
+          <div className="flex justify-between items-center">
+            <div>
+              <h3 className="text-sm font-black text-slate-900">Archived Products</h3>
+              <p className="text-xs text-slate-500">Soft-deleted products that have been hidden from the active catalog.</p>
+            </div>
+          </div>
+          
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse text-xs text-slate-600">
+              <thead>
+                <tr className="bg-slate-50 border-b border-slate-100 text-[10px] font-mono tracking-wider text-slate-400 uppercase">
+                  <th className="py-3 px-4 font-bold">Image</th>
+                  <th className="py-3 px-3 font-bold">Product Info</th>
+                  <th className="py-3 px-3 font-bold text-center">Division</th>
+                  <th className="py-3 px-3 font-bold text-right">Price</th>
+                  <th className="py-3 px-4 text-center font-bold">Action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {products.filter(p => p.archived).length === 0 ? (
+                  <tr>
+                    <td colSpan={5} className="py-10 text-center text-slate-400 italic">
+                      No archived products found.
+                    </td>
+                  </tr>
+                ) : (
+                  products.filter(p => p.archived).map((product) => {
+                    const defaultImg = product.images?.[0] || 'https://images.unsplash.com/photo-1546868871-7041f2a55e12?auto=format&fit=crop&q=80&w=150';
+                    return (
+                      <tr key={product.id} className="hover:bg-slate-50/50 transition-colors">
+                        <td className="py-3 px-4">
+                          <img 
+                            src={defaultImg} 
+                            alt={product.name} 
+                            referrerPolicy="no-referrer"
+                            className="w-10 h-10 object-cover rounded-lg border border-slate-100" 
+                          />
+                        </td>
+                        <td className="py-3 px-3">
+                          <p className="font-bold text-slate-900 leading-tight">{product.name}</p>
+                          <p className="text-[10px] text-slate-400 font-mono mt-0.5">{product.sku}</p>
+                          <div className="flex flex-wrap gap-1.5 mt-1">
+                            <span className="bg-slate-100 text-slate-500 text-[9px] font-mono font-bold px-1 rounded">
+                              {product.brand}
+                            </span>
+                            <span className="bg-slate-100 text-slate-500 text-[9px] font-mono font-bold px-1 rounded">
+                              {product.category}
+                            </span>
+                            {product.deletionStatus === 'pending_approval' && (
+                              <span className="bg-rose-100 text-rose-700 text-[9px] font-mono font-bold px-1.5 py-0.5 rounded animate-pulse">
+                                Deletion Pending
+                              </span>
+                            )}
+                          </div>
+                        </td>
+                        <td className="py-3 px-3 text-center">
+                          <span className={`inline-block text-[9px] font-mono font-black px-2 py-0.5 rounded-full ${
+                            product.subBrand === 'SAT' 
+                              ? 'bg-slate-900 text-amber-400' 
+                              : product.subBrand === 'GZ' 
+                              ? 'bg-amber-100 text-amber-800' 
+                              : 'bg-teal-50 text-teal-700 border border-teal-100'
+                          }`}>
+                            {product.subBrand}
+                          </span>
+                        </td>
+                        <td className="py-3 px-3 text-right">
+                          <p className="font-bold text-slate-900">৳ {product.sellingPrice.toLocaleString()}</p>
+                        </td>
+                        <td className="py-3 px-4 text-center">
+                          <div className="flex items-center justify-center gap-2">
+                            <button
+                              onClick={() => handleUnarchiveProduct(product)}
+                              disabled={product.deletionStatus === 'pending_approval'}
+                              className={`px-3 py-1.5 font-bold text-[10px] rounded-lg cursor-pointer flex items-center justify-center gap-1.5 transition-all ${
+                                product.deletionStatus === 'pending_approval'
+                                  ? 'bg-slate-100 text-slate-400 cursor-not-allowed opacity-50'
+                                  : 'bg-amber-400 hover:bg-amber-500 text-slate-950'
+                              }`}
+                              title={product.deletionStatus === 'pending_approval' ? "Cannot restore a product with pending deletion." : "Restore to Catalog"}
+                            >
+                              Restore to Catalog
+                            </button>
+                            {(user?.role === 'admin' || user?.role === 'superadmin') && (
+                              <button
+                                onClick={() => handleDeleteClick(product)}
+                                className="p-1.5 bg-rose-50 hover:bg-rose-100 text-rose-600 hover:text-rose-700 rounded-lg cursor-pointer transition-colors flex items-center justify-center"
+                                title={user?.role === 'superadmin' ? "Permanently Delete Product" : "Submit Deletion Request"}
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            )}
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* SUB TAB: DELETION REQUESTS */}
+      {activeSubTab === 'deletion_requests' && user?.role === 'superadmin' && (
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden p-6 space-y-4">
+          <div>
+            <h3 className="text-sm font-black text-slate-900">Pending Deletion Requests</h3>
+            <p className="text-xs text-slate-500">Products flagged for deletion by administrators. Super Admin review required.</p>
+          </div>
+          
+          <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+            {products.filter(p => p.deletionStatus === 'pending_approval').length === 0 ? (
+              <div className="col-span-full py-10 text-center text-slate-400 italic text-xs">
+                No pending deletion requests found.
+              </div>
+            ) : (
+              products.filter(p => p.deletionStatus === 'pending_approval').map((product) => {
+                const defaultImg = product.images?.[0] || 'https://images.unsplash.com/photo-1546868871-7041f2a55e12?auto=format&fit=crop&q=80&w=150';
+                return (
+                  <div key={product.id} className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-3 flex flex-col justify-between animate-in fade-in zoom-in-95 duration-200">
+                    <div className="space-y-3">
+                      <div className="flex justify-between items-start gap-2">
+                        <div>
+                          <span className="text-[9px] font-bold text-amber-600 bg-amber-50 border border-amber-100 px-1.5 py-0.5 rounded-md uppercase tracking-wider font-mono">
+                            {product.subBrand || 'SAT'}
+                          </span>
+                          <h4 className="text-xs font-black text-slate-900 mt-1.5">{product.name}</h4>
+                          <p className="text-[9px] font-mono font-bold text-slate-400 uppercase mt-0.5">SKU: {product.sku}</p>
+                        </div>
+                        <img src={defaultImg} alt="Product" className="w-12 h-12 object-cover rounded-xl border border-slate-200" referrerPolicy="no-referrer" />
+                      </div>
+                      
+                      <div className="grid grid-cols-2 gap-y-2 gap-x-4 border-t border-slate-100 pt-2 text-[10px]">
+                        <div>
+                          <span className="text-slate-400 font-medium block">Category:</span>
+                          <span className="font-semibold text-slate-700 truncate block">{product.category}</span>
+                        </div>
+                        <div>
+                          <span className="text-slate-400 font-medium block">Brand:</span>
+                          <span className="font-semibold text-slate-700 truncate block">{product.brand}</span>
+                        </div>
+                      </div>
+                    </div>
+                    
+                    <div className="border-t border-slate-200 pt-3 flex gap-2">
+                      <button
+                        onClick={() => {
+                          showConfirm(
+                            "Approve Deletion?",
+                            `Are you sure you want to permanently delete "${product.name}"? This action cannot be undone.`,
+                            async () => {
+                              await executePermanentDelete(product, async () => {
+                                await onRefreshData();
+                                setFormSuccess(`Permanently deleted "${product.name}".`);
+                                setTimeout(() => setFormSuccess(''), 3000);
+                              });
+                            }
+                          );
+                        }}
+                        className="flex-grow py-1.5 bg-rose-500 hover:bg-rose-600 text-white font-bold text-[10px] rounded-lg shadow-3xs cursor-pointer flex items-center justify-center gap-1 transition-all"
+                      >
+                        <Check size={12} /> Approve (Delete)
+                      </button>
+                      <button
+                        onClick={async () => {
+                          showConfirm(
+                            "Reject Deletion?",
+                            `Are you sure you want to reject the deletion request for "${product.name}"? The product will remain in the catalog.`,
+                            async () => {
+                              try {
+                                await updateProduct(product.id, { deletionStatus: null });
+                                await onRefreshData();
+                                setFormSuccess(`Rejected deletion request for "${product.name}".`);
+                                setTimeout(() => setFormSuccess(''), 3000);
+                              } catch (err: any) {
+                                setFormError(`Failed to reject deletion request: ${err.message || err}`);
+                              }
+                            }
+                          );
+                        }}
+                        className="flex-grow py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold text-[10px] rounded-lg cursor-pointer flex items-center justify-center gap-1 transition-all"
+                      >
+                        <X size={12} /> Reject
+                      </button>
+                    </div>
+                  </div>
+                );
+              })
             )}
           </div>
         </div>
