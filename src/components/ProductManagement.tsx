@@ -435,8 +435,8 @@ export default function ProductManagement({
     const itemsToPrint: { value: string; label: string; subLabel?: string }[] = [];
     
     if (mode === 'primary') {
-      // Print 24 copies of the primary barcode to fill a standard sheet
-      for (let i = 0; i < 24; i++) {
+      // Print 36 copies of the primary barcode to fill a standard A4 sheet (4x9 grid)
+      for (let i = 0; i < 36; i++) {
         itemsToPrint.push({
           value: product.barcodeValue || product.sku,
           label: product.name,
@@ -444,8 +444,8 @@ export default function ProductManagement({
         });
       }
     } else {
-      // Print copies for all variants. Fill the 24-slot sheet as much as possible
-      const repeatCount = Math.max(1, Math.floor(24 / (product.variants.length || 1)));
+      // Print copies for all variants. Fill the 36-slot sheet as much as possible
+      const repeatCount = Math.max(1, Math.floor(36 / (product.variants.length || 1)));
       product.variants.forEach(v => {
         const cleanColor = v.color.trim();
         const cleanModel = v.model.trim();

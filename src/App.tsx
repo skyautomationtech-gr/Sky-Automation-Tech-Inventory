@@ -197,7 +197,18 @@ export default function App() {
   const [clearingDataError, setClearingDataError] = useState('');
   const [isClearingData, setIsClearingData] = useState(false);
 
-  // Listen to Auth State
+  // Listen to Auth State and Global Quota Exceeded event
+  useEffect(() => {
+    const handleQuotaEvent = (e: Event) => {
+      console.warn("Global Quota Event Received:", e);
+      setIsQuotaExceeded(true);
+    };
+    window.addEventListener('firestore-quota-exceeded', handleQuotaEvent);
+    return () => {
+      window.removeEventListener('firestore-quota-exceeded', handleQuotaEvent);
+    };
+  }, []);
+
   useEffect(() => {
     console.log('App: Setting up onAuthStateChanged listener...');
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
