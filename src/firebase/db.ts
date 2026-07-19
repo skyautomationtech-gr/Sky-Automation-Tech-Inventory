@@ -989,6 +989,112 @@ export async function checkInUser(userId: string, userName: string, role: string
   return docRef.id;
 }
 
+export async function checkInOnBehalf(
+  targetUserId: string,
+  targetUser: UserProfile,
+  adminUserId: string,
+  adminName: string,
+  customTime?: number
+): Promise<string> {
+  const colRef = collection(db, 'attendance');
+  const checkInTime = customTime || Date.now();
+  const dateStr = new Date(checkInTime).toISOString().split('T')[0];
+
+  try {
+    // 1. Check for existing open session
+    const qOpen = query(
+      colRef,
+      where('userId', '==', targetUserId),
+      where('checkOutTime', '==', null)
+    );
+    const openSnap = await getDocs(qOpen);
+    if (!openSnap.empty) {
+      throw new Error('User already has an open session. Please check out first.');
+    }
+
+    // 2. Create attendance record
+    const subBrand = targetUser.subBrandAccess?.[0] || 'SAT';
+    const docRef = await addDoc(colRef, {
+      userId: targetUserId,
+      userName: targetUser.name,
+      role: targetUser.role,
+      subBrand,
+      checkInTime,
+      checkOutTime: null,
+      date: dateStr,
+      durationMinutes: null,
+      isManualEntry: true,
+      checkedInBy: adminName
+    });
+
+    // 3. Update user profile
+    const userDocRef = doc(db, 'users', targetUserId);
+    await updateDoc(userDocRef, {
+      currentSessionStatus: 'checked_in',
+      currentSessionId: docRef.id,
+      currentSessionDate: dateStr
+    });
+
+    return docRef.id;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `attendance/behalf_checkin/${targetUserId}`);
+  }
+}
+
+export async function checkOutOnBehalf(
+  targetUserId: string,
+  targetUser: UserProfile,
+  adminUserId: string,
+  adminName: string,
+  customTime?: number
+): Promise<void> {
+  const checkOutTime = customTime || Date.now();
+  const colRef = collection(db, 'attendance');
+
+  try {
+    // 1. Try to find open session
+    const qOpen = query(
+      colRef,
+      where('userId', '==', targetUserId),
+      where('checkOutTime', '==', null)
+    );
+    const openSnap = await getDocs(qOpen);
+
+    if (openSnap.empty) {
+      // If no open session found, just reset the status to be safe
+      const userDocRef = doc(db, 'users', targetUserId);
+      await updateDoc(userDocRef, {
+        currentSessionStatus: 'checked_out',
+        currentSessionId: null,
+        currentSessionDate: null
+      });
+      return;
+    }
+
+    // Close all open sessions (usually there's only 1)
+    for (const d of openSnap.docs) {
+      const checkInTime = d.data().checkInTime;
+      const durationMinutes = Math.max(1, Math.round((checkOutTime - checkInTime) / (1000 * 60)));
+      await updateDoc(doc(db, 'attendance', d.id), {
+        checkOutTime,
+        durationMinutes,
+        isManualEntry: true,
+        checkedOutBy: adminName
+      });
+    }
+
+    // Reset user profile status
+    const userDocRef = doc(db, 'users', targetUserId);
+    await updateDoc(userDocRef, {
+      currentSessionStatus: 'checked_out',
+      currentSessionId: null,
+      currentSessionDate: null
+    });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, `attendance/behalf_checkout/${targetUserId}`);
+  }
+}
+
 export async function checkOutUser(userId: string, sessionId: string | null): Promise<void> {
   const now = Date.now();
   const colRef = collection(db, 'attendance');
@@ -1329,20 +1435,44 @@ export async function updateOrderAndHandleStock(
       const shouldDeduct = !isStockDeducted(oldStatus) && isStockDeducted(newStatus);
       const shouldRestore = isStockDeducted(oldStatus) && (newStatus === 'Returned/Cancelled');
       
+      // --- ALL READS MUST GO HERE ---
+      // 1. Read products
+      const productSnaps = new Map<string, any>();
+      if (shouldDeduct || shouldRestore) {
+        // Collect unique product IDs to minimize reads
+        const productIds = Array.from(new Set(updatedOrder.items.map(item => item.productId)));
+        for (const pid of productIds) {
+          const productRef = doc(db, 'products', pid);
+          const snap = await transaction.get(productRef);
+          productSnaps.set(pid, snap);
+        }
+      }
+      
+      // 2. Read settings and counters if auto-generating invoice
+      const isAutoInvoice = newStatus === 'Confirmed' && oldStatus !== 'Confirmed' && !updatedOrder.invoiceId;
+      let companySettingsSnap = null;
+      let countersSnap = null;
+      const companySettingsRef = doc(db, 'settings', 'company');
+      const countersRef = doc(db, 'settings', 'invoiceCounters');
+      
+      if (isAutoInvoice) {
+        companySettingsSnap = await transaction.get(companySettingsRef);
+        countersSnap = await transaction.get(countersRef);
+      }
+      
+      // --- ALL WRITES MUST GO HERE ---
+      // 1. Handle stock updates and stock logs
       if (shouldDeduct) {
         console.log(`Deducting stock for order ${orderId} during status change: ${oldStatus} -> ${newStatus}`);
         for (const item of updatedOrder.items) {
-          const productRef = doc(db, 'products', item.productId);
-          const productSnap = await transaction.get(productRef);
-          
-          if (productSnap.exists()) {
+          const productSnap = productSnaps.get(item.productId);
+          if (productSnap && productSnap.exists()) {
             const productData = productSnap.data() as Product;
             const updatedVariants = productData.variants.map((v: Variant) => {
               if (v.id === item.variantId) {
                 const beforeQty = v.stock;
                 const afterQty = Math.max(0, beforeQty - item.qty);
                 
-                // Write a stock log inside the transaction
                 const logRef = doc(collection(db, 'stockLogs'));
                 const stockLog: Omit<StockLog, 'id'> = {
                   productId: item.productId,
@@ -1364,16 +1494,15 @@ export async function updateOrderAndHandleStock(
               }
               return v;
             });
+            const productRef = doc(db, 'products', item.productId);
             transaction.update(productRef, { variants: updatedVariants });
           }
         }
       } else if (shouldRestore) {
         console.log(`Restoring stock for order ${orderId} during status change: ${oldStatus} -> ${newStatus}`);
         for (const item of updatedOrder.items) {
-          const productRef = doc(db, 'products', item.productId);
-          const productSnap = await transaction.get(productRef);
-          
-          if (productSnap.exists()) {
+          const productSnap = productSnaps.get(item.productId);
+          if (productSnap && productSnap.exists()) {
             const productData = productSnap.data() as Product;
             const updatedVariants = productData.variants.map((v: Variant) => {
               if (v.id === item.variantId) {
@@ -1383,7 +1512,6 @@ export async function updateOrderAndHandleStock(
                 const typeStr: StockLogType = newStatus === 'Returned/Cancelled' ? 'return_restock' : 'cancellation_restock';
                 const reasonStr = newStatus === 'Returned/Cancelled' ? 'Return Restock' : 'Cancellation Restock';
                 
-                // Write a stock log inside the transaction
                 const logRef = doc(collection(db, 'stockLogs'));
                 const stockLog: Omit<StockLog, 'id'> = {
                   productId: item.productId,
@@ -1405,26 +1533,23 @@ export async function updateOrderAndHandleStock(
               }
               return v;
             });
+            const productRef = doc(db, 'products', item.productId);
             transaction.update(productRef, { variants: updatedVariants });
           }
         }
       }
       
-      // Automatic Invoice Generation when status changes to 'Confirmed'
-      if (newStatus === 'Confirmed' && oldStatus !== 'Confirmed' && !updatedOrder.invoiceId) {
+      // 2. Handle auto-invoice writes
+      if (isAutoInvoice) {
         console.log(`Auto-generating invoice for order ${orderId} on confirmation...`);
-        // Fetch prefixes from settings
-        const companySettingsRef = doc(db, 'settings', 'company');
-        const companySettingsSnap = await transaction.get(companySettingsRef);
-        const prefixes = companySettingsSnap.exists() ? companySettingsSnap.data().prefixes : { SAT: 'SAT-INV', GZ: 'GZ-INV', RTX: 'RTX-INV' };
+        const prefixes = companySettingsSnap && companySettingsSnap.exists() 
+          ? companySettingsSnap.data().prefixes 
+          : { SAT: 'SAT-INV', GZ: 'GZ-INV', RTX: 'RTX-INV' };
         
-        // Fetch counters
-        const countersRef = doc(db, 'settings', 'invoiceCounters');
-        const countersSnap = await transaction.get(countersRef);
         let satCounter = 0;
         let gzCounter = 0;
         let rtxCounter = 0;
-        if (countersSnap.exists()) {
+        if (countersSnap && countersSnap.exists()) {
           const cData = countersSnap.data();
           satCounter = cData.satCounter || 0;
           gzCounter = cData.gzCounter || 0;
@@ -1448,7 +1573,6 @@ export async function updateOrderAndHandleStock(
           nextNum = rtxCounter;
         }
         
-        // Save counters
         transaction.set(countersRef, {
           satCounter,
           gzCounter,
@@ -1483,7 +1607,7 @@ export async function updateOrderAndHandleStock(
         updatedOrder.invoiceId = invoiceId;
       }
       
-      // Update the order itself
+      // 3. Update the order itself
       const sanitizedOrder = sanitizeData(updatedOrder);
       delete sanitizedOrder.id;
       transaction.update(orderDocRef, sanitizedOrder);
@@ -1626,6 +1750,10 @@ export async function voidInvoiceRecord(
         throw new Error('Invoice is already voided');
       }
       
+      // Perform reads first
+      const orderRef = doc(db, 'orders', invoice.orderId);
+      const orderSnap = await transaction.get(orderRef);
+      
       // Update invoice
       transaction.update(invoiceRef, {
         voided: true,
@@ -1635,8 +1763,6 @@ export async function voidInvoiceRecord(
       });
       
       // Update order - remove the invoiceId link
-      const orderRef = doc(db, 'orders', invoice.orderId);
-      const orderSnap = await transaction.get(orderRef);
       if (orderSnap.exists()) {
         transaction.update(orderRef, { invoiceId: '' });
       }
@@ -1662,6 +1788,15 @@ export async function recordOrderPayment(
       }
       
       const order = orderSnap.data() as Order;
+      
+      // Perform all reads first!
+      let invoiceSnap = null;
+      if (order.invoiceId) {
+        const invoiceRef = doc(db, 'invoices', order.invoiceId);
+        invoiceSnap = await transaction.get(invoiceRef);
+      }
+      
+      // Now perform all calculations and writes
       const paymentHistory = order.paymentHistory || [];
       const newHistoryEntry = {
         amount,
@@ -1689,16 +1824,13 @@ export async function recordOrderPayment(
       });
       
       // Update active invoice if exists
-      if (order.invoiceId) {
+      if (invoiceSnap && invoiceSnap.exists() && !invoiceSnap.data().voided) {
         const invoiceRef = doc(db, 'invoices', order.invoiceId);
-        const invoiceSnap = await transaction.get(invoiceRef);
-        if (invoiceSnap.exists() && !invoiceSnap.data().voided) {
-          transaction.update(invoiceRef, {
-            amountPaid: newAmountPaid,
-            amountDue: newAmountDue,
-            paymentStatus: newPaymentStatus
-          });
-        }
+        transaction.update(invoiceRef, {
+          amountPaid: newAmountPaid,
+          amountDue: newAmountDue,
+          paymentStatus: newPaymentStatus
+        });
       }
     });
   } catch (error) {

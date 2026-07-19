@@ -126,8 +126,8 @@ service cloud.firestore {
     }
 
     match /attendance/{sessionId} {
-      allow create: if isSignedIn() && request.resource.data.userId == request.auth.uid;
-      allow update: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn() && (request.resource.data.userId == request.auth.uid || isSuperAdmin());
+      allow update: if isSignedIn() && (resource.data.userId == request.auth.uid || isSuperAdmin());
       allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isSuperAdmin());
       allow delete: if isSuperAdmin();
     }
@@ -141,12 +141,15 @@ service cloud.firestore {
     match /invoices/{invoiceId} {
       allow read: if isSignedIn();
       allow create: if isActive() && (isSuperAdmin() || hasPermission('manageOrders'));
-      allow update: if isActive() && (isSuperAdmin() || hasPermission('voidInvoice')) && 
-                    request.resource.data.voided == true && 
-                    resource.data.voided == false &&
-                    request.resource.data.invoiceNumber == resource.data.invoiceNumber &&
-                    request.resource.data.totalAmount == resource.data.totalAmount &&
-                    request.resource.data.orderId == resource.data.orderId;
+      allow update: if isActive() && (
+                      (isSuperAdmin() || hasPermission('manageOrders')) ||
+                      ((isSuperAdmin() || hasPermission('voidInvoice')) && 
+                       request.resource.data.get('voided', false) == true && 
+                       resource.data.voided == false &&
+                       request.resource.data.invoiceNumber == resource.data.invoiceNumber &&
+                       request.resource.data.totalAmount == resource.data.totalAmount &&
+                       request.resource.data.orderId == resource.data.orderId)
+                    );
       allow delete: if isSuperAdmin();
     }
 

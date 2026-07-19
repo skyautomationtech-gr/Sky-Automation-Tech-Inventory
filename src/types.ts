@@ -53,6 +53,9 @@ export interface AttendanceRecord {
   checkOutTime: number | null;
   date: string; // YYYY-MM-DD
   durationMinutes: number | null;
+  checkedInBy?: string;
+  checkedOutBy?: string;
+  isManualEntry?: boolean;
 }
 
 export interface Variant {

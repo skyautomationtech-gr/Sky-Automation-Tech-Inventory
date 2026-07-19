@@ -77,6 +77,14 @@ export default function OrderManagement({
   const [editingTracking, setEditingTracking] = useState(false);
   const [trackingNumberForm, setTrackingNumberForm] = useState('');
 
+  // Custom confirmation dialog state
+  const [confirmDialog, setConfirmDialog] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    onConfirm: () => void;
+  } | null>(null);
+
   // Create Order Wizard States
   const [wizardStep, setWizardStep] = useState(1);
   
@@ -380,6 +388,10 @@ export default function OrderManagement({
   };
 
   const handleAdvanceStatus = async (targetStatus: OrderStatus) => {
+    if (targetStatus === 'Delivered') {
+      console.log("CONFIRM DELIVERY CLICKED", selectedOrder?.id);
+    }
+
     if (requireCheckIn && !requireCheckIn()) return;
     if (!selectedOrder) return;
     if (!hasManageOrders) {
@@ -388,58 +400,65 @@ export default function OrderManagement({
     }
 
     const confirmMsg = `Are you sure you want to transition order status from "${selectedOrder.status}" to "${targetStatus}"?`;
-    if (!window.confirm(confirmMsg)) return;
 
-    setError('');
-    setSuccess('');
-    setSubmitting(true);
+    setConfirmDialog({
+      isOpen: true,
+      title: "Transition Order Status",
+      message: confirmMsg,
+      onConfirm: async () => {
+        setConfirmDialog(null);
+        setError('');
+        setSuccess('');
+        setSubmitting(true);
 
-    try {
-      const oldStatus = selectedOrder.status;
-      
-      const updatedStatusHistory: OrderStatusHistory[] = [
-        ...selectedOrder.statusHistory,
-        {
-          status: targetStatus,
-          timestamp: Date.now(),
-          changedBy: user?.name || user?.email || 'System'
+        try {
+          const oldStatus = selectedOrder.status;
+          
+          const updatedStatusHistory: OrderStatusHistory[] = [
+            ...selectedOrder.statusHistory,
+            {
+              status: targetStatus,
+              timestamp: Date.now(),
+              changedBy: user?.name || user?.email || 'System'
+            }
+          ];
+
+          const trackingUpdate: Partial<Order> = {};
+          if (targetStatus === 'Shipped' && trackingNumberForm.trim()) {
+            trackingUpdate.courierTrackingNumber = trackingNumberForm.trim();
+          }
+
+          const updatedOrder: Order = {
+            ...selectedOrder,
+            status: targetStatus,
+            statusHistory: updatedStatusHistory,
+            ...trackingUpdate
+          };
+
+          // Calls the transactional status machine & stock deduct helper!
+          await updateOrderAndHandleStock(
+            selectedOrder.id, 
+            updatedOrder, 
+            oldStatus, 
+            user?.id || 'sys', 
+            user?.name || 'Operator'
+          );
+
+          // Recalculate customer LTV in case status changed to/from Returned/Cancelled
+          await recalculateCustomerStats(selectedOrder.customerId);
+
+          setSuccess(`Order successfully moved to "${targetStatus}"!`);
+          setSelectedOrder(updatedOrder);
+          setEditingTracking(false);
+          await fetchData();
+        } catch (err: any) {
+          console.error('OrderManagement: Status advance failed:', err);
+          setError(`Could not perform transactional state change: ${err.message || err}`);
+        } finally {
+          setSubmitting(false);
         }
-      ];
-
-      const trackingUpdate: Partial<Order> = {};
-      if (targetStatus === 'Shipped' && trackingNumberForm.trim()) {
-        trackingUpdate.courierTrackingNumber = trackingNumberForm.trim();
       }
-
-      const updatedOrder: Order = {
-        ...selectedOrder,
-        status: targetStatus,
-        statusHistory: updatedStatusHistory,
-        ...trackingUpdate
-      };
-
-      // Calls the transactional status machine & stock deduct helper!
-      await updateOrderAndHandleStock(
-        selectedOrder.id, 
-        updatedOrder, 
-        oldStatus, 
-        user?.id || 'sys', 
-        user?.name || 'Operator'
-      );
-
-      // Recalculate customer LTV in case status changed to/from Returned/Cancelled
-      await recalculateCustomerStats(selectedOrder.customerId);
-
-      setSuccess(`Order successfully moved to "${targetStatus}"!`);
-      setSelectedOrder(updatedOrder);
-      setEditingTracking(false);
-      await fetchData();
-    } catch (err: any) {
-      console.error('OrderManagement: Status advance failed:', err);
-      setError('Could not perform transactional state change.');
-    } finally {
-      setSubmitting(false);
-    }
+    });
   };
 
   const handleSaveTrackingNumber = async () => {
@@ -476,23 +495,31 @@ export default function OrderManagement({
       setError('Only Superadmins can delete order records.');
       return;
     }
-    if (!window.confirm('CRITICAL: Are you sure you want to delete this order document permanently? This cannot be undone.')) return;
 
-    try {
-      setSubmitting(true);
-      const targetOrder = orders.find(o => o.id === orderId);
-      await deleteOrder(orderId);
-      if (targetOrder) {
-        await recalculateCustomerStats(targetOrder.customerId);
+    setConfirmDialog({
+      isOpen: true,
+      title: "Delete Order Permanently",
+      message: "CRITICAL: Are you sure you want to delete this order document permanently? This cannot be undone.",
+      onConfirm: async () => {
+        setConfirmDialog(null);
+        try {
+          setSubmitting(true);
+          const targetOrder = orders.find(o => o.id === orderId);
+          await deleteOrder(orderId);
+          if (targetOrder) {
+            await recalculateCustomerStats(targetOrder.customerId);
+          }
+          setSelectedOrder(null);
+          setSuccess('Order document permanently deleted.');
+          await fetchData();
+        } catch (err: any) {
+          console.error(err);
+          setError(`Failed to delete order: ${err.message || err}`);
+        } finally {
+          setSubmitting(false);
+        }
       }
-      setSelectedOrder(null);
-      setSuccess('Order document permanently deleted.');
-      await fetchData();
-    } catch (err) {
-      setError('Failed to delete order.');
-    } finally {
-      setSubmitting(false);
-    }
+    });
   };
 
   const handleManualGenerateInvoice = async () => {
@@ -1232,10 +1259,16 @@ export default function OrderManagement({
               </div>
               <button 
                 onClick={() => {
-                  if (window.confirm('Discard all wizard edits?')) {
-                    setShowCreateModal(false);
-                    resetWizard();
-                  }
+                  setConfirmDialog({
+                    isOpen: true,
+                    title: "Discard Wizard",
+                    message: "Are you sure you want to discard all wizard edits?",
+                    onConfirm: () => {
+                      setConfirmDialog(null);
+                      setShowCreateModal(false);
+                      resetWizard();
+                    }
+                  });
                 }}
                 className="text-slate-400 hover:text-white p-1 rounded-lg cursor-pointer"
               >
@@ -1834,6 +1867,35 @@ export default function OrderManagement({
               </button>
             </div>
           </form>
+        </div>
+      </div>
+    )}
+
+    {confirmDialog?.isOpen && (
+      <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs animate-fade-in">
+        <div className="bg-white rounded-2xl border border-slate-150 p-6 max-w-sm w-full space-y-4 shadow-xl">
+          <div className="space-y-1.5">
+            <h3 className="text-sm font-black text-slate-950 font-sans uppercase tracking-wide">{confirmDialog.title}</h3>
+            <p className="text-xs text-slate-500 leading-relaxed font-sans">{confirmDialog.message}</p>
+          </div>
+          <div className="flex gap-2.5 justify-end">
+            <button
+              type="button"
+              onClick={() => setConfirmDialog(null)}
+              className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl text-xs font-bold transition-all cursor-pointer"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={() => {
+                confirmDialog.onConfirm();
+              }}
+              className="px-4 py-2 bg-slate-900 hover:bg-slate-950 text-white rounded-xl text-xs font-bold transition-all shadow-md cursor-pointer"
+            >
+              Confirm
+            </button>
+          </div>
         </div>
       </div>
     )}

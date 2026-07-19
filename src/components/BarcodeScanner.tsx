@@ -68,7 +68,7 @@ export const BarcodeScanner: React.FC<Props> = ({ onScan, onCancel }) => {
         };
 
         await html5QrCode.start(
-          cameraConfig,
+          { facingMode: "environment" },
           {
             fps: 25, // High frame rate for fast detection
             qrbox: (width, height) => {
@@ -77,7 +77,8 @@ export const BarcodeScanner: React.FC<Props> = ({ onScan, onCancel }) => {
                 width: Math.min(width * 0.85, 280),
                 height: Math.min(height * 0.4, 110)
               };
-            }
+            },
+            videoConstraints: cameraConfig
           },
           (decodedText) => {
             console.log("SCAN DETECTED:", decodedText);
