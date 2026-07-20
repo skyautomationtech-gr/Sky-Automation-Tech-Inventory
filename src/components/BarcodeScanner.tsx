@@ -229,7 +229,7 @@ export const BarcodeScanner: React.FC<Props> = ({ onScan, onCancel }) => {
         }
         #reader video {
           width: 100% !important;
-          height: 100% !important;
+          height: Auto!important;
           object-fit: contain !important;
           display: block;
         }
