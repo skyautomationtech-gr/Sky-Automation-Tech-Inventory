@@ -666,9 +666,9 @@ export default function OrderManagement({
       {/* Page Title */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <span className="text-xs font-mono font-bold text-amber-500 uppercase tracking-widest">Courier & Fulfillment Pipeline</span>
+          <span className="text-sm font-mono font-bold text-amber-500 uppercase tracking-widest">Courier & Fulfillment Pipeline</span>
           <h1 className="text-2xl font-black text-slate-950 font-sans uppercase tracking-tight">Order Desk</h1>
-          <p className="text-xs text-slate-500 mt-1">
+          <p className="text-sm text-slate-500 mt-1">
             Track customer sales channels, payments status, courier tracking dispatches, and trigger real-time stock counts.
           </p>
         </div>
@@ -679,7 +679,7 @@ export default function OrderManagement({
               resetWizard();
               setShowCreateModal(true);
             }}
-            className="inline-flex items-center gap-2 bg-slate-950 hover:bg-slate-900 text-amber-400 font-bold text-xs uppercase tracking-wider py-2.5 px-4 rounded-xl shadow-md transition-all cursor-pointer"
+            className="inline-flex items-center gap-2 bg-slate-950 hover:bg-slate-900 text-amber-400 font-bold text-sm uppercase tracking-wider py-2.5 px-4 rounded-xl shadow-md transition-all cursor-pointer"
           >
             <Plus size={14} />
             Create Sales Order
@@ -689,13 +689,13 @@ export default function OrderManagement({
 
       {/* Notifications */}
       {error && (
-        <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-2xl text-xs flex items-center gap-2.5 animate-pulse">
+        <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-2xl text-sm flex items-center gap-2.5 animate-pulse">
           <AlertCircle size={16} className="text-red-500 flex-shrink-0" />
           <span className="font-semibold">{error}</span>
         </div>
       )}
       {success && (
-        <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 p-4 rounded-2xl text-xs flex items-center gap-2.5 animate-pulse">
+        <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 p-4 rounded-2xl text-sm flex items-center gap-2.5 animate-pulse">
           <CheckCircle size={16} className="text-emerald-500 flex-shrink-0" />
           <span className="font-semibold">{success}</span>
         </div>
@@ -717,7 +717,7 @@ export default function OrderManagement({
                   placeholder="Search orders by customer name, phone, or Firestore UID..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 pl-10 pr-4 text-xs text-slate-800 focus:outline-hidden"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 pl-10 pr-4 text-sm text-slate-800 focus:outline-hidden"
                 />
                 <button
                   onClick={() => setShowScanner(true)}
@@ -748,7 +748,7 @@ export default function OrderManagement({
               <select
                 value={statusFilter}
                 onChange={(e) => setStatusFilter(e.target.value)}
-                className="w-full sm:w-40 bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-700 focus:outline-hidden"
+                className="w-full sm:w-40 bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-sm text-slate-700 focus:outline-hidden"
               >
                 <option value="">All Statuses</option>
                 <option value="Pending">Pending</option>
@@ -764,7 +764,7 @@ export default function OrderManagement({
               <select
                 value={subBrandFilter}
                 onChange={(e) => setSubBrandFilter(e.target.value)}
-                className="bg-slate-50 border border-slate-200 rounded-xl py-1.5 px-3 text-xs text-slate-700"
+                className="bg-slate-50 border border-slate-200 rounded-xl py-1.5 px-3 text-sm text-slate-700"
               >
                 <option value="">Sub-Brand</option>
                 {(isSuperAdmin ? ['SAT', 'GZ', 'RTX'] : user?.subBrandAccess || []).map(brand => (
@@ -775,7 +775,7 @@ export default function OrderManagement({
               <select
                 value={salesChannelFilter}
                 onChange={(e) => setSalesChannelFilter(e.target.value)}
-                className="bg-slate-50 border border-slate-200 rounded-xl py-1.5 px-3 text-xs text-slate-700"
+                className="bg-slate-50 border border-slate-200 rounded-xl py-1.5 px-3 text-sm text-slate-700"
               >
                 <option value="">Sales Channel</option>
                 <option value="Facebook">Facebook</option>
@@ -790,7 +790,7 @@ export default function OrderManagement({
               <select
                 value={courierFilter}
                 onChange={(e) => setCourierFilter(e.target.value)}
-                className="bg-slate-50 border border-slate-200 rounded-xl py-1.5 px-3 text-xs text-slate-700"
+                className="bg-slate-50 border border-slate-200 rounded-xl py-1.5 px-3 text-sm text-slate-700"
               >
                 <option value="">Courier Desk</option>
                 <option value="Steadfast (Outside Dhaka)">Steadfast (Outside)</option>
@@ -800,7 +800,7 @@ export default function OrderManagement({
               <select
                 value={paymentStatusFilter}
                 onChange={(e) => setPaymentStatusFilter(e.target.value)}
-                className="bg-slate-50 border border-slate-200 rounded-xl py-1.5 px-3 text-xs text-slate-700"
+                className="bg-slate-50 border border-slate-200 rounded-xl py-1.5 px-3 text-sm text-slate-700"
               >
                 <option value="">Payment Status</option>
                 <option value="Paid">Paid</option>
@@ -815,13 +815,13 @@ export default function OrderManagement({
             {loading ? (
               <div className="p-12 text-center flex flex-col items-center justify-center space-y-3">
                 <div className="w-8 h-8 border-3 border-amber-400 border-t-transparent rounded-full animate-spin" />
-                <span className="text-xs font-mono text-slate-400 uppercase tracking-widest">SYNCING SALES LEDGERS...</span>
+                <span className="text-sm font-mono text-slate-400 uppercase tracking-widest">SYNCING SALES LEDGERS...</span>
               </div>
             ) : filteredOrders.length === 0 ? (
               <div className="p-12 text-center text-slate-400 flex flex-col items-center justify-center">
                 <Package size={36} className="text-slate-300 mb-2" />
-                <span className="text-xs font-mono uppercase tracking-wider font-bold">No Invoices Found</span>
-                <p className="text-[11px] text-slate-400 mt-1">
+                <span className="text-sm font-mono uppercase tracking-wider font-bold">No Invoices Found</span>
+                <p className="text-sm text-slate-400 mt-1">
                   Adjust your search inputs or click "Create Sales Order" to start.
                 </p>
               </div>
@@ -829,7 +829,7 @@ export default function OrderManagement({
               <div className="overflow-x-auto">
                 <table className="w-full border-collapse text-left">
                   <thead>
-                    <tr className="bg-slate-50 border-b border-slate-100 text-[10px] font-black uppercase tracking-wider text-slate-400">
+                    <tr className="bg-slate-50 border-b border-slate-100 text-sm font-black uppercase tracking-wider text-slate-400">
                       <th className="py-3 px-4">Order UID & Date</th>
                       <th className="py-3 px-4">Client</th>
                       <th className="py-3 px-4 text-center">Brand</th>
@@ -840,7 +840,7 @@ export default function OrderManagement({
                       <th className="py-3 px-4"></th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-50 text-xs">
+                  <tbody className="divide-y divide-slate-50 text-sm">
                     {filteredOrders.map((order) => {
                       const itemCount = order.items.reduce((acc, i) => acc + i.qty, 0);
                       return (
@@ -856,13 +856,13 @@ export default function OrderManagement({
                           <td className="py-3 px-4">
                             <div className="flex flex-col gap-0.5">
                               <span className="font-mono font-black text-slate-900 uppercase">#{order.id.substring(0, 8)}</span>
-                              <span className="text-[10px] text-slate-400 font-mono">{new Date(order.createdAt).toLocaleDateString()}</span>
+                              <span className="text-sm text-slate-400 font-mono">{new Date(order.createdAt).toLocaleDateString()}</span>
                             </div>
                           </td>
                           <td className="py-3 px-4">
                             <div className="flex flex-col gap-0.5">
                               <span className="font-semibold text-slate-800">{order.customerName}</span>
-                              <span className="text-[10px] text-slate-400 font-mono">{order.customerPhone}</span>
+                              <span className="text-sm text-slate-400 font-mono">{order.customerPhone}</span>
                             </div>
                           </td>
                           <td className="py-3 px-4 text-center">
@@ -929,7 +929,7 @@ export default function OrderManagement({
                     <span className="text-[9px] font-mono tracking-widest text-slate-400 block uppercase">SALES RECORD</span>
                     <h3 className="font-black font-sans text-base text-amber-400 mt-1">#{selectedOrder.id.substring(0, 12).toUpperCase()}</h3>
                   </div>
-                  <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-sm ${
+                  <span className={`text-sm font-mono font-bold px-2 py-0.5 rounded-sm ${
                     selectedOrder.status === 'Delivered' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' :
                     selectedOrder.status === 'Returned/Cancelled' ? 'bg-red-500/20 text-red-300 border border-red-500/30' :
                     'bg-slate-800 text-slate-300'
@@ -938,7 +938,7 @@ export default function OrderManagement({
                   </span>
                 </div>
 
-                <div className="grid grid-cols-2 gap-4 border-t border-slate-800 pt-4 font-mono text-xs">
+                <div className="grid grid-cols-2 gap-4 border-t border-slate-800 pt-4 font-mono text-sm">
                   <div>
                     <span className="text-[9px] uppercase text-slate-500 font-bold block">Grand Total</span>
                     <span className="text-sm font-black text-white">৳{selectedOrder.totalAmount.toLocaleString()}</span>
@@ -954,7 +954,7 @@ export default function OrderManagement({
 
               {/* Status transition Controls */}
               <div className="px-6 space-y-3">
-                <h4 className="text-xs font-black uppercase tracking-wider text-slate-500 flex items-center gap-1.5 border-b border-slate-100 pb-1.5">
+                <h4 className="text-sm font-black uppercase tracking-wider text-slate-500 flex items-center gap-1.5 border-b border-slate-100 pb-1.5">
                   <Activity size={12} className="text-amber-500" />
                   State Control Matrix
                 </h4>
@@ -965,7 +965,7 @@ export default function OrderManagement({
                     <button
                       onClick={() => handleAdvanceStatus('Confirmed')}
                       disabled={submitting}
-                      className="w-full py-2.5 bg-slate-950 hover:bg-slate-900 text-amber-400 font-bold text-xs uppercase tracking-wider rounded-xl shadow-xs transition-all cursor-pointer"
+                      className="w-full py-2.5 bg-slate-950 hover:bg-slate-900 text-amber-400 font-bold text-sm uppercase tracking-wider rounded-xl shadow-xs transition-all cursor-pointer"
                     >
                       Deduct Stock & Confirm Order
                     </button>
@@ -975,7 +975,7 @@ export default function OrderManagement({
                     <button
                       onClick={() => handleAdvanceStatus('Packed')}
                       disabled={submitting}
-                      className="w-full py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-bold text-xs uppercase tracking-wider rounded-xl cursor-pointer"
+                      className="w-full py-2.5 bg-slate-900 hover:bg-slate-800 text-white font-bold text-sm uppercase tracking-wider rounded-xl cursor-pointer"
                     >
                       Mark as Packed
                     </button>
@@ -985,7 +985,7 @@ export default function OrderManagement({
                     <button
                       onClick={() => handleAdvanceStatus('Shipped')}
                       disabled={submitting}
-                      className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-xs uppercase tracking-wider rounded-xl cursor-pointer"
+                      className="w-full py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-bold text-sm uppercase tracking-wider rounded-xl cursor-pointer"
                     >
                       Ready for Dispatch (Ship)
                     </button>
@@ -996,7 +996,7 @@ export default function OrderManagement({
                       <button
                         onClick={() => handleAdvanceStatus('Delivered')}
                         disabled={submitting}
-                        className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs uppercase tracking-wider rounded-xl cursor-pointer"
+                        className="w-full py-2.5 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm uppercase tracking-wider rounded-xl cursor-pointer"
                       >
                         Confirm Successful Delivery
                       </button>
@@ -1008,7 +1008,7 @@ export default function OrderManagement({
                     <button
                       onClick={() => handleAdvanceStatus('Returned/Cancelled')}
                       disabled={submitting}
-                      className="w-full py-2 bg-red-50 hover:bg-red-100 text-red-700 font-bold text-xs uppercase tracking-wide rounded-xl border border-red-200 cursor-pointer"
+                      className="w-full py-2 bg-red-50 hover:bg-red-100 text-red-700 font-bold text-sm uppercase tracking-wide rounded-xl border border-red-200 cursor-pointer"
                     >
                       Cancel Sales Order (Restore Stock)
                     </button>
@@ -1018,7 +1018,7 @@ export default function OrderManagement({
                     <button
                       onClick={() => handleAdvanceStatus('Returned/Cancelled')}
                       disabled={submitting}
-                      className="w-full py-2 bg-orange-50 hover:bg-orange-100 text-orange-700 font-bold text-xs uppercase tracking-wide rounded-xl border border-orange-200 cursor-pointer"
+                      className="w-full py-2 bg-orange-50 hover:bg-orange-100 text-orange-700 font-bold text-sm uppercase tracking-wide rounded-xl border border-orange-200 cursor-pointer"
                     >
                       Return Delivered Goods (Restock)
                     </button>
@@ -1027,7 +1027,7 @@ export default function OrderManagement({
 
                 {/* Tracking Code Editor */}
                 {['Shipped', 'Delivered'].includes(selectedOrder.status) && (
-                  <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100 space-y-2 text-xs">
+                  <div className="bg-slate-50 p-3 rounded-2xl border border-slate-100 space-y-2 text-sm">
                     <span className="font-bold text-slate-500 uppercase tracking-wide text-[9px] block">Courier tracking reference</span>
                     {editingTracking ? (
                       <div className="flex gap-2">
@@ -1036,18 +1036,18 @@ export default function OrderManagement({
                           value={trackingNumberForm}
                           onChange={(e) => setTrackingNumberForm(e.target.value)}
                           placeholder="Tracking #..."
-                          className="flex-1 bg-white border border-slate-200 rounded-lg px-2 py-1 text-xs"
+                          className="flex-1 bg-white border border-slate-200 rounded-lg px-2 py-1 text-sm"
                         />
                         <button
                           onClick={handleSaveTrackingNumber}
                           disabled={submitting}
-                          className="bg-slate-900 text-amber-400 px-3 py-1 rounded-lg font-bold text-xs"
+                          className="bg-slate-900 text-amber-400 px-3 py-1 rounded-lg font-bold text-sm"
                         >
                           Save
                         </button>
                         <button
                           onClick={() => setEditingTracking(false)}
-                          className="bg-slate-200 text-slate-700 px-2 py-1 rounded-lg text-[10px]"
+                          className="bg-slate-200 text-slate-700 px-2 py-1 rounded-lg text-sm"
                         >
                           X
                         </button>
@@ -1059,7 +1059,7 @@ export default function OrderManagement({
                         </span>
                         <button
                           onClick={() => setEditingTracking(true)}
-                          className="text-amber-600 hover:text-amber-700 font-bold text-[10px] flex items-center gap-0.5"
+                          className="text-amber-600 hover:text-amber-700 font-bold text-sm flex items-center gap-0.5"
                         >
                           <Edit size={10} /> Edit Code
                         </button>
@@ -1070,7 +1070,7 @@ export default function OrderManagement({
               </div>
 
               {/* Billing, Invoice & Cash Collection */}
-              <div className="px-6 space-y-4 text-xs">
+              <div className="px-6 space-y-4 text-sm">
                 <div className="space-y-2 border-t border-slate-100 pt-4">
                   <h5 className="font-bold text-slate-400 uppercase text-[9px] tracking-wider flex items-center gap-1.5">
                     <DollarSign size={11} className="text-[#D4AF37]" />
@@ -1090,7 +1090,7 @@ export default function OrderManagement({
                       </span>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-2 text-[11px] font-mono border-t border-slate-200/50 pt-2.5">
+                    <div className="grid grid-cols-2 gap-2 text-sm font-mono border-t border-slate-200/50 pt-2.5">
                       <div>
                         <span className="text-[9px] uppercase text-slate-400 font-bold block">Paid</span>
                         <span className="font-black text-emerald-600">৳{selectedOrder.amountPaid.toLocaleString()}</span>
@@ -1104,7 +1104,7 @@ export default function OrderManagement({
                     <div className="flex flex-col gap-2 pt-2 border-t border-slate-200/50">
                       {selectedOrder.invoiceId ? (
                         <div className="bg-amber-50/40 p-2 rounded-xl border border-amber-100/30 flex items-center justify-between">
-                          <span className="font-mono text-[10px] text-amber-700 font-bold">✓ Invoice Linked</span>
+                          <span className="font-mono text-sm text-amber-700 font-bold">✓ Invoice Linked</span>
                           <span className="text-[9px] font-mono text-slate-400">({selectedOrder.invoiceId.substring(0, 8).toUpperCase()})</span>
                         </div>
                       ) : (
@@ -1139,7 +1139,7 @@ export default function OrderManagement({
                     <h5 className="font-bold text-slate-400 uppercase text-[9px] tracking-wider">Payment History log</h5>
                     <div className="bg-slate-50 border border-slate-100 rounded-2xl p-3 space-y-2 max-h-36 overflow-y-auto">
                       {selectedOrder.paymentHistory.map((ph, idx) => (
-                        <div key={idx} className="flex justify-between items-center text-[10px] border-b border-slate-100 last:border-0 pb-1.5 last:pb-0">
+                        <div key={idx} className="flex justify-between items-center text-sm border-b border-slate-100 last:border-0 pb-1.5 last:pb-0">
                           <div>
                             <p className="font-semibold text-slate-700">৳{ph.amount.toLocaleString()} ({ph.method})</p>
                             <p className="text-[8px] text-slate-400">By {ph.recordedBy}</p>
@@ -1153,7 +1153,7 @@ export default function OrderManagement({
               </div>
 
               {/* Courier & Client info */}
-              <div className="px-6 space-y-4 text-xs">
+              <div className="px-6 space-y-4 text-sm">
                 {/* Client Profile */}
                 <div className="space-y-2">
                   <h5 className="font-bold text-slate-400 uppercase text-[9px] tracking-wider">Client Recipient</h5>
@@ -1178,10 +1178,10 @@ export default function OrderManagement({
                   <h5 className="font-bold text-slate-400 uppercase text-[9px] tracking-wider">Sales Catalog lines</h5>
                   <div className="p-3 bg-slate-50 border border-slate-100 rounded-2xl divide-y divide-slate-200/55 max-h-[160px] overflow-y-auto space-y-2">
                     {selectedOrder.items.map((item, idx) => (
-                      <div key={idx} className="flex justify-between items-center text-xs pt-2 first:pt-0">
+                      <div key={idx} className="flex justify-between items-center text-sm pt-2 first:pt-0">
                         <div className="min-w-0 pr-2">
                           <p className="font-bold text-slate-800 truncate">{item.productName}</p>
-                          <span className="text-[10px] text-slate-400 font-mono">Var: {item.variantLabel}</span>
+                          <span className="text-sm text-slate-400 font-mono">Var: {item.variantLabel}</span>
                         </div>
                         <div className="text-right flex-shrink-0 font-mono">
                           <span className="text-slate-500 font-semibold">{item.qty} x </span>
@@ -1197,7 +1197,7 @@ export default function OrderManagement({
                   <h5 className="font-bold text-slate-400 uppercase text-[9px] tracking-wider">Status Transition History</h5>
                   <div className="space-y-2 max-h-[130px] overflow-y-auto pr-1">
                     {selectedOrder.statusHistory.map((h, idx) => (
-                      <div key={idx} className="flex gap-2 text-[10px] items-start border-l-2 border-amber-200 pl-3 py-1 ml-1.5">
+                      <div key={idx} className="flex gap-2 text-sm items-start border-l-2 border-amber-200 pl-3 py-1 ml-1.5">
                         <div className="flex-1">
                           <span className="font-bold text-slate-800 uppercase">{h.status}</span>
                           <p className="text-slate-400 mt-0.5">By {h.changedBy}</p>
@@ -1209,7 +1209,7 @@ export default function OrderManagement({
                 </div>
 
                 {/* Notes and creator */}
-                <div className="space-y-1 bg-slate-50/50 p-3 rounded-2xl border border-dashed border-slate-200 text-[10px] text-slate-400">
+                <div className="space-y-1 bg-slate-50/50 p-3 rounded-2xl border border-dashed border-slate-200 text-sm text-slate-400">
                   <p>Channel: <span className="font-bold text-slate-600">{selectedOrder.salesChannel}</span> | Courier: <span className="font-bold text-slate-600">{selectedOrder.courier}</span></p>
                   <p>Creator: <span className="font-mono text-slate-600">{selectedOrder.createdBy}</span> | Created: <span className="font-mono text-slate-600">{new Date(selectedOrder.createdAt).toLocaleDateString()}</span></p>
                   {selectedOrder.notes && <p className="mt-1 border-t border-slate-100 pt-1 text-slate-500 italic">" {selectedOrder.notes} "</p>}
@@ -1219,7 +1219,7 @@ export default function OrderManagement({
                 {isSuperAdmin && (
                   <button
                     onClick={() => handleDeleteOrderClick(selectedOrder.id)}
-                    className="w-full py-2 bg-red-100/30 hover:bg-red-100/70 border border-red-200/55 text-red-700 font-mono text-[10px] rounded-xl flex items-center justify-center gap-1 cursor-pointer"
+                    className="w-full py-2 bg-red-100/30 hover:bg-red-100/70 border border-red-200/55 text-red-700 font-mono text-sm rounded-xl flex items-center justify-center gap-1 cursor-pointer"
                   >
                     <Trash2 size={12} /> Permanently Delete Order Document
                   </button>
@@ -1230,8 +1230,8 @@ export default function OrderManagement({
           ) : (
             <div className="bg-white p-8 rounded-3xl border border-slate-100 shadow-sm text-center text-slate-400 flex flex-col items-center justify-center py-20">
               <Eye size={28} className="text-slate-300 mb-2" />
-              <span className="text-xs font-mono uppercase font-bold">No Order Selected</span>
-              <p className="text-[11px] text-slate-400 mt-1 max-w-xs leading-normal">
+              <span className="text-sm font-mono uppercase font-bold">No Order Selected</span>
+              <p className="text-sm text-slate-400 mt-1 max-w-xs leading-normal">
                 Click on any client invoice row from the order desk list to inspect full item details, status logs, tracking codes, and payment statuses.
               </p>
             </div>
@@ -1249,7 +1249,7 @@ export default function OrderManagement({
             <div className="bg-slate-950 p-5 text-white flex justify-between items-center flex-shrink-0">
               <div>
                 <h3 className="font-black font-sans uppercase tracking-tight text-sm">Create Sales Order</h3>
-                <p className="text-[10px] text-amber-400 font-mono tracking-widest uppercase mt-0.5">Step {wizardStep} of 5: {
+                <p className="text-sm text-amber-400 font-mono tracking-widest uppercase mt-0.5">Step {wizardStep} of 5: {
                   wizardStep === 1 ? 'Customer Recipient' :
                   wizardStep === 2 ? 'Fulfillment & Channels' :
                   wizardStep === 3 ? 'Catalog Items selection' :
@@ -1277,7 +1277,7 @@ export default function OrderManagement({
             </div>
 
             {/* Wizard Navigation Progress dots */}
-            <div className="bg-slate-50 border-b border-slate-100 px-6 py-3 flex justify-between items-center flex-shrink-0 text-[10px] font-mono">
+            <div className="bg-slate-50 border-b border-slate-100 px-6 py-3 flex justify-between items-center flex-shrink-0 text-sm font-mono">
               <div className="flex gap-1.5">
                 {[1, 2, 3, 4, 5].map(step => (
                   <div 
@@ -1305,14 +1305,14 @@ export default function OrderManagement({
                     <button
                       type="button"
                       onClick={() => setIsNewCustomer(false)}
-                      className={`flex-1 py-2 text-xs font-bold rounded-xl border ${!isNewCustomer ? 'bg-slate-950 text-white border-slate-950' : 'bg-white text-slate-600 border-slate-200'}`}
+                      className={`flex-1 py-2 text-sm font-bold rounded-xl border ${!isNewCustomer ? 'bg-slate-950 text-white border-slate-950' : 'bg-white text-slate-600 border-slate-200'}`}
                     >
                       Search Existing Client Database
                     </button>
                     <button
                       type="button"
                       onClick={handleStartNewCustomerForm}
-                      className={`flex-1 py-2 text-xs font-bold rounded-xl border ${isNewCustomer ? 'bg-slate-950 text-white border-slate-950' : 'bg-white text-slate-600 border-slate-200'}`}
+                      className={`flex-1 py-2 text-sm font-bold rounded-xl border ${isNewCustomer ? 'bg-slate-950 text-white border-slate-950' : 'bg-white text-slate-600 border-slate-200'}`}
                     >
                       Quick-Add New Customer
                     </button>
@@ -1320,7 +1320,7 @@ export default function OrderManagement({
 
                   {!isNewCustomer ? (
                     <div className="space-y-3">
-                      <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500">Search Existing Client *</label>
+                      <label className="block text-sm font-bold uppercase tracking-wider text-slate-500">Search Existing Client *</label>
                       <div className="relative">
                         <Search className="absolute left-3.5 top-3 text-slate-400" size={16} />
                         <input
@@ -1331,7 +1331,7 @@ export default function OrderManagement({
                             setCustomerSearch(e.target.value);
                             setSelectedCustomerId('');
                           }}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-10 pr-4 text-xs text-slate-800 focus:outline-hidden"
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-10 pr-4 text-sm text-slate-800 focus:outline-hidden"
                         />
                       </div>
 
@@ -1343,7 +1343,7 @@ export default function OrderManagement({
                               key={c.id}
                               type="button"
                               onClick={() => handleSelectCustomer(c)}
-                              className="w-full text-left px-4 py-2.5 hover:bg-amber-50/40 text-xs flex justify-between items-center"
+                              className="w-full text-left px-4 py-2.5 hover:bg-amber-50/40 text-sm flex justify-between items-center"
                             >
                               <div>
                                 <span className="font-bold text-slate-900">{c.name}</span>
@@ -1357,61 +1357,61 @@ export default function OrderManagement({
 
                       {/* Selected Client Badge */}
                       {selectedCustomerId && (
-                        <div className="bg-emerald-50 border border-emerald-100 p-4 rounded-2xl text-xs flex items-center justify-between">
+                        <div className="bg-emerald-50 border border-emerald-100 p-4 rounded-2xl text-sm flex items-center justify-between">
                           <div className="flex items-center gap-3">
                             <UserCheck className="text-emerald-600" size={18} />
                             <div>
                               <p className="font-bold text-slate-900">{custName}</p>
-                              <p className="text-slate-500 font-mono text-[10px] mt-0.5">{custPhone} | {custAddress || 'No Address'}</p>
+                              <p className="text-slate-500 font-mono text-sm mt-0.5">{custPhone} | {custAddress || 'No Address'}</p>
                             </div>
                           </div>
-                          <span className="text-[10px] font-black uppercase tracking-wider text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded">Linked</span>
+                          <span className="text-sm font-black uppercase tracking-wider text-emerald-700 bg-emerald-100 px-2 py-0.5 rounded">Linked</span>
                         </div>
                       )}
                     </div>
                   ) : (
                     <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                       <div className="col-span-1">
-                        <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">Full Name *</label>
+                        <label className="block text-sm font-bold uppercase tracking-wider text-slate-500 mb-1">Full Name *</label>
                         <input
                           type="text"
                           value={custName}
                           onChange={(e) => setCustName(e.target.value)}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-xs"
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-sm"
                           placeholder="e.g. Shakib Al Hasan"
                           required
                         />
                       </div>
                       <div className="col-span-1">
-                        <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">Phone Number * (Bangladesh)</label>
+                        <label className="block text-sm font-bold uppercase tracking-wider text-slate-500 mb-1">Phone Number * (Bangladesh)</label>
                         <input
                           type="text"
                           value={custPhone}
                           onChange={(e) => setCustPhone(e.target.value)}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-xs font-mono"
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-sm font-mono"
                           placeholder="e.g. 01712345678"
                           required
                         />
                       </div>
                       <div className="col-span-2">
-                        <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">Billing / Delivery Address</label>
+                        <label className="block text-sm font-bold uppercase tracking-wider text-slate-500 mb-1">Billing / Delivery Address</label>
                         <textarea
                           value={custAddress}
                           onChange={(e) => {
                             setCustAddress(e.target.value);
                             setDeliveryAddress(e.target.value);
                           }}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs"
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-sm"
                           rows={2}
                           placeholder="Full delivery location details..."
                         />
                       </div>
                       <div className="col-span-1">
-                        <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">Sub-brand affiliation</label>
+                        <label className="block text-sm font-bold uppercase tracking-wider text-slate-500 mb-1">Sub-brand affiliation</label>
                         <select
                           value={custSubBrand}
                           onChange={(e) => setCustSubBrand(e.target.value)}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-xs"
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-sm"
                         >
                           <option value="">No specific brand</option>
                           <option value="SAT">Sky Auto (SAT)</option>
@@ -1420,12 +1420,12 @@ export default function OrderManagement({
                         </select>
                       </div>
                       <div className="col-span-1">
-                        <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">Client Notes</label>
+                        <label className="block text-sm font-bold uppercase tracking-wider text-slate-500 mb-1">Client Notes</label>
                         <input
                           type="text"
                           value={custNotes}
                           onChange={(e) => setCustNotes(e.target.value)}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-xs"
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-sm"
                           placeholder="e.g. Prefers red accessories"
                         />
                       </div>
@@ -1438,11 +1438,11 @@ export default function OrderManagement({
               {wizardStep === 2 && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">Operating Sub-Brand *</label>
+                    <label className="block text-sm font-bold uppercase tracking-wider text-slate-500 mb-1">Operating Sub-Brand *</label>
                     <select
                       value={orderSubBrand}
                       onChange={(e) => setOrderSubBrand(e.target.value as any)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-xs"
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-sm"
                     >
                       <option value="SAT">Sky Auto (SAT)</option>
                       <option value="GZ">GadgetZu (GZ)</option>
@@ -1451,11 +1451,11 @@ export default function OrderManagement({
                   </div>
 
                   <div>
-                    <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">Sales Channel *</label>
+                    <label className="block text-sm font-bold uppercase tracking-wider text-slate-500 mb-1">Sales Channel *</label>
                     <select
                       value={orderSalesChannel}
                       onChange={(e) => setOrderSalesChannel(e.target.value as any)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-xs text-slate-700 focus:outline-hidden"
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-sm text-slate-700 focus:outline-hidden"
                     >
                       <option value="Direct/WhatsApp">Direct / WhatsApp</option>
                       <option value="Facebook">Facebook Inbox</option>
@@ -1468,11 +1468,11 @@ export default function OrderManagement({
                   </div>
 
                   <div>
-                    <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">Courier Service Partner *</label>
+                    <label className="block text-sm font-bold uppercase tracking-wider text-slate-500 mb-1">Courier Service Partner *</label>
                     <select
                       value={orderCourier}
                       onChange={(e) => setOrderCourier(e.target.value as any)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-xs"
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-sm"
                     >
                       <option value="CarryBee (Inside Dhaka)">CarryBee (Inside Dhaka)</option>
                       <option value="Steadfast (Outside Dhaka)">Steadfast (Outside Dhaka)</option>
@@ -1480,24 +1480,24 @@ export default function OrderManagement({
                   </div>
 
                   <div className="col-span-2">
-                    <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">Delivery Address *</label>
+                    <label className="block text-sm font-bold uppercase tracking-wider text-slate-500 mb-1">Delivery Address *</label>
                     <textarea
                       value={deliveryAddress}
                       onChange={(e) => setDeliveryAddress(e.target.value)}
                       rows={2.5}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs"
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-sm"
                       placeholder="Address where courier will dispatch items..."
                       required
                     />
                   </div>
 
                   <div className="col-span-2">
-                    <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">Order Memo / Notes</label>
+                    <label className="block text-sm font-bold uppercase tracking-wider text-slate-500 mb-1">Order Memo / Notes</label>
                     <input
                       type="text"
                       value={orderNotes}
                       onChange={(e) => setOrderNotes(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-xs"
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-sm"
                       placeholder="Add specific delivery deadlines or gift sample logs..."
                     />
                   </div>
@@ -1515,7 +1515,7 @@ export default function OrderManagement({
                       <select
                         value={itemProductId}
                         onChange={(e) => setItemProductId(e.target.value)}
-                        className="bg-white border border-slate-200 rounded-xl py-2 px-3 text-xs"
+                        className="bg-white border border-slate-200 rounded-xl py-2 px-3 text-sm"
                       >
                         <option value="">-- Choose Product --</option>
                         {products.map(p => (
@@ -1526,7 +1526,7 @@ export default function OrderManagement({
                       <select
                         value={itemVariantId}
                         onChange={(e) => setItemVariantId(e.target.value)}
-                        className="bg-white border border-slate-200 rounded-xl py-2 px-3 text-xs"
+                        className="bg-white border border-slate-200 rounded-xl py-2 px-3 text-sm"
                         disabled={!itemProductId}
                       >
                         <option value="">-- Choose Variant --</option>
@@ -1544,13 +1544,13 @@ export default function OrderManagement({
                           placeholder="Qty"
                           value={itemQty}
                           onChange={(e) => setItemQty(Math.max(1, parseInt(e.target.value) || 1))}
-                          className="w-20 bg-white border border-slate-200 rounded-xl py-2 px-3 text-xs text-center"
+                          className="w-20 bg-white border border-slate-200 rounded-xl py-2 px-3 text-sm text-center"
                         />
                         <button
                           type="button"
                           onClick={handleAddItem}
                           disabled={!itemProductId || !itemVariantId}
-                          className="flex-1 bg-slate-950 hover:bg-slate-900 text-amber-400 text-xs font-bold uppercase rounded-xl flex items-center justify-center gap-1 cursor-pointer"
+                          className="flex-1 bg-slate-950 hover:bg-slate-900 text-amber-400 text-sm font-bold uppercase rounded-xl flex items-center justify-center gap-1 cursor-pointer"
                         >
                           <Plus size={12} /> Add
                         </button>
@@ -1563,21 +1563,21 @@ export default function OrderManagement({
                     <span className="font-bold text-slate-400 uppercase text-[9px] tracking-wider block">Running invoice details</span>
                     
                     {orderItems.length === 0 ? (
-                      <p className="text-center text-xs text-slate-400 italic py-6">Your order sheet is currently empty. Choose a product and click Add.</p>
+                      <p className="text-center text-sm text-slate-400 italic py-6">Your order sheet is currently empty. Choose a product and click Add.</p>
                     ) : (
                       <div className="border border-slate-100 rounded-2xl overflow-hidden divide-y divide-slate-100">
                         {orderItems.map((item, idx) => (
-                          <div key={idx} className="p-3 bg-white hover:bg-slate-50/40 flex justify-between items-center text-xs">
+                          <div key={idx} className="p-3 bg-white hover:bg-slate-50/40 flex justify-between items-center text-sm">
                             <div className="min-w-0 pr-4">
                               <span className="font-bold text-slate-900">{item.productName}</span>
-                              <p className="text-[10px] text-slate-400 font-mono mt-0.5">Variant: {item.variantLabel}</p>
+                              <p className="text-sm text-slate-400 font-mono mt-0.5">Variant: {item.variantLabel}</p>
                             </div>
                             
                             <div className="flex items-center gap-4 flex-shrink-0 font-mono">
                               <div className="text-right">
-                                <span className="text-slate-400 text-[11px]">{item.qty} x </span>
+                                <span className="text-slate-400 text-sm">{item.qty} x </span>
                                 <span className="font-bold text-slate-800">৳{item.unitPrice.toLocaleString()}</span>
-                                <p className="font-black text-slate-950 text-xs mt-0.5">৳{(item.qty * item.unitPrice).toLocaleString()}</p>
+                                <p className="font-black text-slate-950 text-sm mt-0.5">৳{(item.qty * item.unitPrice).toLocaleString()}</p>
                               </div>
                               <button
                                 type="button"
@@ -1593,7 +1593,7 @@ export default function OrderManagement({
                     )}
 
                     <div className="bg-slate-950 p-4 rounded-2xl text-white flex justify-between items-center font-mono">
-                      <span className="text-xs uppercase text-slate-400 font-bold">Estimated Invoice Total</span>
+                      <span className="text-sm uppercase text-slate-400 font-bold">Estimated Invoice Total</span>
                       <span className="text-lg font-black text-amber-400">৳{orderTotal.toLocaleString()}</span>
                     </div>
                   </div>
@@ -1604,18 +1604,18 @@ export default function OrderManagement({
               {wizardStep === 4 && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">Invoice Total</label>
-                    <div className="bg-slate-100 border border-slate-200 rounded-xl py-2.5 px-3 text-xs font-mono font-black text-slate-800">
+                    <label className="block text-sm font-bold uppercase tracking-wider text-slate-500 mb-1">Invoice Total</label>
+                    <div className="bg-slate-100 border border-slate-200 rounded-xl py-2.5 px-3 text-sm font-mono font-black text-slate-800">
                       ৳{orderTotal.toLocaleString()}
                     </div>
                   </div>
 
                   <div>
-                    <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">Payment Method *</label>
+                    <label className="block text-sm font-bold uppercase tracking-wider text-slate-500 mb-1">Payment Method *</label>
                     <select
                       value={orderPaymentMethod}
                       onChange={(e) => setOrderPaymentMethod(e.target.value as any)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-xs"
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-sm"
                     >
                       <option value="Cash">Cash on Delivery</option>
                       <option value="bKash">bKash Personal / Merchant</option>
@@ -1625,11 +1625,11 @@ export default function OrderManagement({
                   </div>
 
                   <div>
-                    <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">Payment Status *</label>
+                    <label className="block text-sm font-bold uppercase tracking-wider text-slate-500 mb-1">Payment Status *</label>
                     <select
                       value={orderPaymentStatus}
                       onChange={(e) => setOrderPaymentStatus(e.target.value as any)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-xs"
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-sm"
                     >
                       <option value="Due">Unpaid (Full Due)</option>
                       <option value="Paid">Fully Paid</option>
@@ -1638,19 +1638,19 @@ export default function OrderManagement({
                   </div>
 
                   <div>
-                    <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">Amount Received (৳)</label>
+                    <label className="block text-sm font-bold uppercase tracking-wider text-slate-500 mb-1">Amount Received (৳)</label>
                     <input
                       type="number"
                       value={orderAmountPaid}
                       disabled={orderPaymentStatus !== 'Partial'}
                       onChange={(e) => setOrderAmountPaid(Math.max(0, parseInt(e.target.value) || 0))}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-xs font-mono font-bold text-slate-800 focus:outline-hidden disabled:opacity-50"
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-sm font-mono font-bold text-slate-800 focus:outline-hidden disabled:opacity-50"
                       min={0}
                       max={orderTotal}
                     />
                   </div>
 
-                  <div className="col-span-2 border-t border-slate-100 pt-4 font-mono text-xs space-y-2">
+                  <div className="col-span-2 border-t border-slate-100 pt-4 font-mono text-sm space-y-2">
                     <div className="flex justify-between">
                       <span className="text-slate-500">Amount Paid:</span>
                       <span className="font-bold text-slate-800">৳{orderAmountPaid.toLocaleString()}</span>
@@ -1666,18 +1666,18 @@ export default function OrderManagement({
               {/* STEP 5: REVIEW & CONFIRM */}
               {wizardStep === 5 && (
                 <div className="space-y-4">
-                  <div className="bg-amber-50/35 border border-amber-200/40 p-4 rounded-2xl flex items-start gap-2.5 text-xs text-amber-900 leading-normal">
+                  <div className="bg-amber-50/35 border border-amber-200/40 p-4 rounded-2xl flex items-start gap-2.5 text-sm text-amber-900 leading-normal">
                     <AlertCircle className="text-amber-500 flex-shrink-0 mt-0.5" size={16} />
                     <div>
                       <p className="font-bold">Important Confirmation Warning</p>
-                      <p className="text-[11px] mt-0.5 text-slate-600">
+                      <p className="text-sm mt-0.5 text-slate-600">
                         A newly submitted order starts in the <strong>Pending</strong> state. Stock quantities will <strong>NOT</strong> be deducted from the inventory catalog until this order is explicitly confirmed in the dashboard.
                       </p>
                     </div>
                   </div>
 
                   {/* Summary Card */}
-                  <div className="bg-slate-50 border border-slate-100 p-5 rounded-2xl space-y-4 text-xs">
+                  <div className="bg-slate-50 border border-slate-100 p-5 rounded-2xl space-y-4 text-sm">
                     <div className="grid grid-cols-2 gap-4">
                       <div>
                         <span className="font-bold text-slate-400 uppercase text-[9px] block">Client Name</span>
@@ -1701,7 +1701,7 @@ export default function OrderManagement({
                       <span className="font-bold text-slate-400 uppercase text-[9px] block mb-2">Item invoice list</span>
                       <div className="space-y-1.5 font-mono max-h-[120px] overflow-y-auto">
                         {orderItems.map((item, idx) => (
-                          <div key={idx} className="flex justify-between items-center text-[11px]">
+                          <div key={idx} className="flex justify-between items-center text-sm">
                             <span className="text-slate-700 truncate max-w-[200px]">{item.productName} ({item.variantLabel})</span>
                             <span className="font-bold text-slate-900">{item.qty} x ৳{item.unitPrice.toLocaleString()}</span>
                           </div>
@@ -1725,7 +1725,7 @@ export default function OrderManagement({
                 type="button"
                 disabled={wizardStep === 1 || submitting}
                 onClick={() => setWizardStep(prev => prev - 1)}
-                className="inline-flex items-center gap-1 px-4 py-2 bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 font-bold text-xs uppercase rounded-xl cursor-pointer disabled:opacity-50"
+                className="inline-flex items-center gap-1 px-4 py-2 bg-white border border-slate-200 text-slate-700 hover:bg-slate-50 font-bold text-sm uppercase rounded-xl cursor-pointer disabled:opacity-50"
               >
                 <ChevronLeft size={14} /> Back
               </button>
@@ -1765,7 +1765,7 @@ export default function OrderManagement({
                     }
                     setWizardStep(prev => prev + 1);
                   }}
-                  className="inline-flex items-center gap-1 px-5 py-2 bg-slate-950 hover:bg-slate-900 text-amber-400 font-bold text-xs uppercase rounded-xl shadow-md cursor-pointer"
+                  className="inline-flex items-center gap-1 px-5 py-2 bg-slate-950 hover:bg-slate-900 text-amber-400 font-bold text-sm uppercase rounded-xl shadow-md cursor-pointer"
                 >
                   Next <ChevronRight size={14} />
                 </button>
@@ -1774,7 +1774,7 @@ export default function OrderManagement({
                   type="button"
                   disabled={submitting}
                   onClick={handlePlaceOrderSubmit}
-                  className="inline-flex items-center gap-1.5 px-6 py-2.5 bg-[#D4AF37] hover:bg-amber-500 text-slate-950 font-black text-xs uppercase tracking-wider rounded-xl shadow-lg cursor-pointer"
+                  className="inline-flex items-center gap-1.5 px-6 py-2.5 bg-[#D4AF37] hover:bg-amber-500 text-slate-950 font-black text-sm uppercase tracking-wider rounded-xl shadow-lg cursor-pointer"
                 >
                   {submitting ? 'Placing Order...' : 'Submit & Place Order'}
                 </button>
@@ -1806,7 +1806,7 @@ export default function OrderManagement({
           </div>
 
           <form onSubmit={handleRecordPaymentSubmit} className="space-y-4">
-            <div className="bg-slate-50 p-4 rounded-2xl space-y-1.5 text-xs text-slate-600 border border-slate-100">
+            <div className="bg-slate-50 p-4 rounded-2xl space-y-1.5 text-sm text-slate-600 border border-slate-100">
               <div className="flex justify-between">
                 <span>Customer:</span>
                 <strong className="text-slate-800">{selectedOrder.customerName}</strong>
@@ -1818,7 +1818,7 @@ export default function OrderManagement({
             </div>
 
             <div className="space-y-1.5">
-              <label className="block text-xs font-semibold text-slate-600">Collection Amount (৳) *</label>
+              <label className="block text-sm font-semibold text-slate-600">Collection Amount (৳) *</label>
               <input
                 type="number"
                 step="any"
@@ -1828,16 +1828,16 @@ export default function OrderManagement({
                 max={selectedOrder.amountDue}
                 min="1"
                 placeholder={`Max ৳${selectedOrder.amountDue}`}
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-xs focus:outline-hidden focus:border-amber-400 text-slate-800 font-mono font-bold"
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-sm focus:outline-hidden focus:border-amber-400 text-slate-800 font-mono font-bold"
               />
             </div>
 
             <div className="space-y-1.5">
-              <label className="block text-xs font-semibold text-slate-600">Payment Gateway / Method *</label>
+              <label className="block text-sm font-semibold text-slate-600">Payment Gateway / Method *</label>
               <select
                 value={paymentMethod}
                 onChange={(e) => setPaymentMethod(e.target.value as any)}
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-xs focus:outline-hidden focus:border-amber-400 text-slate-700 font-semibold"
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-sm focus:outline-hidden focus:border-amber-400 text-slate-700 font-semibold"
               >
                 <option value="Cash">Cash</option>
                 <option value="bKash">bKash (MFS)</option>
@@ -1853,14 +1853,14 @@ export default function OrderManagement({
                   setShowPaymentModal(false);
                   setPaymentAmount('');
                 }}
-                className="py-2.5 px-4 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-600 text-xs font-bold rounded-xl cursor-pointer"
+                className="py-2.5 px-4 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-600 text-sm font-bold rounded-xl cursor-pointer"
               >
                 Cancel
               </button>
               <button
                 type="submit"
                 disabled={paymentSubmitting}
-                className="py-2.5 px-5 bg-slate-900 hover:bg-slate-800 text-[#D4AF37] hover:text-white text-xs font-bold rounded-xl shadow-md cursor-pointer flex items-center gap-1.5"
+                className="py-2.5 px-5 bg-slate-900 hover:bg-slate-800 text-[#D4AF37] hover:text-white text-sm font-bold rounded-xl shadow-md cursor-pointer flex items-center gap-1.5"
               >
                 {paymentSubmitting ? 'Recording...' : 'Submit Payment'}
                 <ChevronRight size={13} />
@@ -1876,13 +1876,13 @@ export default function OrderManagement({
         <div className="bg-white rounded-2xl border border-slate-150 p-6 max-w-sm w-full space-y-4 shadow-xl">
           <div className="space-y-1.5">
             <h3 className="text-sm font-black text-slate-950 font-sans uppercase tracking-wide">{confirmDialog.title}</h3>
-            <p className="text-xs text-slate-500 leading-relaxed font-sans">{confirmDialog.message}</p>
+            <p className="text-sm text-slate-500 leading-relaxed font-sans">{confirmDialog.message}</p>
           </div>
           <div className="flex gap-2.5 justify-end">
             <button
               type="button"
               onClick={() => setConfirmDialog(null)}
-              className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl text-xs font-bold transition-all cursor-pointer"
+              className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl text-sm font-bold transition-all cursor-pointer"
             >
               Cancel
             </button>
@@ -1891,7 +1891,7 @@ export default function OrderManagement({
               onClick={() => {
                 confirmDialog.onConfirm();
               }}
-              className="px-4 py-2 bg-slate-900 hover:bg-slate-950 text-white rounded-xl text-xs font-bold transition-all shadow-md cursor-pointer"
+              className="px-4 py-2 bg-slate-900 hover:bg-slate-950 text-white rounded-xl text-sm font-bold transition-all shadow-md cursor-pointer"
             >
               Confirm
             </button>

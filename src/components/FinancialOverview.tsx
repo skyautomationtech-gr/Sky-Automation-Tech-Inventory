@@ -398,7 +398,7 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
       return (
         <div className="h-full flex flex-col items-center justify-center text-slate-400 p-6 text-center">
           <Info size={28} className="text-slate-300 mb-2" />
-          <p className="text-xs">No expenses entered for this timeframe.</p>
+          <p className="text-sm">No expenses entered for this timeframe.</p>
         </div>
       );
     }
@@ -457,7 +457,7 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
             <circle cx="50" cy="50" r="24" fill="white" />
           </svg>
           <div className="absolute text-center">
-            <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total</p>
+            <p className="text-sm font-bold text-slate-400 uppercase tracking-wider">Total</p>
             <p className="text-sm font-extrabold text-slate-800">৳{totalExp.toLocaleString()}</p>
           </div>
         </div>
@@ -465,7 +465,7 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
         {/* Legend */}
         <div className="flex-1 space-y-1.5 w-full max-h-52 overflow-y-auto pr-1">
           {segments.map((seg, idx) => (
-            <div key={idx} className="flex items-center justify-between text-xs">
+            <div key={idx} className="flex items-center justify-between text-sm">
               <span className="flex items-center gap-2 text-slate-600 font-medium">
                 <span className="w-2.5 h-2.5 rounded-xs" style={{ backgroundColor: seg.color }}></span>
                 {seg.name}
@@ -487,7 +487,7 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
       return (
         <div className="h-full flex flex-col items-center justify-center text-slate-400 p-6 text-center">
           <TrendingUp size={28} className="text-slate-300 mb-2 animate-pulse" />
-          <p className="text-xs">No active sales recorded for this timeframe.</p>
+          <p className="text-sm">No active sales recorded for this timeframe.</p>
         </div>
       );
     }
@@ -552,7 +552,7 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
         </svg>
 
         {/* X Axis Labels */}
-        <div className="flex justify-between px-4 mt-1 text-[10px] font-bold text-slate-400 font-mono">
+        <div className="flex justify-between px-4 mt-1 text-sm font-bold text-slate-400 font-mono">
           <span>{sortedDates[0]}</span>
           {sortedDates.length > 2 && <span>{sortedDates[Math.floor(sortedDates.length / 2)]}</span>}
           <span>{sortedDates[sortedDates.length - 1]}</span>
@@ -571,11 +571,11 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
         
         <div className="relative z-10 flex flex-col md:flex-row md:items-center md:justify-between gap-4">
           <div>
-            <div className="inline-flex items-center gap-1.5 bg-[#D4AF37]/20 border border-[#D4AF37]/30 text-[#D4AF37] text-[10px] font-bold uppercase tracking-wider px-2.5 py-1 rounded-full mb-3">
+            <div className="inline-flex items-center gap-1.5 bg-[#D4AF37]/20 border border-[#D4AF37]/30 text-[#D4AF37] text-sm font-bold uppercase tracking-wider px-2.5 py-1 rounded-full mb-3">
               <TrendingUp size={12} /> Financial Operations
             </div>
             <h1 className="text-xl lg:text-2xl font-black tracking-tight font-sans">INCOME & EXPENSE</h1>
-            <p className="text-xs text-slate-400 max-w-xl mt-1 leading-relaxed">
+            <p className="text-sm text-slate-400 max-w-xl mt-1 leading-relaxed">
               Consolidated financial tracking across operations. Analyzes real-time sales revenue, product purchase cost logs, and other administrative expenses.
             </p>
           </div>
@@ -584,7 +584,7 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
           <div className="bg-slate-800/80 p-1.5 rounded-2xl flex border border-slate-700/50 self-start">
             <button
               onClick={() => { setActiveTab('overview'); setShowAddForm(false); }}
-              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+              className={`px-4 py-2 rounded-xl text-sm font-bold transition-all ${
                 activeTab === 'overview'
                   ? 'bg-[#D4AF37] text-slate-950 shadow-md'
                   : 'text-slate-400 hover:text-white'
@@ -594,7 +594,7 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
             </button>
             <button
               onClick={() => { setActiveTab('expenses'); }}
-              className={`px-4 py-2 rounded-xl text-xs font-bold transition-all ${
+              className={`px-4 py-2 rounded-xl text-sm font-bold transition-all ${
                 activeTab === 'expenses'
                   ? 'bg-[#D4AF37] text-slate-950 shadow-md'
                   : 'text-slate-400 hover:text-white'
@@ -611,19 +611,19 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
         <div className="flex flex-wrap items-center gap-2">
           <button 
             onClick={() => setPresetRange('thisMonth')} 
-            className="px-3 py-1.5 bg-slate-50 hover:bg-slate-100 rounded-xl text-xs text-slate-600 font-bold transition-colors border border-slate-100"
+            className="px-3 py-1.5 bg-slate-50 hover:bg-slate-100 rounded-xl text-sm text-slate-600 font-bold transition-colors border border-slate-100"
           >
             This Month
           </button>
           <button 
             onClick={() => setPresetRange('last30Days')} 
-            className="px-3 py-1.5 bg-slate-50 hover:bg-slate-100 rounded-xl text-xs text-slate-600 font-bold transition-colors border border-slate-100"
+            className="px-3 py-1.5 bg-slate-50 hover:bg-slate-100 rounded-xl text-sm text-slate-600 font-bold transition-colors border border-slate-100"
           >
             Last 30 Days
           </button>
           <button 
             onClick={() => setPresetRange('thisYear')} 
-            className="px-3 py-1.5 bg-slate-50 hover:bg-slate-100 rounded-xl text-xs text-slate-600 font-bold transition-colors border border-slate-100"
+            className="px-3 py-1.5 bg-slate-50 hover:bg-slate-100 rounded-xl text-sm text-slate-600 font-bold transition-colors border border-slate-100"
           >
             This Year
           </button>
@@ -638,7 +638,7 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
                 type="date"
                 value={startDate}
                 onChange={(e) => setStartDate(e.target.value)}
-                className="w-full bg-slate-50 border border-slate-100 rounded-xl py-2 px-3 text-xs text-slate-700 font-medium focus:outline-hidden"
+                className="w-full bg-slate-50 border border-slate-100 rounded-xl py-2 px-3 text-sm text-slate-700 font-medium focus:outline-hidden"
               />
             </div>
           </div>
@@ -651,7 +651,7 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
                 type="date"
                 value={endDate}
                 onChange={(e) => setEndDate(e.target.value)}
-                className="w-full bg-slate-50 border border-slate-100 rounded-xl py-2 px-3 text-xs text-slate-700 font-medium focus:outline-hidden"
+                className="w-full bg-slate-50 border border-slate-100 rounded-xl py-2 px-3 text-sm text-slate-700 font-medium focus:outline-hidden"
               />
             </div>
           </div>
@@ -662,7 +662,7 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
             <select
               value={subBrandFilter}
               onChange={(e) => setSubBrandFilter(e.target.value as any)}
-              className="w-full bg-slate-50 border border-slate-100 rounded-xl py-2 px-2.5 text-xs text-slate-700 font-semibold focus:outline-hidden"
+              className="w-full bg-slate-50 border border-slate-100 rounded-xl py-2 px-2.5 text-sm text-slate-700 font-semibold focus:outline-hidden"
             >
               <option value="All">All Brands</option>
               <option value="SAT">Sky Auto (SAT)</option>
@@ -686,13 +686,13 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
 
       {/* Success / Error Messages */}
       {successMsg && (
-        <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-4 flex items-center gap-3 text-emerald-800 text-xs font-semibold animate-slide-up">
+        <div className="bg-emerald-50 border border-emerald-100 rounded-2xl p-4 flex items-center gap-3 text-emerald-800 text-sm font-semibold animate-slide-up">
           <CheckCircle2 size={18} className="text-emerald-500" />
           <p>{successMsg}</p>
         </div>
       )}
       {errorMsg && (
-        <div className="bg-red-50 border border-red-100 rounded-2xl p-4 flex items-center gap-3 text-red-800 text-xs font-semibold animate-slide-up">
+        <div className="bg-red-50 border border-red-100 rounded-2xl p-4 flex items-center gap-3 text-red-800 text-sm font-semibold animate-slide-up">
           <AlertCircle size={18} className="text-red-500" />
           <p>{errorMsg}</p>
         </div>
@@ -706,14 +706,14 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
             {/* Sales Revenue Card */}
             <div className="bg-white p-5 rounded-3xl border border-slate-100 shadow-xs relative overflow-hidden flex flex-col justify-between h-36">
               <div className="flex items-center justify-between">
-                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Sales Revenue</span>
+                <span className="text-sm font-bold text-slate-400 uppercase tracking-wider">Sales Revenue</span>
                 <span className="p-2 bg-emerald-50 text-emerald-600 rounded-xl"><TrendingUp size={16} /></span>
               </div>
               <div className="mt-3">
                 <h3 className="text-2xl font-black text-slate-900 font-mono">
                   ৳{financialMetrics.totalIncome.toLocaleString()}
                 </h3>
-                <p className="text-[10px] text-slate-400 mt-1 font-sans">
+                <p className="text-sm text-slate-400 mt-1 font-sans">
                   Auto-calculated from <span className="font-semibold text-slate-600">{financialMetrics.filteredOrdersCount}</span> confirmed orders
                 </p>
               </div>
@@ -722,14 +722,14 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
             {/* Product Costs Card */}
             <div className="bg-white p-5 rounded-3xl border border-slate-100 shadow-xs relative overflow-hidden flex flex-col justify-between h-36">
               <div className="flex items-center justify-between">
-                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Product Cost</span>
+                <span className="text-sm font-bold text-slate-400 uppercase tracking-wider">Product Cost</span>
                 <span className="p-2 bg-amber-50 text-amber-600 rounded-xl"><TrendingDown size={16} /></span>
               </div>
               <div className="mt-3">
                 <h3 className="text-2xl font-black text-slate-900 font-mono">
                   ৳{financialMetrics.totalProductCost.toLocaleString()}
                 </h3>
-                <p className="text-[10px] text-slate-400 mt-1 font-sans">
+                <p className="text-sm text-slate-400 mt-1 font-sans">
                   From <span className="font-semibold text-slate-600">{financialMetrics.filteredStockInsCount}</span> Stock In operations
                 </p>
               </div>
@@ -738,14 +738,14 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
             {/* Other Expenses Card */}
             <div className="bg-white p-5 rounded-3xl border border-slate-100 shadow-xs relative overflow-hidden flex flex-col justify-between h-36">
               <div className="flex items-center justify-between">
-                <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Other Expenses</span>
+                <span className="text-sm font-bold text-slate-400 uppercase tracking-wider">Other Expenses</span>
                 <span className="p-2 bg-blue-50 text-blue-600 rounded-xl"><Building size={16} /></span>
               </div>
               <div className="mt-3">
                 <h3 className="text-2xl font-black text-slate-900 font-mono">
                   ৳{financialMetrics.totalExpenses.toLocaleString()}
                 </h3>
-                <p className="text-[10px] text-slate-400 mt-1 font-sans">
+                <p className="text-sm text-slate-400 mt-1 font-sans">
                   From <span className="font-semibold text-slate-600">{financialMetrics.filteredExpensesCount}</span> ledger entries
                 </p>
               </div>
@@ -758,7 +758,7 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
                 : 'bg-red-50/50 border-red-100/80 text-red-900'
             }`}>
               <div className="flex items-center justify-between">
-                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider">Net Profit / Loss</span>
+                <span className="text-sm font-bold text-slate-500 uppercase tracking-wider">Net Profit / Loss</span>
                 <span className={`p-2 rounded-xl ${
                   financialMetrics.netProfit >= 0 ? 'bg-emerald-500 text-white' : 'bg-red-500 text-white'
                 }`}>
@@ -769,7 +769,7 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
                 <h3 className="text-2xl font-black font-mono">
                   {financialMetrics.netProfit < 0 ? '-' : ''}৳{Math.abs(financialMetrics.netProfit).toLocaleString()}
                 </h3>
-                <p className="text-[10px] mt-1 font-semibold flex items-center gap-1">
+                <p className="text-sm mt-1 font-semibold flex items-center gap-1">
                   {financialMetrics.netProfit >= 0 ? (
                     <span className="text-emerald-700 flex items-center gap-0.5">
                       <TrendingUp size={12} strokeWidth={3} /> Positive Margin ({Math.round((financialMetrics.netProfit / (financialMetrics.totalIncome || 1)) * 100)}%)
@@ -790,11 +790,11 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
             <div className="bg-white p-6 rounded-3xl border border-slate-100 space-y-4 shadow-2xs">
               <div className="flex items-center justify-between border-b border-slate-50 pb-4">
                 <div>
-                  <h3 className="text-xs font-extrabold text-slate-800 uppercase tracking-tight">Revenue Timeline</h3>
-                  <p className="text-[10px] text-slate-400 mt-0.5">Plotting sales revenue chronologically within current range</p>
+                  <h3 className="text-sm font-extrabold text-slate-800 uppercase tracking-tight">Revenue Timeline</h3>
+                  <p className="text-sm text-slate-400 mt-0.5">Plotting sales revenue chronologically within current range</p>
                 </div>
                 <div className="text-right">
-                  <span className="text-[10px] font-mono font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded-sm">
+                  <span className="text-sm font-mono font-bold text-emerald-600 bg-emerald-50 px-2 py-1 rounded-sm">
                     Avg ৳{Math.round(financialMetrics.totalIncome / (Object.keys(financialMetrics.incomeByDay).length || 1)).toLocaleString()} / Day
                   </span>
                 </div>
@@ -808,11 +808,11 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
             <div className="bg-white p-6 rounded-3xl border border-slate-100 space-y-4 shadow-2xs">
               <div className="flex items-center justify-between border-b border-slate-50 pb-4">
                 <div>
-                  <h3 className="text-xs font-extrabold text-slate-800 uppercase tracking-tight">Expenses Distribution</h3>
-                  <p className="text-[10px] text-slate-400 mt-0.5">Interactive proportional share of overhead categories</p>
+                  <h3 className="text-sm font-extrabold text-slate-800 uppercase tracking-tight">Expenses Distribution</h3>
+                  <p className="text-sm text-slate-400 mt-0.5">Interactive proportional share of overhead categories</p>
                 </div>
                 <div className="text-right">
-                  <span className="text-[10px] font-mono font-bold text-red-600 bg-red-50 px-2 py-1 rounded-sm">
+                  <span className="text-sm font-mono font-bold text-red-600 bg-red-50 px-2 py-1 rounded-sm">
                     Overhead: {Math.round((financialMetrics.totalExpenses / (financialMetrics.totalIncome || 1)) * 100)}%
                   </span>
                 </div>
@@ -826,8 +826,8 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
           {/* Sub-brand Breakdown */}
           <div className="bg-white p-6 rounded-3xl border border-slate-100 space-y-6 shadow-2xs">
             <div>
-              <h3 className="text-xs font-extrabold text-slate-800 uppercase tracking-tight">Operational Sub-brand Breakdown</h3>
-              <p className="text-[10px] text-slate-400 mt-0.5">Sales performance segmented per business entity</p>
+              <h3 className="text-sm font-extrabold text-slate-800 uppercase tracking-tight">Operational Sub-brand Breakdown</h3>
+              <p className="text-sm text-slate-400 mt-0.5">Sales performance segmented per business entity</p>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
@@ -835,12 +835,12 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
               <div className="border border-slate-100 rounded-2xl p-4 hover:border-slate-200 transition-colors flex flex-col justify-between">
                 <div>
                   <div className="flex items-center justify-between mb-3">
-                    <span className="text-[11px] font-black text-slate-700">SKY AUTOMATION</span>
-                    <span className="text-[10px] font-mono font-bold bg-amber-500/10 text-amber-500 border border-amber-500/20 px-2 py-0.5 rounded-sm">SAT</span>
+                    <span className="text-sm font-black text-slate-700">SKY AUTOMATION</span>
+                    <span className="text-sm font-mono font-bold bg-amber-500/10 text-amber-500 border border-amber-500/20 px-2 py-0.5 rounded-sm">SAT</span>
                   </div>
                   <p className="text-lg font-black text-slate-800 font-mono">৳{financialMetrics.subBrandTotals.SAT.toLocaleString()}</p>
                 </div>
-                <div className="mt-4 pt-3 border-t border-slate-50 flex justify-between items-center text-[10px] text-slate-400">
+                <div className="mt-4 pt-3 border-t border-slate-50 flex justify-between items-center text-sm text-slate-400">
                   <span>Relative Share</span>
                   <span className="font-bold text-slate-600">{Math.round((financialMetrics.subBrandTotals.SAT / (financialMetrics.totalIncome || 1)) * 100)}%</span>
                 </div>
@@ -850,12 +850,12 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
               <div className="border border-slate-100 rounded-2xl p-4 hover:border-slate-200 transition-colors flex flex-col justify-between">
                 <div>
                   <div className="flex items-center justify-between mb-3">
-                    <span className="text-[11px] font-black text-slate-700">GADGETZU</span>
-                    <span className="text-[10px] font-mono font-bold bg-teal-500/10 text-teal-600 border border-teal-500/20 px-2 py-0.5 rounded-sm">GZ</span>
+                    <span className="text-sm font-black text-slate-700">GADGETZU</span>
+                    <span className="text-sm font-mono font-bold bg-teal-500/10 text-teal-600 border border-teal-500/20 px-2 py-0.5 rounded-sm">GZ</span>
                   </div>
                   <p className="text-lg font-black text-slate-800 font-mono">৳{financialMetrics.subBrandTotals.GZ.toLocaleString()}</p>
                 </div>
-                <div className="mt-4 pt-3 border-t border-slate-50 flex justify-between items-center text-[10px] text-slate-400">
+                <div className="mt-4 pt-3 border-t border-slate-50 flex justify-between items-center text-sm text-slate-400">
                   <span>Relative Share</span>
                   <span className="font-bold text-slate-600">{Math.round((financialMetrics.subBrandTotals.GZ / (financialMetrics.totalIncome || 1)) * 100)}%</span>
                 </div>
@@ -865,12 +865,12 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
               <div className="border border-slate-100 rounded-2xl p-4 hover:border-slate-200 transition-colors flex flex-col justify-between">
                 <div>
                   <div className="flex items-center justify-between mb-3">
-                    <span className="text-[11px] font-black text-slate-700">RTX GADGET</span>
-                    <span className="text-[10px] font-mono font-bold bg-orange-500/10 text-orange-500 border border-orange-500/20 px-2 py-0.5 rounded-sm">RTX</span>
+                    <span className="text-sm font-black text-slate-700">RTX GADGET</span>
+                    <span className="text-sm font-mono font-bold bg-orange-500/10 text-orange-500 border border-orange-500/20 px-2 py-0.5 rounded-sm">RTX</span>
                   </div>
                   <p className="text-lg font-black text-slate-800 font-mono">৳{financialMetrics.subBrandTotals.RTX.toLocaleString()}</p>
                 </div>
-                <div className="mt-4 pt-3 border-t border-slate-50 flex justify-between items-center text-[10px] text-slate-400">
+                <div className="mt-4 pt-3 border-t border-slate-50 flex justify-between items-center text-sm text-slate-400">
                   <span>Relative Share</span>
                   <span className="font-bold text-slate-600">{Math.round((financialMetrics.subBrandTotals.RTX / (financialMetrics.totalIncome || 1)) * 100)}%</span>
                 </div>
@@ -888,10 +888,10 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
             <div className="bg-white p-5 lg:p-6 rounded-3xl border border-slate-100 shadow-2xs space-y-4">
               <div className="flex items-center justify-between border-b border-slate-50 pb-4">
                 <div>
-                  <h3 className="text-xs font-black text-slate-800 uppercase tracking-tight">
+                  <h3 className="text-sm font-black text-slate-800 uppercase tracking-tight">
                     {editingExpense ? 'Modify Expense Record' : 'Log New Expense'}
                   </h3>
-                  <p className="text-[10px] text-slate-400 mt-0.5">
+                  <p className="text-sm text-slate-400 mt-0.5">
                     {editingExpense ? 'Amend incorrect operational entries' : 'Manually register miscellaneous expenses'}
                   </p>
                 </div>
@@ -902,7 +902,7 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
                       setFormAmount('');
                       setFormNotes('');
                     }}
-                    className="text-xs font-bold text-red-500 hover:underline flex items-center gap-0.5"
+                    className="text-sm font-bold text-red-500 hover:underline flex items-center gap-0.5"
                   >
                     Cancel Edit
                   </button>
@@ -913,11 +913,11 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
                 <form onSubmit={handleFormSubmit} className="space-y-4">
                   {/* Category */}
                   <div>
-                    <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-tight mb-1.5">Expense Category</label>
+                    <label className="block text-sm font-bold text-slate-500 uppercase tracking-tight mb-1.5">Expense Category</label>
                     <select
                       value={formCategory}
                       onChange={(e) => setFormCategory(e.target.value as ExpenseCategory)}
-                      className="w-full bg-slate-50 border border-slate-100 rounded-xl py-2.5 px-3 text-xs text-slate-800 font-semibold focus:outline-hidden focus:border-slate-200"
+                      className="w-full bg-slate-50 border border-slate-100 rounded-xl py-2.5 px-3 text-sm text-slate-800 font-semibold focus:outline-hidden focus:border-slate-200"
                       required
                     >
                       {CATEGORIES.map(cat => (
@@ -928,37 +928,37 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
 
                   {/* Amount */}
                   <div>
-                    <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-tight mb-1.5">Amount (৳)</label>
+                    <label className="block text-sm font-bold text-slate-500 uppercase tracking-tight mb-1.5">Amount (৳)</label>
                     <input
                       type="number"
                       step="any"
                       placeholder="e.g. 5000"
                       value={formAmount}
                       onChange={(e) => setFormAmount(e.target.value === '' ? '' : Number(e.target.value))}
-                      className="w-full bg-slate-50 border border-slate-100 rounded-xl py-2.5 px-3 text-xs text-slate-800 font-mono focus:outline-hidden focus:border-slate-200"
+                      className="w-full bg-slate-50 border border-slate-100 rounded-xl py-2.5 px-3 text-sm text-slate-800 font-mono focus:outline-hidden focus:border-slate-200"
                       required
                     />
                   </div>
 
                   {/* Date */}
                   <div>
-                    <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-tight mb-1.5">Transaction Date</label>
+                    <label className="block text-sm font-bold text-slate-500 uppercase tracking-tight mb-1.5">Transaction Date</label>
                     <input
                       type="date"
                       value={formDate}
                       onChange={(e) => setFormDate(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-100 rounded-xl py-2.5 px-3 text-xs text-slate-800 focus:outline-hidden focus:border-slate-200 font-medium"
+                      className="w-full bg-slate-50 border border-slate-100 rounded-xl py-2.5 px-3 text-sm text-slate-800 focus:outline-hidden focus:border-slate-200 font-medium"
                       required
                     />
                   </div>
 
                   {/* Sub-brand attachment (optional) */}
                   <div>
-                    <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-tight mb-1.5">Allocate to Sub-Brand (Optional)</label>
+                    <label className="block text-sm font-bold text-slate-500 uppercase tracking-tight mb-1.5">Allocate to Sub-Brand (Optional)</label>
                     <select
                       value={formSubBrand}
                       onChange={(e) => setFormSubBrand(e.target.value as any)}
-                      className="w-full bg-slate-50 border border-slate-100 rounded-xl py-2.5 px-3 text-xs text-slate-800 focus:outline-hidden focus:border-slate-200 font-medium"
+                      className="w-full bg-slate-50 border border-slate-100 rounded-xl py-2.5 px-3 text-sm text-slate-800 focus:outline-hidden focus:border-slate-200 font-medium"
                     >
                       <option value="">Shared Across All Brands</option>
                       <option value="SAT">Sky Auto (SAT)</option>
@@ -969,30 +969,30 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
 
                   {/* Notes/Description */}
                   <div>
-                    <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-tight mb-1.5">Notes / Description</label>
+                    <label className="block text-sm font-bold text-slate-500 uppercase tracking-tight mb-1.5">Notes / Description</label>
                     <textarea
                       placeholder="Add brief details about the expense..."
                       value={formNotes}
                       onChange={(e) => setFormNotes(e.target.value)}
                       rows={3}
-                      className="w-full bg-slate-50 border border-slate-100 rounded-xl py-2.5 px-3 text-xs text-slate-800 focus:outline-hidden focus:border-slate-200 resize-none"
+                      className="w-full bg-slate-50 border border-slate-100 rounded-xl py-2.5 px-3 text-sm text-slate-800 focus:outline-hidden focus:border-slate-200 resize-none"
                     />
                   </div>
 
                   {/* Attachment/Receipt (Optional file upload) */}
                   <div className="space-y-1.5">
-                    <label className="block text-[10px] font-bold text-slate-500 uppercase tracking-tight">Receipt / Proof (Optional)</label>
+                    <label className="block text-sm font-bold text-slate-500 uppercase tracking-tight">Receipt / Proof (Optional)</label>
                     
                     {receiptUrl && !receiptFile ? (
                       <div className="flex items-center justify-between p-2 rounded-xl border border-slate-100 bg-slate-50/50">
-                        <span className="text-[10px] text-slate-500 truncate flex items-center gap-1">
+                        <span className="text-sm text-slate-500 truncate flex items-center gap-1">
                           <ImageIcon size={12} /> Existing Receipt Attached
                         </span>
                         <div className="flex items-center gap-1.5">
                           <button
                             type="button"
                             onClick={() => setViewingReceiptUrl(receiptUrl)}
-                            className="text-xs font-bold text-teal-600 hover:underline"
+                            className="text-sm font-bold text-teal-600 hover:underline"
                           >
                             View
                           </button>
@@ -1015,7 +1015,7 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
                           className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
                         />
                         <Upload size={16} className="text-slate-400 mb-1" />
-                        <span className="text-[10px] text-slate-500 font-semibold">
+                        <span className="text-sm text-slate-500 font-semibold">
                           {receiptFile ? receiptFile.name : 'Choose receipt image'}
                         </span>
                         <span className="text-[8px] text-slate-400">Max size 5MB</span>
@@ -1026,7 +1026,7 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
                   <button
                     type="submit"
                     disabled={isSubmitting}
-                    className="w-full bg-[#D4AF37] hover:bg-[#c39e2d] text-slate-950 font-black tracking-tight rounded-xl py-3 text-xs transition-colors flex items-center justify-center gap-2"
+                    className="w-full bg-[#D4AF37] hover:bg-[#c39e2d] text-slate-950 font-black tracking-tight rounded-xl py-3 text-sm transition-colors flex items-center justify-center gap-2"
                   >
                     {isSubmitting ? (
                       <>
@@ -1044,10 +1044,10 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
                   </button>
                 </form>
               ) : (
-                <div className="p-4 bg-red-50 border border-red-100 rounded-2xl text-center text-xs text-red-800 space-y-2">
+                <div className="p-4 bg-red-50 border border-red-100 rounded-2xl text-center text-sm text-red-800 space-y-2">
                   <AlertCircle className="mx-auto text-red-500" size={24} />
                   <p className="font-bold">Access Restrained</p>
-                  <p className="text-[10px]">Your current credentials do not have permissions to record expenses. This action is restricted to Super Admins only.</p>
+                  <p className="text-sm">Your current credentials do not have permissions to record expenses. This action is restricted to Super Admins only.</p>
                 </div>
               )}
             </div>
@@ -1058,8 +1058,8 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
             <div className="bg-white p-5 lg:p-6 rounded-3xl border border-slate-100 shadow-2xs space-y-4">
               <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 border-b border-slate-50 pb-4">
                 <div>
-                  <h3 className="text-xs font-black text-slate-800 uppercase tracking-tight">Overhead Expense Ledger</h3>
-                  <p className="text-[10px] text-slate-400 mt-0.5">Detailed audit trail of administrative investments</p>
+                  <h3 className="text-sm font-black text-slate-800 uppercase tracking-tight">Overhead Expense Ledger</h3>
+                  <p className="text-sm text-slate-400 mt-0.5">Detailed audit trail of administrative investments</p>
                 </div>
                 
                 <div className="flex flex-wrap items-center gap-2">
@@ -1071,7 +1071,7 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
                       placeholder="Search ledger..."
                       value={ledgerSearch}
                       onChange={(e) => setLedgerSearch(e.target.value)}
-                      className="bg-slate-50 border border-slate-100 rounded-xl py-1.5 pl-8 pr-3 text-xs text-slate-800 focus:outline-hidden"
+                      className="bg-slate-50 border border-slate-100 rounded-xl py-1.5 pl-8 pr-3 text-sm text-slate-800 focus:outline-hidden"
                     />
                   </div>
 
@@ -1079,7 +1079,7 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
                   <select
                     value={ledgerCategory}
                     onChange={(e) => setLedgerCategory(e.target.value)}
-                    className="bg-slate-50 border border-slate-100 rounded-xl py-1.5 px-2.5 text-xs text-slate-700 font-semibold focus:outline-hidden"
+                    className="bg-slate-50 border border-slate-100 rounded-xl py-1.5 px-2.5 text-sm text-slate-700 font-semibold focus:outline-hidden"
                   >
                     <option value="All">All Categories</option>
                     {CATEGORIES.map(cat => (
@@ -1090,7 +1090,7 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
               </div>
 
               {/* Summary of listed ledger rows */}
-              <div className="bg-slate-50 p-4 rounded-2xl flex justify-between items-center text-xs">
+              <div className="bg-slate-50 p-4 rounded-2xl flex justify-between items-center text-sm">
                 <span className="font-semibold text-slate-600">
                   Showing {filteredLedgerExpenses.length} expense record(s)
                 </span>
@@ -1101,7 +1101,7 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
 
               {/* Responsive Table */}
               <div className="overflow-x-auto">
-                <table className="w-full text-left text-xs border-collapse">
+                <table className="w-full text-left text-sm border-collapse">
                   <thead>
                     <tr className="border-b border-slate-100 text-slate-400 font-bold uppercase text-[9px] tracking-wider">
                       <th className="py-3 px-2">Date</th>
@@ -1116,7 +1116,7 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
                   <tbody className="divide-y divide-slate-50">
                     {filteredLedgerExpenses.length === 0 ? (
                       <tr>
-                        <td colSpan={7} className="py-8 text-center text-slate-400 text-xs">
+                        <td colSpan={7} className="py-8 text-center text-slate-400 text-sm">
                           No matching expense records found.
                         </td>
                       </tr>
@@ -1128,7 +1128,7 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
                           
                           {/* Category */}
                           <td className="py-3.5 px-2 font-bold text-slate-800">
-                            <span className="inline-block px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 text-[10px]">
+                            <span className="inline-block px-2 py-0.5 rounded-md bg-slate-100 text-slate-700 text-sm">
                               {exp.category}
                             </span>
                           </td>
@@ -1146,7 +1146,7 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
                                 {exp.subBrand}
                               </span>
                             ) : (
-                              <span className="text-[10px] text-slate-400 italic">Shared</span>
+                              <span className="text-sm text-slate-400 italic">Shared</span>
                             )}
                           </td>
                           
@@ -1165,12 +1165,12 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
                             {exp.receiptUrl ? (
                               <button
                                 onClick={() => setViewingReceiptUrl(exp.receiptUrl || null)}
-                                className="inline-flex items-center gap-1 text-[10px] font-bold text-teal-600 hover:underline"
+                                className="inline-flex items-center gap-1 text-sm font-bold text-teal-600 hover:underline"
                               >
                                 <Eye size={12} /> View
                               </button>
                             ) : (
-                              <span className="text-[10px] text-slate-300">None</span>
+                              <span className="text-sm text-slate-300">None</span>
                             )}
                           </td>
 
@@ -1224,7 +1224,7 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
                 referrerPolicy="no-referrer"
               />
             </div>
-            <div className="text-center text-xs text-slate-400">
+            <div className="text-center text-sm text-slate-400">
               Receipt document viewer. Referrer policy secured.
             </div>
           </div>

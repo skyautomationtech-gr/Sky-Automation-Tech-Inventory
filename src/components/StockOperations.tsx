@@ -289,14 +289,14 @@ export default function StockOperations({
 
       {/* SUCCESS / ERROR NOTIFICATIONS */}
       {success && (
-        <div className="bg-teal-50 border border-teal-200 text-teal-700 p-4 rounded-xl text-xs flex items-center gap-2 animate-in fade-in slide-in-from-top-1 duration-200">
+        <div className="bg-teal-50 border border-teal-200 text-teal-700 p-4 rounded-xl text-sm flex items-center gap-2 animate-in fade-in slide-in-from-top-1 duration-200">
           <CheckCircle2Icon className="text-teal-500" />
           <p className="font-semibold">{success}</p>
         </div>
       )}
 
       {error && (
-        <div className="bg-red-50 border border-red-200 text-red-600 p-4 rounded-xl text-xs flex items-start gap-2 animate-in fade-in slide-in-from-top-1 duration-200">
+        <div className="bg-red-50 border border-red-200 text-red-600 p-4 rounded-xl text-sm flex items-start gap-2 animate-in fade-in slide-in-from-top-1 duration-200">
           <AlertCircle size={16} className="text-red-500 flex-shrink-0" />
           <p>{error}</p>
         </div>
@@ -313,12 +313,12 @@ export default function StockOperations({
                 placeholder="Search ledger by Product, Operator, Ref..."
                 value={ledgerSearch}
                 onChange={(e) => setLedgerSearch(e.target.value)}
-                className="pl-9 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 text-xs focus:outline-hidden"
+                className="pl-9 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 text-sm focus:outline-hidden"
               />
             </div>
             <button
               onClick={refreshLedger}
-              className="py-2 px-4 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-xl text-xs text-slate-700 cursor-pointer font-bold transition-all"
+              className="py-2 px-4 bg-slate-100 hover:bg-slate-200 border border-slate-200 rounded-xl text-sm text-slate-700 cursor-pointer font-bold transition-all"
             >
               Sync Records
             </button>
@@ -327,11 +327,11 @@ export default function StockOperations({
           <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden">
             <div className="overflow-x-auto">
               {ledgerLoading ? (
-                <div className="py-12 text-center text-slate-400 text-xs animate-pulse">
+                <div className="py-12 text-center text-slate-400 text-sm animate-pulse">
                   Synchronizing records with secure cloud vault...
                 </div>
               ) : filteredLedger.length === 0 ? (
-                <div className="py-12 text-center text-slate-400 italic text-xs">
+                <div className="py-12 text-center text-slate-400 italic text-sm">
                   No catalog stock logs found matching the search parameters.
                 </div>
               ) : (
@@ -339,7 +339,7 @@ export default function StockOperations({
                   {/* Desktop Table View */}
                   <table className="w-full text-left border-collapse hidden md:table">
                     <thead>
-                      <tr className="bg-slate-50 border-b border-slate-100 text-[10px] font-mono tracking-wider text-slate-400 uppercase">
+                      <tr className="bg-slate-50 border-b border-slate-100 text-sm font-mono tracking-wider text-slate-400 uppercase">
                         <th className="py-3 px-4 font-bold">Timestamp</th>
                         <th className="py-3 px-3 font-bold">Product Variant</th>
                         <th className="py-3 px-3 font-bold">Action Type</th>
@@ -349,20 +349,20 @@ export default function StockOperations({
                         <th className="py-3 px-4 font-bold text-right">Operator / Ref</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-slate-100 text-xs text-slate-600">
+                    <tbody className="divide-y divide-slate-100 text-sm text-slate-600">
                       {filteredLedger.map((log) => {
                         const isAddition = log.type === 'in' || (log.type === 'adjustment' && log.qty > 0);
                         const isReduction = log.type === 'out' || (log.type === 'adjustment' && log.qty < 0);
 
                         return (
                           <tr key={log.id} className="hover:bg-slate-50/50 transition-colors">
-                            <td className="py-3 px-4 font-mono text-[10px] text-slate-400">
+                            <td className="py-3 px-4 font-mono text-sm text-slate-400">
                               {new Date(log.timestamp).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}
                             </td>
                             <td className="py-3 px-3">
                               <span className="font-bold text-slate-900 leading-tight">{log.productName}</span>
                             </td>
-                            <td className="py-3 px-3 uppercase text-[10px] font-mono font-bold">
+                            <td className="py-3 px-3 uppercase text-sm font-mono font-bold">
                               <span className={`inline-block px-2 py-0.5 rounded-full ${
                                 log.type === 'in' 
                                   ? 'bg-teal-50 text-teal-700' 
@@ -386,7 +386,7 @@ export default function StockOperations({
                             </td>
                             <td className="py-3 px-4 text-right">
                               <p className="font-bold text-slate-800">{log.userName}</p>
-                              {log.refNo && <p className="text-[10px] text-slate-400 font-mono">Ref: {log.refNo}</p>}
+                              {log.refNo && <p className="text-sm text-slate-400 font-mono">Ref: {log.refNo}</p>}
                             </td>
                           </tr>
                         );
@@ -404,10 +404,10 @@ export default function StockOperations({
                         <div key={log.id} className="p-4 space-y-3">
                           <div className="flex justify-between items-start">
                             <div className="space-y-0.5">
-                              <p className="text-[10px] font-mono text-slate-400">
+                              <p className="text-sm font-mono text-slate-400">
                                 {new Date(log.timestamp).toLocaleString([], { dateStyle: 'short', timeStyle: 'short' })}
                               </p>
-                              <p className="font-bold text-slate-900 text-xs leading-tight">{log.productName}</p>
+                              <p className="font-bold text-slate-900 text-sm leading-tight">{log.productName}</p>
                             </div>
                             <span className={`px-2 py-0.5 rounded-full text-[9px] font-bold uppercase tracking-wider ${
                               log.type === 'in' 
@@ -429,13 +429,13 @@ export default function StockOperations({
                             </div>
                             <div className="text-center">
                               <p className="text-[9px] font-bold text-slate-400 uppercase">Stock</p>
-                              <p className="text-xs font-mono font-bold text-slate-800">
+                              <p className="text-sm font-mono font-bold text-slate-800">
                                 {log.beforeQty} → {log.afterQty}
                               </p>
                             </div>
                           </div>
 
-                          <div className="flex justify-between items-center text-[10px]">
+                          <div className="flex justify-between items-center text-sm">
                             <div>
                               <p className="font-bold text-slate-800">{log.userName}</p>
                               {log.refNo && <p className="text-slate-400">Ref: {log.refNo}</p>}
@@ -470,14 +470,14 @@ export default function StockOperations({
               
               {/* Product selector */}
               <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                <label className="block text-sm font-semibold uppercase tracking-wider text-slate-400">
                   Select Product
                 </label>
                 <div className="flex gap-2">
                   <select
                     value={selectedProductId}
                     onChange={(e) => setSelectedProductId(e.target.value)}
-                    className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-2.5 text-xs text-slate-700 focus:outline-hidden"
+                    className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-2.5 text-sm text-slate-700 focus:outline-hidden"
                     required
                   >
                     <option value="">-- Choose Gadget --</option>
@@ -504,13 +504,13 @@ export default function StockOperations({
               {/* Variant selector */}
               {selectedProduct && (
                 <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                  <label className="block text-sm font-semibold uppercase tracking-wider text-slate-400">
                     Product Variant Color & Model
                   </label>
                   <select
                     value={selectedVariantId}
                     onChange={(e) => setSelectedVariantId(e.target.value)}
-                    className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-2.5 text-xs text-slate-700 focus:outline-hidden"
+                    className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-2.5 text-sm text-slate-700 focus:outline-hidden"
                     required
                   >
                     <option value="">-- Choose Variant --</option>
@@ -527,26 +527,26 @@ export default function StockOperations({
               {activeAction !== 'adjust' ? (
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                    <label className="block text-sm font-semibold uppercase tracking-wider text-slate-400">
                       Quantity (Units)
                     </label>
                     <input
                       type="number"
                       value={qty}
                       onChange={(e) => setQty(e.target.value === '' ? '' : Number(e.target.value))}
-                      className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 focus:outline-hidden"
+                      className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-sm text-slate-800 focus:outline-hidden"
                       required
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                    <label className="block text-sm font-semibold uppercase tracking-wider text-slate-400">
                       Purchase Cost Price (৳)
                     </label>
                     <input
                       type="number"
                       value={costPrice}
                       onChange={(e) => setCostPrice(e.target.value === '' ? '' : Number(e.target.value))}
-                      className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 focus:outline-hidden"
+                      className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-sm text-slate-800 focus:outline-hidden"
                       required
                       disabled={isStaff}
                     />
@@ -556,20 +556,20 @@ export default function StockOperations({
                 /* Input for ADJUSTMENT */
                 <div className="grid grid-cols-2 gap-3">
                   <div className="bg-slate-50 p-3 rounded-xl border border-slate-100 text-center font-mono">
-                    <p className="text-[10px] text-slate-400">Current Stock</p>
+                    <p className="text-sm text-slate-400">Current Stock</p>
                     <p className="text-sm font-bold text-slate-800 mt-1">
                       {selectedVariant ? `${selectedVariant.stock} units` : 'N/A'}
                     </p>
                   </div>
                   <div>
-                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                    <label className="block text-sm font-semibold uppercase tracking-wider text-slate-400">
                       Actual Physical Count
                     </label>
                     <input
                       type="number"
                       value={physicalCount}
                       onChange={(e) => setPhysicalCount(e.target.value === '' ? '' : Number(e.target.value))}
-                      className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 focus:outline-hidden"
+                      className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-sm text-slate-800 focus:outline-hidden"
                       required
                     />
                   </div>
@@ -580,7 +580,7 @@ export default function StockOperations({
               {activeAction === 'in' && (
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                    <label className="block text-sm font-semibold uppercase tracking-wider text-slate-400">
                       Supplier Name
                     </label>
                     <input
@@ -588,11 +588,11 @@ export default function StockOperations({
                       placeholder="e.g. Anker BD Importers"
                       value={supplierName}
                       onChange={(e) => setSupplierName(e.target.value)}
-                      className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 focus:outline-hidden"
+                      className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-sm text-slate-800 focus:outline-hidden"
                     />
                   </div>
                   <div>
-                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                    <label className="block text-sm font-semibold uppercase tracking-wider text-slate-400">
                       Reference Number (Invoice)
                     </label>
                     <input
@@ -600,7 +600,7 @@ export default function StockOperations({
                       placeholder="e.g. PUR-789"
                       value={refNo}
                       onChange={(e) => setRefNo(e.target.value)}
-                      className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 focus:outline-hidden"
+                      className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-sm text-slate-800 focus:outline-hidden"
                     />
                   </div>
                 </div>
@@ -609,13 +609,13 @@ export default function StockOperations({
               {activeAction === 'out' && (
                 <div className="grid grid-cols-2 gap-3">
                   <div>
-                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                    <label className="block text-sm font-semibold uppercase tracking-wider text-slate-400">
                       Reason for Stock OUT
                     </label>
                     <select
                       value={outReason}
                       onChange={(e) => setOutReason(e.target.value as any)}
-                      className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-2.5 text-xs text-slate-600 focus:outline-hidden"
+                      className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-2.5 text-sm text-slate-600 focus:outline-hidden"
                       required
                     >
                       <option value="Sale">Sale (Standard retail)</option>
@@ -625,7 +625,7 @@ export default function StockOperations({
                     </select>
                   </div>
                   <div>
-                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                    <label className="block text-sm font-semibold uppercase tracking-wider text-slate-400">
                       Sales / Reference #
                     </label>
                     <input
@@ -633,7 +633,7 @@ export default function StockOperations({
                       placeholder="e.g. SAT-INV-204"
                       value={refNo}
                       onChange={(e) => setRefNo(e.target.value)}
-                      className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 focus:outline-hidden"
+                      className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-sm text-slate-800 focus:outline-hidden"
                     />
                   </div>
                 </div>
@@ -641,7 +641,7 @@ export default function StockOperations({
 
               {activeAction === 'adjust' && (
                 <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                  <label className="block text-sm font-semibold uppercase tracking-wider text-slate-400">
                     Audit Note / Reason
                   </label>
                   <input
@@ -649,7 +649,7 @@ export default function StockOperations({
                     placeholder="e.g. Discrepancy from June physical audit"
                     value={adjustNote}
                     onChange={(e) => setAdjustNote(e.target.value)}
-                    className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 focus:outline-hidden"
+                    className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-sm text-slate-800 focus:outline-hidden"
                     required
                   />
                 </div>
@@ -658,7 +658,7 @@ export default function StockOperations({
               <button
                 type="submit"
                 disabled={submitting}
-                className="w-full bg-amber-400 hover:bg-amber-500 text-slate-950 font-bold py-3 rounded-xl text-xs transition-all shadow-md flex justify-center items-center gap-2"
+                className="w-full bg-amber-400 hover:bg-amber-500 text-slate-950 font-bold py-3 rounded-xl text-sm transition-all shadow-md flex justify-center items-center gap-2"
               >
                 {submitting ? 'Updating Inventory Records...' : 'Execute Transaction Log'}
               </button>
@@ -667,33 +667,33 @@ export default function StockOperations({
 
           {/* Interactive Info card column */}
           <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm space-y-4">
-            <h4 className="text-xs font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
+            <h4 className="text-sm font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
               <Clock size={14} className="text-amber-500" />
               Dynamic Context Check
             </h4>
             {selectedProduct && selectedVariant ? (
               <div className="space-y-4">
                 <div className="p-4 bg-slate-50 rounded-2xl border border-slate-100 space-y-2">
-                  <span className="text-[10px] font-mono bg-amber-400/20 text-amber-700 px-2 py-0.5 rounded font-bold uppercase">
+                  <span className="text-sm font-mono bg-amber-400/20 text-amber-700 px-2 py-0.5 rounded font-bold uppercase">
                     Active Target Selected
                   </span>
                   <h5 className="text-sm font-extrabold text-slate-900 font-sans mt-1">{selectedProduct.name}</h5>
-                  <p className="text-xs font-mono text-slate-500">Variant: {selectedVariant.color} / {selectedVariant.model}</p>
+                  <p className="text-sm font-mono text-slate-500">Variant: {selectedVariant.color} / {selectedVariant.model}</p>
                 </div>
 
                 <div className="grid grid-cols-2 gap-2 text-center">
                   <div className="p-3 bg-slate-50 rounded-xl border border-slate-100">
-                    <p className="text-[10px] text-slate-400">Live Stock</p>
+                    <p className="text-sm text-slate-400">Live Stock</p>
                     <p className="text-base font-black text-slate-900 mt-1 font-mono">{selectedVariant.stock} pcs</p>
                   </div>
                   <div className="p-3 bg-slate-50 rounded-xl border border-slate-100">
-                    <p className="text-[10px] text-slate-400">Reorder Alert</p>
+                    <p className="text-sm text-slate-400">Reorder Alert</p>
                     <p className="text-base font-black text-slate-900 mt-1 font-mono">{selectedProduct.reorderThreshold} pcs</p>
                   </div>
                 </div>
 
                 {activeAction === 'in' && qty > 0 && (
-                  <div className="p-4 bg-teal-50 border border-teal-100 rounded-2xl space-y-1 text-teal-800 text-xs">
+                  <div className="p-4 bg-teal-50 border border-teal-100 rounded-2xl space-y-1 text-teal-800 text-sm">
                     <p className="font-bold">Summary of proposed transaction:</p>
                     <p>• Stock will increase from <span className="font-bold">{selectedVariant.stock}</span> to <span className="font-bold">{selectedVariant.stock + qty}</span> units.</p>
                     {!isStaff && (
@@ -703,7 +703,7 @@ export default function StockOperations({
                 )}
 
                 {activeAction === 'out' && qty > 0 && (
-                  <div className="p-4 bg-red-50 border border-red-100 rounded-2xl space-y-1 text-red-800 text-xs">
+                  <div className="p-4 bg-red-50 border border-red-100 rounded-2xl space-y-1 text-red-800 text-sm">
                     <p className="font-bold">Summary of proposed transaction:</p>
                     <p>• Stock will decrease from <span className="font-bold">{selectedVariant.stock}</span> to <span className="font-bold">{selectedVariant.stock - qty}</span> units.</p>
                     <p>• Reason logged as: <span className="font-bold uppercase font-mono">{outReason}</span></p>
@@ -713,7 +713,7 @@ export default function StockOperations({
               </div>
             ) : (
               <div className="text-center py-10 text-slate-400 italic">
-                <p className="text-xs max-w-xs mx-auto">
+                <p className="text-sm max-w-xs mx-auto">
                   Select a target gadget product and variant to display dynamic pre-transaction calculations and safety constraints.
                 </p>
               </div>

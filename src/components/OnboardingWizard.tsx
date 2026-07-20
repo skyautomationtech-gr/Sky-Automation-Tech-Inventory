@@ -90,14 +90,14 @@ export default function OnboardingWizard({ onComplete, userId }: OnboardingWizar
         {/* Step Indicator Header */}
         <div className="flex justify-between items-center mb-8 border-b border-slate-800 pb-5">
           <div>
-            <span className="text-xs font-mono text-amber-400 tracking-widest uppercase">System Initialization</span>
+            <span className="text-sm font-mono text-amber-400 tracking-widest uppercase">System Initialization</span>
             <h1 className="text-xl font-bold text-white font-sans mt-0.5">Setup Wizard</h1>
           </div>
           <div className="flex gap-2">
             {[1, 2, 3].map((s) => (
               <div
                 key={s}
-                className={`w-8 h-8 rounded-full flex items-center justify-center font-mono text-xs font-semibold border transition-all duration-200 ${
+                className={`w-8 h-8 rounded-full flex items-center justify-center font-mono text-sm font-semibold border transition-all duration-200 ${
                   s === step
                     ? 'bg-amber-400 border-amber-400 text-slate-950 shadow-[0_0_10px_rgba(251,191,36,0.3)]'
                     : s < step
@@ -112,7 +112,7 @@ export default function OnboardingWizard({ onComplete, userId }: OnboardingWizar
         </div>
 
         {error && (
-          <div className="mb-6 bg-red-950/40 border border-red-500/30 text-red-300 p-4 rounded-xl text-xs">
+          <div className="mb-6 bg-red-950/40 border border-red-500/30 text-red-300 p-4 rounded-xl text-sm">
             {error}
           </div>
         )}
@@ -122,14 +122,14 @@ export default function OnboardingWizard({ onComplete, userId }: OnboardingWizar
           <div className="space-y-6">
             <div className="space-y-2">
               <h2 className="text-lg font-bold text-slate-100">Company Identity</h2>
-              <p className="text-xs text-slate-400 leading-relaxed">
+              <p className="text-sm text-slate-400 leading-relaxed">
                 Provide your main registered business details. This will brand the dashboard console.
               </p>
             </div>
 
             <div className="space-y-4">
               <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                <label className="block text-sm font-semibold uppercase tracking-wider text-slate-400">
                   Business Name
                 </label>
                 <div className="mt-1 relative">
@@ -146,7 +146,7 @@ export default function OnboardingWizard({ onComplete, userId }: OnboardingWizar
               </div>
 
               <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                <label className="block text-sm font-semibold uppercase tracking-wider text-slate-400">
                   Business Logo URL (Optional)
                 </label>
                 <input
@@ -156,7 +156,7 @@ export default function OnboardingWizard({ onComplete, userId }: OnboardingWizar
                   className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-xl py-3 px-4 text-white placeholder-slate-600 focus:outline-hidden focus:ring-2 focus:ring-amber-400 focus:border-transparent text-sm"
                   placeholder="e.g. https://yourdomain.com/logo.png"
                 />
-                <p className="mt-1.5 text-[10px] text-slate-500">
+                <p className="mt-1.5 text-sm text-slate-500">
                   Leave empty to use the default high-tech visual logo.
                 </p>
               </div>
@@ -179,7 +179,7 @@ export default function OnboardingWizard({ onComplete, userId }: OnboardingWizar
           <div className="space-y-6">
             <div className="space-y-2">
               <h2 className="text-lg font-bold text-slate-100">Sub-brands & Invoice Prefixing</h2>
-              <p className="text-xs text-slate-400 leading-relaxed">
+              <p className="text-sm text-slate-400 leading-relaxed">
                 We've configured three central sub-brand segments. Set the unique serial numbering formats below.
               </p>
             </div>
@@ -188,14 +188,14 @@ export default function OnboardingWizard({ onComplete, userId }: OnboardingWizar
               <div className="p-4 bg-slate-950 rounded-2xl border border-slate-800 flex items-center justify-between">
                 <div>
                   <h3 className="text-sm font-semibold text-white font-sans">Sky Automation Tech (SAT)</h3>
-                  <p className="text-[10px] text-slate-400">Central Enterprise Platform</p>
+                  <p className="text-sm text-slate-400">Central Enterprise Platform</p>
                 </div>
                 <div className="w-28">
                   <input
                     type="text"
                     value={satPrefix}
                     onChange={(e) => setSatPrefix(e.target.value)}
-                    className="w-full bg-slate-900 border border-slate-800 rounded-lg py-1.5 px-2 text-center text-xs font-mono font-bold text-amber-400 focus:outline-hidden focus:ring-1 focus:ring-amber-400"
+                    className="w-full bg-slate-900 border border-slate-800 rounded-lg py-1.5 px-2 text-center text-sm font-mono font-bold text-amber-400 focus:outline-hidden focus:ring-1 focus:ring-amber-400"
                   />
                 </div>
               </div>
@@ -203,14 +203,14 @@ export default function OnboardingWizard({ onComplete, userId }: OnboardingWizar
               <div className="p-4 bg-slate-950 rounded-2xl border border-slate-800 flex items-center justify-between">
                 <div>
                   <h3 className="text-sm font-semibold text-white font-sans">GadgetZu (GZ)</h3>
-                  <p className="text-[10px] text-slate-400">Retail Accessories Segment</p>
+                  <p className="text-sm text-slate-400">Retail Accessories Segment</p>
                 </div>
                 <div className="w-28">
                   <input
                     type="text"
                     value={gzPrefix}
                     onChange={(e) => setGzPrefix(e.target.value)}
-                    className="w-full bg-slate-900 border border-slate-800 rounded-lg py-1.5 px-2 text-center text-xs font-mono font-bold text-amber-400 focus:outline-hidden focus:ring-1 focus:ring-amber-400"
+                    className="w-full bg-slate-900 border border-slate-800 rounded-lg py-1.5 px-2 text-center text-sm font-mono font-bold text-amber-400 focus:outline-hidden focus:ring-1 focus:ring-amber-400"
                   />
                 </div>
               </div>
@@ -218,14 +218,14 @@ export default function OnboardingWizard({ onComplete, userId }: OnboardingWizar
               <div className="p-4 bg-slate-950 rounded-2xl border border-slate-800 flex items-center justify-between">
                 <div>
                   <h3 className="text-sm font-semibold text-white font-sans">RTX Gadget (RTX)</h3>
-                  <p className="text-[10px] text-slate-400">Premium High-End Gadgets</p>
+                  <p className="text-sm text-slate-400">Premium High-End Gadgets</p>
                 </div>
                 <div className="w-28">
                   <input
                     type="text"
                     value={rtxPrefix}
                     onChange={(e) => setRtxPrefix(e.target.value)}
-                    className="w-full bg-slate-900 border border-slate-800 rounded-lg py-1.5 px-2 text-center text-xs font-mono font-bold text-amber-400 focus:outline-hidden focus:ring-1 focus:ring-amber-400"
+                    className="w-full bg-slate-900 border border-slate-800 rounded-lg py-1.5 px-2 text-center text-sm font-mono font-bold text-amber-400 focus:outline-hidden focus:ring-1 focus:ring-amber-400"
                   />
                 </div>
               </div>
@@ -258,12 +258,12 @@ export default function OnboardingWizard({ onComplete, userId }: OnboardingWizar
                 <CheckCircle2 size={40} className="animate-pulse" />
               </div>
               <h2 className="text-xl font-bold text-slate-100">Enterprise Initialized!</h2>
-              <p className="text-xs text-slate-400 max-w-sm mx-auto leading-relaxed">
+              <p className="text-sm text-slate-400 max-w-sm mx-auto leading-relaxed">
                 Your database schemas and sub-brand credentials for {companyName} are ready for live operations.
               </p>
             </div>
 
-            <div className="p-4 bg-slate-950 rounded-2xl border border-slate-800 text-xs space-y-2">
+            <div className="p-4 bg-slate-950 rounded-2xl border border-slate-800 text-sm space-y-2">
               <div className="flex justify-between border-b border-slate-900 pb-2">
                 <span className="text-slate-500 font-semibold font-sans">Business Name</span>
                 <span className="text-slate-200 font-bold">{companyName}</span>

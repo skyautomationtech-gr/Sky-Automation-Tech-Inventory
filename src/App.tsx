@@ -505,7 +505,7 @@ export default function App() {
     return (
       <div className="min-h-screen bg-slate-950 flex flex-col justify-center items-center">
         <div className="w-12 h-12 border-4 border-amber-400 border-t-transparent rounded-full animate-spin mb-4" />
-        <p className="text-xs font-mono text-slate-400 uppercase tracking-widest">
+        <p className="text-sm font-mono text-slate-400 uppercase tracking-widest">
           Authenticating Operator Session...
         </p>
       </div>
@@ -529,7 +529,7 @@ export default function App() {
             Firestore Quota Exceeded
           </h2>
           
-          <p className="text-xs font-mono text-slate-400 uppercase tracking-wider mb-6">
+          <p className="text-sm font-mono text-slate-400 uppercase tracking-wider mb-6">
             Database Limit Reached
           </p>
 
@@ -537,7 +537,7 @@ export default function App() {
             <p>
               The Firestore database free-tier daily read/write limit has been exceeded for this project.
             </p>
-            <p className="bg-slate-950/60 p-3 rounded-lg border border-slate-800 text-xs font-mono text-slate-400 break-words">
+            <p className="bg-slate-950/60 p-3 rounded-lg border border-slate-800 text-sm font-mono text-slate-400 break-words">
               Error: Free daily read units per project (free tier database) limit exceeded.
             </p>
             <p>
@@ -609,7 +609,7 @@ export default function App() {
             </button>
             <div className="flex items-center gap-2">
               <img src="/logo.png" alt="Company Logo" className="w-6 h-6 rounded object-contain" />
-              <h1 className="text-white font-bold tracking-tight text-xs uppercase">
+              <h1 className="text-white font-bold tracking-tight text-sm uppercase">
                 {companySettings?.companyName || 'Sky Automation'}
               </h1>
             </div>
@@ -619,7 +619,7 @@ export default function App() {
             {dataLoading && (
               <div className="w-2 h-2 bg-amber-400 rounded-full animate-ping" />
             )}
-            <div className="w-8 h-8 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-amber-500 font-bold text-xs">
+            <div className="w-8 h-8 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-amber-500 font-bold text-sm">
               {user?.name?.charAt(0) || 'U'}
             </div>
           </div>
@@ -636,14 +636,14 @@ export default function App() {
                 </div>
                 <div>
                   <h4 className="text-sm font-semibold text-amber-800">Offline Demo Mode Active</h4>
-                  <p className="text-xs text-amber-700/80 mt-0.5">
+                  <p className="text-sm text-amber-700/80 mt-0.5">
                     Viewing local workspace because Firestore quota is temporarily fully utilized. All features are fully functional.
                   </p>
                 </div>
               </div>
               <button
                 onClick={() => window.location.reload()}
-                className="self-start sm:self-center px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 text-xs font-bold rounded-lg flex items-center gap-1.5 transition-all cursor-pointer shrink-0"
+                className="self-start sm:self-center px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 text-sm font-bold rounded-lg flex items-center gap-1.5 transition-all cursor-pointer shrink-0"
               >
                 <RefreshCw size={12} />
                 Check Sync Status
@@ -653,7 +653,7 @@ export default function App() {
 
           {/* Loading Indicator - Desktop Only */}
           {dataLoading && (
-            <div className="hidden lg:flex fixed top-4 right-4 bg-slate-900 border border-amber-400/20 text-white font-mono text-[10px] px-3 py-1.5 rounded-lg items-center gap-2 shadow-lg z-50">
+            <div className="hidden lg:flex fixed top-4 right-4 bg-slate-900 border border-amber-400/20 text-white font-mono text-sm px-3 py-1.5 rounded-lg items-center gap-2 shadow-lg z-50">
               <div className="w-2.5 h-2.5 bg-amber-400 rounded-full animate-ping" />
               SYNCHRONIZING RECONCILIATIONS...
             </div>
@@ -748,7 +748,7 @@ export default function App() {
                 </svg>
               </div>
               <h2 className="text-base font-extrabold text-red-800 uppercase tracking-tight">Access Restricted</h2>
-              <p className="text-xs text-red-600 leading-relaxed">
+              <p className="text-sm text-red-600 leading-relaxed">
                 The Income & Expense financial control panel is strictly reserved for Super Administrator roles only. Your current role is not authorized to access this ledger or run aggregate operational summaries.
               </p>
             </div>
@@ -764,9 +764,9 @@ export default function App() {
         {currentTab === 'settings' && (
           <div className="max-w-2xl bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-slate-100 space-y-6">
             <div>
-              <span className="text-xs font-mono font-bold text-amber-500 uppercase tracking-widest">Global Platform Configuration</span>
+              <span className="text-sm font-mono font-bold text-amber-500 uppercase tracking-widest">Global Platform Configuration</span>
               <h2 className="text-xl font-bold text-slate-900 mt-1">Company Settings & Prefixes</h2>
-              <p className="text-xs text-slate-400 leading-relaxed mt-1">
+              <p className="text-sm text-slate-400 leading-relaxed mt-1">
                 Customize default invoice prefixes and view information about the connected sub-brands.
               </p>
             </div>
@@ -782,38 +782,38 @@ export default function App() {
             >
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
                 <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                  <label className="block text-sm font-semibold uppercase tracking-wider text-slate-400">
                     SAT Invoice Prefix
                   </label>
                   <input
                     type="text"
                     name="sat-prefix"
                     defaultValue={companySettings?.prefixes?.SAT || 'SAT-INV'}
-                    className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 font-mono font-bold text-amber-600 focus:outline-hidden"
+                    className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-sm text-slate-800 font-mono font-bold text-amber-600 focus:outline-hidden"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                  <label className="block text-sm font-semibold uppercase tracking-wider text-slate-400">
                     GadgetZu Invoice Prefix
                   </label>
                   <input
                     type="text"
                     name="gz-prefix"
                     defaultValue={companySettings?.prefixes?.GZ || 'GZ-INV'}
-                    className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 font-mono font-bold text-amber-600 focus:outline-hidden"
+                    className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-sm text-slate-800 font-mono font-bold text-amber-600 focus:outline-hidden"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                  <label className="block text-sm font-semibold uppercase tracking-wider text-slate-400">
                     RTX Gadget Invoice Prefix
                   </label>
                   <input
                     type="text"
                     name="rtx-prefix"
                     defaultValue={companySettings?.prefixes?.RTX || 'RTX-INV'}
-                    className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 font-mono font-bold text-amber-600 focus:outline-hidden"
+                    className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-sm text-slate-800 font-mono font-bold text-amber-600 focus:outline-hidden"
                   />
                 </div>
               </div>
@@ -822,13 +822,13 @@ export default function App() {
                 <button
                   type="button"
                   onClick={() => setIsOnboarding(true)}
-                  className="py-2 px-4 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-600 font-semibold text-xs rounded-xl cursor-pointer"
+                  className="py-2 px-4 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-600 font-semibold text-sm rounded-xl cursor-pointer"
                 >
                   Re-run Onboarding Setup
                 </button>
                 <button
                   type="submit"
-                  className="py-2.5 px-6 bg-amber-400 hover:bg-amber-500 text-slate-950 font-bold text-xs rounded-xl shadow-md cursor-pointer"
+                  className="py-2.5 px-6 bg-amber-400 hover:bg-amber-500 text-slate-950 font-bold text-sm rounded-xl shadow-md cursor-pointer"
                 >
                   Save Invoice Prefixes
                 </button>
@@ -836,8 +836,8 @@ export default function App() {
             </form>
 
             <div className="bg-amber-50/40 p-4 border border-amber-200/40 rounded-2xl space-y-2">
-              <h3 className="text-xs font-bold text-amber-800">Sandbox Database Info</h3>
-              <p className="text-[11px] text-amber-700 leading-relaxed">
+              <h3 className="text-sm font-bold text-amber-800">Sandbox Database Info</h3>
+              <p className="text-sm text-amber-700 leading-relaxed">
                 Database connected: <span className="font-mono bg-amber-400/10 px-1 rounded">Firestore ({companySettings?.companyName})</span>. 
                 In case of offline use or missing rules, the app gracefully activates localized fallback sandbox state so your operators never experience any operational friction.
               </p>
@@ -848,15 +848,15 @@ export default function App() {
                 <div className="flex justify-between items-center bg-slate-50 p-4 rounded-2xl border border-slate-100">
                   <div>
                     <h3 className="text-sm font-bold text-slate-800">Migrate Legacy Barcodes</h3>
-                    <p className="text-xs text-slate-500 mt-1">Convert old random barcodes to the new structured format (e.g., SAT-A1B2).</p>
-                    {migrationResult && <p className="text-xs font-bold text-emerald-600 mt-2">{migrationResult}</p>}
-                    {migrationResult && <p className="text-xs font-bold text-amber-600 mt-1">IMPORTANT: Please reprint all old labels to match the new format!</p>}
+                    <p className="text-sm text-slate-500 mt-1">Convert old random barcodes to the new structured format (e.g., SAT-A1B2).</p>
+                    {migrationResult && <p className="text-sm font-bold text-emerald-600 mt-2">{migrationResult}</p>}
+                    {migrationResult && <p className="text-sm font-bold text-amber-600 mt-1">IMPORTANT: Please reprint all old labels to match the new format!</p>}
                   </div>
                   <button
                     type="button"
                     onClick={handleMigrateBarcodes}
                     disabled={isMigratingBarcodes}
-                    className="py-2 px-4 bg-slate-800 hover:bg-slate-900 text-white font-semibold text-xs rounded-xl cursor-pointer disabled:opacity-50"
+                    className="py-2 px-4 bg-slate-800 hover:bg-slate-900 text-white font-semibold text-sm rounded-xl cursor-pointer disabled:opacity-50"
                   >
                     {isMigratingBarcodes ? 'Migrating...' : 'Run Migration'}
                   </button>
@@ -865,12 +865,12 @@ export default function App() {
                 <div className="flex justify-between items-center">
                   <div>
                     <h3 className="text-sm font-bold text-red-600">Danger Zone</h3>
-                    <p className="text-xs text-slate-500">Permanently delete all products, categories, brands, and stock logs.</p>
+                    <p className="text-sm text-slate-500">Permanently delete all products, categories, brands, and stock logs.</p>
                   </div>
                   <button
                     type="button"
                     onClick={handleClearSampleData}
-                    className="py-2 px-4 bg-red-50 hover:bg-red-100 border border-red-200 text-red-600 font-semibold text-xs rounded-xl cursor-pointer"
+                    className="py-2 px-4 bg-red-50 hover:bg-red-100 border border-red-200 text-red-600 font-semibold text-sm rounded-xl cursor-pointer"
                   >
                     Clear Sample Data
                   </button>
@@ -927,7 +927,7 @@ export default function App() {
             </p>
             
             <div className="mb-6">
-              <label className="block text-xs font-semibold text-slate-500 mb-1">Enter your password to confirm:</label>
+              <label className="block text-sm font-semibold text-slate-500 mb-1">Enter your password to confirm:</label>
               <input 
                 type="password" 
                 value={clearDataPassword}
@@ -936,7 +936,7 @@ export default function App() {
                 placeholder="Your account password"
               />
               {clearingDataError && (
-                <p className="text-red-500 text-xs font-bold mt-2">{clearingDataError}</p>
+                <p className="text-red-500 text-sm font-bold mt-2">{clearingDataError}</p>
               )}
             </div>
 

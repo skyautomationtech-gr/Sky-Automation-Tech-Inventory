@@ -467,19 +467,19 @@ export default function DashboardView({
       case 'GZ':
       case 'GADGETZU':
         return (
-          <span className="px-2 py-0.5 bg-teal-50 text-teal-700 text-[10px] font-bold rounded-sm border border-teal-100">
+          <span className="px-2 py-0.5 bg-teal-50 text-teal-700 text-sm font-bold rounded-sm border border-teal-100">
             GadgetZu
           </span>
         );
       case 'RTX':
         return (
-          <span className="px-2 py-0.5 bg-orange-50 text-orange-700 text-[10px] font-bold rounded-sm border border-orange-100">
+          <span className="px-2 py-0.5 bg-orange-50 text-orange-700 text-sm font-bold rounded-sm border border-orange-100">
             RTX Gadget
           </span>
         );
       default:
         return (
-          <span className="px-2 py-0.5 bg-slate-100 text-slate-700 text-[10px] font-bold rounded-sm border border-slate-200">
+          <span className="px-2 py-0.5 bg-slate-100 text-slate-700 text-sm font-bold rounded-sm border border-slate-200">
             Sky Auto
           </span>
         );
@@ -521,7 +521,7 @@ export default function DashboardView({
       {/* Dynamic Header Row */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-2 border-b border-slate-200">
         <div>
-          <span className="text-xs font-mono font-bold text-amber-500 uppercase tracking-widest">
+          <span className="text-sm font-mono font-bold text-amber-500 uppercase tracking-widest">
             OPERATIONAL HUD
           </span>
           <h2 className="text-xl font-bold text-slate-900 mt-1">Management Dashboard</h2>
@@ -532,8 +532,8 @@ export default function DashboardView({
             {user?.role === 'admin' ? <ShieldCheck size={18} /> : <UserCircle size={18} />}
           </div>
           <div className="text-left pr-2">
-            <p className="text-xs font-bold text-slate-800 leading-tight">{user?.name || 'Operator'}</p>
-            <p className="text-[10px] text-slate-400 font-mono tracking-wider">{user?.role?.toUpperCase()} CONTEXT</p>
+            <p className="text-sm font-bold text-slate-800 leading-tight">{user?.name || 'Operator'}</p>
+            <p className="text-sm text-slate-400 font-mono tracking-wider">{user?.role?.toUpperCase()} CONTEXT</p>
           </div>
         </div>
       </div>
@@ -570,19 +570,19 @@ export default function DashboardView({
                       {res.type === 'product' && (
                         <div>
                           <p className="text-sm font-bold text-slate-900">{res.item.name}</p>
-                          <p className="text-xs text-slate-500 font-mono mt-0.5">SKU: {res.item.sku}</p>
+                          <p className="text-sm text-slate-500 font-mono mt-0.5">SKU: {res.item.sku}</p>
                         </div>
                       )}
                       {res.type === 'order' && (
                         <div>
                           <p className="text-sm font-bold text-slate-900">Order #{res.item.id.slice(0,8)}</p>
-                          <p className="text-xs text-slate-500 mt-0.5">{res.item.customerName}</p>
+                          <p className="text-sm text-slate-500 mt-0.5">{res.item.customerName}</p>
                         </div>
                       )}
                       {res.type === 'customer' && (
                         <div>
                           <p className="text-sm font-bold text-slate-900">{res.item.name}</p>
-                          <p className="text-xs text-slate-500 mt-0.5">{res.item.phone}</p>
+                          <p className="text-sm text-slate-500 mt-0.5">{res.item.phone}</p>
                         </div>
                       )}
                     </button>
@@ -626,7 +626,7 @@ export default function DashboardView({
                   {isCheckedIn && <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>}
                   <span className={`relative inline-flex rounded-full h-2.5 w-2.5 ${isCheckedIn ? 'bg-emerald-500' : 'bg-slate-300'}`}></span>
                 </span>
-                <span className={`text-xs font-bold uppercase tracking-wider ${isCheckedIn ? 'text-emerald-600' : 'text-slate-400'}`}>
+                <span className={`text-sm font-bold uppercase tracking-wider ${isCheckedIn ? 'text-emerald-600' : 'text-slate-400'}`}>
                   {isCheckedIn ? 'Active / Checked In' : 'Inactive / Checked Out'}
                 </span>
               </div>
@@ -667,10 +667,10 @@ export default function DashboardView({
         {/* Today's History */}
         {attendanceRecords.length > 0 && (
           <div className="bg-slate-50 border-t border-slate-100 p-4">
-            <h4 className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-3">Today's Check-in History</h4>
+            <h4 className="text-sm font-bold text-slate-400 uppercase tracking-widest mb-3">Today's Check-in History</h4>
             <div className="flex flex-col gap-2">
               {attendanceRecords.map(record => (
-                <div key={record.id} className="flex justify-between items-center text-xs font-mono text-slate-600 bg-white px-3 py-2 border border-slate-200 rounded-lg">
+                <div key={record.id} className="flex justify-between items-center text-sm font-mono text-slate-600 bg-white px-3 py-2 border border-slate-200 rounded-lg">
                   <div className="flex items-center gap-3">
                     <span className="text-slate-400">In:</span> 
                     <span className="font-bold text-slate-800">{new Date(record.checkInTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}</span>
@@ -704,14 +704,14 @@ export default function DashboardView({
         <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs flex flex-col justify-between min-h-40">
           <div>
             <div className="flex justify-between items-start">
-              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Today's Sales</p>
-              <span className="text-[10px] font-mono font-bold bg-slate-50 text-slate-600 border border-slate-200 px-1.5 py-0.5 rounded">
+              <p className="text-sm font-bold text-slate-400 uppercase tracking-widest">Today's Sales</p>
+              <span className="text-sm font-mono font-bold bg-slate-50 text-slate-600 border border-slate-200 px-1.5 py-0.5 rounded">
                 {todayOrdersCount} Order{todayOrdersCount !== 1 ? 's' : ''}
               </span>
             </div>
             <h3 className="text-2xl md:text-3xl font-black text-slate-950 tracking-tight mt-2">৳ {todaySales.toLocaleString()}</h3>
           </div>
-          <div className="text-[11px] text-slate-500 space-y-1 border-t border-slate-100 pt-2 flex flex-col mt-3">
+          <div className="text-sm text-slate-500 space-y-1 border-t border-slate-100 pt-2 flex flex-col mt-3">
             <div className="flex items-center justify-between">
               <span>Vs yesterday:</span>
               <span className={`font-bold font-mono ${vsYesterdayPercent > 0 ? 'text-emerald-600' : vsYesterdayPercent < 0 ? 'text-red-500' : 'text-amber-600'}`}>
@@ -731,15 +731,15 @@ export default function DashboardView({
         <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs flex flex-col justify-between min-h-40">
           <div>
             <div className="flex justify-between items-start">
-              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Profit Summary</p>
-              <span className="text-[10px] font-mono font-bold bg-emerald-50 text-emerald-700 border border-emerald-100 px-1.5 py-0.5 rounded">
+              <p className="text-sm font-bold text-slate-400 uppercase tracking-widest">Profit Summary</p>
+              <span className="text-sm font-mono font-bold bg-emerald-50 text-emerald-700 border border-emerald-100 px-1.5 py-0.5 rounded">
                 Net Margin
               </span>
             </div>
             <h3 className="text-2xl md:text-3xl font-black text-emerald-600 tracking-tight mt-2">৳ {todayProfit.toLocaleString()}</h3>
-            <p className="text-[10px] text-slate-400 mt-1">Today's net profit (confirmed / delivered)</p>
+            <p className="text-sm text-slate-400 mt-1">Today's net profit (confirmed / delivered)</p>
           </div>
-          <div className="border-t border-slate-100 pt-2 flex items-center justify-between text-xs mt-3">
+          <div className="border-t border-slate-100 pt-2 flex items-center justify-between text-sm mt-3">
             <span className="text-slate-500">This Month's Profit:</span>
             <span className="font-extrabold text-slate-800 font-mono">৳ {thisMonthProfit.toLocaleString()}</span>
           </div>
@@ -749,18 +749,18 @@ export default function DashboardView({
         <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs flex flex-col justify-between min-h-40">
           <div>
             <div className="flex justify-between items-start">
-              <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest">Due Summary</p>
+              <p className="text-sm font-bold text-slate-400 uppercase tracking-widest">Due Summary</p>
               <button 
                 onClick={() => onNavigateToTab('receivables')}
-                className="text-[10px] font-bold text-amber-600 hover:underline flex items-center gap-0.5"
+                className="text-sm font-bold text-amber-600 hover:underline flex items-center gap-0.5"
               >
                 View Logs <ArrowRight size={10} />
               </button>
             </div>
             <h3 className="text-2xl md:text-3xl font-black text-red-500 tracking-tight mt-2">৳ {totalDue.toLocaleString()}</h3>
-            <p className="text-[10px] text-slate-400 mt-1">Over {dueOrders.length} outstanding accounts</p>
+            <p className="text-sm text-slate-400 mt-1">Over {dueOrders.length} outstanding accounts</p>
           </div>
-          <div className="border-t border-slate-100 pt-2 mt-3 space-y-1 text-[11px] text-slate-500">
+          <div className="border-t border-slate-100 pt-2 mt-3 space-y-1 text-sm text-slate-500">
             <div className="flex justify-between items-center">
               <span>Collection rate:</span>
               <span className="font-bold text-slate-800 font-mono">{collectionRate}%</span>
@@ -775,8 +775,8 @@ export default function DashboardView({
         <div className="bg-[#008080] text-white border border-teal-800 rounded-2xl p-5 shadow-md flex flex-col justify-between min-h-40 transition-all duration-300 hover:shadow-lg">
           <div>
             <div className="flex justify-between items-start">
-              <p className="text-[10px] font-bold text-teal-100 uppercase tracking-widest">Inventory Valuation</p>
-              <span className="text-[10px] font-mono font-bold bg-teal-900/40 text-teal-200 border border-teal-700 px-1.5 py-0.5 rounded">
+              <p className="text-sm font-bold text-teal-100 uppercase tracking-widest">Inventory Valuation</p>
+              <span className="text-sm font-mono font-bold bg-teal-900/40 text-teal-200 border border-teal-700 px-1.5 py-0.5 rounded">
                 Live Asset
               </span>
             </div>
@@ -788,7 +788,7 @@ export default function DashboardView({
               </h3>
             )}
           </div>
-          <div className="text-[11px] text-teal-100 flex items-center justify-between border-t border-teal-700/60 pt-2 mt-3">
+          <div className="text-sm text-teal-100 flex items-center justify-between border-t border-teal-700/60 pt-2 mt-3">
             <span>Total Units In Stock:</span>
             <span className="font-bold font-mono text-white">{totalStockUnits.toLocaleString()}</span>
           </div>
@@ -814,7 +814,7 @@ export default function DashboardView({
                 className="flex flex-col items-center justify-center p-4 bg-slate-50 hover:bg-slate-100 border border-slate-100 rounded-xl transition-all cursor-pointer group text-center"
               >
                 <PlusCircle size={20} className="text-slate-600 group-hover:text-slate-950 mb-2 transition-transform duration-200 group-hover:scale-110" />
-                <span className="text-xs font-bold text-slate-800">New Product</span>
+                <span className="text-sm font-bold text-slate-800">New Product</span>
                 <span className="text-[9px] text-slate-400 mt-0.5">Submit to review</span>
               </button>
               
@@ -823,7 +823,7 @@ export default function DashboardView({
                 className="flex flex-col items-center justify-center p-4 bg-slate-50 hover:bg-slate-100 border border-slate-100 rounded-xl transition-all cursor-pointer group text-center"
               >
                 <TrendingUp size={20} className="text-slate-600 group-hover:text-slate-950 mb-2 transition-transform duration-200 group-hover:scale-110" />
-                <span className="text-xs font-bold text-slate-800">Add Stock</span>
+                <span className="text-sm font-bold text-slate-800">Add Stock</span>
                 <span className="text-[9px] text-slate-400 mt-0.5">Increment inventory</span>
               </button>
 
@@ -832,7 +832,7 @@ export default function DashboardView({
                 className="flex flex-col items-center justify-center p-4 bg-slate-50 hover:bg-slate-100 border border-slate-100 rounded-xl transition-all cursor-pointer group text-center"
               >
                 <Coins size={20} className="text-slate-600 group-hover:text-slate-950 mb-2 transition-transform duration-200 group-hover:scale-110" />
-                <span className="text-xs font-bold text-slate-800">Record Paid</span>
+                <span className="text-sm font-bold text-slate-800">Record Paid</span>
                 <span className="text-[9px] text-slate-400 mt-0.5">Collect due funds</span>
               </button>
 
@@ -841,7 +841,7 @@ export default function DashboardView({
                 className="flex flex-col items-center justify-center p-4 bg-slate-50 hover:bg-slate-100 border border-slate-100 rounded-xl transition-all cursor-pointer group text-center"
               >
                 <ShoppingBag size={20} className="text-slate-600 group-hover:text-slate-950 mb-2 transition-transform duration-200 group-hover:scale-110" />
-                <span className="text-xs font-bold text-slate-800">New Order</span>
+                <span className="text-sm font-bold text-slate-800">New Order</span>
                 <span className="text-[9px] text-slate-400 mt-0.5">Book sales ticket</span>
               </button>
             </div>
@@ -856,19 +856,19 @@ export default function DashboardView({
               </h3>
               <button 
                 onClick={() => onNavigateToTab('orders')}
-                className="text-xs text-[#008080] font-bold hover:underline"
+                className="text-sm text-[#008080] font-bold hover:underline"
               >
                 View All Desk
               </button>
             </div>
             
             {recentOrders.length === 0 ? (
-              <p className="text-xs text-slate-400 py-6 text-center">No orders recorded in the registry.</p>
+              <p className="text-sm text-slate-400 py-6 text-center">No orders recorded in the registry.</p>
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-left border-collapse">
                   <thead>
-                    <tr className="border-b border-slate-100 text-[10px] text-slate-400 font-mono uppercase tracking-wider">
+                    <tr className="border-b border-slate-100 text-sm text-slate-400 font-mono uppercase tracking-wider">
                       <th className="pb-2">Order ID</th>
                       <th className="pb-2">Customer</th>
                       <th className="pb-2">Sub-Brand</th>
@@ -876,7 +876,7 @@ export default function DashboardView({
                       <th className="pb-2 text-center">Status</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-50 text-xs">
+                  <tbody className="divide-y divide-slate-50 text-sm">
                     {recentOrders.map(order => (
                       <tr 
                         key={order.id} 
@@ -888,7 +888,7 @@ export default function DashboardView({
                         </td>
                         <td className="py-3">
                           <p className="font-bold text-slate-800">{order.customerName}</p>
-                          <p className="text-[10px] text-slate-400 font-mono">{order.customerPhone}</p>
+                          <p className="text-sm text-slate-400 font-mono">{order.customerPhone}</p>
                         </td>
                         <td className="py-3">{getSubBrandBadge(order.subBrand)}</td>
                         <td className="py-3 text-right font-bold text-slate-900 font-mono">
@@ -921,19 +921,19 @@ export default function DashboardView({
               </h3>
               <button 
                 onClick={() => onNavigateToTab('invoices')}
-                className="text-xs text-indigo-500 font-bold hover:underline"
+                className="text-sm text-indigo-500 font-bold hover:underline"
               >
                 View All Invoices
               </button>
             </div>
             
             {recentInvoices.length === 0 ? (
-              <p className="text-xs text-slate-400 py-6 text-center">No invoices generated yet.</p>
+              <p className="text-sm text-slate-400 py-6 text-center">No invoices generated yet.</p>
             ) : (
               <div className="overflow-x-auto">
                 <table className="w-full text-left border-collapse">
                   <thead>
-                    <tr className="border-b border-slate-100 text-[10px] text-slate-400 font-mono uppercase tracking-wider">
+                    <tr className="border-b border-slate-100 text-sm text-slate-400 font-mono uppercase tracking-wider">
                       <th className="pb-2">Invoice No</th>
                       <th className="pb-2">Customer</th>
                       <th className="pb-2">Date</th>
@@ -941,7 +941,7 @@ export default function DashboardView({
                       <th className="pb-2 text-center">State</th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-50 text-xs">
+                  <tbody className="divide-y divide-slate-50 text-sm">
                     {recentInvoices.map(invoice => (
                       <tr 
                         key={invoice.id} 
@@ -953,7 +953,7 @@ export default function DashboardView({
                         </td>
                         <td className="py-3">
                           <p className="font-bold text-slate-800">{invoice.customerName}</p>
-                          <p className="text-[10px] text-slate-400 font-mono">{invoice.customerPhone}</p>
+                          <p className="text-sm text-slate-400 font-mono">{invoice.customerPhone}</p>
                         </td>
                         <td className="py-3 text-slate-500 font-mono">
                           {new Date(invoice.generatedAt).toLocaleDateString()}
@@ -1000,7 +1000,7 @@ export default function DashboardView({
                     
                     return (
                       <div key={sub} className="space-y-1">
-                        <div className="flex justify-between items-center text-xs">
+                        <div className="flex justify-between items-center text-sm">
                           <span className="font-bold text-slate-800">{sub === 'SAT' ? 'Sky Automation (SAT)' : sub === 'GZ' ? 'GadgetZu (GZ)' : 'RTX Gadget (RTX)'}</span>
                           <span className="font-mono text-slate-600 font-bold">{percent}%</span>
                         </div>
@@ -1012,7 +1012,7 @@ export default function DashboardView({
                             style={{ width: `${percent}%` }}
                           />
                         </div>
-                        <div className="flex justify-between items-center text-[10px] text-slate-400 font-mono">
+                        <div className="flex justify-between items-center text-sm text-slate-400 font-mono">
                           <span>{data.orders} Order{data.orders !== 1 ? 's' : ''}</span>
                           <span>৳ {data.revenue.toLocaleString()}</span>
                         </div>
@@ -1031,7 +1031,7 @@ export default function DashboardView({
                   Top Channels (This Month)
                 </h3>
                 {salesChannelSales.length === 0 ? (
-                  <p className="text-xs text-slate-400 py-6 text-center">No orders recorded this month.</p>
+                  <p className="text-sm text-slate-400 py-6 text-center">No orders recorded this month.</p>
                 ) : (
                   <div className="space-y-3">
                     {salesChannelSales.map((item, i) => {
@@ -1040,7 +1040,7 @@ export default function DashboardView({
                       
                       return (
                         <div key={item.channel} className="space-y-1">
-                          <div className="flex justify-between items-center text-xs">
+                          <div className="flex justify-between items-center text-sm">
                             <span className="font-medium text-slate-700">{item.channel}</span>
                             <span className="font-mono text-slate-500 font-bold">৳ {item.revenue.toLocaleString()}</span>
                           </div>
@@ -1073,7 +1073,7 @@ export default function DashboardView({
             </h3>
             
             {topSellingProducts.length === 0 ? (
-              <p className="text-xs text-slate-400 py-6 text-center">No product sales logged this month.</p>
+              <p className="text-sm text-slate-400 py-6 text-center">No product sales logged this month.</p>
             ) : (
               <div className="space-y-3.5">
                 {topSellingProducts.map((product, index) => (
@@ -1083,15 +1083,15 @@ export default function DashboardView({
                     onClick={() => onNavigateToTab('products', undefined, product.id)}
                   >
                     <div className="flex items-center gap-3">
-                      <div className="w-6 h-6 rounded-lg bg-amber-50 border border-amber-100 flex items-center justify-center text-[10px] font-bold text-amber-700 shrink-0">
+                      <div className="w-6 h-6 rounded-lg bg-amber-50 border border-amber-100 flex items-center justify-center text-sm font-bold text-amber-700 shrink-0">
                         {index + 1}
                       </div>
                       <div className="min-w-0 font-sans">
-                        <p className="text-xs font-bold text-slate-800 truncate leading-tight">{product.name}</p>
-                        <p className="text-[10px] text-slate-400 mt-0.5">{product.qty} unit{product.qty !== 1 ? 's' : ''} sold</p>
+                        <p className="text-sm font-bold text-slate-800 truncate leading-tight">{product.name}</p>
+                        <p className="text-sm text-slate-400 mt-0.5">{product.qty} unit{product.qty !== 1 ? 's' : ''} sold</p>
                       </div>
                     </div>
-                    <span className="text-xs font-bold text-slate-900 font-mono shrink-0">
+                    <span className="text-sm font-bold text-slate-900 font-mono shrink-0">
                       ৳ {product.revenue.toLocaleString()}
                     </span>
                   </div>
@@ -1108,17 +1108,17 @@ export default function DashboardView({
             </h3>
             <div className="grid grid-cols-2 gap-4 border-b border-slate-100 pb-4">
               <div className="p-3 bg-slate-50 border border-slate-100 rounded-xl">
-                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Steadfast</p>
+                <p className="text-sm font-bold text-slate-400 uppercase tracking-wider">Steadfast</p>
                 <h4 className="text-xl font-black text-slate-800 mt-1 font-mono">{courierStats.steadfastShipped}</h4>
                 <p className="text-[9px] text-red-500 mt-1 font-bold">{courierStats.steadfastPending} pending delivery</p>
               </div>
               <div className="p-3 bg-slate-50 border border-slate-100 rounded-xl">
-                <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">CarryBee</p>
+                <p className="text-sm font-bold text-slate-400 uppercase tracking-wider">CarryBee</p>
                 <h4 className="text-xl font-black text-slate-800 mt-1 font-mono">{courierStats.carryBeeShipped}</h4>
                 <p className="text-[9px] text-red-500 mt-1 font-bold">{courierStats.carryBeePending} pending delivery</p>
               </div>
             </div>
-            <p className="text-[10px] text-slate-400 text-center mt-3">Counts reflect active shipments processed this calendar month.</p>
+            <p className="text-sm text-slate-400 text-center mt-3">Counts reflect active shipments processed this calendar month.</p>
           </div>
 
           {/* Weekly Sales Trend (7 days) */}
@@ -1134,7 +1134,7 @@ export default function DashboardView({
                 
                 return (
                   <div key={dayData.day} className="flex items-center gap-3">
-                    <span className="text-xs font-mono font-bold text-slate-400 w-8">{dayData.day}</span>
+                    <span className="text-sm font-mono font-bold text-slate-400 w-8">{dayData.day}</span>
                     <div className="flex-1 bg-slate-50 h-5 rounded-md overflow-hidden relative border border-slate-100">
                       <div 
                         className="bg-emerald-500/85 h-full rounded-r-sm transition-all duration-300" 
@@ -1144,7 +1144,7 @@ export default function DashboardView({
                         {dayData.count} order{dayData.count !== 1 ? 's' : ''}
                       </span>
                     </div>
-                    <span className="text-xs font-bold text-slate-800 font-mono w-16 text-right">
+                    <span className="text-sm font-bold text-slate-800 font-mono w-16 text-right">
                       ৳ {dayData.amount.toLocaleString()}
                     </span>
                   </div>
@@ -1160,13 +1160,13 @@ export default function DashboardView({
                 <AlertCircle size={16} className="text-amber-500 animate-pulse" />
                 Critical Low Stock List
               </h3>
-              <span className="text-[10px] font-mono font-bold bg-amber-50 text-amber-700 border border-amber-200 px-1.5 py-0.5 rounded">
+              <span className="text-sm font-mono font-bold bg-amber-50 text-amber-700 border border-amber-200 px-1.5 py-0.5 rounded">
                 {reorderList.length} Items
               </span>
             </div>
             
             {reorderList.length === 0 ? (
-              <p className="text-xs text-slate-400 py-6 text-center">All product stocks are safely above threshold.</p>
+              <p className="text-sm text-slate-400 py-6 text-center">All product stocks are safely above threshold.</p>
             ) : (
               <div className="space-y-3">
                 {reorderList.map(prod => (
@@ -1176,11 +1176,11 @@ export default function DashboardView({
                     onClick={() => onNavigateToTab('products', undefined, prod.id)}
                   >
                     <div className="min-w-0 pr-3 font-sans">
-                      <p className="text-xs font-bold text-slate-800 truncate leading-tight">{prod.name}</p>
-                      <p className="text-[10px] text-slate-400 mt-0.5">Threshold: {prod.reorderThreshold} units</p>
+                      <p className="text-sm font-bold text-slate-800 truncate leading-tight">{prod.name}</p>
+                      <p className="text-sm text-slate-400 mt-0.5">Threshold: {prod.reorderThreshold} units</p>
                     </div>
                     <div className="text-right shrink-0">
-                      <span className="px-2 py-0.5 bg-red-50 text-red-700 border border-red-100 rounded text-[10px] font-bold font-mono">
+                      <span className="px-2 py-0.5 bg-red-50 text-red-700 border border-red-100 rounded text-sm font-bold font-mono">
                         {prod.stock} Left
                       </span>
                     </div>
@@ -1197,18 +1197,18 @@ export default function DashboardView({
               Staff Desk Status
             </h3>
             <div className="flex justify-between items-center p-3 bg-indigo-50/50 border border-indigo-100 rounded-2xl mb-4">
-              <span className="text-xs font-bold text-indigo-900">Operator Session Count:</span>
-              <span className="text-xs font-extrabold font-mono text-indigo-700 bg-white border border-indigo-200 px-2.5 py-1 rounded-xl shadow-xs">
+              <span className="text-sm font-bold text-indigo-900">Operator Session Count:</span>
+              <span className="text-sm font-extrabold font-mono text-indigo-700 bg-white border border-indigo-200 px-2.5 py-1 rounded-xl shadow-xs">
                 {activeStaff.length} Checked In
               </span>
             </div>
             
             {activeStaff.length === 0 ? (
-              <p className="text-xs text-slate-400 py-4 text-center italic font-sans">No operators currently active.</p>
+              <p className="text-sm text-slate-400 py-4 text-center italic font-sans">No operators currently active.</p>
             ) : (
               <div className="space-y-2.5 max-h-56 overflow-y-auto pr-1">
                 {activeStaff.map(u => (
-                  <div key={u.id} className="flex items-center justify-between text-xs p-2 border border-slate-50 bg-slate-50/20 rounded-xl">
+                  <div key={u.id} className="flex items-center justify-between text-sm p-2 border border-slate-50 bg-slate-50/20 rounded-xl">
                     <div className="flex items-center gap-2.5">
                       <div className="w-2.5 h-2.5 bg-emerald-500 rounded-full animate-ping" />
                       <div>
@@ -1216,7 +1216,7 @@ export default function DashboardView({
                         <p className="text-[9px] text-slate-400 uppercase tracking-wide font-mono mt-0.5">{u.role}</p>
                       </div>
                     </div>
-                    <div className="text-right font-mono text-[10px] text-slate-500">
+                    <div className="text-right font-mono text-sm text-slate-500">
                       {u.subBrandAccess?.length > 0 ? getSubBrandBadge(u.subBrandAccess[0]) : <span className="text-slate-400">All Brands</span>}
                     </div>
                   </div>

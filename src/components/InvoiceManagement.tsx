@@ -302,14 +302,14 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
     <div className="space-y-6">
       {/* Notifications */}
       {error && (
-        <div className="flex items-center gap-3 bg-red-50 text-red-700 p-4 rounded-2xl border border-red-100 animate-fade-in text-xs font-semibold">
+        <div className="flex items-center gap-3 bg-red-50 text-red-700 p-4 rounded-2xl border border-red-100 animate-fade-in text-sm font-semibold">
           <AlertCircle size={16} className="flex-shrink-0" />
           <p className="flex-1">{error}</p>
           <button onClick={() => setError('')} className="hover:opacity-70"><X size={14} /></button>
         </div>
       )}
       {success && (
-        <div className="flex items-center gap-3 bg-emerald-50 text-emerald-700 p-4 rounded-2xl border border-emerald-100 animate-fade-in text-xs font-semibold">
+        <div className="flex items-center gap-3 bg-emerald-50 text-emerald-700 p-4 rounded-2xl border border-emerald-100 animate-fade-in text-sm font-semibold">
           <CheckCircle size={16} className="flex-shrink-0" />
           <p className="flex-1">{success}</p>
           <button onClick={() => setSuccess('')} className="hover:opacity-70"><X size={14} /></button>
@@ -319,12 +319,12 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
       {/* Action Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <span className="text-xs font-mono font-bold text-amber-500 uppercase tracking-widest">Billing Operations</span>
+          <span className="text-sm font-mono font-bold text-amber-500 uppercase tracking-widest">Billing Operations</span>
           <h1 className="text-2xl font-black text-slate-900 mt-1 flex items-center gap-2">
             <Receipt className="text-slate-900" size={24} />
             Invoice Desk
           </h1>
-          <p className="text-xs text-slate-400 mt-1 leading-relaxed">
+          <p className="text-sm text-slate-400 mt-1 leading-relaxed">
             Manage auto-generated sub-brand invoices, download official black-and-white print copies, or void transaction receipts.
           </p>
         </div>
@@ -341,7 +341,7 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
               placeholder="Search by Invoice #, Phone, Name, or Order ID..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-2.5 pl-10 pr-4 text-xs text-slate-800 placeholder-slate-400 focus:outline-hidden focus:border-amber-400"
+              className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-2.5 pl-10 pr-4 text-sm text-slate-800 placeholder-slate-400 focus:outline-hidden focus:border-amber-400"
             />
           </div>
 
@@ -350,7 +350,7 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
             <select
               value={subBrandFilter}
               onChange={(e) => setSubBrandFilter(e.target.value)}
-              className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-2.5 px-3 text-xs text-slate-700 focus:outline-hidden focus:border-amber-400"
+              className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-2.5 px-3 text-sm text-slate-700 focus:outline-hidden focus:border-amber-400"
             >
               <option value="">All Brands</option>
               <option value="SAT">Sky Auto (SAT)</option>
@@ -364,7 +364,7 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
             <select
               value={paymentStatusFilter}
               onChange={(e) => setPaymentStatusFilter(e.target.value)}
-              className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-2.5 px-3 text-xs text-slate-700 focus:outline-hidden focus:border-amber-400"
+              className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-2.5 px-3 text-sm text-slate-700 focus:outline-hidden focus:border-amber-400"
             >
               <option value="">All Payment Statuses</option>
               <option value="Paid">Paid</option>
@@ -378,7 +378,7 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
             <select
               value={voidFilter}
               onChange={(e) => setVoidFilter(e.target.value)}
-              className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-2.5 px-3 text-xs text-slate-700 focus:outline-hidden focus:border-amber-400"
+              className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-2.5 px-3 text-sm text-slate-700 focus:outline-hidden focus:border-amber-400"
             >
               <option value="active">Active Invoices</option>
               <option value="voided">Voided Invoices</option>
@@ -400,30 +400,30 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
       {/* Invoices List */}
       <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden">
         {loading && invoices.length === 0 ? (
-          <div className="p-12 text-center text-xs text-slate-400 font-mono">
+          <div className="p-12 text-center text-sm text-slate-400 font-mono">
             Fetching active invoice registers...
           </div>
         ) : filteredInvoices.length === 0 ? (
           <div className="p-12 text-center text-slate-400">
             <Receipt size={32} className="mx-auto text-slate-200 mb-2" />
-            <p className="text-xs font-semibold">No invoices found matching the current criteria.</p>
+            <p className="text-sm font-semibold">No invoices found matching the current criteria.</p>
           </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="bg-slate-50 border-b border-slate-100">
-                  <th className="py-4 px-6 text-[10px] font-bold text-slate-400 uppercase tracking-wider">Invoice #</th>
-                  <th className="py-4 px-6 text-[10px] font-bold text-slate-400 uppercase tracking-wider">Customer</th>
-                  <th className="py-4 px-6 text-[10px] font-bold text-slate-400 uppercase tracking-wider">Sub-Brand</th>
-                  <th className="py-4 px-6 text-[10px] font-bold text-slate-400 uppercase tracking-wider">Date</th>
-                  <th className="py-4 px-6 text-[10px] font-bold text-slate-400 uppercase tracking-wider">Amount Due</th>
-                  <th className="py-4 px-6 text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total</th>
-                  <th className="py-4 px-6 text-[10px] font-bold text-slate-400 uppercase tracking-wider">Status</th>
-                  <th className="py-4 px-6 text-right text-[10px] font-bold text-slate-400 uppercase tracking-wider">Actions</th>
+                  <th className="py-4 px-6 text-sm font-bold text-slate-400 uppercase tracking-wider">Invoice #</th>
+                  <th className="py-4 px-6 text-sm font-bold text-slate-400 uppercase tracking-wider">Customer</th>
+                  <th className="py-4 px-6 text-sm font-bold text-slate-400 uppercase tracking-wider">Sub-Brand</th>
+                  <th className="py-4 px-6 text-sm font-bold text-slate-400 uppercase tracking-wider">Date</th>
+                  <th className="py-4 px-6 text-sm font-bold text-slate-400 uppercase tracking-wider">Amount Due</th>
+                  <th className="py-4 px-6 text-sm font-bold text-slate-400 uppercase tracking-wider">Total</th>
+                  <th className="py-4 px-6 text-sm font-bold text-slate-400 uppercase tracking-wider">Status</th>
+                  <th className="py-4 px-6 text-right text-sm font-bold text-slate-400 uppercase tracking-wider">Actions</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-50 text-xs">
+              <tbody className="divide-y divide-slate-50 text-sm">
                 {filteredInvoices.map((inv) => (
                   <tr 
                     key={inv.id} 
@@ -439,7 +439,7 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                     </td>
                     <td className="py-3.5 px-6 font-semibold text-slate-700">
                       <div>{inv.customerName}</div>
-                      <div className="text-[10px] text-slate-400 font-mono">{inv.customerPhone}</div>
+                      <div className="text-sm text-slate-400 font-mono">{inv.customerPhone}</div>
                     </td>
                     <td className="py-3.5 px-6">
                       <span className={`inline-block text-[9px] font-mono uppercase px-2 py-0.5 rounded-full font-bold ${
@@ -509,7 +509,7 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
             <div className="bg-white border-b border-slate-200 px-6 py-4 flex items-center justify-between">
               <div>
                 <h3 className="text-sm font-bold text-slate-800 font-mono">Invoice Desk: {selectedInvoice.invoiceNumber}</h3>
-                <p className="text-[10px] text-slate-400 mt-0.5">Official A4 Document Copy and Signature Console</p>
+                <p className="text-sm text-slate-400 mt-0.5">Official A4 Document Copy and Signature Console</p>
               </div>
               <div className="flex items-center gap-3">
                 {/* Void action */}
@@ -522,7 +522,7 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                       }
                       setShowVoidModal(true);
                     }}
-                    className="flex items-center gap-1.5 bg-red-50 hover:bg-red-100 text-red-700 text-xs font-bold px-3 py-2 rounded-xl border border-red-200/50 transition-all cursor-pointer"
+                    className="flex items-center gap-1.5 bg-red-50 hover:bg-red-100 text-red-700 text-sm font-bold px-3 py-2 rounded-xl border border-red-200/50 transition-all cursor-pointer"
                   >
                     <Trash2 size={13} />
                     Void Invoice
@@ -532,7 +532,7 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                 <button
                   onClick={() => downloadPDF(selectedInvoice)}
                   disabled={loading}
-                  className="flex items-center gap-1.5 bg-slate-900 hover:bg-slate-800 text-[#D4AF37] text-xs font-bold px-4 py-2 rounded-xl shadow-xs transition-all cursor-pointer"
+                  className="flex items-center gap-1.5 bg-slate-900 hover:bg-slate-800 text-[#D4AF37] text-sm font-bold px-4 py-2 rounded-xl shadow-xs transition-all cursor-pointer"
                 >
                   <Download size={13} />
                   Download PDF
@@ -557,8 +557,8 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                 <div className="bg-red-50 border border-red-200 text-red-800 p-4 rounded-2xl flex items-start gap-3">
                   <ShieldAlert className="text-red-600 flex-shrink-0 mt-0.5" size={18} />
                   <div>
-                    <h4 className="text-xs font-bold uppercase tracking-wider">This Invoice Has Been VOIDED</h4>
-                    <p className="text-[11px] leading-relaxed mt-1 text-red-600">
+                    <h4 className="text-sm font-bold uppercase tracking-wider">This Invoice Has Been VOIDED</h4>
+                    <p className="text-sm leading-relaxed mt-1 text-red-600">
                       <strong>Void Reason:</strong> {selectedInvoice.voidedReason || 'N/A'} <br />
                       <strong>Voided By:</strong> {selectedInvoice.voidedBy || 'System'} | <strong>Voided At:</strong> {new Date(selectedInvoice.voidedAt || 0).toLocaleString()}
                     </p>
@@ -571,7 +571,7 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                 <div className="bg-white p-4 rounded-3xl border border-slate-200/60 shadow-xs space-y-3">
                   <div className="flex items-center justify-between">
                     <div>
-                      <h4 className="text-xs font-black text-slate-800 flex items-center gap-1.5">
+                      <h4 className="text-sm font-black text-slate-800 flex items-center gap-1.5">
                         <Eraser size={14} className="text-amber-500" />
                         Interactive Digital Signature Pad
                       </h4>
@@ -579,7 +579,7 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                     </div>
                     <button 
                       onClick={clearSignature}
-                      className="text-[10px] font-bold text-slate-500 hover:text-slate-700 flex items-center gap-1 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg py-1 px-2.5 transition-all cursor-pointer"
+                      className="text-sm font-bold text-slate-500 hover:text-slate-700 flex items-center gap-1 bg-slate-50 hover:bg-slate-100 border border-slate-200 rounded-lg py-1 px-2.5 transition-all cursor-pointer"
                     >
                       Clear Pad
                     </button>
@@ -612,18 +612,18 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                     <div className="flex items-center gap-4">
                       <img src="/logo.png" alt="Company Logo" className="w-16 h-16 object-contain" />
                       <div>
-                        <span className="text-[10px] font-mono tracking-widest font-black uppercase">
+                        <span className="text-sm font-mono tracking-widest font-black uppercase">
                           {selectedInvoice.subBrand === 'SAT' ? 'SKY AUTOMATION TECH' : selectedInvoice.subBrand === 'GZ' ? 'GADGETZU' : 'RTX GADGET'}
                         </span>
                         <h1 className="text-3xl font-black tracking-tighter uppercase mt-1">OFFICIAL INVOICE</h1>
-                        <div className="text-xs mt-2 space-y-0.5 font-mono">
+                        <div className="text-sm mt-2 space-y-0.5 font-mono">
                           <p className="font-bold">Issued By: {selectedInvoice.subBrand === 'SAT' ? 'Sky Automation Tech' : selectedInvoice.subBrand === 'GZ' ? 'GadgetZu' : 'RTX Gadget'}</p>
                           <p className="text-slate-600">Email: skyautomationtech@gmail.com</p>
                         </div>
                       </div>
                     </div>
 
-                    <div className="text-right font-mono text-xs space-y-1">
+                    <div className="text-right font-mono text-sm space-y-1">
                       <div className="flex items-center justify-end gap-2 mb-2">
                         <QRCodeSVG value={`INV:${selectedInvoice.invoiceNumber}`} size={60} />
                       </div>
@@ -637,15 +637,15 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                   </div>
 
                   {/* Customer Information Section */}
-                  <div className="grid grid-cols-2 gap-8 border border-black p-4 font-mono text-xs rounded-sm">
+                  <div className="grid grid-cols-2 gap-8 border border-black p-4 font-mono text-sm rounded-sm">
                     <div>
-                      <h3 className="font-black border-b border-black pb-1 mb-2 text-[10px] uppercase tracking-wide">BILLED TO (CUSTOMER):</h3>
+                      <h3 className="font-black border-b border-black pb-1 mb-2 text-sm uppercase tracking-wide">BILLED TO (CUSTOMER):</h3>
                       <p className="font-black text-slate-950 text-sm">{selectedInvoice.customerName}</p>
                       <p className="mt-1 font-bold text-slate-700">Phone: {selectedInvoice.customerPhone}</p>
                     </div>
 
                     <div>
-                      <h3 className="font-black border-b border-black pb-1 mb-2 text-[10px] uppercase tracking-wide">DELIVERY ADDRESS:</h3>
+                      <h3 className="font-black border-b border-black pb-1 mb-2 text-sm uppercase tracking-wide">DELIVERY ADDRESS:</h3>
                       <p className="text-slate-800 whitespace-pre-wrap leading-relaxed">
                         {selectedInvoice.courier ? `${selectedInvoice.courier}` : 'Courier Delivery'} <br />
                         {orders.find(o => o.id === selectedInvoice.orderId)?.deliveryAddress || 'No Address Listed'}
@@ -654,7 +654,7 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                   </div>
 
                   {/* Itemized Invoice Table */}
-                  <div className="border border-black rounded-sm overflow-hidden font-mono text-xs">
+                  <div className="border border-black rounded-sm overflow-hidden font-mono text-sm">
                     <table className="w-full text-left">
                       <thead>
                         <tr className="bg-black text-white font-black">
@@ -681,7 +681,7 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                   </div>
 
                   {/* Financial Summary Block */}
-                  <div className="grid grid-cols-2 gap-8 items-start font-mono text-xs">
+                  <div className="grid grid-cols-2 gap-8 items-start font-mono text-sm">
                     {/* Notes & Courier Info */}
                     <div className="border border-black p-4 space-y-2 rounded-sm bg-slate-50/50">
                       <h4 className="font-black border-b border-black pb-1 uppercase tracking-wider text-[9px]">COURIER & DESPATCH DETS:</h4>
@@ -709,14 +709,14 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                         </div>
                       </div>
                       
-                      <div className="bg-black text-white p-2.5 text-center font-black uppercase text-[10px] tracking-widest">
+                      <div className="bg-black text-white p-2.5 text-center font-black uppercase text-sm tracking-widest">
                         PAYMENT STATUS: {selectedInvoice.paymentStatus}
                       </div>
                     </div>
                   </div>
 
                   {/* Print Page Signature & Footer Section */}
-                  <div className="pt-16 grid grid-cols-2 gap-8 items-end font-mono text-xs text-center">
+                  <div className="pt-16 grid grid-cols-2 gap-8 items-end font-mono text-sm text-center">
                     <div>
                       <p className="border-t border-black pt-2 mx-auto w-48 font-bold">Customer Signature</p>
                     </div>
@@ -756,31 +756,31 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
               <button onClick={() => setShowVoidModal(false)} className="text-slate-400 hover:text-slate-600"><X size={16} /></button>
             </div>
             
-            <p className="text-xs text-slate-500 leading-relaxed">
+            <p className="text-sm text-slate-500 leading-relaxed">
               This action is immutable. Voiding this invoice will log your operator profile, flag this invoice number as "VOIDED" in the public ledger, and allow the Order Desk to generate a fresh replacement invoice.
             </p>
 
             <div className="space-y-1.5">
-              <label className="block text-xs font-semibold text-slate-600">Reason for Voiding *</label>
+              <label className="block text-sm font-semibold text-slate-600">Reason for Voiding *</label>
               <textarea
                 value={voidReason}
                 onChange={(e) => setVoidReason(e.target.value)}
                 placeholder="e.g., Major correction needed, Customer modified ordered item sizes/quantities..."
                 rows={3}
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs focus:outline-hidden focus:border-red-400 text-slate-800"
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-sm focus:outline-hidden focus:border-red-400 text-slate-800"
               />
             </div>
 
             <div className="flex gap-2 justify-end pt-2">
               <button
                 onClick={() => setShowVoidModal(false)}
-                className="py-2 px-4 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-600 text-xs font-bold rounded-xl cursor-pointer"
+                className="py-2 px-4 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-600 text-sm font-bold rounded-xl cursor-pointer"
               >
                 Cancel
               </button>
               <button
                 onClick={handleVoidInvoice}
-                className="py-2 px-5 bg-red-600 hover:bg-red-700 text-white text-xs font-bold rounded-xl shadow-md cursor-pointer"
+                className="py-2 px-5 bg-red-600 hover:bg-red-700 text-white text-sm font-bold rounded-xl shadow-md cursor-pointer"
               >
                 Confirm Void Status
               </button>

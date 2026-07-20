@@ -117,6 +117,8 @@ export const BarcodeScanner: React.FC<Props> = ({ onScan, onCancel }) => {
         { facingMode: "environment" },
         {
           fps: 10,
+          // Removed aspectRatio: letting the camera use its native resolution
+          // prevents the OS from aggressively cropping the sensor (which causes the zoom issue).
           // 70% width, 40% height of the actual video stream
           qrbox: (videoWidth, videoHeight) => {
             const w = Math.round(videoWidth * 0.7);
@@ -245,10 +247,13 @@ export const BarcodeScanner: React.FC<Props> = ({ onScan, onCancel }) => {
           animation: scan 2.5s ease-in-out infinite;
         }
         /* Ensure the video naturally scales inside its container without distortion */
+        #reader {
+          width: 100% !important;
+          height: auto !important;
+        }
         #reader video {
           width: 100% !important;
           height: auto !important;
-          object-fit: contain !important;
           display: block;
         }
         /* Completely hide any default UI (shaded regions, corner brackets) injected by html5-qrcode */
@@ -317,7 +322,8 @@ export const BarcodeScanner: React.FC<Props> = ({ onScan, onCancel }) => {
         </div>
 
         {/* Viewfinder Area */}
-        <div className="relative w-full bg-black rounded-3xl overflow-hidden shadow-2xl border border-slate-800 flex items-center justify-center mb-8 min-h-[300px]">
+        {/* Removed min-h and fixed heights so it perfectly shrink-wraps the video, fixing alignment */}
+        <div className="relative w-full bg-black rounded-3xl overflow-hidden shadow-2xl border border-slate-800 mb-8">
           
           {/* Subtle striped background for the camera box behind the feed */}
           <div className="absolute inset-0 bg-stripes pointer-events-none opacity-30"></div>
@@ -329,7 +335,7 @@ export const BarcodeScanner: React.FC<Props> = ({ onScan, onCancel }) => {
           {isCameraActive && (
             <div className="absolute top-4 left-4 z-20 bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-full flex items-center gap-2 border border-white/10">
               <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse"></div>
-              <span className="text-[11px] font-medium text-white tracking-wide">scanning</span>
+              <span className="text-sm font-medium text-white tracking-wide">scanning</span>
             </div>
           )}
 
@@ -353,7 +359,7 @@ export const BarcodeScanner: React.FC<Props> = ({ onScan, onCancel }) => {
               </div>
               
               <div className="absolute bottom-6 left-0 w-full text-center">
-                <p className="text-xs text-slate-300 font-medium">Place code within the frame to scan</p>
+                <p className="text-sm text-slate-300 font-medium">Place code within the frame to scan</p>
               </div>
             </div>
           )}
@@ -366,7 +372,7 @@ export const BarcodeScanner: React.FC<Props> = ({ onScan, onCancel }) => {
 
           {/* Error */}
           {error && (
-            <div className="absolute inset-x-4 top-1/2 -translate-y-1/2 z-30 bg-red-950/80 backdrop-blur-md border border-red-500/30 text-red-300 p-4 rounded-2xl text-xs flex flex-col items-center text-center gap-2 shadow-xl">
+            <div className="absolute inset-x-4 top-1/2 -translate-y-1/2 z-30 bg-red-950/80 backdrop-blur-md border border-red-500/30 text-red-300 p-4 rounded-2xl text-sm flex flex-col items-center text-center gap-2 shadow-xl">
               <AlertCircle size={20} className="text-red-400" />
               <p className="font-medium leading-relaxed">{error}</p>
             </div>
@@ -374,8 +380,8 @@ export const BarcodeScanner: React.FC<Props> = ({ onScan, onCancel }) => {
 
           {/* Live Debug Panel */}
           {isCameraActive && (
-            <div className="absolute bottom-0 inset-x-0 bg-black/85 backdrop-blur-sm z-30 p-3.5 font-mono text-[11px] leading-relaxed border-t border-slate-800 text-slate-300 pointer-events-auto">
-              <div className="text-amber-400 font-bold mb-1.5 uppercase tracking-wider text-[10px] flex items-center justify-between">
+            <div className="absolute bottom-0 inset-x-0 bg-black/85 backdrop-blur-sm z-30 p-3.5 font-mono text-sm leading-relaxed border-t border-slate-800 text-slate-300 pointer-events-auto">
+              <div className="text-amber-400 font-bold mb-1.5 uppercase tracking-wider text-sm flex items-center justify-between">
                 <span>Scanner Diagnostics</span>
                 <span className="text-slate-500 font-normal normal-case">Live</span>
               </div>
@@ -449,7 +455,7 @@ export const BarcodeScanner: React.FC<Props> = ({ onScan, onCancel }) => {
                     </div>
                     <div>
                       <p className="font-bold text-slate-200 text-sm mb-0.5">{scan.code}</p>
-                      <p className="text-xs text-slate-500 truncate max-w-[180px]">
+                      <p className="text-sm text-slate-500 truncate max-w-[180px]">
                         {scan.productName || 'Unknown Product'}
                       </p>
                     </div>

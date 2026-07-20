@@ -381,10 +381,10 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
 
           {/* Sub brands logos/chips */}
           <div className="flex gap-3 mt-8">
-            <span className="px-3 py-1.5 rounded-full bg-slate-900 border border-amber-400/20 text-xs text-amber-400 font-medium font-sans">
+            <span className="px-3 py-1.5 rounded-full bg-slate-900 border border-amber-400/20 text-sm text-amber-400 font-medium font-sans">
               ★ GadgetZu
             </span>
-            <span className="px-3 py-1.5 rounded-full bg-slate-900 border border-teal-500/20 text-xs text-teal-400 font-medium font-sans">
+            <span className="px-3 py-1.5 rounded-full bg-slate-900 border border-teal-500/20 text-sm text-teal-400 font-medium font-sans">
               ✦ RTX Gadget
             </span>
           </div>
@@ -398,7 +398,7 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
             Launch System Console
           </button>
           
-          <p className="text-xs text-slate-500 font-mono tracking-wider">
+          <p className="text-sm text-slate-500 font-mono tracking-wider">
             SECURE ACCESS ENCRYPTED
           </p>
         </div>
@@ -435,7 +435,7 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
         <div className="bg-slate-900/80 backdrop-blur-md py-8 px-4 shadow-2xl rounded-3xl border border-slate-800 sm:px-10">
           
           {error && (
-            <div className="mb-4 bg-red-950/40 border border-red-500/30 text-red-300 p-3.5 rounded-2xl text-xs flex flex-col gap-2">
+            <div className="mb-4 bg-red-950/40 border border-red-500/30 text-red-300 p-3.5 rounded-2xl text-sm flex flex-col gap-2">
               <div className="flex items-start gap-2">
                 <span className="font-bold">Error:</span>
                 <p>{error}</p>
@@ -445,7 +445,7 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
           )}
 
           {infoMessage && (
-            <div className="mb-4 bg-teal-950/40 border border-teal-500/30 text-teal-300 p-3.5 rounded-2xl text-xs flex items-start gap-2">
+            <div className="mb-4 bg-teal-950/40 border border-teal-500/30 text-teal-300 p-3.5 rounded-2xl text-sm flex items-start gap-2">
               <CheckCircle2 size={16} className="text-teal-400 flex-shrink-0" />
               <p>{infoMessage}</p>
             </div>
@@ -477,7 +477,7 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
             /* OTP FORM */
             <form onSubmit={handleVerifyOtp} className="space-y-6">
               <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                <label className="block text-sm font-semibold uppercase tracking-wider text-slate-400">
                   Enter 6-Digit OTP Code
                 </label>
                 <div className="mt-2 relative">
@@ -506,7 +506,7 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
                 <button
                   type="button"
                   onClick={() => setOtpSent(false)}
-                  className="text-xs text-slate-400 hover:text-white underline"
+                  className="text-sm text-slate-400 hover:text-white underline"
                 >
                   Go Back to Login
                 </button>
@@ -520,7 +520,7 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
                 <div className="space-y-4">
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                      <label className="block text-sm font-semibold uppercase tracking-wider text-slate-400">
                         Full Name <span className="text-red-400">*</span>
                       </label>
                       <div className="mt-1 relative">
@@ -537,7 +537,7 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
                     </div>
 
                     <div>
-                      <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                      <label className="block text-sm font-semibold uppercase tracking-wider text-slate-400">
                         Phone Number <span className="text-red-400">*</span>
                       </label>
                       <div className="mt-1 relative">
@@ -555,7 +555,7 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                    <label className="block text-sm font-semibold uppercase tracking-wider text-slate-400">
                       Email Address <span className="text-red-400">*</span>
                     </label>
                     <div className="mt-1 relative">
@@ -573,7 +573,7 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                      <label className="block text-sm font-semibold uppercase tracking-wider text-slate-400">
                         Password <span className="text-red-400">*</span>
                       </label>
                       <div className="mt-1 relative">
@@ -590,7 +590,7 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
                     </div>
 
                     <div>
-                      <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                      <label className="block text-sm font-semibold uppercase tracking-wider text-slate-400">
                         Confirm Password <span className="text-red-400">*</span>
                       </label>
                       <div className="mt-1 relative">
@@ -609,7 +609,7 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
 
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                      <label className="block text-sm font-semibold uppercase tracking-wider text-slate-400">
                         Requested Role <span className="text-red-400">*</span>
                       </label>
                       <div className="mt-1">
@@ -625,7 +625,7 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
                     </div>
 
                     <div>
-                      <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                      <label className="block text-sm font-semibold uppercase tracking-wider text-slate-400">
                         Designation / Position
                       </label>
                       <div className="mt-1 relative">
@@ -642,7 +642,7 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                    <label className="block text-sm font-semibold uppercase tracking-wider text-slate-400">
                       Photo / Avatar URL (Optional)
                     </label>
                     <div className="mt-1 relative">
@@ -658,7 +658,7 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
                   </div>
 
                   <div>
-                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                    <label className="block text-sm font-semibold uppercase tracking-wider text-slate-400">
                       Requested Sub-brand Access <span className="text-red-400">*</span>
                     </label>
                     <div className="mt-2 grid grid-cols-3 gap-2">
@@ -679,7 +679,7 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
                                 setRequestedSubBrands([...requestedSubBrands, brand.id]);
                               }
                             }}
-                            className={`py-2 px-1 text-center rounded-lg text-xs font-semibold transition-all duration-150 ${
+                            className={`py-2 px-1 text-center rounded-lg text-sm font-semibold transition-all duration-150 ${
                               isSelected
                                 ? 'bg-amber-400/20 text-amber-300 border border-amber-400'
                                 : 'bg-slate-950 text-slate-400 border border-slate-800 hover:border-slate-700'
@@ -698,7 +698,7 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
                   {isLogin && !isForgotPassword && (
                     <div className="space-y-4">
                       <div>
-                        <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                        <label className="block text-sm font-semibold uppercase tracking-wider text-slate-400">
                           Email Address
                         </label>
                         <div className="mt-1 relative">
@@ -716,13 +716,13 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
 
                       <div>
                         <div className="flex justify-between items-center">
-                          <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                          <label className="block text-sm font-semibold uppercase tracking-wider text-slate-400">
                             Password
                           </label>
                           <button
                             type="button"
                             onClick={() => setIsForgotPassword(true)}
-                            className="text-xs text-amber-500 hover:text-amber-400 hover:underline"
+                            className="text-sm text-amber-500 hover:text-amber-400 hover:underline"
                           >
                             Forgot?
                           </button>
@@ -744,7 +744,7 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
 
                   {isForgotPassword && (
                     <div>
-                      <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                      <label className="block text-sm font-semibold uppercase tracking-wider text-slate-400">
                         Email Address
                       </label>
                       <div className="mt-1 relative">
@@ -787,7 +787,7 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
                     onClick={() => {
                       setIsForgotPassword(false);
                     }}
-                    className="text-xs text-amber-500 hover:text-amber-400 hover:underline"
+                    className="text-sm text-amber-500 hover:text-amber-400 hover:underline"
                   >
                     Return to Log In
                   </button>
@@ -799,7 +799,7 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
                       setError('');
                       setSignupSuccess(false);
                     }}
-                    className="text-xs text-amber-500 hover:text-amber-400 hover:underline"
+                    className="text-sm text-amber-500 hover:text-amber-400 hover:underline"
                   >
                     {isLogin ? "Need a new account? Sign Up" : "Already have an account? Sign In"}
                   </button>
@@ -810,7 +810,7 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
                   href="https://forms.gle/TH5uGex3LobzAyAu7"
                   target="_blank"
                   rel="noopener noreferrer"
-                  className="text-xs text-slate-500 hover:text-amber-500 hover:underline"
+                  className="text-sm text-slate-500 hover:text-amber-500 hover:underline"
                 >
                   সমস্যা জানান / Feedback
                 </a>

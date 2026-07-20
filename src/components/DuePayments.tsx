@@ -141,14 +141,14 @@ export default function DuePayments({ user, requireCheckIn }: DuePaymentsProps) 
     <div className="space-y-6">
       {/* Notifications */}
       {error && (
-        <div className="flex items-center gap-3 bg-red-50 text-red-700 p-4 rounded-2xl border border-red-100 animate-fade-in text-xs font-semibold">
+        <div className="flex items-center gap-3 bg-red-50 text-red-700 p-4 rounded-2xl border border-red-100 animate-fade-in text-sm font-semibold">
           <AlertTriangle size={16} className="flex-shrink-0" />
           <p className="flex-1">{error}</p>
           <button onClick={() => setError('')} className="hover:opacity-70"><X size={14} /></button>
         </div>
       )}
       {success && (
-        <div className="flex items-center gap-3 bg-emerald-50 text-emerald-700 p-4 rounded-2xl border border-emerald-100 animate-fade-in text-xs font-semibold">
+        <div className="flex items-center gap-3 bg-emerald-50 text-emerald-700 p-4 rounded-2xl border border-emerald-100 animate-fade-in text-sm font-semibold">
           <CheckCircle size={16} className="flex-shrink-0" />
           <p className="flex-1">{success}</p>
           <button onClick={() => setSuccess('')} className="hover:opacity-70"><X size={14} /></button>
@@ -158,12 +158,12 @@ export default function DuePayments({ user, requireCheckIn }: DuePaymentsProps) 
       {/* Header Info */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <span className="text-xs font-mono font-bold text-amber-500 uppercase tracking-widest">Accounts Receivable</span>
+          <span className="text-sm font-mono font-bold text-amber-500 uppercase tracking-widest">Accounts Receivable</span>
           <h1 className="text-2xl font-black text-slate-900 mt-1 flex items-center gap-2">
             <Coins className="text-slate-900" size={24} />
             Due Payments
           </h1>
-          <p className="text-xs text-slate-400 mt-1 leading-relaxed">
+          <p className="text-sm text-slate-400 mt-1 leading-relaxed">
             Monitor outstanding sales dues and partial customer balances. Record manual partial payments and track collection age.
           </p>
         </div>
@@ -176,7 +176,7 @@ export default function DuePayments({ user, requireCheckIn }: DuePaymentsProps) 
             <Coins size={22} />
           </div>
           <div>
-            <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Total Outstanding Due</span>
+            <span className="text-sm uppercase font-bold text-slate-400 tracking-wider">Total Outstanding Due</span>
             <h3 className="text-xl font-black text-slate-900 mt-0.5 font-mono">৳{totalReceivable.toLocaleString()}</h3>
           </div>
         </div>
@@ -186,7 +186,7 @@ export default function DuePayments({ user, requireCheckIn }: DuePaymentsProps) 
             <TrendingUp size={22} />
           </div>
           <div>
-            <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Partially Collected</span>
+            <span className="text-sm uppercase font-bold text-slate-400 tracking-wider">Partially Collected</span>
             <h3 className="text-xl font-black text-slate-900 mt-0.5 font-mono">৳{totalCollected.toLocaleString()}</h3>
           </div>
         </div>
@@ -196,7 +196,7 @@ export default function DuePayments({ user, requireCheckIn }: DuePaymentsProps) 
             <Clock size={22} />
           </div>
           <div>
-            <span className="text-[10px] uppercase font-bold text-slate-400 tracking-wider">Aged Receivables (14d+)</span>
+            <span className="text-sm uppercase font-bold text-slate-400 tracking-wider">Aged Receivables (14d+)</span>
             <h3 className="text-xl font-black text-slate-900 mt-0.5 font-mono">{agingOver14DaysCount} Orders</h3>
           </div>
         </div>
@@ -213,7 +213,7 @@ export default function DuePayments({ user, requireCheckIn }: DuePaymentsProps) 
               placeholder="Search by customer name, phone, or order ID..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-2.5 pl-10 pr-4 text-xs text-slate-800 placeholder-slate-400 focus:outline-hidden focus:border-amber-400"
+              className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-2.5 pl-10 pr-4 text-sm text-slate-800 placeholder-slate-400 focus:outline-hidden focus:border-amber-400"
             />
           </div>
 
@@ -222,7 +222,7 @@ export default function DuePayments({ user, requireCheckIn }: DuePaymentsProps) 
             <select
               value={subBrandFilter}
               onChange={(e) => setSubBrandFilter(e.target.value)}
-              className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-2.5 px-3 text-xs text-slate-700 focus:outline-hidden focus:border-amber-400"
+              className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-2.5 px-3 text-sm text-slate-700 focus:outline-hidden focus:border-amber-400"
             >
               <option value="">All Sub-Brands</option>
               <option value="SAT">Sky Auto (SAT)</option>
@@ -236,7 +236,7 @@ export default function DuePayments({ user, requireCheckIn }: DuePaymentsProps) 
             <select
               value={paymentStatusFilter}
               onChange={(e) => setPaymentStatusFilter(e.target.value)}
-              className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-2.5 px-3 text-xs text-slate-700 focus:outline-hidden focus:border-amber-400"
+              className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-2.5 px-3 text-sm text-slate-700 focus:outline-hidden focus:border-amber-400"
             >
               <option value="">All Outstanding States</option>
               <option value="Due">Unpaid (Due)</option>
@@ -249,38 +249,38 @@ export default function DuePayments({ user, requireCheckIn }: DuePaymentsProps) 
       {/* Receivables Table */}
       <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden">
         {loading && orders.length === 0 ? (
-          <div className="p-12 text-center text-xs text-slate-400 font-mono">
+          <div className="p-12 text-center text-sm text-slate-400 font-mono">
             Scanning ledger books for unpaid receivables...
           </div>
         ) : filteredOrders.length === 0 ? (
           <div className="p-12 text-center text-slate-400">
             <CheckCircle size={32} className="mx-auto text-emerald-200 mb-2" />
-            <p className="text-xs font-semibold text-slate-500">Perfect sheet! No outstanding dues found.</p>
+            <p className="text-sm font-semibold text-slate-500">Perfect sheet! No outstanding dues found.</p>
           </div>
         ) : (
           <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse">
               <thead>
                 <tr className="bg-slate-50 border-b border-slate-100">
-                  <th className="py-4 px-6 text-[10px] font-bold text-slate-400 uppercase tracking-wider">Customer Contact</th>
-                  <th className="py-4 px-6 text-[10px] font-bold text-slate-400 uppercase tracking-wider">Sub-Brand</th>
-                  <th className="py-4 px-6 text-[10px] font-bold text-slate-400 uppercase tracking-wider">Order Date</th>
-                  <th className="py-4 px-6 text-[10px] font-bold text-slate-400 uppercase tracking-wider">Aging</th>
-                  <th className="py-4 px-6 text-[10px] font-bold text-slate-400 uppercase tracking-wider">Invoice / Ref #</th>
-                  <th className="py-4 px-6 text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total Amt</th>
-                  <th className="py-4 px-6 text-[10px] font-bold text-slate-400 uppercase tracking-wider">Paid So Far</th>
-                  <th className="py-4 px-6 text-[10px] font-bold text-slate-400 uppercase tracking-wider">Amount Due</th>
-                  <th className="py-4 px-6 text-right text-[10px] font-bold text-slate-400 uppercase tracking-wider">Record</th>
+                  <th className="py-4 px-6 text-sm font-bold text-slate-400 uppercase tracking-wider">Customer Contact</th>
+                  <th className="py-4 px-6 text-sm font-bold text-slate-400 uppercase tracking-wider">Sub-Brand</th>
+                  <th className="py-4 px-6 text-sm font-bold text-slate-400 uppercase tracking-wider">Order Date</th>
+                  <th className="py-4 px-6 text-sm font-bold text-slate-400 uppercase tracking-wider">Aging</th>
+                  <th className="py-4 px-6 text-sm font-bold text-slate-400 uppercase tracking-wider">Invoice / Ref #</th>
+                  <th className="py-4 px-6 text-sm font-bold text-slate-400 uppercase tracking-wider">Total Amt</th>
+                  <th className="py-4 px-6 text-sm font-bold text-slate-400 uppercase tracking-wider">Paid So Far</th>
+                  <th className="py-4 px-6 text-sm font-bold text-slate-400 uppercase tracking-wider">Amount Due</th>
+                  <th className="py-4 px-6 text-right text-sm font-bold text-slate-400 uppercase tracking-wider">Record</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-50 text-xs">
+              <tbody className="divide-y divide-slate-50 text-sm">
                 {filteredOrders.map((ord) => {
                   const daysOld = getDaysSinceOrder(ord.createdAt);
                   return (
                     <tr key={ord.id} className="hover:bg-slate-50/50 transition-colors">
                       <td className="py-3.5 px-6 font-semibold text-slate-700">
                         <div>{ord.customerName}</div>
-                        <div className="text-[10px] text-slate-400 font-mono">{ord.customerPhone}</div>
+                        <div className="text-sm text-slate-400 font-mono">{ord.customerPhone}</div>
                       </td>
                       <td className="py-3.5 px-6">
                         <span className={`inline-block text-[9px] font-mono uppercase px-2 py-0.5 rounded-full font-bold ${
@@ -297,14 +297,14 @@ export default function DuePayments({ user, requireCheckIn }: DuePaymentsProps) 
                         {new Date(ord.createdAt).toLocaleDateString('en-GB')}
                       </td>
                       <td className="py-3.5 px-6">
-                        <span className={`inline-block text-[10px] font-mono font-bold px-2 py-1 rounded-lg ${getOverdueBadgeClass(daysOld)}`}>
+                        <span className={`inline-block text-sm font-mono font-bold px-2 py-1 rounded-lg ${getOverdueBadgeClass(daysOld)}`}>
                           {daysOld === 0 ? 'Today' : `${daysOld} days`}
                         </span>
                       </td>
                       <td className="py-3.5 px-6">
                         <button
                           onClick={() => setSelectedOrderForDetails(ord)}
-                          className="font-mono text-[11px] text-[#D4AF37] hover:underline font-bold tracking-tight text-left"
+                          className="font-mono text-sm text-[#D4AF37] hover:underline font-bold tracking-tight text-left"
                         >
                           {ord.invoiceId ? 'Linked Invoice' : `Order #${ord.id.substring(0, 8).toUpperCase()}`}
                         </button>
@@ -322,7 +322,7 @@ export default function DuePayments({ user, requireCheckIn }: DuePaymentsProps) 
                         <div className="flex justify-end gap-1.5">
                           <button
                             onClick={() => setSelectedOrderForPayment(ord)}
-                            className="bg-slate-900 hover:bg-slate-800 text-[#D4AF37] hover:text-white text-[11px] font-bold py-1.5 px-3.5 rounded-xl transition-all cursor-pointer flex items-center gap-1"
+                            className="bg-slate-900 hover:bg-slate-800 text-[#D4AF37] hover:text-white text-sm font-bold py-1.5 px-3.5 rounded-xl transition-all cursor-pointer flex items-center gap-1"
                           >
                             <Plus size={11} />
                             Record
@@ -360,7 +360,7 @@ export default function DuePayments({ user, requireCheckIn }: DuePaymentsProps) 
 
             <form onSubmit={handleRecordPaymentSubmit} className="space-y-4">
               {/* Payment Summary */}
-              <div className="bg-slate-50 p-4 rounded-2xl space-y-1.5 text-xs text-slate-600 border border-slate-100">
+              <div className="bg-slate-50 p-4 rounded-2xl space-y-1.5 text-sm text-slate-600 border border-slate-100">
                 <div className="flex justify-between">
                   <span>Customer:</span>
                   <strong className="text-slate-800">{selectedOrderForPayment.customerName}</strong>
@@ -373,7 +373,7 @@ export default function DuePayments({ user, requireCheckIn }: DuePaymentsProps) 
 
               {/* Amount input */}
               <div className="space-y-1.5">
-                <label className="block text-xs font-semibold text-slate-600">Collection Amount (৳) *</label>
+                <label className="block text-sm font-semibold text-slate-600">Collection Amount (৳) *</label>
                 <input
                   type="number"
                   step="any"
@@ -383,17 +383,17 @@ export default function DuePayments({ user, requireCheckIn }: DuePaymentsProps) 
                   max={selectedOrderForPayment.amountDue}
                   min="1"
                   placeholder={`Max ৳${selectedOrderForPayment.amountDue}`}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-xs focus:outline-hidden focus:border-amber-400 text-slate-800 font-mono font-bold"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-sm focus:outline-hidden focus:border-amber-400 text-slate-800 font-mono font-bold"
                 />
               </div>
 
               {/* Payment Method Select */}
               <div className="space-y-1.5">
-                <label className="block text-xs font-semibold text-slate-600">Payment Gateway / Method *</label>
+                <label className="block text-sm font-semibold text-slate-600">Payment Gateway / Method *</label>
                 <select
                   value={paymentMethod}
                   onChange={(e) => setPaymentMethod(e.target.value as any)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-xs focus:outline-hidden focus:border-amber-400 text-slate-700 font-semibold"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-sm focus:outline-hidden focus:border-amber-400 text-slate-700 font-semibold"
                 >
                   <option value="Cash">Cash</option>
                   <option value="bKash">bKash (MFS)</option>
@@ -409,13 +409,13 @@ export default function DuePayments({ user, requireCheckIn }: DuePaymentsProps) 
                     setSelectedOrderForPayment(null);
                     setPaymentAmount('');
                   }}
-                  className="py-2.5 px-4 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-600 text-xs font-bold rounded-xl cursor-pointer"
+                  className="py-2.5 px-4 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-600 text-sm font-bold rounded-xl cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
-                  className="py-2.5 px-5 bg-slate-900 hover:bg-slate-800 text-[#D4AF37] hover:text-white text-xs font-bold rounded-xl shadow-md cursor-pointer flex items-center gap-1.5"
+                  className="py-2.5 px-5 bg-slate-900 hover:bg-slate-800 text-[#D4AF37] hover:text-white text-sm font-bold rounded-xl shadow-md cursor-pointer flex items-center gap-1.5"
                 >
                   Submit Payment
                   <ArrowRight size={13} />
@@ -433,31 +433,31 @@ export default function DuePayments({ user, requireCheckIn }: DuePaymentsProps) 
             <div className="flex justify-between items-center pb-3 border-b border-slate-100">
               <div>
                 <h3 className="text-sm font-bold text-slate-900 uppercase tracking-tight">Payment Ledger Card</h3>
-                <p className="text-[10px] text-slate-400 mt-0.5">Reference ID: #{selectedOrderForDetails.id.substring(0, 8).toUpperCase()}</p>
+                <p className="text-sm text-slate-400 mt-0.5">Reference ID: #{selectedOrderForDetails.id.substring(0, 8).toUpperCase()}</p>
               </div>
               <button onClick={() => setSelectedOrderForDetails(null)} className="text-slate-400 hover:text-slate-600"><X size={16} /></button>
             </div>
 
             {/* Customer Details */}
             <div className="space-y-3">
-              <div className="grid grid-cols-2 gap-3 text-xs border border-slate-100 p-3 rounded-2xl bg-slate-50/50">
+              <div className="grid grid-cols-2 gap-3 text-sm border border-slate-100 p-3 rounded-2xl bg-slate-50/50">
                 <div>
-                  <span className="text-[10px] uppercase font-bold text-slate-400">Customer Name</span>
+                  <span className="text-sm uppercase font-bold text-slate-400">Customer Name</span>
                   <p className="font-bold text-slate-700 mt-0.5">{selectedOrderForDetails.customerName}</p>
                 </div>
                 <div>
-                  <span className="text-[10px] uppercase font-bold text-slate-400">Phone Contact</span>
+                  <span className="text-sm uppercase font-bold text-slate-400">Phone Contact</span>
                   <p className="font-mono font-semibold text-slate-700 mt-0.5">{selectedOrderForDetails.customerPhone}</p>
                 </div>
               </div>
 
               {/* Items breakdown list */}
               <div>
-                <h4 className="text-[10px] uppercase font-bold text-slate-400 tracking-wider mb-2">Ordered Items Breakdown</h4>
+                <h4 className="text-sm uppercase font-bold text-slate-400 tracking-wider mb-2">Ordered Items Breakdown</h4>
                 <div className="space-y-1.5 max-h-32 overflow-y-auto">
                   {selectedOrderForDetails.items.map((it, idx) => (
-                    <div key={idx} className="flex justify-between text-xs py-1.5 px-3 bg-slate-50 border border-slate-100 rounded-xl">
-                      <span>{it.productName} <span className="text-slate-400 text-[10px]">({it.variantLabel})</span></span>
+                    <div key={idx} className="flex justify-between text-sm py-1.5 px-3 bg-slate-50 border border-slate-100 rounded-xl">
+                      <span>{it.productName} <span className="text-slate-400 text-sm">({it.variantLabel})</span></span>
                       <strong className="font-mono">Qty: {it.qty}</strong>
                     </div>
                   ))}
@@ -466,13 +466,13 @@ export default function DuePayments({ user, requireCheckIn }: DuePaymentsProps) 
 
               {/* Payment History Log Table */}
               <div>
-                <h4 className="text-[10px] uppercase font-bold text-slate-400 tracking-wider mb-2">Payment Collections History Log</h4>
+                <h4 className="text-sm uppercase font-bold text-slate-400 tracking-wider mb-2">Payment Collections History Log</h4>
                 {!selectedOrderForDetails.paymentHistory || selectedOrderForDetails.paymentHistory.length === 0 ? (
-                  <p className="text-xs text-slate-400 italic bg-amber-50/30 border border-amber-100/50 p-3 rounded-xl text-center">
+                  <p className="text-sm text-slate-400 italic bg-amber-50/30 border border-amber-100/50 p-3 rounded-xl text-center">
                     No payment collection entries recorded yet. Outstanding due is fully unpaid.
                   </p>
                 ) : (
-                  <div className="border border-slate-100 rounded-2xl overflow-hidden text-xs max-h-44 overflow-y-auto">
+                  <div className="border border-slate-100 rounded-2xl overflow-hidden text-sm max-h-44 overflow-y-auto">
                     <table className="w-full text-left">
                       <thead>
                         <tr className="bg-slate-50 border-b border-slate-100 text-[9px] uppercase font-bold text-slate-400">
@@ -482,7 +482,7 @@ export default function DuePayments({ user, requireCheckIn }: DuePaymentsProps) 
                           <th className="py-2 px-4 text-right">Amount</th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-slate-100 text-[11px]">
+                      <tbody className="divide-y divide-slate-100 text-sm">
                         {selectedOrderForDetails.paymentHistory.map((ph, idx) => (
                           <tr key={idx} className="hover:bg-slate-50/40">
                             <td className="py-2.5 px-4 font-mono text-slate-400">
@@ -503,7 +503,7 @@ export default function DuePayments({ user, requireCheckIn }: DuePaymentsProps) 
             <div className="flex justify-end pt-2 border-t border-slate-100">
               <button
                 onClick={() => setSelectedOrderForDetails(null)}
-                className="py-2 px-5 bg-slate-900 hover:bg-slate-800 text-[#D4AF37] text-xs font-bold rounded-xl cursor-pointer shadow-xs"
+                className="py-2 px-5 bg-slate-900 hover:bg-slate-800 text-[#D4AF37] text-sm font-bold rounded-xl cursor-pointer shadow-xs"
               >
                 Close Ledger
               </button>

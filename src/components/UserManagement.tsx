@@ -670,7 +670,7 @@ export default function UserManagement({ user }: UserManagementProps) {
       <div className="bg-white p-8 rounded-3xl border border-slate-100 text-center max-w-lg mx-auto mt-10">
         <Shield className="w-16 h-16 text-red-400 mx-auto mb-4" />
         <h2 className="text-xl font-bold text-slate-900">Access Restricted</h2>
-        <p className="text-xs text-slate-400 mt-2 leading-relaxed">
+        <p className="text-sm text-slate-400 mt-2 leading-relaxed">
           Only Super Admin and Admin operators have permission to access the User Management & Staff Permissions registry.
         </p>
       </div>
@@ -689,15 +689,15 @@ export default function UserManagement({ user }: UserManagementProps) {
           
           <div>
             <div className="flex items-center gap-2">
-              <span className="text-[10px] font-mono font-bold bg-amber-400/20 text-amber-400 py-0.5 px-2 rounded-full uppercase tracking-wider">
+              <span className="text-sm font-mono font-bold bg-amber-400/20 text-amber-400 py-0.5 px-2 rounded-full uppercase tracking-wider">
                 Operator Security
               </span>
-              <span className="text-[10px] font-mono text-slate-400">
+              <span className="text-sm font-mono text-slate-400">
                 Level: {user.role.toUpperCase()}
               </span>
             </div>
             <h1 className="text-2xl font-bold font-display mt-2 tracking-tight">Staff Registry & Permissions</h1>
-            <p className="text-xs text-slate-400 leading-relaxed mt-1">
+            <p className="text-sm text-slate-400 leading-relaxed mt-1">
               Provision brand-isolated user accounts, assign roles, and handle operator state locks.
             </p>
           </div>
@@ -707,7 +707,7 @@ export default function UserManagement({ user }: UserManagementProps) {
         <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm flex flex-col justify-between min-h-[140px]">
           <div className="flex justify-between items-start">
             <div>
-              <span className="text-xs text-slate-400 font-semibold uppercase tracking-wider">Operator Coverage</span>
+              <span className="text-sm text-slate-400 font-semibold uppercase tracking-wider">Operator Coverage</span>
               <div className="text-3xl font-extrabold text-slate-900 mt-1 font-mono">{users.filter(u => u.status !== 'pending_approval' && u.status !== 'rejected').length}</div>
             </div>
             <div className="bg-amber-100 p-2.5 rounded-2xl text-amber-600">
@@ -722,13 +722,13 @@ export default function UserManagement({ user }: UserManagementProps) {
                 setSuccess('');
                 setActiveTab('pending');
               }}
-              className="w-full mt-3 py-2.5 px-4 bg-amber-400 hover:bg-amber-500 text-slate-950 font-bold text-xs rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer shadow-xs animate-pulse"
+              className="w-full mt-3 py-2.5 px-4 bg-amber-400 hover:bg-amber-500 text-slate-950 font-bold text-sm rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer shadow-xs animate-pulse"
             >
               <ShieldAlert size={14} />
               {pendingUsers.length} Pending Approval{pendingUsers.length > 1 ? 's' : ''}
             </button>
           ) : (
-            <div className="text-slate-400 text-[10px] uppercase font-bold tracking-tight mt-3 text-center py-1 bg-slate-50 rounded-lg">
+            <div className="text-slate-400 text-sm uppercase font-bold tracking-tight mt-3 text-center py-1 bg-slate-50 rounded-lg">
               System Active & Guarded
             </div>
           )}
@@ -736,7 +736,7 @@ export default function UserManagement({ user }: UserManagementProps) {
           {isSuperAdmin && (
             <button
               onClick={() => setShowRepairTool(!showRepairTool)}
-              className="w-full mt-2 py-2 px-4 border border-slate-200 text-slate-500 hover:bg-slate-50 font-bold text-[10px] rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer"
+              className="w-full mt-2 py-2 px-4 border border-slate-200 text-slate-500 hover:bg-slate-50 font-bold text-sm rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer"
             >
               <Wrench size={12} />
               {showRepairTool ? 'Hide Repair Tool' : 'System Repair Tool'}
@@ -759,40 +759,40 @@ export default function UserManagement({ user }: UserManagementProps) {
             <button
               onClick={handleBulkRepair}
               disabled={loading}
-              className="flex items-center gap-2 text-[10px] font-bold bg-amber-200 text-amber-900 px-4 py-2 rounded-xl hover:bg-amber-300 transition-colors uppercase tracking-wider disabled:opacity-50"
+              className="flex items-center gap-2 text-sm font-bold bg-amber-200 text-amber-900 px-4 py-2 rounded-xl hover:bg-amber-300 transition-colors uppercase tracking-wider disabled:opacity-50"
             >
               <RefreshCw className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`} />
               Bulk System Scan
             </button>
           </div>
-          <p className="text-xs text-amber-700 mb-6 leading-relaxed">
+          <p className="text-sm text-amber-700 mb-6 leading-relaxed">
             This tool automatically resolves mismatches between Firebase Authentication and Firestore profiles. 
             It fetches the <strong>true Auth UID</strong> directly from the system and re-syncs the Firestore record based on email.
           </p>
           
           <form onSubmit={handleRepairAccount} className="flex flex-col md:flex-row items-end gap-4">
             <div className="flex-1 space-y-1">
-              <label className="text-[10px] font-bold text-amber-900 uppercase ml-1">Email Address to Fix</label>
+              <label className="text-sm font-bold text-amber-900 uppercase ml-1">Email Address to Fix</label>
               <input
                 type="email"
                 value={repairEmail}
                 onChange={(e) => setRepairEmail(e.target.value)}
                 placeholder="operator@example.com"
-                className="w-full px-4 py-3 bg-white border border-amber-200 rounded-2xl text-xs focus:ring-2 focus:ring-amber-500 outline-none"
+                className="w-full px-4 py-3 bg-white border border-amber-200 rounded-2xl text-sm focus:ring-2 focus:ring-amber-500 outline-none"
               />
             </div>
             <div className="flex gap-2">
               <button
                 type="button"
                 onClick={() => setShowRepairTool(false)}
-                className="px-6 py-3 text-xs font-bold text-amber-700 hover:bg-amber-100 rounded-2xl transition-colors"
+                className="px-6 py-3 text-sm font-bold text-amber-700 hover:bg-amber-100 rounded-2xl transition-colors"
               >
                 Cancel
               </button>
               <button
                 type="submit"
                 disabled={loading}
-                className="px-8 py-3 bg-amber-600 text-white text-xs font-bold rounded-2xl hover:bg-amber-700 transition-colors shadow-sm disabled:opacity-50"
+                className="px-8 py-3 bg-amber-600 text-white text-sm font-bold rounded-2xl hover:bg-amber-700 transition-colors shadow-sm disabled:opacity-50"
               >
                 {loading ? 'Running System Scan...' : 'Repair Account'}
               </button>
@@ -802,13 +802,13 @@ export default function UserManagement({ user }: UserManagementProps) {
       )}
 
       {error && (
-        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-2xl text-xs font-medium">
+        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-2xl text-sm font-medium">
           {error}
         </div>
       )}
 
       {success && (
-        <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 px-4 py-3 rounded-2xl text-xs font-medium">
+        <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 px-4 py-3 rounded-2xl text-sm font-medium">
           {success}
         </div>
       )}
@@ -836,7 +836,7 @@ export default function UserManagement({ user }: UserManagementProps) {
           >
             Pending Approvals
             {pendingUsers.length > 0 && (
-              <span className="bg-amber-400 text-slate-950 text-[10px] font-bold px-2 py-0.5 rounded-full animate-bounce">
+              <span className="bg-amber-400 text-slate-950 text-sm font-bold px-2 py-0.5 rounded-full animate-bounce">
                 {pendingUsers.length}
               </span>
             )}
@@ -852,10 +852,10 @@ export default function UserManagement({ user }: UserManagementProps) {
               <div>
                 <div className="flex items-center gap-2 text-amber-500">
                   <PlusCircle size={16} />
-                  <span className="text-xs font-mono font-bold uppercase tracking-widest">Provision Console Account</span>
+                  <span className="text-sm font-mono font-bold uppercase tracking-widest">Provision Console Account</span>
                 </div>
                 <h2 className="text-xl font-bold text-slate-900 mt-1">Operator Profile Provisioning</h2>
-                <p className="text-xs text-slate-400 leading-relaxed mt-0.5">
+                <p className="text-sm text-slate-400 leading-relaxed mt-0.5">
                   Complete all sections to securely onboard a new operator to the Sky Automation ecosystem.
                 </p>
               </div>
@@ -892,13 +892,13 @@ export default function UserManagement({ user }: UserManagementProps) {
                         <input type="file" accept="image/*" className="hidden" onChange={handlePhotoChange} />
                       </label>
                     </div>
-                    <span className="text-[10px] font-bold text-slate-400 uppercase tracking-tighter">Avatar Photo</span>
+                    <span className="text-sm font-bold text-slate-400 uppercase tracking-tighter">Avatar Photo</span>
                   </div>
 
                   {/* Inputs */}
                   <div className="flex-grow grid grid-cols-1 md:grid-cols-2 gap-4">
                     <div className="space-y-1">
-                      <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-400 ml-1">
+                      <label className="block text-sm font-bold uppercase tracking-wider text-slate-400 ml-1">
                         Full Name *
                       </label>
                       <div className="relative">
@@ -908,14 +908,14 @@ export default function UserManagement({ user }: UserManagementProps) {
                           required
                           value={fullName}
                           onChange={(e) => setFullName(e.target.value)}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-10 pr-4 text-xs text-slate-800 focus:outline-hidden focus:ring-1 focus:ring-amber-400 focus:border-transparent font-medium"
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-10 pr-4 text-sm text-slate-800 focus:outline-hidden focus:ring-1 focus:ring-amber-400 focus:border-transparent font-medium"
                           placeholder="e.g. Shakib Al Hasan"
                         />
                       </div>
                     </div>
 
                     <div className="space-y-1">
-                      <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-400 ml-1">
+                      <label className="block text-sm font-bold uppercase tracking-wider text-slate-400 ml-1">
                         Email Address *
                       </label>
                       <div className="relative">
@@ -925,14 +925,14 @@ export default function UserManagement({ user }: UserManagementProps) {
                           required
                           value={email}
                           onChange={(e) => setEmail(e.target.value)}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-10 pr-4 text-xs text-slate-800 focus:outline-hidden focus:ring-1 focus:ring-amber-400 focus:border-transparent font-medium font-mono"
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-10 pr-4 text-sm text-slate-800 focus:outline-hidden focus:ring-1 focus:ring-amber-400 focus:border-transparent font-medium font-mono"
                           placeholder="operator@skyautomation.com"
                         />
                       </div>
                     </div>
 
                     <div className="space-y-1">
-                      <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-400 ml-1">
+                      <label className="block text-sm font-bold uppercase tracking-wider text-slate-400 ml-1">
                         Phone Number *
                       </label>
                       <div className="relative">
@@ -942,7 +942,7 @@ export default function UserManagement({ user }: UserManagementProps) {
                           required
                           value={phoneNumber}
                           onChange={(e) => setPhoneNumber(e.target.value)}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-10 pr-4 text-xs text-slate-800 focus:outline-hidden focus:ring-1 focus:ring-amber-400 focus:border-transparent font-medium"
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-10 pr-4 text-sm text-slate-800 focus:outline-hidden focus:ring-1 focus:ring-amber-400 focus:border-transparent font-medium"
                           placeholder="e.g. 01712345678"
                         />
                       </div>
@@ -960,7 +960,7 @@ export default function UserManagement({ user }: UserManagementProps) {
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                   <div className="space-y-3">
-                    <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-400 ml-1">
+                    <label className="block text-sm font-bold uppercase tracking-wider text-slate-400 ml-1">
                       Authority Level
                     </label>
                     <div className="grid grid-cols-2 gap-3">
@@ -974,7 +974,7 @@ export default function UserManagement({ user }: UserManagementProps) {
                         }`}
                       >
                         <UserIcon size={16} />
-                        <span className="font-bold text-xs uppercase tracking-tight">Staff</span>
+                        <span className="font-bold text-sm uppercase tracking-tight">Staff</span>
                       </button>
                       <button
                         type="button"
@@ -988,7 +988,7 @@ export default function UserManagement({ user }: UserManagementProps) {
                       >
                         <Shield size={16} />
                         <div className="text-left">
-                          <span className="block font-bold text-xs uppercase tracking-tight">Admin</span>
+                          <span className="block font-bold text-sm uppercase tracking-tight">Admin</span>
                           {!isSuperAdmin && <span className="text-[8px] text-slate-400 font-mono">SUPER ONLY</span>}
                         </div>
                       </button>
@@ -996,7 +996,7 @@ export default function UserManagement({ user }: UserManagementProps) {
                   </div>
 
                   <div className="space-y-3">
-                    <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-400 ml-1">
+                    <label className="block text-sm font-bold uppercase tracking-wider text-slate-400 ml-1">
                       Sub-brand Access Rights
                     </label>
                     <div className="flex flex-wrap gap-2">
@@ -1007,7 +1007,7 @@ export default function UserManagement({ user }: UserManagementProps) {
                             type="button"
                             key={brand}
                             onClick={() => handleToggleBrandAccess(brand, false)}
-                            className={`py-2.5 px-4 rounded-xl text-xs font-bold border-2 flex items-center gap-2 transition-all ${
+                            className={`py-2.5 px-4 rounded-xl text-sm font-bold border-2 flex items-center gap-2 transition-all ${
                               isSelected
                                 ? 'bg-teal-50 border-teal-500/30 text-teal-700 shadow-xs'
                                 : 'bg-white border-slate-100 text-slate-400 hover:border-slate-200'
@@ -1031,7 +1031,7 @@ export default function UserManagement({ user }: UserManagementProps) {
                   >
                     <div className="flex items-center gap-2">
                       <SlidersHorizontal size={14} className="text-slate-400" />
-                      <span className="text-xs font-bold text-slate-600 uppercase tracking-tight">Individual Permission Overrides</span>
+                      <span className="text-sm font-bold text-slate-600 uppercase tracking-tight">Individual Permission Overrides</span>
                     </div>
                     {showAdvancedPerms ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
                   </button>
@@ -1087,7 +1087,7 @@ export default function UserManagement({ user }: UserManagementProps) {
                   <button
                     type="button"
                     onClick={() => setShowEmploymentInfo(!showEmploymentInfo)}
-                    className="text-xs font-bold text-amber-600 hover:text-amber-700 flex items-center gap-1"
+                    className="text-sm font-bold text-amber-600 hover:text-amber-700 flex items-center gap-1"
                   >
                     {showEmploymentInfo ? 'Hide Details' : 'Show Optional Details'}
                     {showEmploymentInfo ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
@@ -1098,7 +1098,7 @@ export default function UserManagement({ user }: UserManagementProps) {
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-6 animate-slide-down">
                     <div className="space-y-4">
                       <div className="space-y-1">
-                        <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-400 ml-1">
+                        <label className="block text-sm font-bold uppercase tracking-wider text-slate-400 ml-1">
                           Joining Date
                         </label>
                         <div className="relative">
@@ -1107,13 +1107,13 @@ export default function UserManagement({ user }: UserManagementProps) {
                             type="date"
                             value={joiningDate}
                             onChange={(e) => setJoiningDate(e.target.value)}
-                            className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-10 pr-4 text-xs text-slate-800 focus:outline-hidden"
+                            className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-10 pr-4 text-sm text-slate-800 focus:outline-hidden"
                           />
                         </div>
                       </div>
 
                       <div className="space-y-1">
-                        <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-400 ml-1">
+                        <label className="block text-sm font-bold uppercase tracking-wider text-slate-400 ml-1">
                           Designation / Position
                         </label>
                         <div className="relative">
@@ -1122,14 +1122,14 @@ export default function UserManagement({ user }: UserManagementProps) {
                             type="text"
                             value={designation}
                             onChange={(e) => setDesignation(e.target.value)}
-                            className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-10 pr-4 text-xs text-slate-800 focus:outline-hidden"
+                            className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-10 pr-4 text-sm text-slate-800 focus:outline-hidden"
                             placeholder="e.g. Sales Executive"
                           />
                         </div>
                       </div>
 
                       <div className="space-y-1">
-                        <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-400 ml-1">
+                        <label className="block text-sm font-bold uppercase tracking-wider text-slate-400 ml-1">
                           Monthly Salary (৳)
                         </label>
                         <div className="relative">
@@ -1139,7 +1139,7 @@ export default function UserManagement({ user }: UserManagementProps) {
                             disabled={!isSuperAdmin}
                             value={salary}
                             onChange={(e) => setSalary(e.target.value === '' ? '' : Number(e.target.value))}
-                            className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-10 pr-4 text-xs text-slate-800 focus:outline-hidden disabled:opacity-50 disabled:bg-slate-100"
+                            className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-10 pr-4 text-sm text-slate-800 focus:outline-hidden disabled:opacity-50 disabled:bg-slate-100"
                             placeholder={isSuperAdmin ? "e.g. 25000" : "Restricted for Super Admin"}
                           />
                         </div>
@@ -1153,7 +1153,7 @@ export default function UserManagement({ user }: UserManagementProps) {
 
                     <div className="space-y-4">
                       <div className="space-y-1">
-                        <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-400 ml-1">
+                        <label className="block text-sm font-bold uppercase tracking-wider text-slate-400 ml-1">
                           NID / Identification Number
                         </label>
                         <div className="relative">
@@ -1162,14 +1162,14 @@ export default function UserManagement({ user }: UserManagementProps) {
                             type="text"
                             value={nidNumber}
                             onChange={(e) => setNidNumber(e.target.value)}
-                            className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-10 pr-4 text-xs text-slate-800 focus:outline-hidden"
+                            className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-10 pr-4 text-sm text-slate-800 focus:outline-hidden"
                             placeholder="e.g. 1995123456789"
                           />
                         </div>
                       </div>
 
                       <div className="space-y-1">
-                        <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-400 ml-1">
+                        <label className="block text-sm font-bold uppercase tracking-wider text-slate-400 ml-1">
                           Home Address
                         </label>
                         <div className="relative">
@@ -1178,7 +1178,7 @@ export default function UserManagement({ user }: UserManagementProps) {
                             value={address}
                             onChange={(e) => setAddress(e.target.value)}
                             rows={3}
-                            className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-10 pr-4 text-xs text-slate-800 focus:outline-hidden resize-none"
+                            className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-10 pr-4 text-sm text-slate-800 focus:outline-hidden resize-none"
                             placeholder="Full permanent or current address..."
                           />
                         </div>
@@ -1197,7 +1197,7 @@ export default function UserManagement({ user }: UserManagementProps) {
 
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                   <div className="space-y-3">
-                    <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-400 ml-1">
+                    <label className="block text-sm font-bold uppercase tracking-wider text-slate-400 ml-1">
                       Temporary Access Password *
                     </label>
                     <div className="flex gap-2">
@@ -1208,7 +1208,7 @@ export default function UserManagement({ user }: UserManagementProps) {
                           required
                           value={tempPassword}
                           onChange={(e) => setTempPassword(e.target.value)}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-10 pr-10 text-xs text-slate-800 focus:outline-hidden font-mono"
+                          className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-10 pr-10 text-sm text-slate-800 focus:outline-hidden font-mono"
                           placeholder="••••••••••••"
                         />
                         <button
@@ -1241,8 +1241,8 @@ export default function UserManagement({ user }: UserManagementProps) {
                         />
                       </div>
                       <div className="flex flex-col">
-                        <span className="text-xs font-bold text-slate-700">Dispatch Credentials via Email</span>
-                        <span className="text-[10px] text-slate-400">Operator will receive their login link and temp password.</span>
+                        <span className="text-sm font-bold text-slate-700">Dispatch Credentials via Email</span>
+                        <span className="text-sm text-slate-400">Operator will receive their login link and temp password.</span>
                       </div>
                     </label>
 
@@ -1256,8 +1256,8 @@ export default function UserManagement({ user }: UserManagementProps) {
                         />
                       </div>
                       <div className="flex flex-col">
-                        <span className="text-xs font-bold text-slate-700">Enforce Password Change</span>
-                        <span className="text-[10px] text-slate-400">User will be prompted to reset password on their first login.</span>
+                        <span className="text-sm font-bold text-slate-700">Enforce Password Change</span>
+                        <span className="text-sm text-slate-400">User will be prompted to reset password on their first login.</span>
                       </div>
                     </label>
                   </div>
@@ -1268,12 +1268,12 @@ export default function UserManagement({ user }: UserManagementProps) {
               <div className="pt-6 border-t border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-6">
                 <div className="flex items-center gap-4">
                   <div className="flex flex-col">
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-slate-400">Account Initial State</span>
+                    <span className="text-sm font-bold uppercase tracking-wider text-slate-400">Account Initial State</span>
                     <div className="flex items-center gap-2 mt-1">
                       <button
                         type="button"
                         onClick={() => setIsActiveAccount(true)}
-                        className={`py-1.5 px-4 rounded-full text-[10px] font-bold uppercase tracking-tight transition-all ${
+                        className={`py-1.5 px-4 rounded-full text-sm font-bold uppercase tracking-tight transition-all ${
                           isActiveAccount 
                           ? 'bg-teal-500 text-white shadow-lg shadow-teal-500/20' 
                           : 'bg-slate-100 text-slate-400'
@@ -1284,7 +1284,7 @@ export default function UserManagement({ user }: UserManagementProps) {
                       <button
                         type="button"
                         onClick={() => setIsActiveAccount(false)}
-                        className={`py-1.5 px-4 rounded-full text-[10px] font-bold uppercase tracking-tight transition-all ${
+                        className={`py-1.5 px-4 rounded-full text-sm font-bold uppercase tracking-tight transition-all ${
                           !isActiveAccount 
                           ? 'bg-red-500 text-white shadow-lg shadow-red-500/20' 
                           : 'bg-slate-100 text-slate-400'
@@ -1297,7 +1297,7 @@ export default function UserManagement({ user }: UserManagementProps) {
                   {!isActiveAccount && (
                     <div className="flex items-center gap-2 text-red-500 bg-red-50 py-2 px-3 rounded-xl animate-pulse">
                       <Shield size={14} />
-                      <span className="text-[10px] font-bold uppercase">Account will be locked on creation</span>
+                      <span className="text-sm font-bold uppercase">Account will be locked on creation</span>
                     </div>
                   )}
                 </div>
@@ -1306,14 +1306,14 @@ export default function UserManagement({ user }: UserManagementProps) {
                   <button
                     type="button"
                     onClick={() => setShowAddForm(false)}
-                    className="py-3 px-6 bg-slate-50 text-slate-600 font-bold text-xs rounded-2xl hover:bg-slate-100 transition-all border border-slate-100"
+                    className="py-3 px-6 bg-slate-50 text-slate-600 font-bold text-sm rounded-2xl hover:bg-slate-100 transition-all border border-slate-100"
                   >
                     Cancel Onboarding
                   </button>
                   <button
                     type="submit"
                     disabled={loading}
-                    className="py-3 px-8 bg-slate-900 text-amber-400 font-bold text-xs rounded-2xl shadow-xl hover:bg-slate-800 transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed group"
+                    className="py-3 px-8 bg-slate-900 text-amber-400 font-bold text-sm rounded-2xl shadow-xl hover:bg-slate-800 transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed group"
                   >
                     {loading ? (
                       <RefreshCw size={16} className="animate-spin" />
@@ -1343,7 +1343,7 @@ export default function UserManagement({ user }: UserManagementProps) {
               value={searchTerm}
               onChange={(e) => setSearchTerm(e.target.value)}
               placeholder="Search by name or email..."
-              className="w-full bg-slate-50 border border-slate-200 rounded-lg py-1.5 pl-8 pr-4 text-xs text-slate-800 focus:outline-hidden"
+              className="w-full bg-slate-50 border border-slate-200 rounded-lg py-1.5 pl-8 pr-4 text-sm text-slate-800 focus:outline-hidden"
             />
           </div>
 
@@ -1352,7 +1352,7 @@ export default function UserManagement({ user }: UserManagementProps) {
             <select
               value={roleFilter}
               onChange={(e) => setRoleFilter(e.target.value)}
-              className="bg-slate-50 border border-slate-200 rounded-lg py-1.5 px-2 text-xs text-slate-600 focus:outline-hidden cursor-pointer"
+              className="bg-slate-50 border border-slate-200 rounded-lg py-1.5 px-2 text-sm text-slate-600 focus:outline-hidden cursor-pointer"
             >
               <option value="all">All Roles</option>
               <option value="superadmin">Super Admin</option>
@@ -1363,7 +1363,7 @@ export default function UserManagement({ user }: UserManagementProps) {
             <select
               value={statusFilter}
               onChange={(e) => setStatusFilter(e.target.value)}
-              className="bg-slate-50 border border-slate-200 rounded-lg py-1.5 px-2 text-xs text-slate-600 focus:outline-hidden cursor-pointer"
+              className="bg-slate-50 border border-slate-200 rounded-lg py-1.5 px-2 text-sm text-slate-600 focus:outline-hidden cursor-pointer"
             >
               <option value="all">All Statuses</option>
               <option value="active">Active Only</option>
@@ -1375,7 +1375,7 @@ export default function UserManagement({ user }: UserManagementProps) {
         {/* User List Table */}
         <div className="overflow-x-auto">
           {filteredUsers.length === 0 ? (
-            <div className="py-8 text-center text-slate-400 italic text-xs">
+            <div className="py-8 text-center text-slate-400 italic text-sm">
               No active operator records found matching filters.
             </div>
           ) : (
@@ -1383,7 +1383,7 @@ export default function UserManagement({ user }: UserManagementProps) {
               {/* Desktop Table View */}
               <table className="w-full text-left border-collapse hidden md:table">
                 <thead>
-                  <tr className="border-b border-slate-100 text-slate-400 text-[10px] font-semibold uppercase tracking-wider">
+                  <tr className="border-b border-slate-100 text-slate-400 text-sm font-semibold uppercase tracking-wider">
                     <th className="py-3 px-4">Operator Info & System ID</th>
                     <th className="py-3 px-4">Authority Level</th>
                     <th className="py-3 px-4">Scope Domain</th>
@@ -1391,7 +1391,7 @@ export default function UserManagement({ user }: UserManagementProps) {
                     <th className="py-3 px-4 text-right">Registry Operations</th>
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100 text-xs">
+                <tbody className="divide-y divide-slate-100 text-sm">
                   {filteredUsers.map((u) => {
                     const isUserActive = u.active !== false;
                     const isCurrentEditing = editingUserId === u.id;
@@ -1402,7 +1402,7 @@ export default function UserManagement({ user }: UserManagementProps) {
                         {/* Name / Email */}
                         <td className="py-3.5 px-4">
                           <div className="flex items-center gap-3">
-                            <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-xs ${
+                            <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm ${
                               u.role === 'superadmin' ? 'bg-amber-100 text-amber-700' :
                               u.role === 'admin' ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-700'
                             }`}>
@@ -1417,7 +1417,7 @@ export default function UserManagement({ user }: UserManagementProps) {
                                   </span>
                                 )}
                               </div>
-                              <div className="text-slate-400 font-mono text-[11px] mt-0.5">{u.email}</div>
+                              <div className="text-slate-400 font-mono text-sm mt-0.5">{u.email}</div>
                               <div className="flex items-center gap-1 mt-1">
                                 <span className="text-[9px] font-bold text-slate-300 uppercase tracking-tighter">System ID:</span>
                                 <code className="text-[9px] font-mono text-slate-400 bg-slate-50 px-1 rounded border border-slate-100 select-all">
@@ -1444,12 +1444,12 @@ export default function UserManagement({ user }: UserManagementProps) {
                         </td>
 
                         {/* Role Column */}
-                        <td className="py-3.5 px-4 font-semibold uppercase tracking-wider text-[10px]">
+                        <td className="py-3.5 px-4 font-semibold uppercase tracking-wider text-sm">
                           {isCurrentEditing ? (
                             <select
                               value={editRole}
                               onChange={(e) => setEditRole(e.target.value as UserRole)}
-                              className="bg-slate-50 border border-slate-200 rounded-lg p-1 text-[10px] font-bold focus:outline-hidden"
+                              className="bg-slate-50 border border-slate-200 rounded-lg p-1 text-sm font-bold focus:outline-hidden"
                             >
                               <option value="staff">Staff</option>
                               <option value="admin">Admin</option>
@@ -1475,7 +1475,7 @@ export default function UserManagement({ user }: UserManagementProps) {
                                   type="button"
                                   key={brand}
                                   onClick={() => handleToggleBrandAccess(brand, true)}
-                                  className={`py-0.5 px-1.5 rounded text-[10px] font-bold border ${
+                                  className={`py-0.5 px-1.5 rounded text-sm font-bold border ${
                                     editBrandAccess.includes(brand)
                                       ? 'bg-teal-500/10 border-teal-500/30 text-teal-700'
                                       : 'bg-slate-50 border-slate-200 text-slate-400'
@@ -1488,17 +1488,17 @@ export default function UserManagement({ user }: UserManagementProps) {
                           ) : (
                             <div className="flex gap-1">
                               {u.subBrandAccess?.length === 3 ? (
-                                <span className="text-[10px] font-bold bg-slate-100 text-slate-600 py-0.5 px-2 rounded">
+                                <span className="text-sm font-bold bg-slate-100 text-slate-600 py-0.5 px-2 rounded">
                                   Global Scope (All Brands)
                                 </span>
                               ) : u.subBrandAccess && u.subBrandAccess.length > 0 ? (
                                 u.subBrandAccess.map((b) => (
-                                  <span key={b} className="text-[10px] font-mono font-bold bg-slate-50 text-slate-500 border border-slate-100 py-0.5 px-1.5 rounded">
+                                  <span key={b} className="text-sm font-mono font-bold bg-slate-50 text-slate-500 border border-slate-100 py-0.5 px-1.5 rounded">
                                     {b}
                                   </span>
                                 ))
                               ) : (
-                                <span className="text-[10px] italic text-red-500 font-bold">Isolated (None)</span>
+                                <span className="text-sm italic text-red-500 font-bold">Isolated (None)</span>
                               )}
                             </div>
                           )}
@@ -1521,13 +1521,13 @@ export default function UserManagement({ user }: UserManagementProps) {
                               <>
                                 <button
                                   onClick={() => handleUpdateUserRoleAndAccess(u.id)}
-                                  className="py-1 px-2.5 bg-slate-900 text-amber-400 font-bold text-[10px] rounded hover:bg-slate-800"
+                                  className="py-1 px-2.5 bg-slate-900 text-amber-400 font-bold text-sm rounded hover:bg-slate-800"
                                 >
                                   Save
                                 </button>
                                 <button
                                   onClick={() => setEditingUserId(null)}
-                                  className="py-1 px-2.5 bg-slate-100 text-slate-500 font-bold text-[10px] rounded hover:bg-slate-200"
+                                  className="py-1 px-2.5 bg-slate-100 text-slate-500 font-bold text-sm rounded hover:bg-slate-200"
                                 >
                                   Exit
                                 </button>
@@ -1537,7 +1537,7 @@ export default function UserManagement({ user }: UserManagementProps) {
                                 {isSuperAdmin && (
                                   <button
                                     onClick={() => startEdit(u)}
-                                    className="py-1 px-2 text-[10px] font-bold text-slate-600 hover:text-slate-950 hover:bg-slate-100 rounded transition-all"
+                                    className="py-1 px-2 text-sm font-bold text-slate-600 hover:text-slate-950 hover:bg-slate-100 rounded transition-all"
                                   >
                                     Edit Access
                                   </button>
@@ -1547,7 +1547,7 @@ export default function UserManagement({ user }: UserManagementProps) {
                                 {u.id !== user.id && (
                                   <button
                                     onClick={() => handleToggleUserActive(u)}
-                                    className={`py-1 px-2 text-[10px] font-bold rounded transition-all ${
+                                    className={`py-1 px-2 text-sm font-bold rounded transition-all ${
                                       isUserActive
                                         ? 'text-red-600 hover:bg-red-50'
                                         : 'text-teal-600 hover:bg-teal-50'
@@ -1586,7 +1586,7 @@ export default function UserManagement({ user }: UserManagementProps) {
                             {u.name}
                             {u.id === user.id && <span className="text-[9px] bg-slate-900 text-amber-400 px-1 rounded">You</span>}
                           </div>
-                          <div className="text-slate-400 font-mono text-[10px]">{u.email}</div>
+                          <div className="text-slate-400 font-mono text-sm">{u.email}</div>
                         </div>
                         <div className="flex flex-col items-end gap-1">
                           <span className={`inline-flex items-center gap-1 py-0.5 px-2 rounded-full font-bold text-[9px] uppercase tracking-wider ${
@@ -1595,7 +1595,7 @@ export default function UserManagement({ user }: UserManagementProps) {
                           }`}>
                             {u.role}
                           </span>
-                          <span className={`text-[10px] font-bold ${isUserActive ? 'text-teal-600' : 'text-slate-400'}`}>
+                          <span className={`text-sm font-bold ${isUserActive ? 'text-teal-600' : 'text-slate-400'}`}>
                             {isUserActive ? '● Active' : '● Locked'}
                           </span>
                         </div>
@@ -1605,15 +1605,15 @@ export default function UserManagement({ user }: UserManagementProps) {
                         <p className="text-[9px] font-bold text-slate-400 uppercase mb-1">Brand Access Scope</p>
                         <div className="flex flex-wrap gap-1">
                           {u.subBrandAccess?.length === 3 ? (
-                            <span className="text-[10px] font-bold text-slate-600">Global (All Brands)</span>
+                            <span className="text-sm font-bold text-slate-600">Global (All Brands)</span>
                           ) : u.subBrandAccess && u.subBrandAccess.length > 0 ? (
                             u.subBrandAccess.map((b) => (
-                              <span key={b} className="text-[10px] font-mono font-bold bg-white border border-slate-200 py-0.5 px-1.5 rounded">
+                              <span key={b} className="text-sm font-mono font-bold bg-white border border-slate-200 py-0.5 px-1.5 rounded">
                                 {b}
                               </span>
                             ))
                           ) : (
-                            <span className="text-[10px] italic text-red-500 font-bold">None</span>
+                            <span className="text-sm italic text-red-500 font-bold">None</span>
                           )}
                         </div>
                       </div>
@@ -1622,7 +1622,7 @@ export default function UserManagement({ user }: UserManagementProps) {
                         {isSuperAdmin && (
                           <button
                             onClick={() => startEdit(u)}
-                            className="py-1.5 px-3 text-[10px] font-bold text-slate-600 bg-white border border-slate-200 rounded-lg"
+                            className="py-1.5 px-3 text-sm font-bold text-slate-600 bg-white border border-slate-200 rounded-lg"
                           >
                             Edit Access
                           </button>
@@ -1630,7 +1630,7 @@ export default function UserManagement({ user }: UserManagementProps) {
                         {u.id !== user.id && (
                           <button
                             onClick={() => handleToggleUserActive(u)}
-                            className={`py-1.5 px-3 text-[10px] font-bold rounded-lg border transition-all ${
+                            className={`py-1.5 px-3 text-sm font-bold rounded-lg border transition-all ${
                               isUserActive
                                 ? 'text-red-600 border-red-100 bg-red-50'
                                 : 'text-teal-600 border-teal-100 bg-teal-50'
@@ -1652,7 +1652,7 @@ export default function UserManagement({ user }: UserManagementProps) {
           /* PENDING APPROVALS LIST */
           <div className="space-y-4">
             {pendingUsers.length === 0 ? (
-              <div className="py-12 text-center text-slate-400 italic text-xs">
+              <div className="py-12 text-center text-slate-400 italic text-sm">
                 No pending operator registration requests found.
               </div>
             ) : (
@@ -1679,17 +1679,17 @@ export default function UserManagement({ user }: UserManagementProps) {
                             Requested: {u.requestedRole === 'admin' ? 'Manager (Admin)' : 'Operator (Staff)'}
                           </span>
                         </div>
-                        <p className="text-slate-400 font-mono text-[11px] truncate">{u.email}</p>
-                        <p className="text-slate-600 text-xs flex items-center gap-1 font-medium">
+                        <p className="text-slate-400 font-mono text-sm truncate">{u.email}</p>
+                        <p className="text-slate-600 text-sm flex items-center gap-1 font-medium">
                           <span className="text-slate-400">Phone:</span> {u.phone}
                         </p>
                         {u.designation && (
-                          <p className="text-slate-600 text-xs">
+                          <p className="text-slate-600 text-sm">
                             <span className="text-slate-400">Position:</span> {u.designation}
                           </p>
                         )}
                         {u.createdAt && (
-                          <p className="text-[10px] text-slate-400">
+                          <p className="text-sm text-slate-400">
                             Requested: {new Date(u.createdAt).toLocaleString()}
                           </p>
                         )}
@@ -1698,16 +1698,16 @@ export default function UserManagement({ user }: UserManagementProps) {
 
                     {/* Sub-brand list */}
                     <div className="bg-white p-3 rounded-xl border border-slate-100">
-                      <p className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mb-1.5">Requested Sub-brands:</p>
+                      <p className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-1.5">Requested Sub-brands:</p>
                       <div className="flex gap-1.5 flex-wrap">
                         {u.requestedSubBrandAccess && u.requestedSubBrandAccess.length > 0 ? (
                           u.requestedSubBrandAccess.map((brand: string) => (
-                            <span key={brand} className="text-[10px] font-mono font-bold bg-slate-50 border border-slate-100 text-slate-600 py-0.5 px-2 rounded-lg">
+                            <span key={brand} className="text-sm font-mono font-bold bg-slate-50 border border-slate-100 text-slate-600 py-0.5 px-2 rounded-lg">
                               {brand === 'SAT' ? 'Sky Automation' : brand === 'GZ' ? 'GadgetZu' : 'RTX Gadget'}
                             </span>
                           ))
                         ) : (
-                          <span className="text-[10px] italic text-slate-400">No brands selected</span>
+                          <span className="text-sm italic text-slate-400">No brands selected</span>
                         )}
                       </div>
                     </div>
@@ -1717,7 +1717,7 @@ export default function UserManagement({ user }: UserManagementProps) {
                       <button
                         onClick={() => handleApproveUser(u)}
                         disabled={loading}
-                        className="flex-grow py-2 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl transition-all shadow-sm flex items-center justify-center gap-2 cursor-pointer"
+                        className="flex-grow py-2 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm rounded-xl transition-all shadow-sm flex items-center justify-center gap-2 cursor-pointer"
                       >
                         <UserCheck size={14} />
                         Approve Operator
@@ -1725,7 +1725,7 @@ export default function UserManagement({ user }: UserManagementProps) {
                       <button
                         onClick={() => handleRejectUser(u)}
                         disabled={loading}
-                        className="py-2 px-4 bg-red-50 hover:bg-red-100 text-red-600 font-bold text-xs rounded-xl transition-all border border-red-100 flex items-center justify-center gap-1.5 cursor-pointer"
+                        className="py-2 px-4 bg-red-50 hover:bg-red-100 text-red-600 font-bold text-sm rounded-xl transition-all border border-red-100 flex items-center justify-center gap-1.5 cursor-pointer"
                       >
                         <UserX size={14} />
                         Reject
@@ -1733,7 +1733,7 @@ export default function UserManagement({ user }: UserManagementProps) {
                       <button
                         onClick={() => handleDeleteRequest(u.id)}
                         disabled={loading}
-                        className="py-2 px-3 hover:bg-slate-200 text-slate-400 hover:text-slate-600 font-bold text-xs rounded-xl transition-all flex items-center justify-center cursor-pointer"
+                        className="py-2 px-3 hover:bg-slate-200 text-slate-400 hover:text-slate-600 font-bold text-sm rounded-xl transition-all flex items-center justify-center cursor-pointer"
                         title="Delete registration request"
                       >
                         <Trash2 size={14} />

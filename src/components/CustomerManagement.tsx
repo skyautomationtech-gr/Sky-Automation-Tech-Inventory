@@ -286,9 +286,9 @@ export default function CustomerManagement({
       {/* Title section */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
         <div>
-          <span className="text-xs font-mono font-bold text-amber-500 uppercase tracking-widest">Active Client Ledger</span>
+          <span className="text-sm font-mono font-bold text-amber-500 uppercase tracking-widest">Active Client Ledger</span>
           <h1 className="text-2xl font-black text-slate-950 font-sans uppercase tracking-tight">Customer Directory</h1>
-          <p className="text-xs text-slate-500 mt-1">
+          <p className="text-sm text-slate-500 mt-1">
             Maintain full records of retail buyers, active sub-brand associations, and purchase frequencies.
           </p>
         </div>
@@ -299,7 +299,7 @@ export default function CustomerManagement({
               resetForm();
               setShowAddModal(true);
             }}
-            className="inline-flex items-center gap-2 bg-slate-950 hover:bg-slate-900 text-amber-400 font-bold text-xs uppercase tracking-wider py-2.5 px-4 rounded-xl shadow-md transition-all cursor-pointer"
+            className="inline-flex items-center gap-2 bg-slate-950 hover:bg-slate-900 text-amber-400 font-bold text-sm uppercase tracking-wider py-2.5 px-4 rounded-xl shadow-md transition-all cursor-pointer"
           >
             <UserPlus size={14} />
             Add Customer
@@ -309,13 +309,13 @@ export default function CustomerManagement({
 
       {/* User Notifications */}
       {error && (
-        <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-2xl text-xs flex items-center gap-2.5 animate-pulse">
+        <div className="bg-red-50 border border-red-200 text-red-700 p-4 rounded-2xl text-sm flex items-center gap-2.5 animate-pulse">
           <AlertCircle size={16} className="text-red-500 flex-shrink-0" />
           <span className="font-semibold">{error}</span>
         </div>
       )}
       {success && (
-        <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 p-4 rounded-2xl text-xs flex items-center gap-2.5 animate-pulse">
+        <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 p-4 rounded-2xl text-sm flex items-center gap-2.5 animate-pulse">
           <TrendingUp size={16} className="text-emerald-500 flex-shrink-0" />
           <span className="font-semibold">{success}</span>
         </div>
@@ -334,14 +334,14 @@ export default function CustomerManagement({
                 placeholder="Search customers by name or phone..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 pl-10 pr-4 text-xs text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-amber-400/50"
+                className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 pl-10 pr-4 text-sm text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-amber-400/50"
               />
             </div>
             {/* Sub-brand selector */}
             <select
               value={selectedSubBrandFilter}
               onChange={(e) => setSelectedSubBrandFilter(e.target.value)}
-              className="w-full sm:w-48 bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-700 focus:outline-hidden focus:ring-2 focus:ring-amber-400/50"
+              className="w-full sm:w-48 bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-sm text-slate-700 focus:outline-hidden focus:ring-2 focus:ring-amber-400/50"
             >
               <option value="">All Sub-brands</option>
               {(isSuperAdmin ? ['SAT', 'GZ', 'RTX'] : user?.subBrandAccess || []).map(brand => (
@@ -355,13 +355,13 @@ export default function CustomerManagement({
             {loading ? (
               <div className="p-12 text-center flex flex-col items-center justify-center space-y-3">
                 <div className="w-8 h-8 border-3 border-amber-400 border-t-transparent rounded-full animate-spin" />
-                <span className="text-xs font-mono text-slate-400 uppercase tracking-widest">LOADING DIRECTORY...</span>
+                <span className="text-sm font-mono text-slate-400 uppercase tracking-widest">LOADING DIRECTORY...</span>
               </div>
             ) : sortedCustomers.length === 0 ? (
               <div className="p-12 text-center text-slate-400 flex flex-col items-center justify-center">
                 <User size={36} className="text-slate-300 mb-2" />
-                <span className="text-xs font-mono uppercase tracking-wider font-bold">No Customers Found</span>
-                <p className="text-[11px] text-slate-400 mt-1 max-w-md">
+                <span className="text-sm font-mono uppercase tracking-wider font-bold">No Customers Found</span>
+                <p className="text-sm text-slate-400 mt-1 max-w-md">
                   No matching customer documents exist. Click "Add Customer" to register a buyer manually or place an order to auto-create.
                 </p>
               </div>
@@ -369,7 +369,7 @@ export default function CustomerManagement({
               <div className="overflow-x-auto">
                 <table className="w-full border-collapse text-left">
                   <thead>
-                    <tr className="bg-slate-50 border-b border-slate-100 text-[10px] font-black uppercase tracking-wider text-slate-400">
+                    <tr className="bg-slate-50 border-b border-slate-100 text-sm font-black uppercase tracking-wider text-slate-400">
                       <th className="py-3 px-4">
                         <button onClick={() => toggleSort('name')} className="flex items-center gap-1 hover:text-slate-700">
                           Customer
@@ -393,7 +393,7 @@ export default function CustomerManagement({
                       <th className="py-3 px-4"></th>
                     </tr>
                   </thead>
-                  <tbody className="divide-y divide-slate-50 text-xs">
+                  <tbody className="divide-y divide-slate-50 text-sm">
                     {sortedCustomers.map((customer) => (
                       <tr 
                         key={customer.id}
@@ -410,12 +410,12 @@ export default function CustomerManagement({
                             </div>
                             <div>
                               <div className="font-bold text-slate-900">{customer.name}</div>
-                              <div className="text-[10px] text-slate-400 font-mono">ID: {customer.id.substring(0, 8).toUpperCase()}</div>
+                              <div className="text-sm text-slate-400 font-mono">ID: {customer.id.substring(0, 8).toUpperCase()}</div>
                             </div>
                           </div>
                         </td>
                         <td className="py-3 px-4">
-                          <div className="flex flex-col gap-0.5 text-[11px]">
+                          <div className="flex flex-col gap-0.5 text-sm">
                             <span className="font-mono text-slate-700 font-medium">{customer.phone}</span>
                             <span className="text-slate-400 truncate max-w-[150px]">{customer.address || 'No Address Listed'}</span>
                           </div>
@@ -430,7 +430,7 @@ export default function CustomerManagement({
                               {customer.subBrand}
                             </span>
                           ) : (
-                            <span className="text-slate-300 font-mono text-[10px]">None</span>
+                            <span className="text-slate-300 font-mono text-sm">None</span>
                           )}
                         </td>
                         <td className="py-3 px-4 text-center font-mono font-bold text-slate-800">
@@ -464,7 +464,7 @@ export default function CustomerManagement({
                     </div>
                     <div>
                       <h3 className="font-black font-sans text-sm tracking-tight">{selectedCustomer.name}</h3>
-                      <p className="text-[10px] text-slate-400 font-mono tracking-widest uppercase">CUSTOMER FILE</p>
+                      <p className="text-sm text-slate-400 font-mono tracking-widest uppercase">CUSTOMER FILE</p>
                     </div>
                   </div>
                   {hasManageOrders && (
@@ -493,42 +493,42 @@ export default function CustomerManagement({
               {/* Edit form inline or details list */}
               {showEditForm ? (
                 <form onSubmit={handleEditCustomerSubmit} className="p-6 space-y-4 pt-0">
-                  <h4 className="text-xs font-black uppercase tracking-wider text-slate-800 border-b border-slate-100 pb-2">Edit Customer Info</h4>
+                  <h4 className="text-sm font-black uppercase tracking-wider text-slate-800 border-b border-slate-100 pb-2">Edit Customer Info</h4>
                   <div>
-                    <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">Full Name</label>
+                    <label className="block text-sm font-bold uppercase tracking-wider text-slate-500 mb-1">Full Name</label>
                     <input
                       type="text"
                       value={formName}
                       onChange={(e) => setFormName(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-amber-400/50"
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-sm text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-amber-400/50"
                       required
                     />
                   </div>
                   <div>
-                    <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">Phone Number (Bangladesh)</label>
+                    <label className="block text-sm font-bold uppercase tracking-wider text-slate-500 mb-1">Phone Number (Bangladesh)</label>
                     <input
                       type="text"
                       value={formPhone}
                       onChange={(e) => setFormPhone(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-amber-400/50"
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-sm text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-amber-400/50"
                       required
                     />
                   </div>
                   <div>
-                    <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">Delivery Address</label>
+                    <label className="block text-sm font-bold uppercase tracking-wider text-slate-500 mb-1">Delivery Address</label>
                     <textarea
                       value={formAddress}
                       onChange={(e) => setFormAddress(e.target.value)}
                       rows={2}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-amber-400/50"
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-sm text-slate-800 focus:outline-hidden focus:ring-2 focus:ring-amber-400/50"
                     />
                   </div>
                   <div>
-                    <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">Sub-brand Association</label>
+                    <label className="block text-sm font-bold uppercase tracking-wider text-slate-500 mb-1">Sub-brand Association</label>
                     <select
                       value={formSubBrand}
                       onChange={(e) => setFormSubBrand(e.target.value)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-700 focus:outline-hidden"
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-sm text-slate-700 focus:outline-hidden"
                     >
                       <option value="">No specific brand</option>
                       <option value="SAT">Sky Auto (SAT)</option>
@@ -537,12 +537,12 @@ export default function CustomerManagement({
                     </select>
                   </div>
                   <div>
-                    <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">Private Client Notes</label>
+                    <label className="block text-sm font-bold uppercase tracking-wider text-slate-500 mb-1">Private Client Notes</label>
                     <textarea
                       value={formNotes}
                       onChange={(e) => setFormNotes(e.target.value)}
                       rows={2}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 focus:outline-hidden"
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-sm text-slate-800 focus:outline-hidden"
                       placeholder="Special delivery directives..."
                     />
                   </div>
@@ -551,14 +551,14 @@ export default function CustomerManagement({
                     <button
                       type="button"
                       onClick={() => setShowEditForm(false)}
-                      className="flex-1 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl cursor-pointer"
+                      className="flex-1 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-bold rounded-xl cursor-pointer"
                     >
                       Cancel
                     </button>
                     <button
                       type="submit"
                       disabled={submitting}
-                      className="flex-1 py-2 bg-slate-950 hover:bg-slate-900 text-amber-400 text-xs font-bold rounded-xl shadow-md cursor-pointer"
+                      className="flex-1 py-2 bg-slate-950 hover:bg-slate-900 text-amber-400 text-sm font-bold rounded-xl shadow-md cursor-pointer"
                     >
                       {submitting ? 'Saving...' : 'Save Changes'}
                     </button>
@@ -568,12 +568,12 @@ export default function CustomerManagement({
                 <div className="p-6 space-y-6 pt-0">
                   {/* Detailed Information */}
                   <div className="space-y-3">
-                    <h4 className="text-xs font-black uppercase tracking-wider text-slate-400 border-b border-slate-100 pb-1.5 flex items-center gap-1.5">
+                    <h4 className="text-sm font-black uppercase tracking-wider text-slate-400 border-b border-slate-100 pb-1.5 flex items-center gap-1.5">
                       <User size={12} className="text-amber-500" />
                       Client Profile details
                     </h4>
                     
-                    <div className="space-y-2.5 text-xs">
+                    <div className="space-y-2.5 text-sm">
                       <div className="flex items-center gap-2">
                         <Phone size={12} className="text-slate-400 flex-shrink-0" />
                         <span className="font-mono text-slate-700">{selectedCustomer.phone}</span>
@@ -587,11 +587,11 @@ export default function CustomerManagement({
                       {selectedCustomer.notes && (
                         <div className="flex items-start gap-2 bg-amber-50/40 p-2.5 border border-amber-200/20 rounded-xl">
                           <FileText size={12} className="text-amber-500 flex-shrink-0 mt-0.5" />
-                          <p className="text-[11px] text-slate-600 leading-normal">{selectedCustomer.notes}</p>
+                          <p className="text-sm text-slate-600 leading-normal">{selectedCustomer.notes}</p>
                         </div>
                       )}
 
-                      <div className="flex items-center gap-2 font-mono text-[10px] text-slate-400">
+                      <div className="flex items-center gap-2 font-mono text-sm text-slate-400">
                         <Calendar size={12} className="text-slate-300" />
                         <span>Joined: {new Date(selectedCustomer.createdAt).toLocaleDateString()}</span>
                       </div>
@@ -600,7 +600,7 @@ export default function CustomerManagement({
 
                   {/* Order History */}
                   <div className="space-y-3">
-                    <h4 className="text-xs font-black uppercase tracking-wider text-slate-400 border-b border-slate-100 pb-1.5 flex justify-between items-center">
+                    <h4 className="text-sm font-black uppercase tracking-wider text-slate-400 border-b border-slate-100 pb-1.5 flex justify-between items-center">
                       <span className="flex items-center gap-1.5">
                         <ShoppingBag size={12} className="text-amber-500" />
                         Order History
@@ -611,17 +611,17 @@ export default function CustomerManagement({
                     </h4>
 
                     {customerOrders.length === 0 ? (
-                      <p className="text-[11px] text-slate-400 italic py-2 text-center">No orders registered for this client yet.</p>
+                      <p className="text-sm text-slate-400 italic py-2 text-center">No orders registered for this client yet.</p>
                     ) : (
                       <div className="space-y-2 max-h-[250px] overflow-y-auto pr-1">
                         {customerOrders.map(order => (
                           <div 
                             key={order.id} 
-                            className="p-2.5 bg-slate-50 hover:bg-slate-100 rounded-xl border border-slate-100 flex items-center justify-between text-xs"
+                            className="p-2.5 bg-slate-50 hover:bg-slate-100 rounded-xl border border-slate-100 flex items-center justify-between text-sm"
                           >
                             <div className="min-w-0">
                               <div className="font-mono font-bold text-slate-800 truncate">#{order.id.substring(0, 8).toUpperCase()}</div>
-                              <div className="text-[10px] text-slate-400 font-mono mt-0.5">{new Date(order.createdAt).toLocaleDateString()}</div>
+                              <div className="text-sm text-slate-400 font-mono mt-0.5">{new Date(order.createdAt).toLocaleDateString()}</div>
                             </div>
                             <div className="text-right">
                               <div className="font-mono font-black text-slate-900">৳{order.totalAmount.toLocaleString()}</div>
@@ -645,8 +645,8 @@ export default function CustomerManagement({
           ) : (
             <div className="bg-white p-8 rounded-3xl border border-slate-100 shadow-sm text-center text-slate-400 flex flex-col items-center justify-center py-16">
               <Eye size={28} className="text-slate-300 mb-2" />
-              <span className="text-xs font-mono uppercase font-bold">No Customer Selected</span>
-              <p className="text-[11px] text-slate-400 mt-1 max-w-xs leading-normal">
+              <span className="text-sm font-mono uppercase font-bold">No Customer Selected</span>
+              <p className="text-sm text-slate-400 mt-1 max-w-xs leading-normal">
                 Select an entry from the customer directory to display detailed purchase charts, delivery directions, and historic item invoices.
               </p>
             </div>
@@ -661,7 +661,7 @@ export default function CustomerManagement({
             <div className="bg-slate-950 p-5 text-white flex justify-between items-center">
               <div>
                 <h3 className="font-black font-sans uppercase tracking-tight text-sm">Add New Client Document</h3>
-                <p className="text-[10px] text-amber-400 font-mono tracking-widest uppercase mt-0.5">CUSTOMER RECONCILIATION</p>
+                <p className="text-sm text-amber-400 font-mono tracking-widest uppercase mt-0.5">CUSTOMER RECONCILIATION</p>
               </div>
               <button 
                 onClick={() => setShowAddModal(false)}
@@ -673,47 +673,47 @@ export default function CustomerManagement({
 
             <form onSubmit={handleAddCustomerSubmit} className="p-6 space-y-4">
               <div>
-                <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">Full Name *</label>
+                <label className="block text-sm font-bold uppercase tracking-wider text-slate-500 mb-1">Full Name *</label>
                 <input
                   type="text"
                   placeholder="e.g. Shakib Al Hasan"
                   value={formName}
                   onChange={(e) => setFormName(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3.5 text-xs text-slate-800 focus:outline-hidden focus:ring-4 focus:ring-amber-400/20"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3.5 text-sm text-slate-800 focus:outline-hidden focus:ring-4 focus:ring-amber-400/20"
                   required
                 />
               </div>
 
               <div>
-                <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">Phone Number * (Bangladesh Format)</label>
+                <label className="block text-sm font-bold uppercase tracking-wider text-slate-500 mb-1">Phone Number * (Bangladesh Format)</label>
                 <input
                   type="text"
                   placeholder="e.g. 01712345678"
                   value={formPhone}
                   onChange={(e) => setFormPhone(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3.5 text-xs text-slate-800 focus:outline-hidden focus:ring-4 focus:ring-amber-400/20 font-mono"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3.5 text-sm text-slate-800 focus:outline-hidden focus:ring-4 focus:ring-amber-400/20 font-mono"
                   required
                 />
                 <p className="text-[9px] text-slate-400 mt-1">Must be a valid Bangladeshi number starting with 01 or +8801.</p>
               </div>
 
               <div>
-                <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">Delivery Address</label>
+                <label className="block text-sm font-bold uppercase tracking-wider text-slate-500 mb-1">Delivery Address</label>
                 <textarea
                   placeholder="House #, Road #, Sector, Area, City"
                   value={formAddress}
                   onChange={(e) => setFormAddress(e.target.value)}
                   rows={2.5}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 focus:outline-hidden"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-sm text-slate-800 focus:outline-hidden"
                 />
               </div>
 
               <div>
-                <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">Sub-brand Association (Optional)</label>
+                <label className="block text-sm font-bold uppercase tracking-wider text-slate-500 mb-1">Sub-brand Association (Optional)</label>
                 <select
                   value={formSubBrand}
                   onChange={(e) => setFormSubBrand(e.target.value)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-xs text-slate-700 focus:outline-hidden"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-sm text-slate-700 focus:outline-hidden"
                 >
                   <option value="">No specific brand (Visible to all)</option>
                   <option value="SAT">Sky Auto (SAT)</option>
@@ -723,13 +723,13 @@ export default function CustomerManagement({
               </div>
 
               <div>
-                <label className="block text-[10px] font-bold uppercase tracking-wider text-slate-500 mb-1">Private Client Notes (Optional)</label>
+                <label className="block text-sm font-bold uppercase tracking-wider text-slate-500 mb-1">Private Client Notes (Optional)</label>
                 <textarea
                   placeholder="Any preferences, warnings or special delivery directives..."
                   value={formNotes}
                   onChange={(e) => setFormNotes(e.target.value)}
                   rows={2}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 focus:outline-hidden"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-sm text-slate-800 focus:outline-hidden"
                 />
               </div>
 
@@ -737,14 +737,14 @@ export default function CustomerManagement({
                 <button
                   type="button"
                   onClick={() => setShowAddModal(false)}
-                  className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold rounded-xl cursor-pointer"
+                  className="flex-1 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-sm font-bold rounded-xl cursor-pointer"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={submitting}
-                  className="flex-1 py-2.5 bg-slate-950 hover:bg-slate-900 text-amber-400 text-xs font-bold rounded-xl shadow-md cursor-pointer"
+                  className="flex-1 py-2.5 bg-slate-950 hover:bg-slate-900 text-amber-400 text-sm font-bold rounded-xl shadow-md cursor-pointer"
                 >
                   {submitting ? 'Registering...' : 'Register Client'}
                 </button>
