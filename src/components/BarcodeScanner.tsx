@@ -99,10 +99,11 @@ export const BarcodeScanner: React.FC<Props> = ({ onScan, onCancel }) => {
         { facingMode: "environment" },
         {
           fps: 10,
+          aspectRatio: 1.7777777778, // Force 16:9 aspect ratio inside html5-qrcode
           videoConstraints: {
             facingMode: { ideal: "environment" },
-            width: { ideal: 1920 },
-            height: { ideal: 1080 },
+            width: { ideal: 1280 }, // Use standard HD resolution to prevent excessive zooming on ultra-high res sensors
+            height: { ideal: 720 },
             aspectRatio: { ideal: 1.7777777778 } // Standard 16:9 aspect ratio
           }
         },
@@ -223,10 +224,13 @@ export const BarcodeScanner: React.FC<Props> = ({ onScan, onCancel }) => {
         #reader {
           width: 100% !important;
           height: auto !important;
+          aspect-ratio: 16 / 9 !important;
+          background: #000;
+          overflow: hidden;
         }
         #reader video {
           width: 100% !important;
-          height: auto !important;
+          height: 100% !important;
           object-fit: contain !important;
           display: block;
         }
