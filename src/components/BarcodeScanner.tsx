@@ -317,7 +317,7 @@ export const BarcodeScanner: React.FC<Props> = ({ onScan, onCancel }) => {
         </div>
 
         {/* Viewfinder Area */}
-        <div className="relative w-full aspect-[4/5] bg-black rounded-3xl overflow-hidden shadow-2xl border border-slate-800 flex items-center justify-center mb-8">
+        <div className="relative w-full bg-black rounded-3xl overflow-hidden shadow-2xl border border-slate-800 flex items-center justify-center mb-8 min-h-[300px]">
           
           {/* Subtle striped background for the camera box behind the feed */}
           <div className="absolute inset-0 bg-stripes pointer-events-none opacity-30"></div>
