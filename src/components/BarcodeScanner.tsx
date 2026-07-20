@@ -97,19 +97,12 @@ export const BarcodeScanner: React.FC<Props> = ({ onScan, onCancel }) => {
 
       await html5QrCode.start(
         { 
-          facingMode: "environment",
-          // Request high resolution to prevent mobile browsers from aggressively center-cropping (zooming)
-          width: { ideal: 1920 },
-          height: { ideal: 1080 }
+          facingMode: "environment"
         },
         {
           fps: 10,
-          // 70% width, 40% height of the actual video stream
-          qrbox: (videoWidth, videoHeight) => {
-            const w = Math.round(videoWidth * 0.7);
-            const h = Math.round(videoHeight * 0.4);
-            return { width: w, height: h };
-          }
+          // Removed qrbox to scan the full frame and prevent internal zooming/cropping by the library.
+          // The CSS overlay still shows a target to guide the user.
         },
         (decodedText) => {
           if (isMounted.current) {
@@ -233,10 +226,6 @@ export const BarcodeScanner: React.FC<Props> = ({ onScan, onCancel }) => {
           width: 100% !important;
           height: auto !important;
           display: block;
-        }
-        /* Completely hide any default UI (shaded regions, corner brackets) injected by html5-qrcode */
-        #reader > div {
-          display: none !important;
         }
         /* Keep the canvas if it's there but hide it if it's not the video overlay */
         #reader canvas:not(.html5-qrcode-video) {
