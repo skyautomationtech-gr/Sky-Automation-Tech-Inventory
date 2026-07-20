@@ -224,14 +224,13 @@ export const BarcodeScanner: React.FC<Props> = ({ onScan, onCancel }) => {
         #reader {
           width: 100% !important;
           height: auto !important;
-          aspect-ratio: 16 / 9 !important;
           background: #000;
           overflow: hidden;
         }
         #reader video {
           width: 100% !important;
           height: 100% !important;
-          object-fit: contain !important;
+          object-fit: cover !important;
           display: block;
         }
         /* Keep the canvas if it's there but hide it if it's not the video overlay */
