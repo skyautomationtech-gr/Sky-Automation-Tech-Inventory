@@ -96,15 +96,15 @@ export const BarcodeScanner: React.FC<Props> = ({ onScan, onCancel }) => {
       html5QrCodeRef.current = html5QrCode;
 
       await html5QrCode.start(
-        { 
-          facingMode: { ideal: "environment" },
-          width: { ideal: 1920 },
-          height: { ideal: 1080 }
-        },
+        { facingMode: "environment" },
         {
           fps: 10,
-          // Removed qrbox to scan the full frame and prevent internal zooming/cropping by the library.
-          // The CSS overlay still shows a target to guide the user.
+          videoConstraints: {
+            facingMode: { ideal: "environment" },
+            width: { ideal: 1920 },
+            height: { ideal: 1080 },
+            aspectRatio: { ideal: 1.7777777778 } // Standard 16:9 aspect ratio
+          }
         },
         (decodedText) => {
           if (isMounted.current) {
