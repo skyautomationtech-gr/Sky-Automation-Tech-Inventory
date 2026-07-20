@@ -97,7 +97,9 @@ export const BarcodeScanner: React.FC<Props> = ({ onScan, onCancel }) => {
 
       await html5QrCode.start(
         { 
-          facingMode: "environment"
+          facingMode: { ideal: "environment" },
+          width: { ideal: 1920 },
+          height: { ideal: 1080 }
         },
         {
           fps: 10,
@@ -225,6 +227,7 @@ export const BarcodeScanner: React.FC<Props> = ({ onScan, onCancel }) => {
         #reader video {
           width: 100% !important;
           height: auto !important;
+          object-fit: contain !important;
           display: block;
         }
         /* Keep the canvas if it's there but hide it if it's not the video overlay */
