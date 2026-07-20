@@ -27,6 +27,13 @@ export const BarcodeScanner: React.FC<Props> = ({ onScan, onCancel }) => {
   const [recentScans, setRecentScans] = useState<RecentScan[]>([]);
   const [productsCache, setProductsCache] = useState<Product[]>([]);
   
+  // Temporary Debug States
+  const [debugFormats, setDebugFormats] = useState<string>('[]');
+  const [debugQrBox, setDebugQrBox] = useState<string>('x=0, y=0, width=0, height=0');
+  const [debugResolution, setDebugResolution] = useState<string>('0x0');
+  const [framesProcessed, setFramesProcessed] = useState<number>(0);
+  const [lastDecodeResult, setLastDecodeResult] = useState<string>('Initializing...');
+  
   const isMounted = useRef(true);
 
   // Load recent scans from session storage (simple persistence) and fetch products for mapping
@@ -82,11 +89,24 @@ export const BarcodeScanner: React.FC<Props> = ({ onScan, onCancel }) => {
       setIsCameraActive(false);
       setFlashOn(false);
       setFlashSupported(false);
+      setFramesProcessed(0);
+      setLastDecodeResult('Starting camera...');
+
+      const formats = scanMode === 'barcode' 
+        ? [Html5QrcodeSupportedFormats.CODE_128] 
+        : [Html5QrcodeSupportedFormats.QR_CODE];
+      
+      // Update format text
+      const formatNames = formats.map(f => {
+        for (const [key, val] of Object.entries(Html5QrcodeSupportedFormats)) {
+          if (val === f) return key;
+        }
+        return String(f);
+      });
+      setDebugFormats(JSON.stringify(formatNames));
 
       const scannerConfig = {
-        formatsToSupport: scanMode === 'barcode' 
-          ? [Html5QrcodeSupportedFormats.CODE_128] 
-          : [Html5QrcodeSupportedFormats.QR_CODE],
+        formatsToSupport: formats,
         verbose: false
       };
       
@@ -99,13 +119,18 @@ export const BarcodeScanner: React.FC<Props> = ({ onScan, onCancel }) => {
           fps: 10,
           // 70% width, 40% height of the actual video stream
           qrbox: (videoWidth, videoHeight) => {
-            return {
-              width: Math.round(videoWidth * 0.7),
-              height: Math.round(videoHeight * 0.4)
-            };
+            const w = Math.round(videoWidth * 0.7);
+            const h = Math.round(videoHeight * 0.4);
+            const x = Math.round((videoWidth - w) / 2);
+            const y = Math.round((videoHeight - h) / 2);
+            setDebugQrBox(`x=${x}, y=${y}, width=${w}, height=${h}`);
+            setDebugResolution(`${videoWidth}x${videoHeight}`);
+            return { width: w, height: h };
           }
         },
         (decodedText) => {
+          setFramesProcessed(prev => prev + 1);
+          setLastDecodeResult(`Decoded successfully: "${decodedText}"`);
           if (isMounted.current) {
             addRecentScan(decodedText);
             html5QrCode.stop().then(() => {
@@ -115,8 +140,9 @@ export const BarcodeScanner: React.FC<Props> = ({ onScan, onCancel }) => {
             });
           }
         },
-        () => {
-          // Ignore scan failures on individual frames
+        (errorMessage) => {
+          setFramesProcessed(prev => prev + 1);
+          setLastDecodeResult(errorMessage || "NotFoundException");
         }
       );
 
@@ -343,6 +369,23 @@ export const BarcodeScanner: React.FC<Props> = ({ onScan, onCancel }) => {
             <div className="absolute inset-x-4 top-1/2 -translate-y-1/2 z-30 bg-red-950/80 backdrop-blur-md border border-red-500/30 text-red-300 p-4 rounded-2xl text-xs flex flex-col items-center text-center gap-2 shadow-xl">
               <AlertCircle size={20} className="text-red-400" />
               <p className="font-medium leading-relaxed">{error}</p>
+            </div>
+          )}
+
+          {/* Live Debug Panel */}
+          {isCameraActive && (
+            <div className="absolute bottom-0 inset-x-0 bg-black/85 backdrop-blur-sm z-30 p-3.5 font-mono text-[11px] leading-relaxed border-t border-slate-800 text-slate-300 pointer-events-auto">
+              <div className="text-amber-400 font-bold mb-1.5 uppercase tracking-wider text-[10px] flex items-center justify-between">
+                <span>Scanner Diagnostics</span>
+                <span className="text-slate-500 font-normal normal-case">Live</span>
+              </div>
+              <div className="space-y-1 text-left">
+                <div><span className="text-slate-500">formats configured:</span> <code className="text-white bg-slate-800 px-1 rounded">{debugFormats}</code></div>
+                <div><span className="text-slate-500">scan region (qrbox):</span> <span className="text-emerald-400 font-medium">{debugQrBox}</span></div>
+                <div><span className="text-slate-500">video resolution:</span> <span className="text-emerald-400 font-medium">{debugResolution}</span></div>
+                <div><span className="text-slate-500">frames processed:</span> <span className="text-amber-400 font-bold">{framesProcessed}</span></div>
+                <div className="truncate"><span className="text-slate-500">last decode result:</span> <span className={`${lastDecodeResult.includes('success') ? 'text-green-400' : 'text-slate-400'}`} title={lastDecodeResult}>{lastDecodeResult}</span></div>
+              </div>
             </div>
           )}
         </div>
