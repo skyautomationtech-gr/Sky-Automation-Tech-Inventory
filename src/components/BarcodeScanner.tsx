@@ -135,9 +135,9 @@ export const BarcodeScanner: React.FC<Props> = ({ onScan, onCancel }) => {
         }
       }
     } catch (err) {
-      console.error("Camera start error:", err);
+      console.warn("Camera start error:", err);
       if (isMounted.current) {
-        setError("Failed to access camera. Please check permissions or try 'Scan an image file'.");
+        setError(`Failed to access camera. Please check permissions or try 'Scan an image file'. Details: ${err instanceof Error ? err.message : String(err)}`);
       }
     }
   }, [scanMode, onScan, addRecentScan]);
