@@ -77,11 +77,19 @@ export const BarcodeScanner: React.FC<Props> = ({ onScan, onCancel }) => {
   };
 
   const startCamera = useCallback(async () => {
+    let timeoutId: NodeJS.Timeout;
     try {
       await stopCamera();
       setIsCameraActive(false);
       setFlashOn(false);
       setFlashSupported(false);
+
+      // Add a timeout to catch silent failures on mobile
+      timeoutId = setTimeout(() => {
+        if (isMounted.current && !isCameraActive) {
+          setError("Camera failed to start (timed out). Please check permissions or try 'Scan an image file'.");
+        }
+      }, 5000);
 
       const formats = scanMode === 'barcode' 
         ? [Html5QrcodeSupportedFormats.CODE_128] 
@@ -104,6 +112,9 @@ export const BarcodeScanner: React.FC<Props> = ({ onScan, onCancel }) => {
               width: Math.floor(viewfinderWidth * 0.7),
               height: Math.floor(viewfinderHeight * 0.4)
             };
+          },
+          videoConstraints: {
+            facingMode: { ideal: "environment" }
           }
         },
         (decodedText) => {
@@ -121,6 +132,8 @@ export const BarcodeScanner: React.FC<Props> = ({ onScan, onCancel }) => {
         }
       );
 
+      clearTimeout(timeoutId);
+
       if (isMounted.current) {
         setIsCameraActive(true);
         // Check for torch capability
@@ -134,6 +147,7 @@ export const BarcodeScanner: React.FC<Props> = ({ onScan, onCancel }) => {
         }
       }
     } catch (err) {
+      clearTimeout(timeoutId!);
       console.warn("Camera start error:", err);
       if (isMounted.current) {
         setError(`Failed to access camera. Please check permissions or try 'Scan an image file'. Details: ${err instanceof Error ? err.message : String(err)}`);
@@ -231,6 +245,10 @@ export const BarcodeScanner: React.FC<Props> = ({ onScan, onCancel }) => {
           height: Auto!important;
           object-fit: contain !important;
           display: block;
+        }
+        /* Hide the library's built-in shaded region to avoid duplicate frames */
+        #qr-shaded-region {
+          display: none !important;
         }
         /* Keep the canvas if it's there but hide it if it's not the video overlay */
         #reader canvas:not(.html5-qrcode-video) {
