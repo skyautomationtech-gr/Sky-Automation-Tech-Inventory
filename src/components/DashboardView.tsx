@@ -36,6 +36,7 @@ import {
   getInvoices,
   getAllUsers
 } from '../firebase/db';
+
 import { BarcodeScanner } from './BarcodeScanner';
 
 interface DashboardViewProps {
@@ -611,8 +612,6 @@ export default function DashboardView({
           onCancel={() => setShowScanner(false)}
         />
       )}
-
-      {/* Check In / Check Out Widget */}
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
         <div className="p-5 flex flex-col md:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-4">

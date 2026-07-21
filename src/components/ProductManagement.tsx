@@ -26,7 +26,6 @@ import {
 import { motion } from 'motion/react';
 import { QRCodeSVG } from 'qrcode.react';
 import Barcode from './Barcode';
-import { BarcodeScanner } from './BarcodeScanner';
 import { generateBarcodePDF } from '../utils/barcodePdf';
 import JsBarcode from 'jsbarcode';
 import { Product, Variant, Category, Brand, UserProfile, StockLog, ProductColor, ProductModel } from '../types';
@@ -1560,22 +1559,7 @@ export default function ProductManagement({
                   onChange={(e) => setSearch(e.target.value)}
                   className="pl-9 w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 md:py-2 text-sm focus:outline-hidden focus:ring-1 focus:ring-amber-400"
                 />
-                <button
-                  onClick={() => setShowScanner(true)}
-                  className="absolute top-2 right-2 p-1.5 bg-slate-100 rounded-lg hover:bg-slate-200"
-                >
-                  <QrCode size={16} className="text-slate-600" />
-                </button>
               </div>
-              {showScanner && (
-                <BarcodeScanner
-                  onScan={(text) => {
-                    setSearch(text);
-                    setShowScanner(false);
-                  }}
-                  onCancel={() => setShowScanner(false)}
-                />
-              )}
 
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-4 gap-2">
                 

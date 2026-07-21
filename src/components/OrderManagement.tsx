@@ -25,7 +25,6 @@ import {
   UserCheck,
   QrCode
 } from 'lucide-react';
-import { BarcodeScanner } from './BarcodeScanner';
 import { Order, Customer, Product, Variant, UserProfile, OrderItem, OrderStatusHistory, OrderStatus } from '../types';
 import { 
   getOrders, 
@@ -719,32 +718,7 @@ export default function OrderManagement({
                   onChange={(e) => setSearchQuery(e.target.value)}
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 pl-10 pr-4 text-sm text-slate-800 focus:outline-hidden"
                 />
-                <button
-                  onClick={() => setShowScanner(true)}
-                  className="absolute top-1.5 right-1.5 p-1.5 bg-slate-100 rounded-lg hover:bg-slate-200"
-                >
-                  <QrCode size={16} className="text-slate-600" />
-                </button>
               </div>
-              {showScanner && (
-                <BarcodeScanner
-                  onScan={(text) => {
-                    setShowScanner(false);
-                    if (text.startsWith('INV:')) {
-                      const invId = text.substring(4);
-                      const order = orders.find(o => o.id === invId || o.invoiceId === invId);
-                      if (order) {
-                        setSelectedOrder(order);
-                      } else {
-                        setError('Order not found for this Invoice QR.');
-                      }
-                    } else {
-                      setSearchQuery(text);
-                    }
-                  }}
-                  onCancel={() => setShowScanner(false)}
-                />
-              )}
               <select
                 value={statusFilter}
                 onChange={(e) => setStatusFilter(e.target.value)}

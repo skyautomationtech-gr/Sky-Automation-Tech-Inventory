@@ -14,7 +14,6 @@ import {
   Coins,
   QrCode
 } from 'lucide-react';
-import { BarcodeScanner } from './BarcodeScanner';
 import { Product, Variant, StockLog, StockLogType, UserProfile } from '../types';
 import { addStockLog, updateProduct, getStockLogs } from '../firebase/db';
 
@@ -485,21 +484,8 @@ export default function StockOperations({
                       <option key={p.id} value={p.id}>{p.name} [{p.sku}]</option>
                     ))}
                   </select>
-                  <button
-                    type="button"
-                    onClick={() => setShowScanner(true)}
-                    className="mt-1 p-2 bg-slate-100 hover:bg-slate-200 rounded-xl"
-                  >
-                    <QrCode size={16} />
-                  </button>
                 </div>
               </div>
-              {showScanner && (
-                <BarcodeScanner
-                  onScan={handleScan}
-                  onCancel={() => setShowScanner(false)}
-                />
-              )}
 
               {/* Variant selector */}
               {selectedProduct && (
