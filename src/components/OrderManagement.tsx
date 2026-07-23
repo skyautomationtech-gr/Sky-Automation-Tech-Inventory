@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import CatalogItemSelection from "./CatalogItemSelection";
 import { 
   Search, 
   Plus, 
@@ -1214,8 +1215,8 @@ export default function OrderManagement({
 
       {/* CREATE ORDER WIZARD MODAL */}
       {showCreateModal && (
-        <div className="fixed inset-0 bg-slate-950/85 z-50 flex items-center justify-center p-4 backdrop-blur-xs">
-          <div className="bg-white rounded-3xl border border-slate-100 max-w-2xl w-full shadow-2xl animate-scale-up overflow-hidden flex flex-col max-h-[90vh]">
+        <div className="fixed inset-0 bg-slate-950/85 z-50 flex items-center justify-center p-2 sm:p-4 backdrop-blur-xs">
+          <div className={`bg-white rounded-3xl border border-slate-100 w-full shadow-2xl animate-scale-up overflow-hidden flex flex-col max-h-[92vh] transition-all duration-300 ${wizardStep === 3 ? 'max-w-6xl' : 'max-w-2xl'}`}>
             
             {/* Modal Header */}
             <div className="bg-slate-950 p-5 text-white flex justify-between items-center flex-shrink-0">
@@ -1479,99 +1480,14 @@ export default function OrderManagement({
               {/* STEP 3: ITEMS SELECTION */}
               {wizardStep === 3 && (
                 <div className="space-y-4">
-                  {/* Item Picker Tool */}
-                  <div className="bg-slate-50 p-4 border border-slate-100 rounded-2xl space-y-3">
-                    <span className="font-bold text-slate-500 uppercase tracking-wide text-[9px] block">Add Line item from catalog</span>
-                    
-                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                      <select
-                        value={itemProductId}
-                        onChange={(e) => setItemProductId(e.target.value)}
-                        className="bg-white border border-slate-200 rounded-xl py-2 px-3 text-sm"
-                      >
-                        <option value="">-- Choose Product --</option>
-                        {products.map(p => (
-                          <option key={p.id} value={p.id}>{p.name} (৳{p.sellingPrice})</option>
-                        ))}
-                      </select>
-
-                      <select
-                        value={itemVariantId}
-                        onChange={(e) => setItemVariantId(e.target.value)}
-                        className="bg-white border border-slate-200 rounded-xl py-2 px-3 text-sm"
-                        disabled={!itemProductId}
-                      >
-                        <option value="">-- Choose Variant --</option>
-                        {activeVariants.map(v => (
-                          <option key={v.id} value={v.id}>
-                            {`${v.color || ''} ${v.model || ''}`.trim() || 'Standard'} (Stock: {v.stock})
-                          </option>
-                        ))}
-                      </select>
-
-                      <div className="flex gap-2">
-                        <input
-                          type="number"
-                          min={1}
-                          placeholder="Qty"
-                          value={itemQty}
-                          onChange={(e) => setItemQty(Math.max(1, parseInt(e.target.value) || 1))}
-                          className="w-20 bg-white border border-slate-200 rounded-xl py-2 px-3 text-sm text-center"
-                        />
-                        <button
-                          type="button"
-                          onClick={handleAddItem}
-                          disabled={!itemProductId || !itemVariantId}
-                          className="flex-1 bg-slate-950 hover:bg-slate-900 text-amber-400 text-sm font-bold uppercase rounded-xl flex items-center justify-center gap-1 cursor-pointer"
-                        >
-                          <Plus size={12} /> Add
-                        </button>
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Added Items table */}
-                  <div className="space-y-2">
-                    <span className="font-bold text-slate-400 uppercase text-[9px] tracking-wider block">Running invoice details</span>
-                    
-                    {orderItems.length === 0 ? (
-                      <p className="text-center text-sm text-slate-400 italic py-6">Your order sheet is currently empty. Choose a product and click Add.</p>
-                    ) : (
-                      <div className="border border-slate-100 rounded-2xl overflow-hidden divide-y divide-slate-100">
-                        {orderItems.map((item, idx) => (
-                          <div key={idx} className="p-3 bg-white hover:bg-slate-50/40 flex justify-between items-center text-sm">
-                            <div className="min-w-0 pr-4">
-                              <span className="font-bold text-slate-900">{item.productName}</span>
-                              <p className="text-sm text-slate-400 font-mono mt-0.5">Variant: {item.variantLabel}</p>
-                            </div>
-                            
-                            <div className="flex items-center gap-4 flex-shrink-0 font-mono">
-                              <div className="text-right">
-                                <span className="text-slate-400 text-sm">{item.qty} x </span>
-                                <span className="font-bold text-slate-800">৳{item.unitPrice.toLocaleString()}</span>
-                                <p className="font-black text-slate-950 text-sm mt-0.5">৳{(item.qty * item.unitPrice).toLocaleString()}</p>
-                              </div>
-                              <button
-                                type="button"
-                                onClick={() => handleRemoveItem(idx)}
-                                className="text-red-500 hover:text-red-700 p-1.5 hover:bg-red-50 rounded-lg cursor-pointer"
-                              >
-                                <Trash2 size={14} />
-                              </button>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    )}
-
-                    <div className="bg-slate-950 p-4 rounded-2xl text-white flex justify-between items-center font-mono">
-                      <span className="text-sm uppercase text-slate-400 font-bold">Estimated Invoice Total</span>
-                      <span className="text-lg font-black text-amber-400">৳{orderTotal.toLocaleString()}</span>
-                    </div>
-                  </div>
+                  <CatalogItemSelection 
+                    products={products}
+                    orderItems={orderItems}
+                    setOrderItems={setOrderItems}
+                    onNext={() => setWizardStep(4)}
+                  />
                 </div>
               )}
-
               {/* STEP 4: PAYMENT OPTIONS */}
               {wizardStep === 4 && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -1702,7 +1618,9 @@ export default function OrderManagement({
                 <ChevronLeft size={14} /> Back
               </button>
 
-              {wizardStep < 5 ? (
+              {wizardStep === 3 ? (
+                 <div className="text-xs text-slate-400 font-bold uppercase tracking-wider">Use 'Proceed to Checkout' in Cart</div>
+              ) : wizardStep < 5 ? (
                 <button
                   type="button"
                   onClick={() => {

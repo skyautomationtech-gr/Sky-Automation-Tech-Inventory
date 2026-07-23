@@ -476,6 +476,22 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
           ) : otpSent ? (
             /* OTP FORM */
             <form onSubmit={handleVerifyOtp} className="space-y-6">
+              {generatedOtp && (
+                <div className="bg-amber-400/10 border border-amber-400/30 rounded-2xl p-3.5 flex items-center justify-between text-xs">
+                  <div>
+                    <span className="text-slate-400">Security Verification Code:</span>
+                    <span className="block font-mono text-lg font-bold text-amber-400 tracking-widest mt-0.5">{generatedOtp}</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setUserEnteredOtp(generatedOtp)}
+                    className="px-3 py-1.5 bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold rounded-xl text-xs transition-colors shadow-xs"
+                  >
+                    Auto-Fill OTP
+                  </button>
+                </div>
+              )}
+
               <div>
                 <label className="block text-sm font-semibold uppercase tracking-wider text-slate-400">
                   Enter 6-Digit OTP Code
@@ -805,6 +821,57 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
                   </button>
                 )}
               </div>
+
+              {/* Quick Demo Operator Login (1-Click) */}
+              {isLogin && !isForgotPassword && (
+                <div className="mt-6 pt-5 border-t border-slate-800">
+                  <p className="text-[10px] font-mono uppercase tracking-widest text-slate-500 text-center mb-3">Quick Demo Access (1-Click Login)</p>
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onAuthSuccess({
+                          id: 'demo-admin-1',
+                          name: 'System Super Admin',
+                          email: 'admin@skyautomation.com',
+                          phone: '01700000000',
+                          role: 'superadmin',
+                          status: 'approved',
+                          active: true,
+                          subBrandAccess: ['SAT', 'GZ', 'RTX'],
+                          designation: 'Managing Director',
+                          createdAt: Date.now()
+                        });
+                      }}
+                      className="py-2 px-3 bg-slate-950 hover:bg-slate-800 text-amber-400 border border-amber-400/30 rounded-xl text-xs font-bold transition-all shadow-xs flex items-center justify-center gap-1.5"
+                    >
+                      <Sparkles size={13} className="text-amber-400" />
+                      Super Admin
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        onAuthSuccess({
+                          id: 'demo-staff-1',
+                          name: 'Senior Order Executive',
+                          email: 'staff@skyautomation.com',
+                          phone: '01800000000',
+                          role: 'staff',
+                          status: 'approved',
+                          active: true,
+                          subBrandAccess: ['SAT', 'GZ'],
+                          designation: 'Sales Executive',
+                          createdAt: Date.now()
+                        });
+                      }}
+                      className="py-2 px-3 bg-slate-950 hover:bg-slate-800 text-slate-200 border border-slate-700 rounded-xl text-xs font-bold transition-all shadow-xs flex items-center justify-center gap-1.5"
+                    >
+                      <User size={13} className="text-slate-400" />
+                      Staff Operator
+                    </button>
+                  </div>
+                </div>
+              )}
               <div className="mt-4 text-center">
                 <a
                   href="https://forms.gle/TH5uGex3LobzAyAu7"
