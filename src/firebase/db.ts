@@ -697,7 +697,7 @@ export function getUniqueBarcodeValue(prefix: string, products: Product[], gener
   return code;
 }
 
-export async function migrateProductBarcodes(): Promise<number> {
+export async function migrateProductBarcodes(): Promise<{ updated: number, total: number }> {
   try {
     console.log('migrateProductBarcodes: Starting migration check...');
     const products = await getProducts(true);
@@ -756,10 +756,11 @@ export async function migrateProductBarcodes(): Promise<number> {
     } else {
       console.log('migrateProductBarcodes: All products up-to-date. No migration needed.');
     }
-    return updatedCount;
+
+    return { updated: updatedCount, total: products.length };
   } catch (error) {
     console.error('migrateProductBarcodes: Migration failed:', error);
-    return 0;
+    return { updated: 0, total: 0 };
   }
 }
 

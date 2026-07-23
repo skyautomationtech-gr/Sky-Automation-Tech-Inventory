@@ -15,7 +15,6 @@ import {
   LogIn,
   MessageSquare,
   Search,
-  QrCode,
   ShoppingBag,
   Receipt,
   BarChart3,
@@ -36,8 +35,6 @@ import {
   getInvoices,
   getAllUsers
 } from '../firebase/db';
-
-import { BarcodeScanner } from './BarcodeScanner';
 
 interface DashboardViewProps {
   products: Product[];
@@ -63,7 +60,6 @@ export default function DashboardView({
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [isSearching, setIsSearching] = useState(false);
-  const [showScanner, setShowScanner] = useState(false);
   const [allOrders, setAllOrders] = useState<Order[]>([]);
   const [allCustomers, setAllCustomers] = useState<Customer[]>([]);
   const [allInvoices, setAllInvoices] = useState<Invoice[]>([]);
@@ -132,26 +128,6 @@ export default function DashboardView({
 
     setSearchResults(results.slice(0, 15));
     setIsSearching(false);
-  };
-
-  const handleScan = (text: string) => {
-    setShowScanner(false);
-    if (text.startsWith('INV:')) {
-      const invId = text.substring(4);
-      const order = allOrders.find(o => o.id === invId || o.invoiceId === invId);
-      if (order) {
-        onNavigateToTab('orders', undefined, order.id);
-      } else {
-        alert('No match found for this scan');
-      }
-    } else {
-      const p = products.find(prod => !prod.archived && (prod.variants.some(v => v.barcodeValue === text) || prod.barcodeValue === text || prod.sku === text));
-      if (p) {
-        onNavigateToTab('products', undefined, p.id);
-      } else {
-        alert('No match found for this scan');
-      }
-    }
   };
 
   useEffect(() => {
@@ -597,21 +573,8 @@ export default function DashboardView({
             </div>
           )}
         </div>
-        <button
-          onClick={() => setShowScanner(true)}
-          className="shrink-0 flex items-center justify-center bg-[#16161b] hover:bg-black text-[#D4AF37] p-3.5 rounded-2xl shadow-sm transition-all active:scale-95"
-          title="Scan Barcode / QR Code"
-        >
-          <QrCode size={22} />
-        </button>
       </div>
       
-      {showScanner && (
-        <BarcodeScanner
-          onScan={handleScan}
-          onCancel={() => setShowScanner(false)}
-        />
-      )}
       <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
         <div className="p-5 flex flex-col md:flex-row items-center justify-between gap-4">
           <div className="flex items-center gap-4">

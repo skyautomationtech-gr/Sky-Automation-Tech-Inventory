@@ -23,7 +23,6 @@ import {
   Edit,
   Activity,
   UserCheck,
-  QrCode
 } from 'lucide-react';
 import { Order, Customer, Product, Variant, UserProfile, OrderItem, OrderStatusHistory, OrderStatus } from '../types';
 import { 
@@ -118,7 +117,6 @@ export default function OrderManagement({
   const [orderAmountPaid, setOrderAmountPaid] = useState<number>(0);
 
   const [submitting, setSubmitting] = useState(false);
-  const [showScanner, setShowScanner] = useState(false);
 
   // Partial Payment and Manual Invoice States
   const [showPaymentModal, setShowPaymentModal] = useState(false);

@@ -284,8 +284,6 @@ export default function App() {
     try {
       await seedInitialDataIfEmpty();
       
-      // Auto-heal / migrate legacy long barcodes to short unique IDs
-      await migrateProductBarcodes();
       
       // Retrieve collections
       const prodsList = await getProducts(true);
@@ -428,12 +426,12 @@ export default function App() {
   };
 
   const handleMigrateBarcodes = async () => {
-    if (user?.role !== 'superadmin') return;
+    if (user?.role !== 'superadmin' && user?.role !== 'super_admin') return;
     setIsMigratingBarcodes(true);
     setMigrationResult(null);
     try {
-      const count = await migrateProductBarcodes();
-      setMigrationResult(`${count} products migrated to new barcode format.`);
+      const result = await migrateProductBarcodes();
+      setMigrationResult(`${result.updated} products updated, ${result.total - result.updated} products already had valid barcodes.`);
       await refreshApplicationData();
     } catch (err) {
       setMigrationResult("Migration failed. Please check logs.");
@@ -843,7 +841,7 @@ export default function App() {
               </p>
             </div>
 
-            {user?.role === 'superadmin' && (
+            {(user?.role === 'superadmin' || user?.role === 'super_admin') && (
               <div className="pt-6 border-t border-slate-100 flex flex-col gap-6">
                 <div className="flex justify-between items-center bg-slate-50 p-4 rounded-2xl border border-slate-100">
                   <div>

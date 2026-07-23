@@ -5,7 +5,6 @@ import {
   Filter, 
   Trash2, 
   Edit3, 
-  QrCode, 
   Upload, 
   Tag, 
   Archive, 
@@ -91,7 +90,6 @@ export default function ProductManagement({
 
   // List management states
   const [search, setSearch] = useState('');
-  const [showScanner, setShowScanner] = useState(false);
   const [filterCategory, setFilterCategory] = useState('');
   const [filterBrand, setFilterBrand] = useState('');
   const [filterSubBrand, setFilterSubBrand] = useState('');

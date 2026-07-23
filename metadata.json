@@ -1,8 +1,6 @@
 {
   "name": "Sky Automation Tech Inventory",
   "description": "Premium Phase 1 Inventory Management platform for Sky Automation Tech, GadgetZu, and RTX Gadget brands, with Firestore persistence, multiple variants, stock operations, and bulk import.",
-  "requestFramePermissions": [
-    "camera"
-  ],
+  "requestFramePermissions": [],
   "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
 }

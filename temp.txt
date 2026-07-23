@@ -1,0 +1,11 @@
+    setError('');
+  };
+
+  const handleScan = (text: string) => {
+    let found = false;
+    e.preventDefault();
+    if (requireCheckIn && !requireCheckIn()) return;
+    setError('');
+    setSuccess('');
+
+    if (!selectedProductId || !selectedVariantId) {

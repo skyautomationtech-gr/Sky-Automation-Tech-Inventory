@@ -64,18 +64,18 @@ export async function generateBarcodePDF(
     doc.setLineWidth(0.08);
     doc.rect(x, y, labelWidth, labelHeight);
 
-    // Render barcode to an in-memory canvas to get base64 JPEG image
+    // Render barcode to an in-memory canvas to get base64 PNG image (lossless)
     const canvas = document.createElement('canvas');
     try {
       JsBarcode(canvas, item.value, {
         format: 'CODE128',
-        width: 3.5, // Thicker bars for maximum scannability
-        height: 100,
+        width: 6, // Increased width for much higher resolution (300+ DPI equivalent)
+        height: 200, // Increased height for higher resolution
         displayValue: false, // Rendered manually for perfect sizing/control
         margin: 0,
         background: '#ffffff',
       });
-      const imgData = canvas.toDataURL('image/jpeg', 1.0);
+      const imgData = canvas.toDataURL('image/png');
       
       // 1. Draw product display name on the sticker (centered, bold, small)
       doc.setFont('Helvetica', 'bold');
@@ -106,7 +106,7 @@ export async function generateBarcodePDF(
       // 3. Draw Barcode Image (take majority of the middle area, wide, tall enough)
       const barcodeY = y + (item.subLabel ? 7.5 : 5.2);
       const barcodeHeight = 14.0;
-      doc.addImage(imgData, 'JPEG', x + 2.0, barcodeY, labelWidth - 4.0, barcodeHeight, undefined, 'FAST', 0);
+      doc.addImage(imgData, 'PNG', x + 2.0, barcodeY, labelWidth - 4.0, barcodeHeight);
 
       // 4. Draw Human-readable SKU/Barcode text below the bars (standard barcode convention)
       doc.setFont('Courier', 'bold');

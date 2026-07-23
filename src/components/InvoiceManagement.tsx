@@ -605,10 +605,10 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
               )}
 
               {/* A4 PRINT CONTAINER (STRICT BLACK AND WHITE FOR PRINTING) */}
-              <div className="bg-white border border-slate-300 shadow-md p-10 max-w-[210mm] mx-auto min-h-[297mm] text-slate-900 font-sans" id="invoice-print-area" style={{ width: '210mm' }}>
+              <div className="bg-[#ffffff] border border-[#cccccc] p-10 max-w-[210mm] mx-auto min-h-[297mm] text-[#000000] font-sans" id="invoice-print-area" style={{ width: '210mm' }}>
                 <div className="space-y-8">
                   {/* Print Invoice Top Header */}
-                  <div className="border-b border-black pb-6 flex justify-between items-start">
+                  <div className="border-b border-[#000000] pb-6 flex justify-between items-start">
                     <div className="flex items-center gap-4">
                       <img src="/logo.png" alt="Company Logo" className="w-16 h-16 object-contain" />
                       <div>
@@ -618,7 +618,7 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                         <h1 className="text-3xl font-black tracking-tighter uppercase mt-1">OFFICIAL INVOICE</h1>
                         <div className="text-sm mt-2 space-y-0.5 font-mono">
                           <p className="font-bold">Issued By: {selectedInvoice.subBrand === 'SAT' ? 'Sky Automation Tech' : selectedInvoice.subBrand === 'GZ' ? 'GadgetZu' : 'RTX Gadget'}</p>
-                          <p className="text-slate-600">Email: skyautomationtech@gmail.com</p>
+                          <p className="text-[#666666]">Email: skyautomationtech@gmail.com</p>
                         </div>
                       </div>
                     </div>
@@ -627,7 +627,7 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                       <div className="flex items-center justify-end gap-2 mb-2">
                         <QRCodeSVG value={`INV:${selectedInvoice.invoiceNumber}`} size={60} />
                       </div>
-                      <div className="border border-black p-2 text-center bg-black text-white rounded-sm">
+                      <div className="border border-[#000000] p-2 text-center bg-[#000000] text-[#ffffff] rounded-sm">
                         <p className="text-[9px] font-bold uppercase tracking-wider">INVOICE NUMBER</p>
                         <p className="text-sm font-black tracking-tight">{selectedInvoice.invoiceNumber}</p>
                       </div>
@@ -637,16 +637,16 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                   </div>
 
                   {/* Customer Information Section */}
-                  <div className="grid grid-cols-2 gap-8 border border-black p-4 font-mono text-sm rounded-sm">
+                  <div className="grid grid-cols-2 gap-8 border border-[#000000] p-4 font-mono text-sm rounded-sm">
                     <div>
-                      <h3 className="font-black border-b border-black pb-1 mb-2 text-sm uppercase tracking-wide">BILLED TO (CUSTOMER):</h3>
-                      <p className="font-black text-slate-950 text-sm">{selectedInvoice.customerName}</p>
-                      <p className="mt-1 font-bold text-slate-700">Phone: {selectedInvoice.customerPhone}</p>
+                      <h3 className="font-black border-b border-[#000000] pb-1 mb-2 text-sm uppercase tracking-wide">BILLED TO (CUSTOMER):</h3>
+                      <p className="font-black text-[#000000] text-sm">{selectedInvoice.customerName}</p>
+                      <p className="mt-1 font-bold text-[#333333]">Phone: {selectedInvoice.customerPhone}</p>
                     </div>
 
                     <div>
-                      <h3 className="font-black border-b border-black pb-1 mb-2 text-sm uppercase tracking-wide">DELIVERY ADDRESS:</h3>
-                      <p className="text-slate-800 whitespace-pre-wrap leading-relaxed">
+                      <h3 className="font-black border-b border-[#000000] pb-1 mb-2 text-sm uppercase tracking-wide">DELIVERY ADDRESS:</h3>
+                      <p className="text-[#222222] whitespace-pre-wrap leading-relaxed">
                         {selectedInvoice.courier ? `${selectedInvoice.courier}` : 'Courier Delivery'} <br />
                         {orders.find(o => o.id === selectedInvoice.orderId)?.deliveryAddress || 'No Address Listed'}
                       </p>
@@ -654,22 +654,22 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                   </div>
 
                   {/* Itemized Invoice Table */}
-                  <div className="border border-black rounded-sm overflow-hidden font-mono text-sm">
+                  <div className="border border-[#000000] rounded-sm overflow-hidden font-mono text-sm">
                     <table className="w-full text-left">
                       <thead>
-                        <tr className="bg-black text-white font-black">
+                        <tr className="bg-[#000000] text-[#ffffff] font-black">
                           <th className="py-2.5 px-4">PRODUCT DESCRIPTION</th>
                           <th className="py-2.5 px-4 text-center">QUANTITY</th>
                           <th className="py-2.5 px-4 text-right">UNIT PRICE</th>
                           <th className="py-2.5 px-4 text-right">LINE TOTAL</th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-black/40">
+                      <tbody className="divide-y divide-[#999999]">
                         {selectedInvoice.items.map((item, idx) => (
-                          <tr key={idx} className="hover:bg-slate-50/50">
+                          <tr key={idx} className="hover:bg-[#f9f9f9]">
                             <td className="py-3 px-4 font-black">
                               {item.productName}
-                              <div className="text-[9px] text-slate-500 font-normal mt-0.5">Variant: {item.variantLabel}</div>
+                              <div className="text-[9px] text-[#888888] font-normal mt-0.5">Variant: {item.variantLabel}</div>
                             </td>
                             <td className="py-3 px-4 text-center font-bold">{item.qty}</td>
                             <td className="py-3 px-4 text-right font-bold">৳{item.unitPrice.toLocaleString()}</td>
@@ -683,8 +683,8 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                   {/* Financial Summary Block */}
                   <div className="grid grid-cols-2 gap-8 items-start font-mono text-sm">
                     {/* Notes & Courier Info */}
-                    <div className="border border-black p-4 space-y-2 rounded-sm bg-slate-50/50">
-                      <h4 className="font-black border-b border-black pb-1 uppercase tracking-wider text-[9px]">COURIER & DESPATCH DETS:</h4>
+                    <div className="border border-[#000000] p-4 space-y-2 rounded-sm bg-[#f9f9f9]">
+                      <h4 className="font-black border-b border-[#000000] pb-1 uppercase tracking-wider text-[9px]">COURIER & DESPATCH DETS:</h4>
                       <div className="space-y-1">
                         <p><strong>Courier:</strong> {selectedInvoice.courier || 'N/A'}</p>
                         <p><strong>Tracking No:</strong> {selectedInvoice.courierTrackingNumber || 'Pending Courier Assign'}</p>
@@ -693,23 +693,23 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                     </div>
 
                     {/* Financial Summary Calculations */}
-                    <div className="border border-black rounded-sm overflow-hidden">
+                    <div className="border border-[#000000] rounded-sm overflow-hidden">
                       <div className="p-3 space-y-1.5">
                         <div className="flex justify-between">
                           <span>Subtotal Amount:</span>
                           <span>৳{selectedInvoice.totalAmount.toLocaleString()}</span>
                         </div>
-                        <div className="flex justify-between text-emerald-800 font-bold border-b border-black/20 pb-1.5">
+                        <div className="flex justify-between text-[#000000] font-bold border-b border-[#cccccc] pb-1.5">
                           <span>Total Paid:</span>
                           <span>৳{selectedInvoice.amountPaid.toLocaleString()}</span>
                         </div>
-                        <div className="flex justify-between font-black text-slate-900 pt-1 text-sm">
+                        <div className="flex justify-between font-black text-[#000000] pt-1 text-sm">
                           <span>TOTAL DUE:</span>
                           <span>৳{selectedInvoice.amountDue.toLocaleString()}</span>
                         </div>
                       </div>
                       
-                      <div className="bg-black text-white p-2.5 text-center font-black uppercase text-sm tracking-widest">
+                      <div className="bg-[#000000] text-[#ffffff] p-2.5 text-center font-black uppercase text-sm tracking-widest">
                         PAYMENT STATUS: {selectedInvoice.paymentStatus}
                       </div>
                     </div>
@@ -718,7 +718,7 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                   {/* Print Page Signature & Footer Section */}
                   <div className="pt-16 grid grid-cols-2 gap-8 items-end font-mono text-sm text-center">
                     <div>
-                      <p className="border-t border-black pt-2 mx-auto w-48 font-bold">Customer Signature</p>
+                      <p className="border-t border-[#000000] pt-2 mx-auto w-48 font-bold">Customer Signature</p>
                     </div>
 
                     <div className="flex flex-col items-center">
@@ -726,14 +726,14 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                       <img 
                         id="print-signature-img" 
                         alt="Signature preview" 
-                        className="h-10 object-contain hidden border border-slate-100 bg-slate-50/20 mb-1" 
+                        className="h-10 object-contain hidden border border-[#eeeeee] bg-[#f9f9f9] mb-1" 
                       />
-                      <p className="border-t border-black pt-2 w-48 font-bold mx-auto">Authorized Signature</p>
+                      <p className="border-t border-[#000000] pt-2 w-48 font-bold mx-auto">Authorized Signature</p>
                     </div>
                   </div>
                   
                   {/* Footnote */}
-                  <div className="text-center text-[9px] text-slate-500 font-mono border-t border-black/10 pt-4">
+                  <div className="text-center text-[9px] text-[#888888] font-mono border-t border-[#eeeeee] pt-4">
                     This is an official system-generated invoice from Sky Automation Tech Platform. All rights reserved. Thank you.
                   </div>
                 </div>
@@ -747,7 +747,7 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
       {/* Void Reason Dialog Modal */}
       {showVoidModal && (
         <div className="fixed inset-0 z-[100] bg-black/70 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl w-full max-w-md p-6 shadow-2xl border border-slate-100 space-y-4">
+          <div className="bg-[#ffffff] rounded-3xl w-full max-w-md p-6 shadow-2xl border border-[#eeeeee] space-y-4">
             <div className="flex justify-between items-center pb-3 border-b border-slate-100">
               <h3 className="text-sm font-bold text-slate-900 uppercase tracking-tight flex items-center gap-1.5">
                 <ShieldAlert className="text-red-500" size={16} />

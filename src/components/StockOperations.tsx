@@ -12,7 +12,6 @@ import {
   AlertCircle,
   Clock,
   Coins,
-  QrCode
 } from 'lucide-react';
 import { Product, Variant, StockLog, StockLogType, UserProfile } from '../types';
 import { addStockLog, updateProduct, getStockLogs } from '../firebase/db';
@@ -64,7 +63,6 @@ export default function StockOperations({
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [submitting, setSubmitting] = useState(false);
-  const [showScanner, setShowScanner] = useState(false);
 
   // Refresh active logs list
   const refreshLedger = async () => {
@@ -107,32 +105,6 @@ export default function StockOperations({
     setError('');
   };
 
-  const handleScan = (text: string) => {
-    let found = false;
-    for (const p of products) {
-      if (p.barcodeValue === text) {
-        setSelectedProductId(p.id);
-        if (p.variants.length > 0) {
-          setSelectedVariantId(p.variants[0].id);
-        }
-        found = true;
-        break;
-      }
-      const v = p.variants.find(v => v.barcodeValue === text);
-      if (v) {
-        setSelectedProductId(p.id);
-        setSelectedVariantId(v.id);
-        found = true;
-        break;
-      }
-    }
-    if (!found) {
-      setError('No product found for scanned barcode.');
-    }
-    setShowScanner(false);
-  };
-
-  // Run Transaction
   const handleTransaction = async (e: React.FormEvent) => {
     e.preventDefault();
     if (requireCheckIn && !requireCheckIn()) return;
