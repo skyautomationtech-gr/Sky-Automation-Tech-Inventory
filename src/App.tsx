@@ -407,13 +407,14 @@ export default function App() {
   };
 
   // Settings prefix updates form
-  const handleSaveSettingsPrefixes = async (e: React.FormEvent, prefixes: any) => {
+  const handleSaveSettingsPrefixes = async (e: React.FormEvent, prefixes: any, invoiceTerms: string) => {
     e.preventDefault();
     if (!companySettings) return;
 
     const updated = {
       ...companySettings,
-      prefixes
+      prefixes,
+      invoiceTerms
     };
 
     try {
@@ -774,7 +775,7 @@ export default function App() {
                 const sat = (e.currentTarget.elements.namedItem('sat-prefix') as HTMLInputElement).value;
                 const gz = (e.currentTarget.elements.namedItem('gz-prefix') as HTMLInputElement).value;
                 const rtx = (e.currentTarget.elements.namedItem('rtx-prefix') as HTMLInputElement).value;
-                handleSaveSettingsPrefixes(e, { SAT: sat, GZ: gz, RTX: rtx });
+                const terms = (e.currentTarget.elements.namedItem('invoice-terms') as HTMLTextAreaElement).value; handleSaveSettingsPrefixes(e, { SAT: sat, GZ: gz, RTX: rtx }, terms);
               }}
               className="space-y-4"
             >
@@ -814,6 +815,18 @@ export default function App() {
                     className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-sm text-slate-800 font-mono font-bold text-amber-600 focus:outline-hidden"
                   />
                 </div>
+              </div>
+
+              <div className="mt-4">
+                <label className="block text-sm font-semibold uppercase tracking-wider text-slate-400">
+                  Default Invoice Terms & Conditions
+                </label>
+                <textarea
+                  name="invoice-terms"
+                  rows={3}
+                  defaultValue={companySettings?.invoiceTerms || 'Goods once sold are non-refundable. Please verify items at delivery.'}
+                  className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-sm text-slate-800 font-mono focus:outline-hidden focus:border-amber-400"
+                />
               </div>
 
               <div className="pt-4 border-t border-slate-100 flex justify-between items-center">

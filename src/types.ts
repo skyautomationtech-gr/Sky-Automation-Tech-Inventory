@@ -137,6 +137,7 @@ export interface ProductModel {
 export interface CompanySettings {
   companyName: string;
   logoUrl?: string;
+  invoiceTerms?: string;
   prefixes: {
     SAT: string; // default: SAT-INV
     GZ: string;  // default: GZ-INV

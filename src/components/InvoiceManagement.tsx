@@ -15,8 +15,8 @@ import {
   Eraser, 
   Check 
 } from 'lucide-react';
-import { Invoice, UserProfile, Order } from '../types';
-import { getInvoices, voidInvoiceRecord, getOrders } from '../firebase/db';
+import { Invoice, UserProfile, Order, CompanySettings } from '../types';
+import { getInvoices, voidInvoiceRecord, getOrders, getCompanySettings } from '../firebase/db';
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase/config';
 import html2canvas from 'html2canvas';
@@ -30,6 +30,7 @@ interface InvoiceManagementProps {
 export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManagementProps) {
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
+  const [companySettings, setCompanySettings] = useState<CompanySettings | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -62,6 +63,8 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
     try {
       const invoicesData = await getInvoices();
       const ordersData = await getOrders();
+      const settingsData = await getCompanySettings();
+      setCompanySettings(settingsData);
       setInvoices(invoicesData || []);
       setOrders(ordersData || []);
     } catch (err: any) {
@@ -248,21 +251,6 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
         useCORS: true,
         backgroundColor: '#ffffff',
         logging: true,
-        onclone: (clonedDoc) => {
-          const printArea = clonedDoc.getElementById('invoice-print-area');
-          if (printArea) {
-            // Force standard colors to avoid modern color parsing errors
-            const style = clonedDoc.createElement('style');
-            style.innerHTML = `
-              #invoice-print-area, #invoice-print-area * {
-                color: #000000 !important;
-                background-color: #ffffff !important;
-                border-color: #000000 !important;
-              }
-            `;
-            clonedDoc.head.appendChild(style);
-          }
-        }
       });
       
       const imgData = canvas.toDataURL('image/png');
@@ -605,136 +593,134 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
               )}
 
               {/* A4 PRINT CONTAINER (STRICT BLACK AND WHITE FOR PRINTING) */}
-              <div className="bg-[#ffffff] border border-[#cccccc] p-10 max-w-[210mm] mx-auto min-h-[297mm] text-[#000000] font-sans" id="invoice-print-area" style={{ width: '210mm' }}>
-                <div className="space-y-8">
-                  {/* Print Invoice Top Header */}
-                  <div className="border-b border-[#000000] pb-6 flex justify-between items-start">
-                    <div className="flex items-center gap-4">
-                      <img src="/logo.png" alt="Company Logo" className="w-16 h-16 object-contain" />
-                      <div>
-                        <span className="text-sm font-mono tracking-widest font-black uppercase">
-                          {selectedInvoice.subBrand === 'SAT' ? 'SKY AUTOMATION TECH' : selectedInvoice.subBrand === 'GZ' ? 'GADGETZU' : 'RTX GADGET'}
-                        </span>
-                        <h1 className="text-3xl font-black tracking-tighter uppercase mt-1">OFFICIAL INVOICE</h1>
-                        <div className="text-sm mt-2 space-y-0.5 font-mono">
-                          <p className="font-bold">Issued By: {selectedInvoice.subBrand === 'SAT' ? 'Sky Automation Tech' : selectedInvoice.subBrand === 'GZ' ? 'GadgetZu' : 'RTX Gadget'}</p>
-                          <p className="text-[#666666]">Email: skyautomationtech@gmail.com</p>
-                        </div>
+              <div className="bg-[#ffffff] max-w-[210mm] mx-auto min-h-[297mm] text-[#000000] font-sans relative overflow-hidden" id="invoice-print-area" style={{ width: '210mm' }}>
+                {/* Header Section */}
+                <div className="relative bg-[#111111] h-[140px] w-full flex justify-between items-start p-8">
+                  {/* Subtle Wave SVG */}
+                  <svg className="absolute inset-0 w-full h-full object-cover pointer-events-none opacity-80" preserveAspectRatio="none" viewBox="0 0 800 140" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M0 0H800V140C800 140 650 90 400 90C150 90 0 140 0 140V0Z" fill="#3a3a3a"/>
+                  </svg>
+                  <div className="relative z-10 text-[#ffffff]">
+                    <h1 className="text-[30px] font-bold tracking-wider">INVOICE</h1>
+                  </div>
+                  <div className="relative z-10 text-right text-[#ffffff] flex flex-col items-end">
+                    {/* Hexagon Mark */}
+                    <svg width="24" height="24" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" className="mb-2">
+                      <path d="M12 0L22.3923 6V18L12 24L1.6077 18V6L12 0Z" fill="#ffffff"/>
+                    </svg>
+                    <div className="font-bold text-[16px] tracking-widest">SKY AUTOMATION TECH</div>
+                    <div className="text-[10px] text-[#888888] tracking-[0.2em] mt-1 uppercase">
+                      {selectedInvoice.subBrand === 'SAT' ? 'SKY AUTO DIVISION' : selectedInvoice.subBrand === 'GZ' ? 'GADGETZU DIVISION' : 'RTX GADGET DIVISION'}
+                    </div>
+                  </div>
+                </div>
+
+                <div className="px-10 py-8 space-y-8">
+                  {/* INVOICE TO / META INFO ROW */}
+                  <div className="flex justify-between items-start">
+                    <div className="space-y-1.5">
+                      <div className="text-[11px] text-[#888888] tracking-widest mb-2 font-semibold">INVOICE TO</div>
+                      <div className="font-bold text-[16px]">{selectedInvoice.customerName}</div>
+                      <div className="text-[13px]">P : {selectedInvoice.customerPhone}</div>
+                      <div className="text-[13px] max-w-[250px] whitespace-pre-wrap leading-relaxed">
+                        A : {orders.find(o => o.id === selectedInvoice.orderId)?.deliveryAddress || 'No Address Listed'}
                       </div>
                     </div>
-
-                    <div className="text-right font-mono text-sm space-y-1">
-                      <div className="flex items-center justify-end gap-2 mb-2">
-                        <QRCodeSVG value={`INV:${selectedInvoice.invoiceNumber}`} size={60} />
-                      </div>
-                      <div className="border border-[#000000] p-2 text-center bg-[#000000] text-[#ffffff] rounded-sm">
-                        <p className="text-[9px] font-bold uppercase tracking-wider">INVOICE NUMBER</p>
-                        <p className="text-sm font-black tracking-tight">{selectedInvoice.invoiceNumber}</p>
-                      </div>
-                      <p className="pt-2"><strong>Invoice Date:</strong> {new Date(selectedInvoice.generatedAt).toLocaleDateString('en-GB')}</p>
-                      <p><strong>Order Reference:</strong> #{selectedInvoice.orderId.substring(0, 8).toUpperCase()}</p>
+                    <div className="text-right space-y-1.5 text-[13px]">
+                      <div><span className="font-semibold">Invoice No :</span> {selectedInvoice.invoiceNumber}</div>
+                      <div><span className="font-semibold">Date :</span> {new Date(selectedInvoice.generatedAt).toLocaleDateString('en-GB')}</div>
+                      <div><span className="font-semibold">Courier :</span> {selectedInvoice.courier || 'N/A'}</div>
                     </div>
                   </div>
 
-                  {/* Customer Information Section */}
-                  <div className="grid grid-cols-2 gap-8 border border-[#000000] p-4 font-mono text-sm rounded-sm">
-                    <div>
-                      <h3 className="font-black border-b border-[#000000] pb-1 mb-2 text-sm uppercase tracking-wide">BILLED TO (CUSTOMER):</h3>
-                      <p className="font-black text-[#000000] text-sm">{selectedInvoice.customerName}</p>
-                      <p className="mt-1 font-bold text-[#333333]">Phone: {selectedInvoice.customerPhone}</p>
-                    </div>
-
-                    <div>
-                      <h3 className="font-black border-b border-[#000000] pb-1 mb-2 text-sm uppercase tracking-wide">DELIVERY ADDRESS:</h3>
-                      <p className="text-[#222222] whitespace-pre-wrap leading-relaxed">
-                        {selectedInvoice.courier ? `${selectedInvoice.courier}` : 'Courier Delivery'} <br />
-                        {orders.find(o => o.id === selectedInvoice.orderId)?.deliveryAddress || 'No Address Listed'}
-                      </p>
-                    </div>
-                  </div>
-
-                  {/* Itemized Invoice Table */}
-                  <div className="border border-[#000000] rounded-sm overflow-hidden font-mono text-sm">
+                  {/* ITEMS TABLE */}
+                  <div className="w-full text-sm">
                     <table className="w-full text-left">
                       <thead>
-                        <tr className="bg-[#000000] text-[#ffffff] font-black">
-                          <th className="py-2.5 px-4">PRODUCT DESCRIPTION</th>
-                          <th className="py-2.5 px-4 text-center">QUANTITY</th>
-                          <th className="py-2.5 px-4 text-right">UNIT PRICE</th>
-                          <th className="py-2.5 px-4 text-right">LINE TOTAL</th>
+                        <tr className="bg-[#111111] text-[#ffffff]">
+                          <th className="py-2 px-4 font-semibold w-12 text-center">SL</th>
+                          <th className="py-2 px-4 font-semibold">Item description</th>
+                          <th className="py-2 px-4 font-semibold text-center w-24">Qty</th>
+                          <th className="py-2 px-4 font-semibold text-right w-32">Total</th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-[#999999]">
+                      <tbody>
                         {selectedInvoice.items.map((item, idx) => (
-                          <tr key={idx} className="hover:bg-[#f9f9f9]">
-                            <td className="py-3 px-4 font-black">
-                              {item.productName}
-                              <div className="text-[9px] text-[#888888] font-normal mt-0.5">Variant: {item.variantLabel}</div>
+                          <tr key={idx} style={{ backgroundColor: idx % 2 === 0 ? '#f2f2f2' : '#ffffff' }}>
+                            <td className="py-3 px-4 text-center text-[13px]">{idx + 1}</td>
+                            <td className="py-3 px-4">
+                              <div className="font-bold text-[14px]">{item.productName}</div>
+                              {item.variantLabel && <div className="text-[11px] text-[#888888] mt-0.5">{item.variantLabel}</div>}
                             </td>
-                            <td className="py-3 px-4 text-center font-bold">{item.qty}</td>
-                            <td className="py-3 px-4 text-right font-bold">৳{item.unitPrice.toLocaleString()}</td>
-                            <td className="py-3 px-4 text-right font-black">৳{(item.qty * item.unitPrice).toLocaleString()}</td>
+                            <td className="py-3 px-4 text-center text-[13px]">{item.qty}</td>
+                            <td className="py-3 px-4 text-right text-[13px]">৳{(item.qty * item.unitPrice).toLocaleString()}</td>
                           </tr>
                         ))}
                       </tbody>
                     </table>
                   </div>
 
-                  {/* Financial Summary Block */}
-                  <div className="grid grid-cols-2 gap-8 items-start font-mono text-sm">
-                    {/* Notes & Courier Info */}
-                    <div className="border border-[#000000] p-4 space-y-2 rounded-sm bg-[#f9f9f9]">
-                      <h4 className="font-black border-b border-[#000000] pb-1 uppercase tracking-wider text-[9px]">COURIER & DESPATCH DETS:</h4>
-                      <div className="space-y-1">
-                        <p><strong>Courier:</strong> {selectedInvoice.courier || 'N/A'}</p>
-                        <p><strong>Tracking No:</strong> {selectedInvoice.courierTrackingNumber || 'Pending Courier Assign'}</p>
-                        <p><strong>Biller:</strong> {user?.name || 'Operator'}</p>
-                      </div>
+                  {/* PAYMENT INFO + TOTALS ROW */}
+                  <div className="flex justify-between items-start pt-4">
+                    <div className="space-y-1.5">
+                      <div className="text-[11px] text-[#888888] tracking-widest mb-2 font-semibold">PAYMENT INFO</div>
+                      <div className="text-[13px]"><span className="font-semibold">Method :</span> Cash on Delivery</div>
+                      <div className="text-[13px]"><span className="font-semibold">Status :</span> {selectedInvoice.paymentStatus}</div>
                     </div>
-
-                    {/* Financial Summary Calculations */}
-                    <div className="border border-[#000000] rounded-sm overflow-hidden">
-                      <div className="p-3 space-y-1.5">
-                        <div className="flex justify-between">
-                          <span>Subtotal Amount:</span>
-                          <span>৳{selectedInvoice.totalAmount.toLocaleString()}</span>
-                        </div>
-                        <div className="flex justify-between text-[#000000] font-bold border-b border-[#cccccc] pb-1.5">
-                          <span>Total Paid:</span>
-                          <span>৳{selectedInvoice.amountPaid.toLocaleString()}</span>
-                        </div>
-                        <div className="flex justify-between font-black text-[#000000] pt-1 text-sm">
-                          <span>TOTAL DUE:</span>
-                          <span>৳{selectedInvoice.amountDue.toLocaleString()}</span>
-                        </div>
+                    <div className="w-64 space-y-3">
+                      <div className="flex justify-between text-[13px] px-4">
+                        <span>Subtotal</span>
+                        <span>৳{selectedInvoice.totalAmount.toLocaleString()}</span>
                       </div>
-                      
-                      <div className="bg-[#000000] text-[#ffffff] p-2.5 text-center font-black uppercase text-sm tracking-widest">
-                        PAYMENT STATUS: {selectedInvoice.paymentStatus}
+                      <div className="flex justify-between text-[13px] px-4">
+                        <span>Total Paid</span>
+                        <span>৳{selectedInvoice.amountPaid.toLocaleString()}</span>
+                      </div>
+                      <div className="bg-[#111111] text-[#ffffff] flex justify-between p-4 font-bold text-[16px]">
+                        <span>Total :</span>
+                        <span>৳{selectedInvoice.amountDue.toLocaleString()}</span>
                       </div>
                     </div>
                   </div>
 
-                  {/* Print Page Signature & Footer Section */}
-                  <div className="pt-16 grid grid-cols-2 gap-8 items-end font-mono text-sm text-center">
-                    <div>
-                      <p className="border-t border-[#000000] pt-2 mx-auto w-48 font-bold">Customer Signature</p>
+                  {/* TERMS AND SIGNATURE */}
+                  <div className="pt-16 flex justify-between items-end">
+                    <div className="max-w-[300px]">
+                      <div className="text-[11px] text-[#888888] tracking-widest mb-2 font-semibold">TERMS AND CONDITIONS</div>
+                      <div className="text-[11px] text-[#333333] leading-relaxed">
+                        {companySettings?.invoiceTerms || 'Goods once sold are non-refundable. Please verify items at delivery.'}
+                      </div>
                     </div>
-
-                    <div className="flex flex-col items-center">
-                      {/* Image tag displaying the drawn signature from canvas */}
-                      <img 
-                        id="print-signature-img" 
-                        alt="Signature preview" 
-                        className="h-10 object-contain hidden border border-[#eeeeee] bg-[#f9f9f9] mb-1" 
-                      />
-                      <p className="border-t border-[#000000] pt-2 w-48 font-bold mx-auto">Authorized Signature</p>
+                    <div className="text-center w-48">
+                      <div className="mb-2 h-16 flex items-end justify-center relative">
+                        <img 
+                          id="print-signature-img" 
+                          alt="Signature preview" 
+                          className="h-14 object-contain hidden relative z-10" 
+                          style={{ mixBlendMode: 'multiply' }}
+                        />
+                        {/* Fallback signature text if no image */}
+                        <div className="font-[cursive] text-2xl text-[#000000] absolute bottom-2 w-full" id="fallback-signature">Sky Automation</div>
+                      </div>
+                      <div className="border-t border-[#000000] pt-2 text-[12px] font-semibold">
+                        Authorized signature
+                      </div>
                     </div>
                   </div>
-                  
-                  {/* Footnote */}
-                  <div className="text-center text-[9px] text-[#888888] font-mono border-t border-[#eeeeee] pt-4">
-                    This is an official system-generated invoice from Sky Automation Tech Platform. All rights reserved. Thank you.
+                </div>
+
+                {/* FOOTER */}
+                <div className="absolute bottom-0 w-full h-[100px] bg-[#111111] flex items-center px-10">
+                  <svg className="absolute inset-0 w-full h-full object-cover pointer-events-none opacity-80" preserveAspectRatio="none" viewBox="0 0 800 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+                    <path d="M0 100H800V0C800 0 650 50 400 50C150 50 0 0 0 0V100Z" fill="#3a3a3a"/>
+                  </svg>
+                  <div className="relative z-10 text-[#ffffff] text-[12px] flex gap-8 w-full">
+                    <div className="underline decoration-[#888888] underline-offset-4">Get in touch</div>
+                    <div className="flex gap-4">
+                      <span>01577351518</span>
+                      <span className="text-[#888888]">|</span>
+                      <span>skyautomationtech@gmail.com</span>
+                    </div>
                   </div>
                 </div>
               </div>
