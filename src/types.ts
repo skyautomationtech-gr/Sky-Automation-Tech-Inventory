@@ -85,6 +85,7 @@ export interface Product {
   createdAt: number;
   barcodeValue?: string;
   status?: 'pending_review' | 'approved' | 'rejected';
+  stockStatus?: 'in_stock' | 'out_of_stock';
   rejectionReason?: string;
   deletionStatus?: 'pending_approval' | null;
   deletionRequestedBy?: string;
@@ -134,20 +135,106 @@ export interface ProductModel {
   name: string;
 }
 
+export interface SubBrandDetails {
+  companyName?: string;
+  address?: string;
+  phone?: string;
+  email?: string;
+  logoUrl?: string;
+  invoiceTerms?: string;
+  tagline?: string;
+}
+
 export interface CompanySettings {
   companyName: string;
   logoUrl?: string;
+  address?: string;
+  phone?: string;
+  email?: string;
   invoiceTerms?: string;
+  footerTagline?: string;
+  paymentMethodsInfo?: {
+    bkashNagad?: string;
+    bankInfo?: string;
+    whatsappContact?: string;
+  };
   prefixes: {
     SAT: string; // default: SAT-INV
     GZ: string;  // default: GZ-INV
     RTX: string; // default: RTX-INV
   };
+  subBrandDetails?: {
+    SAT?: SubBrandDetails;
+    GZ?: SubBrandDetails;
+    RTX?: SubBrandDetails;
+  };
+  subBrands?: string[];
   onboarded: boolean;
+
+  // Phase 3 Configurable Options
+  defaultReorderThreshold?: number;
+  notificationPreferences?: {
+    lowStockAlerts?: boolean;
+    orderStatusAlerts?: boolean;
+    duePaymentAlerts?: boolean;
+    pendingApprovalAlerts?: boolean;
+  };
+  agingThresholds?: {
+    bucket1MaxDays?: number; // e.g. 15
+    bucket2MaxDays?: number; // e.g. 30
+  };
+  defaultReportDateRange?: 'today' | 'this_week' | 'this_month' | 'last_month' | 'this_year';
+  supplierTermsNote?: string;
+  emailJsConfig?: {
+    serviceId?: string;
+    templateId?: string;
+    publicKey?: string;
+    recipientEmail?: string;
+  };
+}
+
+export interface Supplier {
+  id: string;
+  name: string;
+  phone: string;
+  address?: string;
+  notes?: string;
+  subBrand?: 'SAT' | 'GZ' | 'RTX' | 'ALL' | '';
+  totalPurchases: number;
+  totalPaid: number;
+  outstandingDue: number;
+  createdAt: number;
+}
+
+export interface SupplierPayment {
+  id: string;
+  supplierId: string;
+  amount: number;
+  paymentMethod: 'Cash' | 'bKash' | 'Nagad' | 'Bank Transfer';
+  referenceNo?: string;
+  notes?: string;
+  date: string; // YYYY-MM-DD
+  recordedBy: string;
+  createdAt: number;
+}
+
+export type NotificationType = 'low_stock' | 'order_status' | 'due_payment' | 'pending_approval';
+
+export interface AppNotification {
+  id: string;
+  type: NotificationType;
+  title: string;
+  message: string;
+  targetScreen?: string; // 'products' | 'orders' | 'due_payments' | 'users' | 'suppliers'
+  targetId?: string;
+  createdAt: number;
+  read: boolean;
+  dismissedBy?: string[];
 }
 
 export interface Customer {
   id: string;
+  customerId?: string;
   name: string;
   phone: string;
   address?: string;
@@ -194,6 +281,8 @@ export interface Order {
   subBrand: 'SAT' | 'GZ' | 'RTX';
   salesChannel: SalesChannel;
   items: OrderItem[];
+  discountAmount?: number;
+  shippingCharge?: number;
   totalAmount: number;
   courier: CourierName;
   courierTrackingNumber?: string;
@@ -217,9 +306,12 @@ export interface Invoice {
   invoiceNumber: string;
   subBrand: 'SAT' | 'GZ' | 'RTX';
   subBrandPrefix: string;
+  customerId?: string;
   customerName: string;
   customerPhone: string;
   items: OrderItem[];
+  discountAmount?: number;
+  shippingCharge?: number;
   totalAmount: number;
   amountPaid: number;
   amountDue: number;

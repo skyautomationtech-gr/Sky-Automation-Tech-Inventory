@@ -20,12 +20,14 @@ import {
   FolderPlus,
   Coins,
   ArrowLeft,
-  ArrowRight
+  ArrowRight,
+  PackagePlus
 } from 'lucide-react';
 import { motion } from 'motion/react';
 import { QRCodeSVG } from 'qrcode.react';
 import Barcode from './Barcode';
 import { generateBarcodePDF } from '../utils/barcodePdf';
+import { getBrandLogo } from '../utils/brandLogos';
 import JsBarcode from 'jsbarcode';
 import { Product, Variant, Category, Brand, UserProfile, StockLog, ProductColor, ProductModel } from '../types';
 import { 
@@ -68,6 +70,7 @@ interface ProductManagementProps {
   requireCheckIn?: () => boolean;
   initialProductId?: string | null;
   clearInitialProductId?: () => void;
+  onNavigateToStock?: (productId: string) => void;
 }
 
 export default function ProductManagement({
@@ -81,12 +84,13 @@ export default function ProductManagement({
   initialAddMode = false,
   requireCheckIn,
   initialProductId,
-  clearInitialProductId
+  clearInitialProductId,
+  onNavigateToStock
 }: ProductManagementProps) {
   const isStaff = user?.role === 'staff';
 
   // Sub tabs
-  const [activeSubTab, setActiveSubTab] = useState<'catalog' | 'categories' | 'brands' | 'attributes' | 'pending' | 'archive' | 'deletion_requests'>('catalog');
+  const [activeSubTab, setActiveSubTab] = useState<'catalog' | 'categories' | 'brands' | 'attributes' | 'out_of_stock' | 'pending' | 'archive' | 'deletion_requests'>('catalog');
 
   // List management states
   const [search, setSearch] = useState('');
@@ -1374,8 +1378,9 @@ export default function ProductManagement({
 
     const matchesStatus = product.status === 'approved';
     const matchesArchived = !product.archived;
+    const matchesStockStatus = product.stockStatus !== 'out_of_stock';
     
-    return matchesSearch && matchesCategory && matchesBrand && matchesSubBrand && matchesStock && matchesStatus && matchesArchived;
+    return matchesSearch && matchesCategory && matchesBrand && matchesSubBrand && matchesStock && matchesStatus && matchesArchived && matchesStockStatus;
   });
 
   // Sort
@@ -1467,6 +1472,21 @@ export default function ProductManagement({
               )}
             </button>
           )}
+          <button
+            onClick={() => setActiveSubTab('out_of_stock')}
+            className={`pb-2.5 px-1 font-semibold text-sm transition-all border-b-2 cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
+              activeSubTab === 'out_of_stock'
+                ? 'border-amber-400 text-slate-900 font-extrabold'
+                : 'border-transparent text-slate-500 hover:text-slate-950'
+            }`}
+          >
+            Out of Stock
+            {products.filter(p => p.stockStatus === 'out_of_stock' && !p.archived).length > 0 && (
+              <span className="px-1.5 py-0.5 bg-red-500 text-white text-[9px] font-black rounded-full leading-none">
+                {products.filter(p => p.stockStatus === 'out_of_stock' && !p.archived).length}
+              </span>
+            )}
+          </button>
           <button
             onClick={() => setActiveSubTab('archive')}
             className={`pb-2.5 px-1 font-semibold text-sm transition-all border-b-2 cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
@@ -1704,13 +1724,14 @@ export default function ProductManagement({
                               </div>
                             </td>
                             <td className="py-3 px-3 text-center">
-                              <span className={`inline-block text-[9px] font-mono font-black px-2 py-0.5 rounded-full ${
+                              <span className={`inline-flex items-center gap-1.5 text-[9px] font-mono font-black px-2 py-0.5 rounded-full ${
                                 product.subBrand === 'SAT' 
-                                  ? 'bg-slate-900 text-amber-400' 
+                                  ? 'bg-slate-900 text-amber-400 border border-slate-800' 
                                   : product.subBrand === 'GZ' 
-                                  ? 'bg-amber-100 text-amber-800' 
-                                  : 'bg-teal-50 text-teal-700 border border-teal-100'
+                                  ? 'bg-amber-100 text-amber-800 border border-amber-200' 
+                                  : 'bg-teal-50 text-teal-700 border border-teal-200'
                               }`}>
+                                <img src={getBrandLogo(product.subBrand)} alt={product.subBrand} className="w-3.5 h-3.5 object-contain rounded-xs" />
                                 {product.subBrand}
                               </span>
                             </td>
@@ -2107,9 +2128,14 @@ export default function ProductManagement({
                   <h4 className="text-sm font-bold text-slate-900 font-sans">Variants Stock Grid</h4>
                   <div className="grid grid-cols-2 gap-2">
                     {selectedProduct.variants.map((v) => (
-                      <div key={v.id} className="p-2 bg-slate-50 rounded-lg border border-slate-100 text-center font-mono">
+                      <div key={v.id} className="p-2 bg-slate-50 rounded-lg border border-slate-100 text-center font-mono relative">
+                        {v.stock === 0 && (
+                           <span className="absolute -top-1 -right-1 bg-rose-500 text-white text-[8px] font-black uppercase px-1.5 py-0.5 rounded-full shadow-sm z-10">Out of Stock</span>
+                        )}
                         <p className="text-sm font-semibold text-slate-400 truncate">{v.color} - {v.model}</p>
-                        <p className="text-sm font-black text-slate-800 mt-0.5">{v.stock} in stock</p>
+                        <p className={`text-sm font-black mt-0.5 ${v.stock === 0 ? 'text-rose-500' : 'text-slate-800'}`}>
+                          {v.stock} in stock
+                        </p>
                       </div>
                     ))}
                   </div>
@@ -2837,6 +2863,102 @@ export default function ProductManagement({
                 })}
               </div>
             )}
+          </div>
+        </div>
+      )}
+
+      {/* SUB TAB: OUT OF STOCK */}
+      {activeSubTab === 'out_of_stock' && (
+        <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden p-6 space-y-4">
+          <div className="flex justify-between items-center">
+            <div>
+              <h3 className="text-sm font-black text-slate-900">Out of Stock</h3>
+              <p className="text-sm text-slate-500">Products with 0 inventory remaining. Restock to move them back to the active catalog.</p>
+            </div>
+          </div>
+          
+          <div className="overflow-x-auto">
+            <table className="w-full text-left border-collapse text-sm text-slate-600">
+              <thead>
+                <tr className="bg-slate-50 border-b border-slate-100 text-sm font-mono tracking-wider text-slate-400 uppercase">
+                  <th className="py-3 px-4 font-bold">Image</th>
+                  <th className="py-3 px-3 font-bold">Product Info</th>
+                  <th className="py-3 px-3 font-bold text-center">Division</th>
+                  <th className="py-3 px-3 font-bold text-right">Price</th>
+                  <th className="py-3 px-3 font-bold text-center">Stock</th>
+                  <th className="py-3 px-4 text-center font-bold">Action</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {products.filter(p => p.stockStatus === 'out_of_stock' && !p.archived).length === 0 ? (
+                  <tr>
+                    <td colSpan={6} className="py-10 text-center text-slate-400 italic">
+                      No out of stock products found.
+                    </td>
+                  </tr>
+                ) : (
+                  products.filter(p => p.stockStatus === 'out_of_stock' && !p.archived).map((product) => {
+                    const defaultImg = product.images?.[0] || 'https://images.unsplash.com/photo-1546868871-7041f2a55e12?auto=format&fit=crop&q=80&w=150';
+                    return (
+                      <tr key={product.id} className="hover:bg-slate-50/50 transition-colors">
+                        <td className="py-3 px-4">
+                          <img 
+                            src={defaultImg} 
+                            alt={product.name} 
+                            referrerPolicy="no-referrer"
+                            className="w-10 h-10 object-cover rounded-lg border border-slate-100" 
+                          />
+                        </td>
+                        <td className="py-3 px-3">
+                          <p className="font-bold text-slate-900 leading-tight">{product.name}</p>
+                          <p className="text-sm text-slate-400 font-mono mt-0.5">{product.sku}</p>
+                          <div className="flex flex-wrap gap-1.5 mt-1">
+                            <span className="bg-slate-100 text-slate-500 text-[9px] font-mono font-bold px-1 rounded">
+                              {product.brand}
+                            </span>
+                            <span className="bg-slate-100 text-slate-500 text-[9px] font-mono font-bold px-1 rounded">
+                              {product.category}
+                            </span>
+                          </div>
+                        </td>
+                        <td className="py-3 px-3 text-center">
+                          <span className={`inline-block text-[9px] font-mono font-black px-2 py-0.5 rounded-full ${
+                            product.subBrand === 'SAT' 
+                              ? 'bg-slate-900 text-amber-400' 
+                              : product.subBrand === 'GZ' 
+                              ? 'bg-amber-100 text-amber-800' 
+                              : 'bg-teal-50 text-teal-700 border border-teal-100'
+                          }`}>
+                            {product.subBrand}
+                          </span>
+                        </td>
+                        <td className="py-3 px-3 text-right">
+                          <p className="font-bold text-slate-900">৳ {product.sellingPrice.toLocaleString()}</p>
+                        </td>
+                        <td className="py-3 px-3 text-center">
+                           <span className="text-rose-600 font-black text-sm bg-rose-50 px-2 py-1 rounded-md">0 pcs</span>
+                        </td>
+                        <td className="py-3 px-4 text-center">
+                          <button
+                            onClick={() => {
+                              if (onNavigateToStock) {
+                                onNavigateToStock(product.id);
+                              } else {
+                                setSelectedProduct(product);
+                                setActiveSubTab('catalog');
+                              }
+                            }}
+                            className="bg-amber-400 hover:bg-amber-500 text-slate-900 px-3 py-1.5 font-bold text-sm rounded-lg cursor-pointer flex items-center justify-center gap-1.5 shadow-xs transition-colors mx-auto"
+                          >
+                            <PackagePlus size={14} /> Restock
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })
+                )}
+              </tbody>
+            </table>
           </div>
         </div>
       )}

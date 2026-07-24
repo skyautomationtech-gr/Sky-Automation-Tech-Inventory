@@ -63,14 +63,16 @@ service cloud.firestore {
       );
       allow update: if isSuperAdmin()
                     || (isSignedIn() && (
-                      // Protect key administrative / privilege fields from self-modification or non-superadmin updates
-                      request.resource.data.get('status', resource.data.get('status', 'pending_approval')) == resource.data.get('status', 'pending_approval') &&
-                      request.resource.data.get('active', resource.data.get('active', false)) == resource.data.get('active', false) &&
-                      request.resource.data.get('role', resource.data.get('role', 'staff')) == resource.data.get('role', 'staff') &&
-                      request.resource.data.get('subBrandAccess', resource.data.get('subBrandAccess', [])) == resource.data.get('subBrandAccess', []) &&
-                      
-                      // Allow updates to other fields for self or by an Admin for non-superadmin users
-                      (request.auth.uid == userId || (isAdmin() && resource.data.role != 'superadmin'))
+                      // A user can update their own profile, but cannot escalate privileges
+                      (request.auth.uid == userId && 
+                        request.resource.data.get('status', 'pending_approval') == resource.data.get('status', 'pending_approval') &&
+                        request.resource.data.get('active', false) == resource.data.get('active', false) &&
+                        request.resource.data.get('role', 'staff') == resource.data.get('role', 'staff') &&
+                        request.resource.data.get('subBrandAccess', []) == resource.data.get('subBrandAccess', [])
+                      )
+                      || 
+                      // An Admin can update non-superadmin users (including approving them), but cannot make them superadmins
+                      (isAdmin() && resource.data.role != 'superadmin' && request.resource.data.get('role', 'staff') != 'superadmin')
                     ));
       allow delete: if isSuperAdmin() && resource.data.role != 'superadmin';
 
@@ -82,6 +84,16 @@ service cloud.firestore {
     match /settings/rolePermissions {
       allow read: if isSignedIn();
       allow write: if isSuperAdmin();
+    }
+
+    match /settings/invoiceCounters {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
+    }
+
+    match /settings/customerCounter {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
     }
 
     match /settings/{docId} {
@@ -115,17 +127,17 @@ service cloud.firestore {
       allow read: if isSignedIn();
       allow create: if isActive() && (isSuperAdmin() || hasPermission('addProduct'));
       allow update: if isActive() && (
-        isSuperAdmin() || (
-          hasPermission('editProduct') && (
-            (request.resource.data.get('deletionStatus', null) == resource.data.get('deletionStatus', null)) ||
-            (request.resource.data.get('deletionStatus', null) == 'pending_approval' && isAdmin())
-          )
-        )
-      );
-      allow delete: if isSuperAdmin();
-    }
-
-    match /stockLogs/{logId} {
+                      (
+                        (isSuperAdmin() || hasPermission('manageOrders')) && 
+                        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['amountPaid', 'amountDue', 'paymentStatus'])
+                      ) || 
+                      (
+                        (isSuperAdmin() || hasPermission('voidInvoice')) && 
+                        request.resource.data.get('voided', false) == true && 
+                        resource.data.voided == false && 
+                        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['voided', 'voidedReason', 'voidedBy', 'voidedAt'])
+                      )
+                    );
       allow read: if isSignedIn();
       allow create: if isActive() && (isSuperAdmin() || hasPermission('stockIn') || hasPermission('stockOut') || hasPermission('stockAdjustment'));
       allow update: if false;
@@ -149,17 +161,19 @@ service cloud.firestore {
       allow read: if isSignedIn();
       allow create: if isActive() && (isSuperAdmin() || hasPermission('manageOrders'));
       allow update: if isActive() && (
-                      (isSuperAdmin() || hasPermission('manageOrders')) ||
-                      ((isSuperAdmin() || hasPermission('voidInvoice')) && 
-                       request.resource.data.get('voided', false) == true && 
-                       resource.data.voided == false &&
-                       request.resource.data.invoiceNumber == resource.data.invoiceNumber &&
-                       request.resource.data.totalAmount == resource.data.totalAmount &&
-                       request.resource.data.orderId == resource.data.orderId)
+                      (
+                        (isSuperAdmin() || hasPermission('manageOrders')) && 
+                        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['amountPaid', 'amountDue', 'paymentStatus'])
+                      ) || 
+                      (
+                        (isSuperAdmin() || hasPermission('voidInvoice')) && 
+                        request.resource.data.get('voided', false) == true && 
+                        resource.data.voided == false && 
+                        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['voided', 'voidedReason', 'voidedBy', 'voidedAt'])
+                      )
                     );
       allow delete: if isSuperAdmin();
     }
-
     match /customers/{customerId} {
       allow read: if isSignedIn();
       allow write: if isActive() && (isSuperAdmin() || hasPermission('manageOrders'));
@@ -168,6 +182,16 @@ service cloud.firestore {
     match /suppliers/{supplierId} {
       allow read: if isSignedIn();
       allow write: if isActive() && (isSuperAdmin() || hasPermission('manageCategories'));
+    }
+
+    match /supplierPayments/{paymentId} {
+      allow read: if isSignedIn();
+      allow write: if isActive() && (isSuperAdmin() || hasPermission('manageCategories'));
+    }
+
+    match /notifications/{notificationId} {
+      allow read: if isSignedIn();
+      allow write: if isSignedIn();
     }
 
     match /expenses/{expenseId} {

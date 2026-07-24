@@ -14,7 +14,10 @@ import {
   promoteUserToSuperAdmin,
   clearSampleData,
   seedInitialDataIfEmpty,
-  migrateProductBarcodes
+  syncProductStockStatuses,
+  migrateProductBarcodes,
+  migrateExistingCustomerIds,
+  exportAllData
 } from './firebase/db';
 import { UserProfile, Product, Category, Brand, CompanySettings, ProductColor, ProductModel } from './types';
 import { Menu, AlertTriangle, Sparkles, RefreshCw } from 'lucide-react';
@@ -33,6 +36,9 @@ import OrderManagement from './components/OrderManagement';
 import InvoiceManagement from './components/InvoiceManagement';
 import DuePayments from './components/DuePayments';
 import FinancialOverview from './components/FinancialOverview';
+import SupplierManagement from './components/SupplierManagement';
+import ReportsAnalytics from './components/ReportsAnalytics';
+import NotificationCenter from './components/NotificationCenter';
 
 // Mock/Fallback Data in case of Firestore permission/network errors
 const MOCK_PRODUCTS: Product[] = [
@@ -192,6 +198,7 @@ export default function App() {
   // Sub-action passing (e.g., automatically opening add product drawer)
   const [initialProductAddMode, setInitialProductAddMode] = useState(false);
   const [initialStockAction, setInitialStockAction] = useState('in');
+  const [initialStockProductId, setInitialStockProductId] = useState('');
 
   const [showClearDataModal, setShowClearDataModal] = useState(false);
   const [clearDataPassword, setClearDataPassword] = useState('');
@@ -200,6 +207,27 @@ export default function App() {
 
   const [isMigratingBarcodes, setIsMigratingBarcodes] = useState(false);
   const [migrationResult, setMigrationResult] = useState<string | null>(null);
+
+  const [isMigratingCustomerIds, setIsMigratingCustomerIds] = useState(false);
+  const [customerIdMigrationResult, setCustomerIdMigrationResult] = useState<string | null>(null);
+
+  const handleMigrateCustomerIds = async () => {
+    setIsMigratingCustomerIds(true);
+    setCustomerIdMigrationResult(null);
+    try {
+      const res = await migrateExistingCustomerIds();
+      if (res) {
+        setCustomerIdMigrationResult(`Successfully assigned Customer IDs to ${res.totalMigrated} existing customer(s). Next counter is at CUS-${String(res.nextCounter + 1).padStart(4, '0')}.`);
+      } else {
+        setCustomerIdMigrationResult('Migration complete. All existing customers already have Customer IDs.');
+      }
+    } catch (err: any) {
+      console.error('Customer ID Migration error:', err);
+      setCustomerIdMigrationResult(`Migration failed: ${err.message || 'Error occurred'}`);
+    } finally {
+      setIsMigratingCustomerIds(false);
+    }
+  };
 
   // Listen to Auth State and Global Quota Exceeded event
   useEffect(() => {
@@ -283,7 +311,7 @@ export default function App() {
     setDataLoading(true);
     try {
       await seedInitialDataIfEmpty();
-      
+      await syncProductStockStatuses();
       
       // Retrieve collections
       const prodsList = await getProducts(true);
@@ -406,23 +434,59 @@ export default function App() {
     }
   };
 
-  // Settings prefix updates form
-  const handleSaveSettingsPrefixes = async (e: React.FormEvent, prefixes: any, invoiceTerms: string) => {
+  // Settings prefix & logo updates form
+  const [settingsLogoUrl, setSettingsLogoUrl] = useState<string>('');
+
+  useEffect(() => {
+    if (companySettings?.logoUrl) {
+      setSettingsLogoUrl(companySettings.logoUrl);
+    }
+  }, [companySettings]);
+
+  const handleLogoFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) {
+      if (file.size > 2 * 1024 * 1024) {
+        alert('Image file size should be less than 2MB.');
+        return;
+      }
+      const reader = new FileReader();
+      reader.onload = () => {
+        if (typeof reader.result === 'string') {
+          setSettingsLogoUrl(reader.result);
+        }
+      };
+      reader.readAsDataURL(file);
+    }
+  };
+
+  const handleSaveCompanySettings = async (
+    e: React.FormEvent, 
+    extraData: any
+  ) => {
     e.preventDefault();
-    if (!companySettings) return;
+
+    if (user?.role !== 'superadmin' && user?.role !== 'super_admin') {
+      alert('Access Restricted: Only Super Admin can modify Company and Invoice Settings.');
+      return;
+    }
 
     const updated = {
-      ...companySettings,
-      prefixes,
-      invoiceTerms
+      ...(companySettings || {
+        companyName: 'Sky Automation Tech',
+        subBrands: ['SAT', 'GZ', 'RTX'],
+        onboarded: true
+      }),
+      ...extraData
     };
 
     try {
       await saveCompanySettings(updated);
       setCompanySettings(updated);
-      alert('Invoice prefixes updated successfully in Firestore!');
+      alert('Invoice & Company Settings updated successfully!');
     } catch (err) {
       console.error(err);
+      alert('Failed to save company settings.');
     }
   };
 
@@ -438,6 +502,33 @@ export default function App() {
       setMigrationResult("Migration failed. Please check logs.");
     } finally {
       setIsMigratingBarcodes(false);
+    }
+  };
+
+  const [isExportingData, setIsExportingData] = useState(false);
+  const [exportMessage, setExportMessage] = useState<string | null>(null);
+
+  const handleExportData = async () => {
+    setIsExportingData(true);
+    setExportMessage(null);
+    try {
+      const data = await exportAllData();
+      const jsonString = JSON.stringify(data, null, 2);
+      const blob = new Blob([jsonString], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement('a');
+      link.href = url;
+      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
+      link.download = `inventory-backup-${timestamp}.json`;
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
+      setExportMessage(`Data exported successfully. Backup saved as JSON.`);
+    } catch (err: any) {
+      setExportMessage(`Export failed: ${err.message}`);
+    } finally {
+      setIsExportingData(false);
     }
   };
 
@@ -592,6 +683,7 @@ export default function App() {
         isOpen={isSidebarOpen}
         setIsOpen={setIsSidebarOpen}
         companyName={companySettings?.companyName || 'Sky Automation Tech'}
+        logoUrl={companySettings?.logoUrl}
       />
 
       {/* Main Content Workspace */}
@@ -607,7 +699,7 @@ export default function App() {
               <Menu size={20} />
             </button>
             <div className="flex items-center gap-2">
-              <img src="/logo.png" alt="Company Logo" className="w-6 h-6 rounded object-contain" />
+              <img src={companySettings?.logoUrl || "/logo.png"} alt="Company Logo" className="w-6 h-6 rounded object-contain" />
               <h1 className="text-white font-bold tracking-tight text-sm uppercase">
                 {companySettings?.companyName || 'Sky Automation'}
               </h1>
@@ -618,6 +710,7 @@ export default function App() {
             {dataLoading && (
               <div className="w-2 h-2 bg-amber-400 rounded-full animate-ping" />
             )}
+            <NotificationCenter user={user} onNavigate={navigateToTab} />
             <div className="w-8 h-8 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-amber-500 font-bold text-sm">
               {user?.name?.charAt(0) || 'U'}
             </div>
@@ -625,6 +718,31 @@ export default function App() {
         </header>
 
         <main className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8 pt-20 lg:pt-8 bg-slate-50">
+          
+          {/* Desktop Header Bar */}
+          <div className="hidden lg:flex items-center justify-between pb-6 mb-6 border-b border-slate-200/80">
+            <div>
+              <div className="text-xs font-mono font-bold text-amber-600 uppercase tracking-widest">
+                {companySettings?.companyName || 'Sky Automation'} Platform
+              </div>
+              <h2 className="text-xl font-black text-slate-900 capitalize">
+                {currentTab.replace('_', ' ')}
+              </h2>
+            </div>
+
+            <div className="flex items-center gap-4">
+              <NotificationCenter user={user} onNavigate={navigateToTab} />
+              <div className="flex items-center gap-3 pl-4 border-l border-slate-200">
+                <div className="w-9 h-9 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-center text-amber-400 font-bold text-sm shadow-xs">
+                  {user?.name?.charAt(0) || 'U'}
+                </div>
+                <div className="text-left">
+                  <div className="text-xs font-bold text-slate-900">{user?.name || 'Staff User'}</div>
+                  <div className="text-[10px] text-slate-500 capitalize">{user?.role || 'staff'}</div>
+                </div>
+              </div>
+            </div>
+          </div>
           
           {/* Offline Mode Banner */}
           {isOfflineDemoMode && (
@@ -682,6 +800,11 @@ export default function App() {
             requireCheckIn={requireCheckIn}
             initialProductId={initialProductId}
             clearInitialProductId={() => setInitialProductId(null)}
+            onNavigateToStock={(productId) => {
+              setInitialStockAction('in');
+              setInitialStockProductId(productId);
+              setCurrentTab('stock');
+            }}
           />
         )}
 
@@ -693,6 +816,7 @@ export default function App() {
             onRefreshData={refreshApplicationData}
             initialAction={initialStockAction}
             requireCheckIn={requireCheckIn}
+            initialProductId={initialStockProductId}
           />
         )}
 
@@ -759,91 +883,693 @@ export default function App() {
           <AttendanceLog user={user} />
         )}
 
+        {/* Tab Suppliers: Supplier Management View */}
+        {currentTab === 'suppliers' && (
+          <SupplierManagement user={user} rolePermissions={{}} />
+        )}
+
+        {/* Tab Reports: Reports & Analytics View */}
+        {currentTab === 'reports' && (
+          <ReportsAnalytics user={user} />
+        )}
+
         {/* Tab 5: Settings View */}
         {currentTab === 'settings' && (
-          <div className="max-w-2xl bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-slate-100 space-y-6">
+          <div className="max-w-3xl bg-white p-6 md:p-8 rounded-3xl shadow-sm border border-slate-100 space-y-6">
             <div>
               <span className="text-sm font-mono font-bold text-amber-500 uppercase tracking-widest">Global Platform Configuration</span>
-              <h2 className="text-xl font-bold text-slate-900 mt-1">Company Settings & Prefixes</h2>
+              <h2 className="text-xl font-bold text-slate-900 mt-1">Company Branding & Invoice Settings</h2>
               <p className="text-sm text-slate-400 leading-relaxed mt-1">
-                Customize default invoice prefixes and view information about the connected sub-brands.
+                Customize company details, invoice layout, payment method instructions, terms, and sub-brand information.
               </p>
             </div>
 
+            {/* SUPER ADMIN ROLE GUARD BADGE */}
+            {!(user?.role === 'superadmin' || user?.role === 'super_admin') ? (
+              <div className="p-4 bg-amber-50 border border-amber-200 rounded-2xl flex items-start gap-3 text-amber-800">
+                <div className="p-2 bg-amber-100 rounded-xl shrink-0 text-amber-700 font-bold">🔒</div>
+                <div>
+                  <h4 className="font-bold text-sm text-amber-900">Super Admin Access Restricted</h4>
+                  <p className="text-xs text-amber-700 mt-0.5">
+                    Editing company settings, sub-brand details, and invoice templates is restricted to <strong>Super Admin</strong> roles. You can view the current settings below in read-only mode.
+                  </p>
+                </div>
+              </div>
+            ) : (
+              <div className="p-3 bg-emerald-50 border border-emerald-200 rounded-2xl flex items-center gap-2 text-xs font-bold text-emerald-800">
+                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                Super Admin Authorized: You have full permissions to modify company branding and invoice properties.
+              </div>
+            )}
+
             <form 
               onSubmit={(e) => {
-                const sat = (e.currentTarget.elements.namedItem('sat-prefix') as HTMLInputElement).value;
-                const gz = (e.currentTarget.elements.namedItem('gz-prefix') as HTMLInputElement).value;
-                const rtx = (e.currentTarget.elements.namedItem('rtx-prefix') as HTMLInputElement).value;
-                const terms = (e.currentTarget.elements.namedItem('invoice-terms') as HTMLTextAreaElement).value; handleSaveSettingsPrefixes(e, { SAT: sat, GZ: gz, RTX: rtx }, terms);
+                const companyNameVal = (e.currentTarget.elements.namedItem('company-name') as HTMLInputElement)?.value;
+                const taglineVal = (e.currentTarget.elements.namedItem('footer-tagline') as HTMLInputElement)?.value;
+                const logoUrlVal = settingsLogoUrl || (e.currentTarget.elements.namedItem('logo-url') as HTMLInputElement)?.value;
+                const addressVal = (e.currentTarget.elements.namedItem('company-address') as HTMLInputElement)?.value;
+                const phoneVal = (e.currentTarget.elements.namedItem('company-phone') as HTMLInputElement)?.value;
+                const emailVal = (e.currentTarget.elements.namedItem('company-email') as HTMLInputElement)?.value;
+
+                const bkashNagadVal = (e.currentTarget.elements.namedItem('bkash-nagad') as HTMLInputElement)?.value;
+                const bankInfoVal = (e.currentTarget.elements.namedItem('bank-info') as HTMLInputElement)?.value;
+                const whatsappVal = (e.currentTarget.elements.namedItem('whatsapp-contact') as HTMLInputElement)?.value;
+
+                const sat = (e.currentTarget.elements.namedItem('sat-prefix') as HTMLInputElement)?.value;
+                const gz = (e.currentTarget.elements.namedItem('gz-prefix') as HTMLInputElement)?.value;
+                const rtx = (e.currentTarget.elements.namedItem('rtx-prefix') as HTMLInputElement)?.value;
+                const terms = (e.currentTarget.elements.namedItem('invoice-terms') as HTMLTextAreaElement)?.value; 
+
+                const satName = (e.currentTarget.elements.namedItem('sat-name') as HTMLInputElement)?.value;
+                const satAddress = (e.currentTarget.elements.namedItem('sat-address') as HTMLInputElement)?.value;
+                const satPhone = (e.currentTarget.elements.namedItem('sat-phone') as HTMLInputElement)?.value;
+                const satEmail = (e.currentTarget.elements.namedItem('sat-email') as HTMLInputElement)?.value;
+                const satTerms = (e.currentTarget.elements.namedItem('sat-terms') as HTMLTextAreaElement)?.value;
+                const satTagline = (e.currentTarget.elements.namedItem('sat-tagline') as HTMLInputElement)?.value;
+
+                const gzName = (e.currentTarget.elements.namedItem('gz-name') as HTMLInputElement)?.value;
+                const gzAddress = (e.currentTarget.elements.namedItem('gz-address') as HTMLInputElement)?.value;
+                const gzPhone = (e.currentTarget.elements.namedItem('gz-phone') as HTMLInputElement)?.value;
+                const gzEmail = (e.currentTarget.elements.namedItem('gz-email') as HTMLInputElement)?.value;
+                const gzTerms = (e.currentTarget.elements.namedItem('gz-terms') as HTMLTextAreaElement)?.value;
+                const gzTagline = (e.currentTarget.elements.namedItem('gz-tagline') as HTMLInputElement)?.value;
+
+                const rtxName = (e.currentTarget.elements.namedItem('rtx-name') as HTMLInputElement)?.value;
+                const rtxAddress = (e.currentTarget.elements.namedItem('rtx-address') as HTMLInputElement)?.value;
+                const rtxPhone = (e.currentTarget.elements.namedItem('rtx-phone') as HTMLInputElement)?.value;
+                const rtxEmail = (e.currentTarget.elements.namedItem('rtx-email') as HTMLInputElement)?.value;
+                const rtxTerms = (e.currentTarget.elements.namedItem('rtx-terms') as HTMLTextAreaElement)?.value;
+                const rtxTagline = (e.currentTarget.elements.namedItem('rtx-tagline') as HTMLInputElement)?.value;
+
+                const lowStockThresh = parseInt((e.currentTarget.elements.namedItem('low-stock-thresh') as HTMLInputElement)?.value || '5', 10);
+                const agingBucket1 = parseInt((e.currentTarget.elements.namedItem('aging-bucket1') as HTMLInputElement)?.value || '15', 10);
+                const agingBucket2 = parseInt((e.currentTarget.elements.namedItem('aging-bucket2') as HTMLInputElement)?.value || '30', 10);
+                const suppTerms = (e.currentTarget.elements.namedItem('supplier-terms') as HTMLTextAreaElement)?.value;
+
+                const emailJsServiceId = (e.currentTarget.elements.namedItem('emailjs-service-id') as HTMLInputElement)?.value;
+                const emailJsTemplateId = (e.currentTarget.elements.namedItem('emailjs-template-id') as HTMLInputElement)?.value;
+                const emailJsPublicKey = (e.currentTarget.elements.namedItem('emailjs-public-key') as HTMLInputElement)?.value;
+                const emailJsRecipient = (e.currentTarget.elements.namedItem('emailjs-recipient') as HTMLInputElement)?.value;
+
+                handleSaveCompanySettings(e, {
+                  companyName: companyNameVal,
+                  logoUrl: logoUrlVal,
+                  address: addressVal,
+                  phone: phoneVal,
+                  email: emailVal,
+                  footerTagline: taglineVal,
+                  invoiceTerms: terms,
+                  lowStockDefaultThreshold: lowStockThresh,
+                  agingThresholdBucket1Days: agingBucket1,
+                  agingThresholdBucket2Days: agingBucket2,
+                  supplierTermsNote: suppTerms,
+                  emailJsConfig: {
+                    serviceId: emailJsServiceId,
+                    templateId: emailJsTemplateId,
+                    publicKey: emailJsPublicKey,
+                    recipientEmail: emailJsRecipient
+                  },
+                  paymentMethodsInfo: {
+                    bkashNagad: bkashNagadVal,
+                    bankInfo: bankInfoVal,
+                    whatsappContact: whatsappVal
+                  },
+                  prefixes: { SAT: sat, GZ: gz, RTX: rtx },
+                  subBrandDetails: {
+                    SAT: {
+                      companyName: satName || 'Sky Automation Tech',
+                      address: satAddress,
+                      phone: satPhone,
+                      email: satEmail,
+                      logoUrl: companySettings?.subBrandDetails?.SAT?.logoUrl || '/sat_logo.jpg',
+                      invoiceTerms: satTerms || terms,
+                      tagline: satTagline || taglineVal
+                    },
+                    GZ: {
+                      companyName: gzName || 'GadgetZu',
+                      address: gzAddress,
+                      phone: gzPhone,
+                      email: gzEmail,
+                      logoUrl: companySettings?.subBrandDetails?.GZ?.logoUrl || '/gz_logo.jpg',
+                      invoiceTerms: gzTerms || terms,
+                      tagline: gzTagline || taglineVal
+                    },
+                    RTX: {
+                      companyName: rtxName || 'RTX Gadget',
+                      address: rtxAddress,
+                      phone: rtxPhone,
+                      email: rtxEmail,
+                      logoUrl: companySettings?.subBrandDetails?.RTX?.logoUrl || '/rtx_logo.jpg',
+                      invoiceTerms: rtxTerms || terms,
+                      tagline: rtxTagline || taglineVal
+                    }
+                  }
+                });
               }}
-              className="space-y-4"
+              className="space-y-6"
             >
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              {/* SECTION 1: MAIN BRAND & INVOICE HEADER */}
+              <div className="p-5 bg-slate-50 border border-slate-200/80 rounded-2xl space-y-4">
+                <h3 className="text-xs font-bold font-mono text-slate-500 uppercase tracking-wider flex items-center gap-2">
+                  <span>🏢</span> Main Brand & Invoice Header Info
+                </h3>
+                
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1">
+                      Main Company Name
+                    </label>
+                    <input
+                      type="text"
+                      name="company-name"
+                      disabled={!(user?.role === 'superadmin' || user?.role === 'super_admin')}
+                      defaultValue={companySettings?.companyName || 'Sky Automation Tech'}
+                      placeholder="e.g. Sky Automation Tech"
+                      className="w-full bg-white border border-slate-200 rounded-xl py-2 px-3 text-sm text-slate-800 font-bold focus:outline-hidden focus:border-amber-400 disabled:opacity-60"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1">
+                      Invoice Tagline / Subtitle
+                    </label>
+                    <input
+                      type="text"
+                      name="footer-tagline"
+                      disabled={!(user?.role === 'superadmin' || user?.role === 'super_admin')}
+                      defaultValue={companySettings?.footerTagline || 'Smart solutions, better future'}
+                      placeholder="e.g. Smart solutions, better future"
+                      className="w-full bg-white border border-slate-200 rounded-xl py-2 px-3 text-sm text-slate-800 focus:outline-hidden focus:border-amber-400 disabled:opacity-60"
+                    />
+                  </div>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">Main Address</label>
+                    <input
+                      type="text"
+                      name="company-address"
+                      disabled={!(user?.role === 'superadmin' || user?.role === 'super_admin')}
+                      defaultValue={companySettings?.address || 'House #12, Road #3, Block-A, Banasree, Dhaka'}
+                      placeholder="Company Address"
+                      className="w-full bg-white border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 focus:outline-hidden disabled:opacity-60"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">Phone / Hotline</label>
+                    <input
+                      type="text"
+                      name="company-phone"
+                      disabled={!(user?.role === 'superadmin' || user?.role === 'super_admin')}
+                      defaultValue={companySettings?.phone || '01577351518'}
+                      placeholder="01577351518"
+                      className="w-full bg-white border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 focus:outline-hidden disabled:opacity-60"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">Official Email</label>
+                    <input
+                      type="text"
+                      name="company-email"
+                      disabled={!(user?.role === 'superadmin' || user?.role === 'super_admin')}
+                      defaultValue={companySettings?.email || 'skyautomationtech@gmail.com'}
+                      placeholder="email@domain.com"
+                      className="w-full bg-white border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 focus:outline-hidden disabled:opacity-60"
+                    />
+                  </div>
+                </div>
+
+                {/* Main Logo Upload */}
                 <div>
-                  <label className="block text-sm font-semibold uppercase tracking-wider text-slate-400">
-                    SAT Invoice Prefix
+                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1">
+                    Main Logo Image
                   </label>
-                  <input
-                    type="text"
-                    name="sat-prefix"
-                    defaultValue={companySettings?.prefixes?.SAT || 'SAT-INV'}
-                    className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-sm text-slate-800 font-mono font-bold text-amber-600 focus:outline-hidden"
-                  />
+                  
+                  <div className="flex flex-col sm:flex-row items-center gap-4 bg-white p-3 rounded-xl border border-slate-200">
+                    <div className="w-16 h-16 bg-slate-950 rounded-xl p-2 flex items-center justify-center shrink-0 border border-slate-800">
+                      <img 
+                        src={settingsLogoUrl || companySettings?.logoUrl || "/logo.png"} 
+                        alt="Logo Preview" 
+                        className="w-full h-full object-contain"
+                      />
+                    </div>
+                    <div className="flex-1 w-full space-y-2">
+                      {(user?.role === 'superadmin' || user?.role === 'super_admin') && (
+                        <div className="flex items-center gap-2">
+                          <label className="cursor-pointer bg-amber-400 hover:bg-amber-500 text-slate-950 font-bold text-xs py-1.5 px-3 rounded-lg transition-colors inline-block">
+                            Upload Logo File
+                            <input 
+                              type="file" 
+                              accept="image/*" 
+                              onChange={handleLogoFileUpload} 
+                              className="hidden" 
+                            />
+                          </label>
+                          {settingsLogoUrl && (
+                            <button
+                              type="button"
+                              onClick={() => setSettingsLogoUrl('')}
+                              className="text-xs text-red-500 hover:underline font-semibold"
+                            >
+                              Reset
+                            </button>
+                          )}
+                        </div>
+                      )}
+                      <input
+                        type="text"
+                        name="logo-url"
+                        disabled={!(user?.role === 'superadmin' || user?.role === 'super_admin')}
+                        value={settingsLogoUrl}
+                        onChange={(e) => setSettingsLogoUrl(e.target.value)}
+                        placeholder="Or paste image URL (e.g. https://...)"
+                        className="w-full bg-slate-50 border border-slate-200 rounded-lg py-1.5 px-2.5 text-xs text-slate-700 font-mono focus:outline-hidden disabled:opacity-60"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* SECTION 2: INVOICE PAYMENT METHODS & FOOTER */}
+              <div className="p-5 bg-slate-50 border border-slate-200/80 rounded-2xl space-y-4">
+                <h3 className="text-xs font-bold font-mono text-slate-500 uppercase tracking-wider flex items-center gap-2">
+                  <span>💳</span> Invoice Payment Instructions & Footer Notes
+                </h3>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-600 mb-1">
+                      bKash / Nagad Number
+                    </label>
+                    <input
+                      type="text"
+                      name="bkash-nagad"
+                      disabled={!(user?.role === 'superadmin' || user?.role === 'super_admin')}
+                      defaultValue={companySettings?.paymentMethodsInfo?.bkashNagad || companySettings?.phone || '01577351518'}
+                      placeholder="e.g. 01577351518"
+                      className="w-full bg-white border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 font-bold focus:outline-hidden disabled:opacity-60"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-600 mb-1">
+                      Bank Account Info
+                    </label>
+                    <input
+                      type="text"
+                      name="bank-info"
+                      disabled={!(user?.role === 'superadmin' || user?.role === 'super_admin')}
+                      defaultValue={companySettings?.paymentMethodsInfo?.bankInfo || 'DBBL - 105.***.***.18'}
+                      placeholder="e.g. DBBL - 105.***.***.18"
+                      className="w-full bg-white border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 font-bold focus:outline-hidden disabled:opacity-60"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-600 mb-1">
+                      WhatsApp Slip Contact
+                    </label>
+                    <input
+                      type="text"
+                      name="whatsapp-contact"
+                      disabled={!(user?.role === 'superadmin' || user?.role === 'super_admin')}
+                      defaultValue={companySettings?.paymentMethodsInfo?.whatsappContact || companySettings?.phone || '01577351518'}
+                      placeholder="e.g. 01577351518"
+                      className="w-full bg-white border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 font-bold focus:outline-hidden disabled:opacity-60"
+                    />
+                  </div>
                 </div>
 
                 <div>
-                  <label className="block text-sm font-semibold uppercase tracking-wider text-slate-400">
-                    GadgetZu Invoice Prefix
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-600 mb-1">
+                    Default Invoice Terms & Conditions / Policy
                   </label>
-                  <input
-                    type="text"
-                    name="gz-prefix"
-                    defaultValue={companySettings?.prefixes?.GZ || 'GZ-INV'}
-                    className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-sm text-slate-800 font-mono font-bold text-amber-600 focus:outline-hidden"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-semibold uppercase tracking-wider text-slate-400">
-                    RTX Gadget Invoice Prefix
-                  </label>
-                  <input
-                    type="text"
-                    name="rtx-prefix"
-                    defaultValue={companySettings?.prefixes?.RTX || 'RTX-INV'}
-                    className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-sm text-slate-800 font-mono font-bold text-amber-600 focus:outline-hidden"
+                  <textarea
+                    name="invoice-terms"
+                    rows={3}
+                    disabled={!(user?.role === 'superadmin' || user?.role === 'super_admin')}
+                    defaultValue={companySettings?.invoiceTerms || 'Goods once sold are non-refundable. Please verify items at delivery.'}
+                    className="w-full bg-white border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 font-mono focus:outline-hidden focus:border-amber-400 disabled:opacity-60"
                   />
                 </div>
               </div>
 
-              <div className="mt-4">
-                <label className="block text-sm font-semibold uppercase tracking-wider text-slate-400">
-                  Default Invoice Terms & Conditions
-                </label>
-                <textarea
-                  name="invoice-terms"
-                  rows={3}
-                  defaultValue={companySettings?.invoiceTerms || 'Goods once sold are non-refundable. Please verify items at delivery.'}
-                  className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-sm text-slate-800 font-mono focus:outline-hidden focus:border-amber-400"
-                />
+              {/* SECTION 3: INVOICE PREFIXES BY SUB-BRAND */}
+              <div className="p-5 bg-slate-50 border border-slate-200/80 rounded-2xl space-y-3">
+                <h3 className="text-xs font-bold font-mono text-slate-500 uppercase tracking-wider flex items-center gap-2">
+                  <span>🔢</span> Invoice Serial Prefixes
+                </h3>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div>
+                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500">
+                      SAT Prefix
+                    </label>
+                    <input
+                      type="text"
+                      name="sat-prefix"
+                      disabled={!(user?.role === 'superadmin' || user?.role === 'super_admin')}
+                      defaultValue={companySettings?.prefixes?.SAT || 'SAT-INV'}
+                      className="mt-1 w-full bg-white border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 font-mono font-bold text-amber-600 focus:outline-hidden disabled:opacity-60"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500">
+                      GadgetZu Prefix
+                    </label>
+                    <input
+                      type="text"
+                      name="gz-prefix"
+                      disabled={!(user?.role === 'superadmin' || user?.role === 'super_admin')}
+                      defaultValue={companySettings?.prefixes?.GZ || 'GZ-INV'}
+                      className="mt-1 w-full bg-white border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 font-mono font-bold text-amber-600 focus:outline-hidden disabled:opacity-60"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500">
+                      RTX Gadget Prefix
+                    </label>
+                    <input
+                      type="text"
+                      name="rtx-prefix"
+                      disabled={!(user?.role === 'superadmin' || user?.role === 'super_admin')}
+                      defaultValue={companySettings?.prefixes?.RTX || 'RTX-INV'}
+                      className="mt-1 w-full bg-white border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 font-mono font-bold text-amber-600 focus:outline-hidden disabled:opacity-60"
+                    />
+                  </div>
+                </div>
               </div>
 
-              <div className="pt-4 border-t border-slate-100 flex justify-between items-center">
-                <button
-                  type="button"
-                  onClick={() => setIsOnboarding(true)}
-                  className="py-2 px-4 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-600 font-semibold text-sm rounded-xl cursor-pointer"
-                >
-                  Re-run Onboarding Setup
-                </button>
-                <button
-                  type="submit"
-                  className="py-2.5 px-6 bg-amber-400 hover:bg-amber-500 text-slate-950 font-bold text-sm rounded-xl shadow-md cursor-pointer"
-                >
-                  Save Invoice Prefixes
-                </button>
+              {/* SECTION 4: SUB-BRAND SPECIFIC DETAILS */}
+              <div className="p-5 bg-slate-50 border border-slate-200/80 rounded-2xl space-y-4">
+                <h3 className="text-xs font-bold font-mono text-slate-500 uppercase tracking-wider flex items-center gap-2">
+                  <span>🏷️</span> Sub-Brand Profiles (Printed on Brand Invoices)
+                </h3>
+
+                {/* Sky Automation Tech */}
+                <div className="bg-white p-4 rounded-xl border border-slate-200 space-y-3">
+                  <div className="flex items-center gap-2 pb-2 border-b border-slate-100">
+                    <img src="/sat_logo.jpg" alt="SAT" className="w-5 h-5 object-contain" />
+                    <span className="font-bold text-xs text-slate-800 uppercase">Sky Automation Tech (SAT) Profile</span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <input
+                      type="text"
+                      name="sat-name"
+                      disabled={!(user?.role === 'superadmin' || user?.role === 'super_admin')}
+                      placeholder="Company Name"
+                      defaultValue={companySettings?.subBrandDetails?.SAT?.companyName || 'Sky Automation Tech'}
+                      className="bg-slate-50 border border-slate-200 rounded-lg p-2 text-xs font-bold disabled:opacity-60"
+                    />
+                    <input
+                      type="text"
+                      name="sat-tagline"
+                      disabled={!(user?.role === 'superadmin' || user?.role === 'super_admin')}
+                      placeholder="Tagline / Slogan"
+                      defaultValue={companySettings?.subBrandDetails?.SAT?.tagline || 'Smart solutions, better future'}
+                      className="bg-slate-50 border border-slate-200 rounded-lg p-2 text-xs disabled:opacity-60"
+                    />
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    <input
+                      type="text"
+                      name="sat-address"
+                      disabled={!(user?.role === 'superadmin' || user?.role === 'super_admin')}
+                      placeholder="Address"
+                      defaultValue={companySettings?.subBrandDetails?.SAT?.address || 'House #12, Road #3, Block-A, Banasree, Dhaka'}
+                      className="bg-slate-50 border border-slate-200 rounded-lg p-2 text-xs disabled:opacity-60"
+                    />
+                    <input
+                      type="text"
+                      name="sat-phone"
+                      disabled={!(user?.role === 'superadmin' || user?.role === 'super_admin')}
+                      placeholder="Phone"
+                      defaultValue={companySettings?.subBrandDetails?.SAT?.phone || '01577351518'}
+                      className="bg-slate-50 border border-slate-200 rounded-lg p-2 text-xs disabled:opacity-60"
+                    />
+                    <input
+                      type="text"
+                      name="sat-email"
+                      disabled={!(user?.role === 'superadmin' || user?.role === 'super_admin')}
+                      placeholder="Email"
+                      defaultValue={companySettings?.subBrandDetails?.SAT?.email || 'skyautomationtech@gmail.com'}
+                      className="bg-slate-50 border border-slate-200 rounded-lg p-2 text-xs disabled:opacity-60"
+                    />
+                  </div>
+                  <textarea
+                    name="sat-terms"
+                    rows={2}
+                    disabled={!(user?.role === 'superadmin' || user?.role === 'super_admin')}
+                    placeholder="Specific Terms & Conditions for SAT invoices"
+                    defaultValue={companySettings?.subBrandDetails?.SAT?.invoiceTerms || 'Goods once sold are non-refundable. Please verify items at delivery.'}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-xs font-mono disabled:opacity-60"
+                  />
+                </div>
+
+                {/* GadgetZu */}
+                <div className="bg-white p-4 rounded-xl border border-slate-200 space-y-3">
+                  <div className="flex items-center gap-2 pb-2 border-b border-slate-100">
+                    <img src="/gz_logo.jpg" alt="GZ" className="w-5 h-5 object-contain" />
+                    <span className="font-bold text-xs text-slate-800 uppercase">GadgetZu (GZ) Profile</span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <input
+                      type="text"
+                      name="gz-name"
+                      disabled={!(user?.role === 'superadmin' || user?.role === 'super_admin')}
+                      placeholder="Company Name"
+                      defaultValue={companySettings?.subBrandDetails?.GZ?.companyName || 'GadgetZu'}
+                      className="bg-slate-50 border border-slate-200 rounded-lg p-2 text-xs font-bold disabled:opacity-60"
+                    />
+                    <input
+                      type="text"
+                      name="gz-tagline"
+                      disabled={!(user?.role === 'superadmin' || user?.role === 'super_admin')}
+                      placeholder="Tagline / Slogan"
+                      defaultValue={companySettings?.subBrandDetails?.GZ?.tagline || 'Your trusted gadget shop'}
+                      className="bg-slate-50 border border-slate-200 rounded-lg p-2 text-xs disabled:opacity-60"
+                    />
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    <input
+                      type="text"
+                      name="gz-address"
+                      disabled={!(user?.role === 'superadmin' || user?.role === 'super_admin')}
+                      placeholder="Address"
+                      defaultValue={companySettings?.subBrandDetails?.GZ?.address || 'House #12, Road #3, Block-A, Banasree, Dhaka'}
+                      className="bg-slate-50 border border-slate-200 rounded-lg p-2 text-xs disabled:opacity-60"
+                    />
+                    <input
+                      type="text"
+                      name="gz-phone"
+                      disabled={!(user?.role === 'superadmin' || user?.role === 'super_admin')}
+                      placeholder="Phone"
+                      defaultValue={companySettings?.subBrandDetails?.GZ?.phone || '01577351518'}
+                      className="bg-slate-50 border border-slate-200 rounded-lg p-2 text-xs disabled:opacity-60"
+                    />
+                    <input
+                      type="text"
+                      name="gz-email"
+                      disabled={!(user?.role === 'superadmin' || user?.role === 'super_admin')}
+                      placeholder="Email"
+                      defaultValue={companySettings?.subBrandDetails?.GZ?.email || 'gadgetzu.bd@gmail.com'}
+                      className="bg-slate-50 border border-slate-200 rounded-lg p-2 text-xs disabled:opacity-60"
+                    />
+                  </div>
+                  <textarea
+                    name="gz-terms"
+                    rows={2}
+                    disabled={!(user?.role === 'superadmin' || user?.role === 'super_admin')}
+                    placeholder="Specific Terms & Conditions for GZ invoices"
+                    defaultValue={companySettings?.subBrandDetails?.GZ?.invoiceTerms || 'Goods once sold are non-refundable. Please verify items at delivery.'}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-xs font-mono disabled:opacity-60"
+                  />
+                </div>
+
+                {/* RTX Gadget */}
+                <div className="bg-white p-4 rounded-xl border border-slate-200 space-y-3">
+                  <div className="flex items-center gap-2 pb-2 border-b border-slate-100">
+                    <img src="/rtx_logo.jpg" alt="RTX" className="w-5 h-5 object-contain" />
+                    <span className="font-bold text-xs text-slate-800 uppercase">RTX Gadget (RTX) Profile</span>
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                    <input
+                      type="text"
+                      name="rtx-name"
+                      disabled={!(user?.role === 'superadmin' || user?.role === 'super_admin')}
+                      placeholder="Company Name"
+                      defaultValue={companySettings?.subBrandDetails?.RTX?.companyName || 'RTX Gadget'}
+                      className="bg-slate-50 border border-slate-200 rounded-lg p-2 text-xs font-bold disabled:opacity-60"
+                    />
+                    <input
+                      type="text"
+                      name="rtx-tagline"
+                      disabled={!(user?.role === 'superadmin' || user?.role === 'super_admin')}
+                      placeholder="Tagline / Slogan"
+                      defaultValue={companySettings?.subBrandDetails?.RTX?.tagline || 'Next-gen gaming & tech accessories'}
+                      className="bg-slate-50 border border-slate-200 rounded-lg p-2 text-xs disabled:opacity-60"
+                    />
+                  </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                    <input
+                      type="text"
+                      name="rtx-address"
+                      disabled={!(user?.role === 'superadmin' || user?.role === 'super_admin')}
+                      placeholder="Address"
+                      defaultValue={companySettings?.subBrandDetails?.RTX?.address || 'House #12, Road #3, Block-A, Banasree, Dhaka'}
+                      className="bg-slate-50 border border-slate-200 rounded-lg p-2 text-xs disabled:opacity-60"
+                    />
+                    <input
+                      type="text"
+                      name="rtx-phone"
+                      disabled={!(user?.role === 'superadmin' || user?.role === 'super_admin')}
+                      placeholder="Phone"
+                      defaultValue={companySettings?.subBrandDetails?.RTX?.phone || '01577351518'}
+                      className="bg-slate-50 border border-slate-200 rounded-lg p-2 text-xs disabled:opacity-60"
+                    />
+                    <input
+                      type="text"
+                      name="rtx-email"
+                      disabled={!(user?.role === 'superadmin' || user?.role === 'super_admin')}
+                      placeholder="Email"
+                      defaultValue={companySettings?.subBrandDetails?.RTX?.email || 'rtxgadget.bd@gmail.com'}
+                      className="bg-slate-50 border border-slate-200 rounded-lg p-2 text-xs disabled:opacity-60"
+                    />
+                  </div>
+                  <textarea
+                    name="rtx-terms"
+                    rows={2}
+                    disabled={!(user?.role === 'superadmin' || user?.role === 'super_admin')}
+                    placeholder="Specific Terms & Conditions for RTX invoices"
+                    defaultValue={companySettings?.subBrandDetails?.RTX?.invoiceTerms || 'Goods once sold are non-refundable. Please verify items at delivery.'}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 text-xs font-mono disabled:opacity-60"
+                  />
+                </div>
               </div>
+
+              {/* SECTION 5: INVENTORY ALERTS & EMAILJS CONFIGURATION */}
+              <div className="p-5 bg-slate-50 border border-slate-200/80 rounded-2xl space-y-4">
+                <h3 className="text-xs font-bold font-mono text-slate-500 uppercase tracking-wider flex items-center gap-2">
+                  <span>⚙️</span> System Thresholds, Aging & EmailJS Preferences
+                </h3>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+                  <div>
+                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-600 mb-1">
+                      Low Stock Reorder Threshold
+                    </label>
+                    <input
+                      type="number"
+                      name="low-stock-thresh"
+                      disabled={!(user?.role === 'superadmin' || user?.role === 'super_admin')}
+                      defaultValue={companySettings?.lowStockDefaultThreshold || 5}
+                      className="w-full bg-white border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 font-mono focus:outline-none disabled:opacity-60"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-600 mb-1">
+                      Due Aging Bucket 1 (Days)
+                    </label>
+                    <input
+                      type="number"
+                      name="aging-bucket1"
+                      disabled={!(user?.role === 'superadmin' || user?.role === 'super_admin')}
+                      defaultValue={companySettings?.agingThresholdBucket1Days || 15}
+                      className="w-full bg-white border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 font-mono focus:outline-none disabled:opacity-60"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-600 mb-1">
+                      Due Aging Bucket 2 (Days)
+                    </label>
+                    <input
+                      type="number"
+                      name="aging-bucket2"
+                      disabled={!(user?.role === 'superadmin' || user?.role === 'super_admin')}
+                      defaultValue={companySettings?.agingThresholdBucket2Days || 30}
+                      className="w-full bg-white border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 font-mono focus:outline-none disabled:opacity-60"
+                    />
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-600 mb-1">
+                    Default Supplier Payment Terms Note
+                  </label>
+                  <textarea
+                    name="supplier-terms"
+                    rows={2}
+                    disabled={!(user?.role === 'superadmin' || user?.role === 'super_admin')}
+                    placeholder="Standard payment terms for supplier purchases"
+                    defaultValue={companySettings?.supplierTermsNote || 'Standard payment terms: Net 15 days.'}
+                    className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800 focus:outline-none disabled:opacity-60"
+                  />
+                </div>
+
+                <div className="pt-3 border-t border-slate-200/60 space-y-3">
+                  <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider">EmailJS Low-Stock Alert Integration (Optional)</h4>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <input
+                      type="text"
+                      name="emailjs-service-id"
+                      disabled={!(user?.role === 'superadmin' || user?.role === 'super_admin')}
+                      placeholder="EmailJS Service ID"
+                      defaultValue={companySettings?.emailJsConfig?.serviceId || ''}
+                      className="bg-white border border-slate-200 rounded-xl p-2 text-xs font-mono disabled:opacity-60"
+                    />
+                    <input
+                      type="text"
+                      name="emailjs-template-id"
+                      disabled={!(user?.role === 'superadmin' || user?.role === 'super_admin')}
+                      placeholder="EmailJS Template ID"
+                      defaultValue={companySettings?.emailJsConfig?.templateId || ''}
+                      className="bg-white border border-slate-200 rounded-xl p-2 text-xs font-mono disabled:opacity-60"
+                    />
+                    <input
+                      type="text"
+                      name="emailjs-public-key"
+                      disabled={!(user?.role === 'superadmin' || user?.role === 'super_admin')}
+                      placeholder="EmailJS Public Key"
+                      defaultValue={companySettings?.emailJsConfig?.publicKey || ''}
+                      className="bg-white border border-slate-200 rounded-xl p-2 text-xs font-mono disabled:opacity-60"
+                    />
+                    <input
+                      type="email"
+                      name="emailjs-recipient"
+                      disabled={!(user?.role === 'superadmin' || user?.role === 'super_admin')}
+                      placeholder="Notification Recipient Email"
+                      defaultValue={companySettings?.emailJsConfig?.recipientEmail || ''}
+                      className="bg-white border border-slate-200 rounded-xl p-2 text-xs disabled:opacity-60"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* SAVE BUTTONS */}
+              {(user?.role === 'superadmin' || user?.role === 'super_admin') && (
+                <div className="pt-4 border-t border-slate-100 flex justify-between items-center">
+                  <button
+                    type="button"
+                    onClick={() => setIsOnboarding(true)}
+                    className="py-2 px-4 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-600 font-semibold text-sm rounded-xl cursor-pointer"
+                  >
+                    Re-run Onboarding Setup
+                  </button>
+                  <button
+                    type="submit"
+                    className="py-2.5 px-6 bg-amber-400 hover:bg-amber-500 text-slate-950 font-bold text-sm rounded-xl shadow-md cursor-pointer"
+                  >
+                    Save Company & Invoice Settings
+                  </button>
+                </div>
+              )}
             </form>
 
             <div className="bg-amber-50/40 p-4 border border-amber-200/40 rounded-2xl space-y-2">
@@ -856,6 +1582,38 @@ export default function App() {
 
             {(user?.role === 'superadmin' || user?.role === 'super_admin') && (
               <div className="pt-6 border-t border-slate-100 flex flex-col gap-6">
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-50 p-4 rounded-2xl border border-slate-100">
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-800">Data Backup & Export</h3>
+                    <p className="text-sm text-slate-500 mt-1">Download a full JSON backup of all databases (products, orders, customers, etc).</p>
+                    {exportMessage && <p className={`text-sm font-bold mt-2 ${exportMessage.includes('failed') ? 'text-red-600' : 'text-emerald-600'}`}>{exportMessage}</p>}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleExportData}
+                    disabled={isExportingData}
+                    className="py-2 px-4 bg-slate-800 hover:bg-slate-900 text-white font-bold text-sm rounded-xl cursor-pointer disabled:opacity-50 shrink-0"
+                  >
+                    {isExportingData ? 'Exporting...' : 'Export All Data'}
+                  </button>
+                </div>
+
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-50 p-4 rounded-2xl border border-slate-100">
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-800">Assign Sequential Customer IDs (CUS-0001)</h3>
+                    <p className="text-sm text-slate-500 mt-1">Generate and assign unique 4-digit sequential Customer IDs to any existing customers missing an ID.</p>
+                    {customerIdMigrationResult && <p className="text-sm font-bold text-emerald-600 mt-2">{customerIdMigrationResult}</p>}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleMigrateCustomerIds}
+                    disabled={isMigratingCustomerIds}
+                    className="py-2 px-4 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold text-sm rounded-xl cursor-pointer disabled:opacity-50 shrink-0"
+                  >
+                    {isMigratingCustomerIds ? 'Assigning IDs...' : 'Migrate Customer IDs'}
+                  </button>
+                </div>
+
                 <div className="flex justify-between items-center bg-slate-50 p-4 rounded-2xl border border-slate-100">
                   <div>
                     <h3 className="text-sm font-bold text-slate-800">Migrate Legacy Barcodes</h3>

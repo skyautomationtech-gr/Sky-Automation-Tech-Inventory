@@ -22,6 +22,7 @@ interface StockOperationsProps {
   onRefreshData: () => Promise<void>;
   initialAction?: string; // e.g. "in" automatically pre-selected
   requireCheckIn?: () => boolean;
+  initialProductId?: string;
 }
 
 export default function StockOperations({
@@ -29,7 +30,8 @@ export default function StockOperations({
   user,
   onRefreshData,
   initialAction = 'in',
-  requireCheckIn
+  requireCheckIn,
+  initialProductId = ''
 }: StockOperationsProps) {
   const isStaff = user?.role === 'staff';
 
@@ -44,7 +46,7 @@ export default function StockOperations({
   const [ledgerLoading, setLedgerLoading] = useState(false);
 
   // Selector choices
-  const [selectedProductId, setSelectedProductId] = useState('');
+  const [selectedProductId, setSelectedProductId] = useState(initialProductId);
   const [selectedVariantId, setSelectedVariantId] = useState('');
   
   // Fields for Operations

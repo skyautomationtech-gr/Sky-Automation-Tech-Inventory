@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
 import { Product, OrderItem } from '../types';
+import { getBrandLogo } from '../utils/brandLogos';
 import { 
   ShoppingCart, 
   Plus, 
@@ -60,7 +61,8 @@ export default function CatalogItemSelection({
                             p.sku.toLowerCase().includes(searchQuery.toLowerCase());
       const matchesCategory = selectedCategory === 'All' || p.category === selectedCategory;
       const matchesBrand = selectedBrand === 'All' || p.brand === selectedBrand;
-      return matchesSearch && matchesCategory && matchesBrand;
+      const matchesStockStatus = p.stockStatus !== 'out_of_stock';
+      return matchesSearch && matchesCategory && matchesBrand && matchesStockStatus;
     });
   }, [products, searchQuery, selectedCategory, selectedBrand]);
 
@@ -347,7 +349,8 @@ export default function CatalogItemSelection({
                   {/* Top Badges */}
                   <div className="absolute top-2.5 left-2.5 flex flex-wrap gap-1">
                     {product.subBrand && (
-                      <span className="bg-slate-950 text-amber-400 text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-lg border border-amber-400/30 shadow-xs">
+                      <span className="bg-slate-950 text-amber-400 text-[9px] font-black uppercase tracking-wider px-2 py-0.5 rounded-lg border border-amber-400/30 shadow-xs inline-flex items-center gap-1">
+                        <img src={getBrandLogo(product.subBrand)} alt={product.subBrand} className="w-3 h-3 object-contain rounded-2xs" />
                         {product.subBrand}
                       </span>
                     )}
@@ -517,18 +520,28 @@ export default function CatalogItemSelection({
                     <div className="grid grid-cols-2 gap-2">
                       <button 
                         type="button"
+                        disabled={activeStock === 0}
                         onClick={() => handleAddToCart(product)}
-                        className="bg-amber-400 hover:bg-amber-500 text-slate-950 text-[11px] font-black uppercase tracking-wider rounded-2xl py-2.5 flex items-center justify-center gap-1.5 transition-all shadow-xs active:scale-[0.97]"
+                        className={`text-[11px] font-black uppercase tracking-wider rounded-2xl py-2.5 flex items-center justify-center gap-1.5 transition-all shadow-xs ${
+                          activeStock === 0
+                            ? 'bg-slate-200 text-slate-400 cursor-not-allowed opacity-60'
+                            : 'bg-amber-400 hover:bg-amber-500 text-slate-950 active:scale-[0.97] cursor-pointer'
+                        }`}
                       >
                         <ShoppingCart size={14} />
-                        Add to Cart
+                        {activeStock === 0 ? 'Out of Stock' : 'Add to Cart'}
                       </button>
                       <button 
                         type="button"
+                        disabled={activeStock === 0}
                         onClick={() => handleBuyNow(product)}
-                        className="bg-slate-950 hover:bg-slate-900 text-white text-[11px] font-black uppercase tracking-wider rounded-2xl py-2.5 flex items-center justify-center gap-1.5 transition-all shadow-xs active:scale-[0.97]"
+                        className={`text-[11px] font-black uppercase tracking-wider rounded-2xl py-2.5 flex items-center justify-center gap-1.5 transition-all shadow-xs ${
+                          activeStock === 0
+                            ? 'bg-slate-100 text-slate-300 border border-slate-200 cursor-not-allowed opacity-60'
+                            : 'bg-slate-950 hover:bg-slate-900 text-white active:scale-[0.97] cursor-pointer'
+                        }`}
                       >
-                        <Zap size={14} className="text-amber-400" />
+                        <Zap size={14} className={activeStock === 0 ? 'text-slate-300' : 'text-amber-400'} />
                         Buy Now
                       </button>
                     </div>

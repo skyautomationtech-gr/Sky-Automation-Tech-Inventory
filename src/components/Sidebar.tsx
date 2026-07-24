@@ -15,7 +15,9 @@ import {
   Receipt,
   Coins,
   MessageSquare,
-  DollarSign
+  DollarSign,
+  Truck,
+  BarChart3
 } from 'lucide-react';
 import { UserProfile } from '../types';
 
@@ -27,6 +29,7 @@ interface SidebarProps {
   isOpen: boolean;
   setIsOpen: (isOpen: boolean) => void;
   companyName: string;
+  logoUrl?: string;
 }
 
 export default function Sidebar({
@@ -36,7 +39,8 @@ export default function Sidebar({
   onLogout,
   isOpen,
   setIsOpen,
-  companyName
+  companyName,
+  logoUrl
 }: SidebarProps) {
   const isPrivileged = user?.role === 'superadmin' || user?.role === 'admin';
   const isSuperAdmin = user?.role === 'superadmin';
@@ -48,6 +52,8 @@ export default function Sidebar({
     { id: 'orders', name: 'Order Desk', icon: ShoppingBag },
     { id: 'invoices', name: 'Invoice Desk', icon: Receipt },
     { id: 'receivables', name: 'Due Payments', icon: Coins },
+    { id: 'suppliers', name: 'Supplier Directory', icon: Truck },
+    { id: 'reports', name: 'Reports & Analytics', icon: BarChart3 },
     ...(isSuperAdmin ? [{ id: 'financials', name: 'Income & Expense', icon: DollarSign }] : []),
     { id: 'customers', name: 'Customer Directory', icon: Contact },
     ...(isSuperAdmin ? [{ id: 'attendance', name: 'Attendance Log', icon: Users }] : []),
@@ -80,10 +86,10 @@ export default function Sidebar({
         {/* Brand Header */}
         <div className="p-4 lg:p-6 border-b border-slate-800 flex items-center justify-center lg:justify-start">
           <div className="flex items-center gap-3">
-            <img src="/logo.png" alt="Company Logo" className="w-10 h-10 lg:w-8 lg:h-8 rounded object-contain" />
+            <img src={logoUrl || "/logo.png"} alt="Company Logo" className="w-10 h-10 lg:w-8 lg:h-8 rounded object-contain" />
             <div className="hidden lg:block">
               <h1 className="text-white font-black tracking-tight text-sm leading-tight uppercase">
-                Sky Automation
+                {companyName || 'Sky Automation'}
               </h1>
               <p className="text-[9px] text-[#D4AF37] font-mono tracking-widest uppercase">
                 Inventory Platform

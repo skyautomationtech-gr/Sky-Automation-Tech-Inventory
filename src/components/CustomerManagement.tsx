@@ -247,7 +247,8 @@ export default function CustomerManagement({
     // 3. Search query
     const matchSearch = 
       customer.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      customer.phone.includes(searchQuery);
+      customer.phone.includes(searchQuery) ||
+      (customer.customerId && customer.customerId.toLowerCase().includes(searchQuery.toLowerCase()));
     
     return matchSearch;
   });
@@ -410,7 +411,7 @@ export default function CustomerManagement({
                             </div>
                             <div>
                               <div className="font-bold text-slate-900">{customer.name}</div>
-                              <div className="text-sm text-slate-400 font-mono">ID: {customer.id.substring(0, 8).toUpperCase()}</div>
+                              <div className="text-sm text-amber-700 font-bold font-mono">ID: {customer.customerId || customer.id.substring(0, 8).toUpperCase()}</div>
                             </div>
                           </div>
                         </td>
@@ -464,7 +465,7 @@ export default function CustomerManagement({
                     </div>
                     <div>
                       <h3 className="font-black font-sans text-sm tracking-tight">{selectedCustomer.name}</h3>
-                      <p className="text-sm text-slate-400 font-mono tracking-widest uppercase">CUSTOMER FILE</p>
+                      <p className="text-sm text-amber-400 font-mono tracking-wider font-bold uppercase">{selectedCustomer.customerId || `ID: ${selectedCustomer.id.substring(0, 8).toUpperCase()}`}</p>
                     </div>
                   </div>
                   {hasManageOrders && (

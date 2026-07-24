@@ -51,11 +51,20 @@
         "rtxCounter": { "type": "number" }
       }
     },
+    "CustomerCounters": {
+      "title": "CustomerCounters",
+      "description": "Sequential counter for auto-generating customer IDs",
+      "type": "object",
+      "properties": {
+        "count": { "type": "number" }
+      }
+    },
     "Customer": {
       "title": "Customer",
       "description": "Customer Directory record",
       "type": "object",
       "properties": {
+        "customerId": { "type": "string" },
         "name": { "type": "string" },
         "phone": { "type": "string" },
         "address": { "type": "string" },
@@ -94,6 +103,52 @@
         "paymentHistory": { "type": "array" }
       }
     },
+    "Supplier": {
+      "title": "Supplier",
+      "description": "Supplier directory record",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "phone": { "type": "string" },
+        "address": { "type": "string" },
+        "notes": { "type": "string" },
+        "subBrand": { "type": "string" },
+        "totalPurchases": { "type": "number" },
+        "totalPaid": { "type": "number" },
+        "outstandingDue": { "type": "number" },
+        "createdAt": { "type": "number" }
+      }
+    },
+    "SupplierPayment": {
+      "title": "SupplierPayment",
+      "description": "Record of payment made to a supplier",
+      "type": "object",
+      "properties": {
+        "supplierId": { "type": "string" },
+        "amount": { "type": "number" },
+        "paymentMethod": { "type": "string" },
+        "referenceNo": { "type": "string" },
+        "notes": { "type": "string" },
+        "date": { "type": "string" },
+        "recordedBy": { "type": "string" },
+        "createdAt": { "type": "number" }
+      }
+    },
+    "AppNotification": {
+      "title": "AppNotification",
+      "description": "In-app system notification alert",
+      "type": "object",
+      "properties": {
+        "type": { "type": "string" },
+        "title": { "type": "string" },
+        "message": { "type": "string" },
+        "targetScreen": { "type": "string" },
+        "targetId": { "type": "string" },
+        "createdAt": { "type": "number" },
+        "read": { "type": "boolean" },
+        "dismissedBy": { "type": "array" }
+      }
+    },
     "Invoice": {
       "title": "Invoice",
       "description": "Generated immutable invoice record",
@@ -103,6 +158,7 @@
         "invoiceNumber": { "type": "string" },
         "subBrand": { "type": "string" },
         "subBrandPrefix": { "type": "string" },
+        "customerId": { "type": "string" },
         "customerName": { "type": "string" },
         "customerPhone": { "type": "string" },
         "items": { "type": "array" },
@@ -138,6 +194,10 @@
       "schema": "InvoiceCounters",
       "description": "Invoice sequential counters document"
     },
+    "/settings/customerCounter": {
+      "schema": "CustomerCounters",
+      "description": "Customer sequential counter document"
+    },
     "/customers/{customerId}": {
       "schema": "Customer",
       "description": "Customers collection"
@@ -149,6 +209,18 @@
     "/invoices/{invoiceId}": {
       "schema": "Invoice",
       "description": "Invoices collection"
+    },
+    "/suppliers/{supplierId}": {
+      "schema": "Supplier",
+      "description": "Suppliers collection"
+    },
+    "/supplierPayments/{paymentId}": {
+      "schema": "SupplierPayment",
+      "description": "Supplier payments log collection"
+    },
+    "/notifications/{notificationId}": {
+      "schema": "AppNotification",
+      "description": "System notifications collection"
     }
   }
 }

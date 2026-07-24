@@ -112,10 +112,12 @@ export default function OrderManagement({
   const [itemQty, setItemQty] = useState<number>(1);
   const [itemPrice, setItemPrice] = useState<number>(0);
 
-  // Step 4: Payments
+  // Step 4: Payments & Adjustments
   const [orderPaymentMethod, setOrderPaymentMethod] = useState<'Cash' | 'bKash' | 'Nagad' | 'Bank Transfer'>('Cash');
   const [orderPaymentStatus, setOrderPaymentStatus] = useState<'Paid' | 'Due' | 'Partial'>('Due');
   const [orderAmountPaid, setOrderAmountPaid] = useState<number>(0);
+  const [orderDiscount, setOrderDiscount] = useState<string>('');
+  const [orderShippingCharge, setOrderShippingCharge] = useState<string>('');
 
   const [submitting, setSubmitting] = useState(false);
 
@@ -179,7 +181,8 @@ export default function OrderManagement({
   const filteredCustomersSearch = customerSearch.trim() === '' ? [] :
     customers.filter(c => 
       c.name.toLowerCase().includes(customerSearch.toLowerCase()) || 
-      c.phone.includes(customerSearch)
+      c.phone.includes(customerSearch) ||
+      (c.customerId && c.customerId.toLowerCase().includes(customerSearch.toLowerCase()))
     ).slice(0, 5);
 
   const handleSelectCustomer = (c: Customer) => {
@@ -259,12 +262,13 @@ export default function OrderManagement({
     setOrderItems(orderItems.filter((_, i) => i !== idx));
   };
 
-  const calculateTotal = () => {
+  const calculateSubtotal = () => {
     return orderItems.reduce((acc, item) => acc + (item.qty * item.unitPrice), 0);
   };
 
   // Sync Payment Method and Status
-  const orderTotal = calculateTotal();
+  const orderSubtotal = calculateSubtotal();
+  const orderTotal = Math.max(0, orderSubtotal - (Number(orderDiscount) || 0) + (Number(orderShippingCharge) || 0));
   useEffect(() => {
     if (orderPaymentStatus === 'Paid') {
       setOrderAmountPaid(orderTotal);
@@ -347,6 +351,8 @@ export default function OrderManagement({
         subBrand: orderSubBrand,
         salesChannel: orderSalesChannel,
         items: orderItems,
+        discountAmount: Number(orderDiscount) || 0,
+        shippingCharge: Number(orderShippingCharge) || 0,
         totalAmount: orderTotal,
         courier: orderCourier,
         courierTrackingNumber: '',
@@ -630,6 +636,8 @@ export default function OrderManagement({
     setOrderPaymentMethod('Cash');
     setOrderPaymentStatus('Due');
     setOrderAmountPaid(0);
+    setOrderDiscount('');
+    setOrderShippingCharge('');
   };
 
   // Filters
@@ -1120,6 +1128,18 @@ export default function OrderManagement({
                           <span className="font-mono text-slate-400">{new Date(ph.date).toLocaleDateString('en-GB')}</span>
                         </div>
                       ))}
+                      <div className="pt-2 mt-2 border-t border-slate-200 text-right">
+                        {selectedOrder.amountDue === 0 ? (
+                          <div className="flex items-center justify-end gap-1 text-emerald-600">
+                            <Check size={14} />
+                            <span className="font-bold text-sm">Fully Settled</span>
+                          </div>
+                        ) : (
+                          <span className="font-bold text-sm text-red-600 font-mono">
+                            Remaining Due: ৳{selectedOrder.amountDue.toLocaleString()}
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </div>
                 )}
@@ -1319,6 +1339,11 @@ export default function OrderManagement({
                               className="w-full text-left px-4 py-2.5 hover:bg-amber-50/40 text-sm flex justify-between items-center"
                             >
                               <div>
+                                {c.customerId && (
+                                  <span className="font-bold text-amber-700 font-mono text-xs mr-2 bg-amber-50 border border-amber-200 px-1.5 py-0.5 rounded">
+                                    {c.customerId}
+                                  </span>
+                                )}
                                 <span className="font-bold text-slate-900">{c.name}</span>
                                 <span className="text-slate-500 font-mono ml-2">({c.phone})</span>
                               </div>
@@ -1490,62 +1515,103 @@ export default function OrderManagement({
               )}
               {/* STEP 4: PAYMENT OPTIONS */}
               {wizardStep === 4 && (
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-bold uppercase tracking-wider text-slate-500 mb-1">Invoice Total</label>
-                    <div className="bg-slate-100 border border-slate-200 rounded-xl py-2.5 px-3 text-sm font-mono font-black text-slate-800">
-                      ৳{orderTotal.toLocaleString()}
+                <div className="space-y-4">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-slate-50 p-4 rounded-2xl border border-slate-200/80">
+                    <div>
+                      <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1">Discount Amount (৳)</label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={orderDiscount}
+                        onChange={(e) => setOrderDiscount(e.target.value)}
+                        placeholder="0"
+                        className="w-full bg-white border border-slate-200 rounded-xl py-2 px-3 text-sm font-mono font-bold text-slate-800 focus:outline-hidden"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1">Delivery / Shipping Charge (৳)</label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={orderShippingCharge}
+                        onChange={(e) => setOrderShippingCharge(e.target.value)}
+                        placeholder="0"
+                        className="w-full bg-white border border-slate-200 rounded-xl py-2 px-3 text-sm font-mono font-bold text-slate-800 focus:outline-hidden"
+                      />
                     </div>
                   </div>
 
-                  <div>
-                    <label className="block text-sm font-bold uppercase tracking-wider text-slate-500 mb-1">Payment Method *</label>
-                    <select
-                      value={orderPaymentMethod}
-                      onChange={(e) => setOrderPaymentMethod(e.target.value as any)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-sm"
-                    >
-                      <option value="Cash">Cash on Delivery</option>
-                      <option value="bKash">bKash Personal / Merchant</option>
-                      <option value="Nagad">Nagad Mobile Wallet</option>
-                      <option value="Bank Transfer">City Bank / Eastern Bank</option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-bold uppercase tracking-wider text-slate-500 mb-1">Payment Status *</label>
-                    <select
-                      value={orderPaymentStatus}
-                      onChange={(e) => setOrderPaymentStatus(e.target.value as any)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-sm"
-                    >
-                      <option value="Due">Unpaid (Full Due)</option>
-                      <option value="Paid">Fully Paid</option>
-                      <option value="Partial">Partial Downpayment</option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-bold uppercase tracking-wider text-slate-500 mb-1">Amount Received (৳)</label>
-                    <input
-                      type="number"
-                      value={orderAmountPaid}
-                      disabled={orderPaymentStatus !== 'Partial'}
-                      onChange={(e) => setOrderAmountPaid(Math.max(0, parseInt(e.target.value) || 0))}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-sm font-mono font-bold text-slate-800 focus:outline-hidden disabled:opacity-50"
-                      min={0}
-                      max={orderTotal}
-                    />
-                  </div>
-
-                  <div className="col-span-2 border-t border-slate-100 pt-4 font-mono text-sm space-y-2">
-                    <div className="flex justify-between">
-                      <span className="text-slate-500">Amount Paid:</span>
-                      <span className="font-bold text-slate-800">৳{orderAmountPaid.toLocaleString()}</span>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-bold uppercase tracking-wider text-slate-500 mb-1">Payment Method *</label>
+                      <select
+                        value={orderPaymentMethod}
+                        onChange={(e) => setOrderPaymentMethod(e.target.value as any)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-sm"
+                      >
+                        <option value="Cash">Cash on Delivery</option>
+                        <option value="bKash">bKash Personal / Merchant</option>
+                        <option value="Nagad">Nagad Mobile Wallet</option>
+                        <option value="Bank Transfer">City Bank / Eastern Bank</option>
+                      </select>
                     </div>
-                    <div className="flex justify-between text-slate-900 font-bold border-t border-slate-100 pt-2 text-sm">
+
+                    <div>
+                      <label className="block text-sm font-bold uppercase tracking-wider text-slate-500 mb-1">Payment Status *</label>
+                      <select
+                        value={orderPaymentStatus}
+                        onChange={(e) => setOrderPaymentStatus(e.target.value as any)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-sm"
+                      >
+                        <option value="Due">Unpaid (Full Due)</option>
+                        <option value="Paid">Fully Paid</option>
+                        <option value="Partial">Partial Downpayment</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-sm font-bold uppercase tracking-wider text-slate-500 mb-1">Amount Received (৳)</label>
+                      <input
+                        type="number"
+                        value={orderAmountPaid}
+                        disabled={orderPaymentStatus !== 'Partial'}
+                        onChange={(e) => setOrderAmountPaid(Math.max(0, parseInt(e.target.value) || 0))}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-sm font-mono font-bold text-slate-800 focus:outline-hidden disabled:opacity-50"
+                        min={0}
+                        max={orderTotal}
+                      />
+                    </div>
+                  </div>
+
+                  <div className="bg-slate-900 text-white p-4 rounded-2xl font-mono text-xs space-y-2">
+                    <div className="flex justify-between text-slate-300">
+                      <span>Items Subtotal:</span>
+                      <span>৳{orderSubtotal.toLocaleString()}</span>
+                    </div>
+                    { (Number(orderDiscount) || 0) > 0 && (
+                      <div className="flex justify-between text-emerald-400">
+                        <span>Discount:</span>
+                        <span>-৳{(Number(orderDiscount) || 0).toLocaleString()}</span>
+                      </div>
+                    )}
+                    { (Number(orderShippingCharge) || 0) > 0 && (
+                      <div className="flex justify-between text-amber-300">
+                        <span>Shipping Charge:</span>
+                        <span>+৳{(Number(orderShippingCharge) || 0).toLocaleString()}</span>
+                      </div>
+                    )}
+                    <div className="flex justify-between text-white font-black text-sm border-t border-slate-800 pt-2">
+                      <span>Grand Total:</span>
+                      <span className="text-[#D4AF37]">৳{orderTotal.toLocaleString()}</span>
+                    </div>
+                    <div className="flex justify-between text-slate-300 border-t border-slate-800/60 pt-1">
+                      <span>Amount Paid:</span>
+                      <span className="font-bold text-emerald-400">৳{orderAmountPaid.toLocaleString()}</span>
+                    </div>
+                    <div className="flex justify-between text-slate-300">
                       <span>Remaining Balance (Due):</span>
-                      <span className="font-black text-red-600">৳{Math.max(0, orderTotal - orderAmountPaid).toLocaleString()}</span>
+                      <span className="font-bold text-red-400">৳{Math.max(0, orderTotal - orderAmountPaid).toLocaleString()}</span>
                     </div>
                   </div>
                 </div>
@@ -1597,9 +1663,27 @@ export default function OrderManagement({
                       </div>
                     </div>
 
-                    <div className="border-t border-slate-200/60 pt-3 flex justify-between items-center font-mono font-black text-sm">
-                      <span className="text-slate-900">GRAND TOTAL</span>
-                      <span className="text-[#D4AF37] bg-slate-950 px-3 py-1 rounded-md text-sm">৳{orderTotal.toLocaleString()}</span>
+                    <div className="border-t border-slate-200/60 pt-3 space-y-1 font-mono text-xs text-slate-600">
+                      <div className="flex justify-between">
+                        <span>Subtotal:</span>
+                        <span>৳{orderSubtotal.toLocaleString()}</span>
+                      </div>
+                      { (Number(orderDiscount) || 0) > 0 && (
+                        <div className="flex justify-between text-emerald-600 font-semibold">
+                          <span>Discount:</span>
+                          <span>-৳{(Number(orderDiscount) || 0).toLocaleString()}</span>
+                        </div>
+                      )}
+                      { (Number(orderShippingCharge) || 0) > 0 && (
+                        <div className="flex justify-between text-amber-700 font-semibold">
+                          <span>Delivery / Shipping Charge:</span>
+                          <span>+৳{(Number(orderShippingCharge) || 0).toLocaleString()}</span>
+                        </div>
+                      )}
+                      <div className="flex justify-between items-center font-mono font-black text-sm pt-2 border-t border-slate-200">
+                        <span className="text-slate-900">GRAND TOTAL</span>
+                        <span className="text-[#D4AF37] bg-slate-950 px-3 py-1 rounded-md text-sm">৳{orderTotal.toLocaleString()}</span>
+                      </div>
                     </div>
                   </div>
                 </div>

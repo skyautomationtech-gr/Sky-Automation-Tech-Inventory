@@ -29,6 +29,7 @@ export default function DuePayments({ user, requireCheckIn }: DuePaymentsProps) 
   const [success, setSuccess] = useState('');
 
   // Filtering states
+  const [activeTab, setActiveTab] = useState<'still_due' | 'recently_settled'>('still_due');
   const [searchQuery, setSearchQuery] = useState('');
   const [subBrandFilter, setSubBrandFilter] = useState('');
   const [paymentStatusFilter, setPaymentStatusFilter] = useState(''); // Due, Partial
@@ -50,10 +51,13 @@ export default function DuePayments({ user, requireCheckIn }: DuePaymentsProps) 
     setError('');
     try {
       const data = await getOrders();
-      // Filter orders that are not fully paid
-      // i.e., paymentStatus is 'Due' or 'Partial'
-      const dueOrders = (data || []).filter(o => o.paymentStatus === 'Due' || o.paymentStatus === 'Partial');
-      setOrders(dueOrders);
+      // Filter orders that are relevant to this screen:
+      // 1. Still Due (amountDue > 0)
+      // 2. Recently Settled (amountDue === 0, but has payment history indicating it was paid off)
+      const relevantOrders = (data || []).filter(o => 
+        o.amountDue > 0 || (o.amountDue === 0 && o.paymentHistory && o.paymentHistory.length > 0)
+      );
+      setOrders(relevantOrders);
     } catch (err: any) {
       console.error('DuePayments: Error fetching orders:', err);
       setError('Could not retrieve outstanding receivable registers.');
@@ -128,14 +132,24 @@ export default function DuePayments({ user, requireCheckIn }: DuePaymentsProps) 
 
     const matchesBrand = subBrandFilter === '' || o.subBrand === subBrandFilter;
     const matchesStatus = paymentStatusFilter === '' || o.paymentStatus === paymentStatusFilter;
+    
+    const matchesTab = activeTab === 'still_due' ? o.amountDue > 0 : o.amountDue === 0;
 
-    return matchesSearch && matchesBrand && matchesStatus;
+    return matchesSearch && matchesBrand && matchesStatus && matchesTab;
+  }).sort((a, b) => {
+    if (activeTab === 'recently_settled') {
+      const aLastPayment = a.paymentHistory && a.paymentHistory.length > 0 ? a.paymentHistory[a.paymentHistory.length - 1].date : a.createdAt;
+      const bLastPayment = b.paymentHistory && b.paymentHistory.length > 0 ? b.paymentHistory[b.paymentHistory.length - 1].date : b.createdAt;
+      return bLastPayment - aLastPayment;
+    }
+    return b.createdAt - a.createdAt;
   });
 
-  // Calculate metrics
-  const totalReceivable = filteredOrders.reduce((sum, o) => sum + o.amountDue, 0);
-  const totalCollected = filteredOrders.reduce((sum, o) => sum + o.amountPaid, 0);
-  const agingOver14DaysCount = filteredOrders.filter(o => getDaysSinceOrder(o.createdAt) >= 14).length;
+  // Calculate metrics (only based on still due orders)
+  const stillDueOrders = orders.filter(o => o.amountDue > 0);
+  const totalReceivable = stillDueOrders.reduce((sum, o) => sum + o.amountDue, 0);
+  const totalCollected = stillDueOrders.reduce((sum, o) => sum + o.amountPaid, 0);
+  const agingOver14DaysCount = stillDueOrders.filter(o => getDaysSinceOrder(o.createdAt) >= 14).length;
 
   return (
     <div className="space-y-6">
@@ -246,6 +260,35 @@ export default function DuePayments({ user, requireCheckIn }: DuePaymentsProps) 
         </div>
       </div>
 
+      {/* Tabs */}
+      <div className="flex border-b border-slate-200">
+        <button
+          onClick={() => setActiveTab('still_due')}
+          className={`px-4 py-3 text-sm font-bold border-b-2 transition-colors ${
+            activeTab === 'still_due'
+              ? 'border-amber-400 text-slate-900'
+              : 'border-transparent text-slate-400 hover:text-slate-600'
+          }`}
+        >
+          Still Due
+          {orders.filter(o => o.amountDue > 0).length > 0 && (
+            <span className="ml-2 px-1.5 py-0.5 bg-rose-500 text-white text-[10px] font-black rounded-full">
+              {orders.filter(o => o.amountDue > 0).length}
+            </span>
+          )}
+        </button>
+        <button
+          onClick={() => setActiveTab('recently_settled')}
+          className={`px-4 py-3 text-sm font-bold border-b-2 transition-colors ${
+            activeTab === 'recently_settled'
+              ? 'border-emerald-500 text-slate-900'
+              : 'border-transparent text-slate-400 hover:text-slate-600'
+          }`}
+        >
+          Recently Settled
+        </button>
+      </div>
+
       {/* Receivables Table */}
       <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden">
         {loading && orders.length === 0 ? (
@@ -264,18 +307,33 @@ export default function DuePayments({ user, requireCheckIn }: DuePaymentsProps) 
                 <tr className="bg-slate-50 border-b border-slate-100">
                   <th className="py-4 px-6 text-sm font-bold text-slate-400 uppercase tracking-wider">Customer Contact</th>
                   <th className="py-4 px-6 text-sm font-bold text-slate-400 uppercase tracking-wider">Sub-Brand</th>
-                  <th className="py-4 px-6 text-sm font-bold text-slate-400 uppercase tracking-wider">Order Date</th>
-                  <th className="py-4 px-6 text-sm font-bold text-slate-400 uppercase tracking-wider">Aging</th>
-                  <th className="py-4 px-6 text-sm font-bold text-slate-400 uppercase tracking-wider">Invoice / Ref #</th>
-                  <th className="py-4 px-6 text-sm font-bold text-slate-400 uppercase tracking-wider">Total Amt</th>
-                  <th className="py-4 px-6 text-sm font-bold text-slate-400 uppercase tracking-wider">Paid So Far</th>
-                  <th className="py-4 px-6 text-sm font-bold text-slate-400 uppercase tracking-wider">Amount Due</th>
-                  <th className="py-4 px-6 text-right text-sm font-bold text-slate-400 uppercase tracking-wider">Record</th>
+                  {activeTab === 'still_due' ? (
+                    <>
+                      <th className="py-4 px-6 text-sm font-bold text-slate-400 uppercase tracking-wider">Order Date</th>
+                      <th className="py-4 px-6 text-sm font-bold text-slate-400 uppercase tracking-wider">Aging</th>
+                      <th className="py-4 px-6 text-sm font-bold text-slate-400 uppercase tracking-wider">Invoice / Ref #</th>
+                      <th className="py-4 px-6 text-sm font-bold text-slate-400 uppercase tracking-wider">Total Amt</th>
+                      <th className="py-4 px-6 text-sm font-bold text-slate-400 uppercase tracking-wider">Paid So Far</th>
+                      <th className="py-4 px-6 text-sm font-bold text-slate-400 uppercase tracking-wider">Amount Due</th>
+                      <th className="py-4 px-6 text-right text-sm font-bold text-slate-400 uppercase tracking-wider">Record</th>
+                    </>
+                  ) : (
+                    <>
+                      <th className="py-4 px-6 text-sm font-bold text-slate-400 uppercase tracking-wider">Invoice / Ref #</th>
+                      <th className="py-4 px-6 text-sm font-bold text-slate-400 uppercase tracking-wider">Total Amt</th>
+                      <th className="py-4 px-6 text-sm font-bold text-slate-400 uppercase tracking-wider">Status</th>
+                      <th className="py-4 px-6 text-sm font-bold text-slate-400 uppercase tracking-wider text-right">Details</th>
+                    </>
+                  )}
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-50 text-sm">
                 {filteredOrders.map((ord) => {
                   const daysOld = getDaysSinceOrder(ord.createdAt);
+                  const lastPaymentDate = ord.paymentHistory && ord.paymentHistory.length > 0 
+                    ? ord.paymentHistory[ord.paymentHistory.length - 1].date 
+                    : ord.createdAt;
+
                   return (
                     <tr key={ord.id} className="hover:bg-slate-50/50 transition-colors">
                       <td className="py-3.5 px-6 font-semibold text-slate-700">
@@ -293,42 +351,77 @@ export default function DuePayments({ user, requireCheckIn }: DuePaymentsProps) 
                           {ord.subBrand}
                         </span>
                       </td>
-                      <td className="py-3.5 px-6 font-mono text-slate-400">
-                        {new Date(ord.createdAt).toLocaleDateString('en-GB')}
-                      </td>
-                      <td className="py-3.5 px-6">
-                        <span className={`inline-block text-sm font-mono font-bold px-2 py-1 rounded-lg ${getOverdueBadgeClass(daysOld)}`}>
-                          {daysOld === 0 ? 'Today' : `${daysOld} days`}
-                        </span>
-                      </td>
-                      <td className="py-3.5 px-6">
-                        <button
-                          onClick={() => setSelectedOrderForDetails(ord)}
-                          className="font-mono text-sm text-[#D4AF37] hover:underline font-bold tracking-tight text-left"
-                        >
-                          {ord.invoiceId ? 'Linked Invoice' : `Order #${ord.id.substring(0, 8).toUpperCase()}`}
-                        </button>
-                      </td>
-                      <td className="py-3.5 px-6 font-mono font-bold text-slate-600">
-                        ৳{ord.totalAmount.toLocaleString()}
-                      </td>
-                      <td className="py-3.5 px-6 font-mono text-emerald-600 font-semibold">
-                        ৳{ord.amountPaid.toLocaleString()}
-                      </td>
-                      <td className="py-3.5 px-6 font-mono font-black text-red-600">
-                        ৳{ord.amountDue.toLocaleString()}
-                      </td>
-                      <td className="py-3.5 px-6 text-right">
-                        <div className="flex justify-end gap-1.5">
-                          <button
-                            onClick={() => setSelectedOrderForPayment(ord)}
-                            className="bg-slate-900 hover:bg-slate-800 text-[#D4AF37] hover:text-white text-sm font-bold py-1.5 px-3.5 rounded-xl transition-all cursor-pointer flex items-center gap-1"
-                          >
-                            <Plus size={11} />
-                            Record
-                          </button>
-                        </div>
-                      </td>
+                      
+                      {activeTab === 'still_due' ? (
+                        <>
+                          <td className="py-3.5 px-6 font-mono text-slate-400">
+                            {new Date(ord.createdAt).toLocaleDateString('en-GB')}
+                          </td>
+                          <td className="py-3.5 px-6">
+                            <span className={`inline-block text-sm font-mono font-bold px-2 py-1 rounded-lg ${getOverdueBadgeClass(daysOld)}`}>
+                              {daysOld === 0 ? 'Today' : `${daysOld} days`}
+                            </span>
+                          </td>
+                          <td className="py-3.5 px-6">
+                            <button
+                              onClick={() => setSelectedOrderForDetails(ord)}
+                              className="font-mono text-sm text-[#D4AF37] hover:underline font-bold tracking-tight text-left cursor-pointer"
+                            >
+                              {ord.invoiceId ? 'Linked Invoice' : `Order #${ord.id.substring(0, 8).toUpperCase()}`}
+                            </button>
+                          </td>
+                          <td className="py-3.5 px-6 font-mono font-bold text-slate-600">
+                            ৳{ord.totalAmount.toLocaleString()}
+                          </td>
+                          <td className="py-3.5 px-6 font-mono text-emerald-600 font-semibold">
+                            ৳{ord.amountPaid.toLocaleString()}
+                          </td>
+                          <td className="py-3.5 px-6 font-mono font-black text-red-600">
+                            ৳{ord.amountDue.toLocaleString()}
+                          </td>
+                          <td className="py-3.5 px-6 text-right">
+                            <div className="flex justify-end gap-1.5">
+                              <button
+                                onClick={() => setSelectedOrderForPayment(ord)}
+                                className="bg-slate-900 hover:bg-slate-800 text-[#D4AF37] hover:text-white text-sm font-bold py-1.5 px-3.5 rounded-xl transition-all cursor-pointer flex items-center gap-1"
+                              >
+                                <Plus size={11} />
+                                Record
+                              </button>
+                            </div>
+                          </td>
+                        </>
+                      ) : (
+                        <>
+                          <td className="py-3.5 px-6">
+                            <button
+                              onClick={() => setSelectedOrderForDetails(ord)}
+                              className="font-mono text-sm text-[#D4AF37] hover:underline font-bold tracking-tight text-left cursor-pointer"
+                            >
+                              {ord.invoiceId ? 'Linked Invoice' : `Order #${ord.id.substring(0, 8).toUpperCase()}`}
+                            </button>
+                          </td>
+                          <td className="py-3.5 px-6 font-mono font-bold text-slate-600">
+                            ৳{ord.totalAmount.toLocaleString()}
+                          </td>
+                          <td className="py-3.5 px-6">
+                            <div className="flex items-center gap-1.5">
+                              <CheckCircle size={14} className="text-emerald-500" />
+                              <span className="text-sm font-bold text-emerald-600">
+                                Settled on {new Date(lastPaymentDate).toLocaleDateString('en-GB')}
+                              </span>
+                            </div>
+                          </td>
+                          <td className="py-3.5 px-6 text-right">
+                             <button
+                                onClick={() => setSelectedOrderForDetails(ord)}
+                                className="text-sm font-bold text-slate-500 hover:text-slate-800 cursor-pointer underline"
+                              >
+                                View Log
+                              </button>
+                          </td>
+                        </>
+                      )}
                     </tr>
                   );
                 })}
@@ -493,6 +586,20 @@ export default function DuePayments({ user, requireCheckIn }: DuePaymentsProps) 
                             <td className="py-2.5 px-4 text-right font-mono font-bold text-slate-900">৳{ph.amount.toLocaleString()}</td>
                           </tr>
                         ))}
+                        <tr className="bg-slate-50/50">
+                          <td colSpan={4} className="py-3 px-4 text-right">
+                            {selectedOrderForDetails.amountDue === 0 ? (
+                              <div className="flex items-center justify-end gap-1.5 text-emerald-600">
+                                <CheckCircle size={14} />
+                                <span className="font-bold text-sm">Fully Settled</span>
+                              </div>
+                            ) : (
+                              <span className="font-bold text-sm text-red-600 font-mono">
+                                Remaining Due: ৳{selectedOrderForDetails.amountDue.toLocaleString()}
+                              </span>
+                            )}
+                          </td>
+                        </tr>
                       </tbody>
                     </table>
                   </div>

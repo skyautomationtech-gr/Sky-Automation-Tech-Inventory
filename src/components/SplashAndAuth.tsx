@@ -368,8 +368,8 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
 
         {/* Logo Container */}
         <div className="flex flex-col items-center">
-          <div className="w-28 h-28 bg-slate-900 rounded-3xl flex items-center justify-center border border-amber-400/30 shadow-[0_0_50px_rgba(251,191,36,0.15)] mb-6 animate-bounce">
-            <img src="/logo.png" alt="Company Logo" className="w-20 h-20 object-contain" />
+          <div className="w-28 h-28 bg-slate-900 rounded-3xl flex items-center justify-center border border-amber-400/30 shadow-[0_0_50px_rgba(251,191,36,0.15)] mb-6 animate-bounce overflow-hidden p-2">
+            <img src="/Sky Automation Tech Logo.jpeg" alt="Sky Automation Tech Logo" className="w-full h-full object-contain rounded-2xl" />
           </div>
           
           <h1 className="text-3xl md:text-4xl font-extrabold text-white font-sans tracking-tight">
@@ -380,13 +380,15 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
           </p>
 
           {/* Sub brands logos/chips */}
-          <div className="flex gap-3 mt-8">
-            <span className="px-3 py-1.5 rounded-full bg-slate-900 border border-amber-400/20 text-sm text-amber-400 font-medium font-sans">
-              ★ GadgetZu
-            </span>
-            <span className="px-3 py-1.5 rounded-full bg-slate-900 border border-teal-500/20 text-sm text-teal-400 font-medium font-sans">
-              ✦ RTX Gadget
-            </span>
+          <div className="flex items-center gap-3 mt-8">
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-2xl bg-slate-900/90 border border-amber-400/30 text-xs text-amber-400 font-bold font-sans shadow-xs">
+              <img src="/gadgetzu-logo-1768544471034.jpeg" alt="GadgetZu" className="w-5 h-5 object-contain rounded-md" />
+              GadgetZu
+            </div>
+            <div className="flex items-center gap-2 px-3 py-1.5 rounded-2xl bg-slate-900/90 border border-teal-500/30 text-xs text-teal-400 font-bold font-sans shadow-xs">
+              <img src="/RTX Gadget logo.jpeg" alt="RTX Gadget" className="w-5 h-5 object-contain rounded-md" />
+              RTX Gadget
+            </div>
           </div>
         </div>
 
