@@ -2309,13 +2309,18 @@ export async function exportAllData(): Promise<any> {
   const exportData: Record<string, any[]> = {};
   
   for (const col of collections) {
-    const colRef = collection(db, col);
-    const snap = await getDocs(colRef);
-    const list: any[] = [];
-    snap.forEach(d => {
-      list.push({ id: d.id, ...d.data() });
-    });
-    exportData[col] = list;
+    try {
+      const colRef = collection(db, col);
+      const snap = await getDocs(colRef);
+      const list: any[] = [];
+      snap.forEach(d => {
+        list.push({ id: d.id, ...d.data() });
+      });
+      exportData[col] = list;
+    } catch (error: any) {
+      console.error(`Error exporting collection "${col}":`, error);
+      throw new Error(`Failed to export collection "${col}": ${error.message}`);
+    }
   }
   
   return exportData;

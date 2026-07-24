@@ -297,25 +297,34 @@ export default function SupplierManagement({ user, rolePermissions }: SupplierMa
           </div>
         </div>
 
-        <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs flex items-center gap-4">
-          <div className="w-12 h-12 rounded-xl bg-blue-50 flex items-center justify-center text-blue-600 font-bold shrink-0">
-            <DollarSign size={24} />
-          </div>
-          <div>
-            <div className="text-xs font-bold text-slate-400 uppercase tracking-wider">Total Purchases</div>
-            <div className="text-2xl font-black text-blue-900 mt-0.5">৳{totalPurchasesSum.toLocaleString('en-BD')}</div>
-          </div>
-        </div>
+        {isSuperAdmin ? (
+          <>
+            <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs flex items-center gap-4">
+              <div className="w-12 h-12 rounded-xl bg-blue-50 flex items-center justify-center text-blue-600 font-bold shrink-0">
+                <DollarSign size={24} />
+              </div>
+              <div>
+                <div className="text-xs font-bold text-slate-400 uppercase tracking-wider">Total Purchases</div>
+                <div className="text-2xl font-black text-blue-900 mt-0.5">৳{totalPurchasesSum.toLocaleString('en-BD')}</div>
+              </div>
+            </div>
 
-        <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs flex items-center gap-4">
-          <div className="w-12 h-12 rounded-xl bg-rose-50 flex items-center justify-center text-rose-600 font-bold shrink-0">
-            <AlertCircle size={24} />
+            <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs flex items-center gap-4">
+              <div className="w-12 h-12 rounded-xl bg-rose-50 flex items-center justify-center text-rose-600 font-bold shrink-0">
+                <AlertCircle size={24} />
+              </div>
+              <div>
+                <div className="text-xs font-bold text-slate-400 uppercase tracking-wider">Total Outstanding Owed</div>
+                <div className="text-2xl font-black text-rose-600 mt-0.5">৳{totalOutstandingDueSum.toLocaleString('en-BD')}</div>
+              </div>
+            </div>
+          </>
+        ) : (
+          <div className="col-span-2 bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs flex items-center gap-4 text-xs text-slate-500 font-medium">
+            <AlertCircle size={20} className="text-amber-500 shrink-0" />
+            <span>Supplier financial summaries and aggregates are restricted to Super Admin only.</span>
           </div>
-          <div>
-            <div className="text-xs font-bold text-slate-400 uppercase tracking-wider">Total Outstanding Owed</div>
-            <div className="text-2xl font-black text-rose-600 mt-0.5">৳{totalOutstandingDueSum.toLocaleString('en-BD')}</div>
-          </div>
-        </div>
+        )}
       </div>
 
       {/* Filter and Search Bar */}
@@ -411,18 +420,24 @@ export default function SupplierManagement({ user, rolePermissions }: SupplierMa
                 </div>
               </div>
 
-              <div className="pt-3 border-t border-slate-100 grid grid-cols-2 gap-2 text-xs">
-                <div>
-                  <div className="text-[10px] uppercase font-bold text-slate-400">Total Purchases</div>
-                  <div className="font-bold text-slate-800">৳{(supplier.totalPurchases || 0).toLocaleString('en-BD')}</div>
-                </div>
-                <div>
-                  <div className="text-[10px] uppercase font-bold text-slate-400">Balance Due</div>
-                  <div className={`font-bold ${(supplier.outstandingDue || 0) > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
-                    ৳{(supplier.outstandingDue || 0).toLocaleString('en-BD')}
+              {isSuperAdmin ? (
+                <div className="pt-3 border-t border-slate-100 grid grid-cols-2 gap-2 text-xs">
+                  <div>
+                    <div className="text-[10px] uppercase font-bold text-slate-400">Total Purchases</div>
+                    <div className="font-bold text-slate-800">৳{(supplier.totalPurchases || 0).toLocaleString('en-BD')}</div>
+                  </div>
+                  <div>
+                    <div className="text-[10px] uppercase font-bold text-slate-400">Balance Due</div>
+                    <div className={`font-bold ${(supplier.outstandingDue || 0) > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
+                      ৳{(supplier.outstandingDue || 0).toLocaleString('en-BD')}
+                    </div>
                   </div>
                 </div>
-              </div>
+              ) : (
+                <div className="pt-3 border-t border-slate-100 text-[11px] text-slate-400 italic">
+                  Financial figures (Super Admin only)
+                </div>
+              )}
             </div>
           ))}
         </div>
@@ -458,7 +473,7 @@ export default function SupplierManagement({ user, rolePermissions }: SupplierMa
               <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200 space-y-4">
                 <div className="flex items-center justify-between">
                   <h3 className="text-sm font-bold text-slate-800">Running Balance & Due Status</h3>
-                  {hasManagePermission && (
+                  {isSuperAdmin && hasManagePermission && (
                     <button
                       onClick={handleOpenPaymentModal}
                       className="flex items-center gap-1.5 px-3.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold text-xs rounded-xl cursor-pointer shadow-xs transition-colors"
@@ -469,24 +484,30 @@ export default function SupplierManagement({ user, rolePermissions }: SupplierMa
                   )}
                 </div>
 
-                <div className="grid grid-cols-3 gap-3">
-                  <div className="bg-white p-3 rounded-xl border border-slate-200 text-center">
-                    <div className="text-[10px] uppercase font-bold text-slate-400">Total Purchased</div>
-                    <div className="text-base font-black text-slate-900 mt-0.5">৳{(selectedSupplier.totalPurchases || 0).toLocaleString('en-BD')}</div>
-                  </div>
+                {isSuperAdmin ? (
+                  <div className="grid grid-cols-3 gap-3">
+                    <div className="bg-white p-3 rounded-xl border border-slate-200 text-center">
+                      <div className="text-[10px] uppercase font-bold text-slate-400">Total Purchased</div>
+                      <div className="text-base font-black text-slate-900 mt-0.5">৳{(selectedSupplier.totalPurchases || 0).toLocaleString('en-BD')}</div>
+                    </div>
 
-                  <div className="bg-white p-3 rounded-xl border border-slate-200 text-center">
-                    <div className="text-[10px] uppercase font-bold text-slate-400">Total Paid</div>
-                    <div className="text-base font-black text-emerald-600 mt-0.5">৳{(selectedSupplier.totalPaid || 0).toLocaleString('en-BD')}</div>
-                  </div>
+                    <div className="bg-white p-3 rounded-xl border border-slate-200 text-center">
+                      <div className="text-[10px] uppercase font-bold text-slate-400">Total Paid</div>
+                      <div className="text-base font-black text-emerald-600 mt-0.5">৳{(selectedSupplier.totalPaid || 0).toLocaleString('en-BD')}</div>
+                    </div>
 
-                  <div className="bg-white p-3 rounded-xl border border-slate-200 text-center">
-                    <div className="text-[10px] uppercase font-bold text-slate-400">Outstanding Due</div>
-                    <div className={`text-base font-black mt-0.5 ${(selectedSupplier.outstandingDue || 0) > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
-                      ৳{(selectedSupplier.outstandingDue || 0).toLocaleString('en-BD')}
+                    <div className="bg-white p-3 rounded-xl border border-slate-200 text-center">
+                      <div className="text-[10px] uppercase font-bold text-slate-400">Outstanding Due</div>
+                      <div className={`text-base font-black mt-0.5 ${(selectedSupplier.outstandingDue || 0) > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
+                        ৳{(selectedSupplier.outstandingDue || 0).toLocaleString('en-BD')}
+                      </div>
                     </div>
                   </div>
-                </div>
+                ) : (
+                  <div className="bg-white p-4 rounded-xl border border-slate-200 text-xs text-slate-500 italic">
+                    Running balances, payment records, and financial amounts are restricted to Super Admin only.
+                  </div>
+                )}
 
                 {selectedSupplier.notes && (
                   <div className="text-xs text-slate-600 bg-white p-3 rounded-xl border border-slate-200">

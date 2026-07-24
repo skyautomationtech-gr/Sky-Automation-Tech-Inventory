@@ -1,43 +1,34 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-
     function isSignedIn() {
       return request.auth != null;
     }
-
     function getUserDoc() {
       let path = /databases/$(database)/documents/users/$(request.auth.uid);
       return exists(path) ? get(path).data : null;
     }
-
     function myRole() {
       let user = getUserDoc();
       return user != null ? user.role : null;
     }
-
     function getRole(uid) {
       let path = /databases/$(database)/documents/users/$(uid);
       return exists(path) ? get(path).data.role : null;
     }
-
     function isSuperAdmin() {
-      return isSignedIn() && myRole() == 'superadmin';
+      return isSignedIn() && (myRole() == 'superadmin' || myRole() == 'super_admin');
     }
-
     function isAdmin() {
-      return isSignedIn() && myRole() == 'admin';
+      return isSignedIn() && (myRole() == 'admin' || myRole() == 'superadmin' || myRole() == 'super_admin');
     }
-
     function isStaff() {
       return isSignedIn() && myRole() == 'staff';
     }
-
     function isActive() {
       let user = getUserDoc();
       return user != null && user.active == true;
     }
-
     function hasPermission(action) {
       let userDoc = getUserDoc();
       let permsPath = /databases/$(database)/documents/settings/rolePermissions;
@@ -46,14 +37,14 @@ service cloud.firestore {
       
       return userDoc != null && perms != null && (
         userDoc.role == 'superadmin' || 
+        userDoc.role == 'super_admin' || 
         override == true || 
         (override == 'NONE' && (
-          (userDoc.role == 'admin' && perms.admin.get(action, false) == true) ||
+          (isAdmin() && perms.admin.get(action, false) == true) ||
           (userDoc.role == 'staff' && perms.staff.get(action, false) == true)
         ))
       );
     }
-
     match /users/{userId} {
       allow read: if isSignedIn();
       allow create: if isSignedIn() && (
@@ -72,91 +63,78 @@ service cloud.firestore {
                       )
                       || 
                       // An Admin can update non-superadmin users (including approving them), but cannot make them superadmins
-                      (isAdmin() && resource.data.role != 'superadmin' && request.resource.data.get('role', 'staff') != 'superadmin')
+                      (isAdmin() && resource.data.role != 'superadmin' && resource.data.role != 'super_admin' && request.resource.data.get('role', 'staff') != 'superadmin' && request.resource.data.get('role', 'staff') != 'super_admin')
                     ));
-      allow delete: if isSuperAdmin() && resource.data.role != 'superadmin';
-
+      allow delete: if isSuperAdmin() && resource.data.role != 'superadmin' && resource.data.role != 'super_admin';
+      
       match /private/employment {
         allow read, write: if isSuperAdmin();
       }
     }
-
     match /settings/rolePermissions {
       allow read: if isSignedIn();
       allow write: if isSuperAdmin();
     }
-
     match /settings/invoiceCounters {
       allow read: if isSignedIn();
       allow write: if isSignedIn();
     }
-
     match /settings/customerCounter {
       allow read: if isSignedIn();
       allow write: if isSignedIn();
     }
-
     match /settings/{docId} {
       allow read: if isSignedIn();
       allow write: if isSuperAdmin();
     }
-
     match /categories/{categoryId} {
       allow read: if isSignedIn();
       allow create, update: if isSuperAdmin() || hasPermission('manageCategories');
       allow delete: if isSuperAdmin() || (hasPermission('manageCategories') && isAdmin());
     }
-
     match /productColors/{colorId} {
       allow read: if isSignedIn();
       allow create, update, delete: if isSuperAdmin() || hasPermission('manageCategories');
     }
-
     match /productModels/{modelId} {
       allow read: if isSignedIn();
       allow create, update, delete: if isSuperAdmin() || hasPermission('manageCategories');
     }
-
     match /brands/{brandId} {
       allow read: if isSignedIn();
       allow create, update: if isSuperAdmin() || hasPermission('manageCategories');
       allow delete: if isSuperAdmin() || (hasPermission('manageCategories') && isAdmin());
     }
-
     match /products/{productId} {
       allow read: if isSignedIn();
       allow create: if isActive() && (isSuperAdmin() || hasPermission('addProduct'));
       allow update: if isActive() && (
-                      (
-                        (isSuperAdmin() || hasPermission('manageOrders')) && 
-                        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['amountPaid', 'amountDue', 'paymentStatus'])
-                      ) || 
-                      (
-                        (isSuperAdmin() || hasPermission('voidInvoice')) && 
-                        request.resource.data.get('voided', false) == true && 
-                        resource.data.voided == false && 
-                        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['voided', 'voidedReason', 'voidedBy', 'voidedAt'])
-                      )
-                    );
+        isSuperAdmin() || (
+          hasPermission('editProduct') && (
+            (request.resource.data.get('deletionStatus', null) == resource.data.get('deletionStatus', null)) ||
+            (request.resource.data.get('deletionStatus', null) == 'pending_approval' && isAdmin())
+          )
+        )
+      );
+      allow delete: if isSuperAdmin();
+    }
+    match /stockLogs/{logId} {
       allow read: if isSignedIn();
       allow create: if isActive() && (isSuperAdmin() || hasPermission('stockIn') || hasPermission('stockOut') || hasPermission('stockAdjustment'));
       allow update: if false;
       allow delete: if isSuperAdmin();
     }
-
     match /attendance/{sessionId} {
       allow create: if isSignedIn() && (request.resource.data.userId == request.auth.uid || isSuperAdmin());
       allow update: if isSignedIn() && (resource.data.userId == request.auth.uid || isSuperAdmin());
       allow read: if isSignedIn() && (resource.data.userId == request.auth.uid || isSuperAdmin());
       allow delete: if isSuperAdmin();
     }
-
     match /orders/{orderId} {
       allow read: if isSignedIn();
       allow create, update: if isActive() && (isSuperAdmin() || hasPermission('manageOrders'));
       allow delete: if isSuperAdmin();
     }
-
     match /invoices/{invoiceId} {
       allow read: if isSignedIn();
       allow create: if isActive() && (isSuperAdmin() || hasPermission('manageOrders'));
@@ -177,27 +155,25 @@ service cloud.firestore {
     match /customers/{customerId} {
       allow read: if isSignedIn();
       allow write: if isActive() && (isSuperAdmin() || hasPermission('manageOrders'));
+      allow delete: if isSuperAdmin();
     }
-
     match /suppliers/{supplierId} {
       allow read: if isSignedIn();
       allow write: if isActive() && (isSuperAdmin() || hasPermission('manageCategories'));
+      allow delete: if isSuperAdmin();
     }
-
     match /supplierPayments/{paymentId} {
       allow read: if isSignedIn();
       allow write: if isActive() && (isSuperAdmin() || hasPermission('manageCategories'));
+      allow delete: if isSuperAdmin();
     }
-
     match /notifications/{notificationId} {
       allow read: if isSignedIn();
       allow write: if isSignedIn();
     }
-
     match /expenses/{expenseId} {
-      allow read, write: if isActive() && isSuperAdmin();
+      allow read, write: if isSuperAdmin();
     }
-
     match /{document=**} {
       allow read, write: if false;
     }

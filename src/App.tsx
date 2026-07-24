@@ -19,6 +19,19 @@ import {
   migrateExistingCustomerIds,
   exportAllData
 } from './firebase/db';
+import {
+  exportProductsToExcel,
+  exportOrdersToExcel,
+  exportInvoicesToExcel,
+  exportCustomersToExcel,
+  exportSuppliersToExcel,
+  exportStockLogsToExcel,
+  exportExpensesToExcel,
+  exportCategoriesBrandsToExcel,
+  exportUsersToExcel,
+  exportAttendanceToExcel,
+  exportEverythingWorkbook
+} from './utils/excelExport';
 import { UserProfile, Product, Category, Brand, CompanySettings, ProductColor, ProductModel } from './types';
 import { Menu, AlertTriangle, Sparkles, RefreshCw } from 'lucide-react';
 
@@ -505,30 +518,24 @@ export default function App() {
     }
   };
 
-  const [isExportingData, setIsExportingData] = useState(false);
+  const [lastExportTime, setLastExportTime] = useState<string>(() => localStorage.getItem('last_backup_time') || 'Never');
+  const [exportingType, setExportingType] = useState<string | null>(null);
   const [exportMessage, setExportMessage] = useState<string | null>(null);
 
-  const handleExportData = async () => {
-    setIsExportingData(true);
+  const handleRunExcelExport = async (typeName: string, exportFn: () => Promise<void>) => {
+    setExportingType(typeName);
     setExportMessage(null);
     try {
-      const data = await exportAllData();
-      const jsonString = JSON.stringify(data, null, 2);
-      const blob = new Blob([jsonString], { type: 'application/json' });
-      const url = URL.createObjectURL(blob);
-      const link = document.createElement('a');
-      link.href = url;
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-');
-      link.download = `inventory-backup-${timestamp}.json`;
-      document.body.appendChild(link);
-      link.click();
-      document.body.removeChild(link);
-      URL.revokeObjectURL(url);
-      setExportMessage(`Data exported successfully. Backup saved as JSON.`);
+      await exportFn();
+      const nowStr = new Date().toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
+      setLastExportTime(nowStr);
+      localStorage.setItem('last_backup_time', nowStr);
+      setExportMessage(`Successfully exported ${typeName} to Excel (.xlsx).`);
     } catch (err: any) {
-      setExportMessage(`Export failed: ${err.message}`);
+      console.error(`Export failed for ${typeName}:`, err);
+      setExportMessage(`Export failed for ${typeName}: ${err.message}`);
     } finally {
-      setIsExportingData(false);
+      setExportingType(null);
     }
   };
 
@@ -1582,20 +1589,126 @@ export default function App() {
 
             {(user?.role === 'superadmin' || user?.role === 'super_admin') && (
               <div className="pt-6 border-t border-slate-100 flex flex-col gap-6">
-                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-50 p-4 rounded-2xl border border-slate-100">
-                  <div>
-                    <h3 className="text-sm font-bold text-slate-800">Data Backup & Export</h3>
-                    <p className="text-sm text-slate-500 mt-1">Download a full JSON backup of all databases (products, orders, customers, etc).</p>
-                    {exportMessage && <p className={`text-sm font-bold mt-2 ${exportMessage.includes('failed') ? 'text-red-600' : 'text-emerald-600'}`}>{exportMessage}</p>}
+                <div className="bg-slate-50 p-5 rounded-2xl border border-slate-100 space-y-4">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+                    <div>
+                      <h3 className="text-base font-bold text-slate-900">Data Backup & Excel Export</h3>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        Download individual or combined Excel (.xlsx) spreadsheets with clean column headers and formatted dates. Last exported: <span className="font-semibold text-slate-700">{lastExportTime}</span>
+                      </p>
+                      {exportMessage && <p className={`text-xs font-bold mt-2 ${exportMessage.includes('failed') ? 'text-red-600' : 'text-emerald-600'}`}>{exportMessage}</p>}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => handleRunExcelExport('All Collections (Multi-Sheet)', exportEverythingWorkbook)}
+                      disabled={exportingType !== null}
+                      className="py-2.5 px-5 bg-slate-900 hover:bg-black text-white font-bold text-xs rounded-xl cursor-pointer disabled:opacity-50 shrink-0 shadow-xs flex items-center gap-2"
+                    >
+                      {exportingType === 'All Collections (Multi-Sheet)' ? 'Exporting Everything...' : 'Export Everything (.xlsx)'}
+                    </button>
                   </div>
-                  <button
-                    type="button"
-                    onClick={handleExportData}
-                    disabled={isExportingData}
-                    className="py-2 px-4 bg-slate-800 hover:bg-slate-900 text-white font-bold text-sm rounded-xl cursor-pointer disabled:opacity-50 shrink-0"
-                  >
-                    {isExportingData ? 'Exporting...' : 'Export All Data'}
-                  </button>
+
+                  <div className="pt-4 border-t border-slate-200/60 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => handleRunExcelExport('Products', exportProductsToExcel)}
+                      disabled={exportingType !== null}
+                      className="py-2.5 px-4 bg-white hover:bg-slate-100 border border-slate-200 text-slate-800 font-semibold text-xs rounded-xl cursor-pointer disabled:opacity-50 text-left transition-colors flex items-center justify-between"
+                    >
+                      <span>Export Products (.xlsx)</span>
+                      {exportingType === 'Products' && <span className="animate-spin text-amber-500">⏳</span>}
+                    </button>
+                    
+                    <button
+                      type="button"
+                      onClick={() => handleRunExcelExport('Orders', exportOrdersToExcel)}
+                      disabled={exportingType !== null}
+                      className="py-2.5 px-4 bg-white hover:bg-slate-100 border border-slate-200 text-slate-800 font-semibold text-xs rounded-xl cursor-pointer disabled:opacity-50 text-left transition-colors flex items-center justify-between"
+                    >
+                      <span>Export Orders (.xlsx)</span>
+                      {exportingType === 'Orders' && <span className="animate-spin text-amber-500">⏳</span>}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handleRunExcelExport('Invoices', exportInvoicesToExcel)}
+                      disabled={exportingType !== null}
+                      className="py-2.5 px-4 bg-white hover:bg-slate-100 border border-slate-200 text-slate-800 font-semibold text-xs rounded-xl cursor-pointer disabled:opacity-50 text-left transition-colors flex items-center justify-between"
+                    >
+                      <span>Export Invoices (.xlsx)</span>
+                      {exportingType === 'Invoices' && <span className="animate-spin text-amber-500">⏳</span>}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handleRunExcelExport('Customers', exportCustomersToExcel)}
+                      disabled={exportingType !== null}
+                      className="py-2.5 px-4 bg-white hover:bg-slate-100 border border-slate-200 text-slate-800 font-semibold text-xs rounded-xl cursor-pointer disabled:opacity-50 text-left transition-colors flex items-center justify-between"
+                    >
+                      <span>Export Customers (.xlsx)</span>
+                      {exportingType === 'Customers' && <span className="animate-spin text-amber-500">⏳</span>}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handleRunExcelExport('Suppliers', exportSuppliersToExcel)}
+                      disabled={exportingType !== null}
+                      className="py-2.5 px-4 bg-white hover:bg-slate-100 border border-slate-200 text-slate-800 font-semibold text-xs rounded-xl cursor-pointer disabled:opacity-50 text-left transition-colors flex items-center justify-between"
+                    >
+                      <span>Export Suppliers (.xlsx)</span>
+                      {exportingType === 'Suppliers' && <span className="animate-spin text-amber-500">⏳</span>}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handleRunExcelExport('Stock Logs', exportStockLogsToExcel)}
+                      disabled={exportingType !== null}
+                      className="py-2.5 px-4 bg-white hover:bg-slate-100 border border-slate-200 text-slate-800 font-semibold text-xs rounded-xl cursor-pointer disabled:opacity-50 text-left transition-colors flex items-center justify-between"
+                    >
+                      <span>Export Stock Logs (.xlsx)</span>
+                      {exportingType === 'Stock Logs' && <span className="animate-spin text-amber-500">⏳</span>}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handleRunExcelExport('Expenses', exportExpensesToExcel)}
+                      disabled={exportingType !== null}
+                      className="py-2.5 px-4 bg-white hover:bg-slate-100 border border-slate-200 text-slate-800 font-semibold text-xs rounded-xl cursor-pointer disabled:opacity-50 text-left transition-colors flex items-center justify-between"
+                    >
+                      <span>Export Expenses (.xlsx)</span>
+                      {exportingType === 'Expenses' && <span className="animate-spin text-amber-500">⏳</span>}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handleRunExcelExport('Categories & Brands', exportCategoriesBrandsToExcel)}
+                      disabled={exportingType !== null}
+                      className="py-2.5 px-4 bg-white hover:bg-slate-100 border border-slate-200 text-slate-800 font-semibold text-xs rounded-xl cursor-pointer disabled:opacity-50 text-left transition-colors flex items-center justify-between"
+                    >
+                      <span>Export Categories & Brands</span>
+                      {exportingType === 'Categories & Brands' && <span className="animate-spin text-amber-500">⏳</span>}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handleRunExcelExport('Users & Staff', exportUsersToExcel)}
+                      disabled={exportingType !== null}
+                      className="py-2.5 px-4 bg-white hover:bg-slate-100 border border-slate-200 text-slate-800 font-semibold text-xs rounded-xl cursor-pointer disabled:opacity-50 text-left transition-colors flex items-center justify-between"
+                    >
+                      <span>Export Users/Staff (.xlsx)</span>
+                      {exportingType === 'Users & Staff' && <span className="animate-spin text-amber-500">⏳</span>}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handleRunExcelExport('Attendance', exportAttendanceToExcel)}
+                      disabled={exportingType !== null}
+                      className="py-2.5 px-4 bg-white hover:bg-slate-100 border border-slate-200 text-slate-800 font-semibold text-xs rounded-xl cursor-pointer disabled:opacity-50 text-left transition-colors flex items-center justify-between"
+                    >
+                      <span>Export Attendance (.xlsx)</span>
+                      {exportingType === 'Attendance' && <span className="animate-spin text-amber-500">⏳</span>}
+                    </button>
+                  </div>
                 </div>
 
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-50 p-4 rounded-2xl border border-slate-100">
