@@ -36,7 +36,8 @@ import {
   Expense,
   Supplier,
   SupplierPayment,
-  AppNotification
+  AppNotification,
+  Branch
 } from '../types';
 
 // --- Data Sanitization Helper ---
@@ -333,6 +334,18 @@ export async function updateUserProfile(userId: string, data: Partial<UserProfil
     console.error('updateUserProfile failed:', error);
     handleFirestoreError(error, OperationType.UPDATE, 'users/' + userId);
   }
+}
+
+export async function updateUserPasswordByEmail(email: string, newPassword: string): Promise<void> {
+  const profile = await findUserProfileByEmail(email);
+  if (!profile) {
+    throw new Error('No user profile found with this email address.');
+  }
+  await updateUserProfile(profile.id, {
+    customPassword: newPassword,
+    requirePasswordChange: false,
+    updatedAt: Date.now()
+  });
 }
 
 export async function promoteUserToSuperAdmin(email: string): Promise<void> {
@@ -1802,16 +1815,84 @@ export async function getInvoices(): Promise<Invoice[]> {
   if (dbCache.invoices) return dbCache.invoices;
   try {
     const colRef = collection(db, 'invoices');
-    const q = query(colRef, orderBy('generatedAt', 'desc'));
-    const snapshot = await getDocs(q);
+    // Fetch all docs without orderBy to avoid excluding documents missing generatedAt field
+    const snapshot = await getDocs(colRef);
     const list: Invoice[] = [];
     snapshot.forEach(docSnap => {
-      list.push({ id: docSnap.id, ...docSnap.data() } as Invoice);
+      const data = docSnap.data();
+      list.push({ 
+        id: docSnap.id, 
+        invoiceNumber: data.invoiceNumber || `INV-${docSnap.id.substring(0, 8)}`,
+        generatedAt: data.generatedAt || data.createdAt || Date.now(),
+        voided: data.voided ?? false,
+        discountAmount: data.discountAmount || 0,
+        shippingCharge: data.shippingCharge || 0,
+        totalAmount: data.totalAmount || 0,
+        amountPaid: data.amountPaid || 0,
+        amountDue: data.amountDue || 0,
+        paymentStatus: data.paymentStatus || 'Paid',
+        orderId: data.orderId || '',
+        customerName: data.customerName || 'Walk-in Customer',
+        customerPhone: data.customerPhone || '',
+        items: data.items || [],
+        ...data 
+      } as Invoice);
     });
+    // Sort in memory by generatedAt desc
+    list.sort((a, b) => (b.generatedAt || 0) - (a.generatedAt || 0));
     dbCache.invoices = list;
     return list;
   } catch (error) {
     handleFirestoreError(error, OperationType.LIST, 'invoices');
+  }
+}
+
+export async function migrateExistingInvoices(): Promise<{ totalMigrated: number }> {
+  try {
+    const colRef = collection(db, 'invoices');
+    const snapshot = await getDocs(colRef);
+    let migratedCount = 0;
+    const batch = writeBatch(db);
+
+    snapshot.docs.forEach(docSnap => {
+      const data = docSnap.data();
+      const updates: Record<string, any> = {};
+      let needsUpdate = false;
+
+      if (data.generatedAt === undefined || data.generatedAt === null) {
+        updates.generatedAt = data.createdAt || Date.now();
+        needsUpdate = true;
+      }
+      if (data.voided === undefined || data.voided === null) {
+        updates.voided = false;
+        needsUpdate = true;
+      }
+      if (data.discountAmount === undefined) {
+        updates.discountAmount = 0;
+        needsUpdate = true;
+      }
+      if (data.shippingCharge === undefined) {
+        updates.shippingCharge = 0;
+        needsUpdate = true;
+      }
+      if (!data.invoiceNumber) {
+        updates.invoiceNumber = `INV-${docSnap.id.substring(0, 8)}`;
+        needsUpdate = true;
+      }
+
+      if (needsUpdate) {
+        batch.update(doc(db, 'invoices', docSnap.id), updates);
+        migratedCount++;
+      }
+    });
+
+    if (migratedCount > 0) {
+      await batch.commit();
+      dbCache.invoices = null;
+    }
+    return { totalMigrated: migratedCount };
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, 'invoices/migrateInvoices');
   }
 }
 
@@ -2084,6 +2165,79 @@ export async function deleteExpense(id: string): Promise<void> {
 // SUPPLIER OPERATIONS
 // ==========================================
 
+export async function getNextSupplierCode(txn?: any): Promise<string> {
+  const counterRef = doc(db, 'settings', 'supplierCounter');
+  if (txn) {
+    const snap = await txn.get(counterRef);
+    let currentCount = 0;
+    if (snap.exists()) {
+      currentCount = snap.data().count || 0;
+    }
+    const nextCount = currentCount + 1;
+    txn.set(counterRef, { count: nextCount }, { merge: true });
+    return `SUP-${String(nextCount).padStart(4, '0')}`;
+  } else {
+    let nextNum = 1;
+    await runTransaction(db, async (t) => {
+      const snap = await t.get(counterRef);
+      let currentCount = 0;
+      if (snap.exists()) {
+        currentCount = snap.data().count || 0;
+      }
+      nextNum = currentCount + 1;
+      t.set(counterRef, { count: nextNum }, { merge: true });
+    });
+    return `SUP-${String(nextNum).padStart(4, '0')}`;
+  }
+}
+
+export async function migrateExistingSupplierCodes(): Promise<{ totalMigrated: number; nextCounter: number }> {
+  try {
+    const colRef = collection(db, 'suppliers');
+    const snapshot = await getDocs(colRef);
+    const allSuppliers = snapshot.docs.map(d => ({
+      docId: d.id,
+      data: d.data() as Supplier
+    }));
+
+    const missing = allSuppliers.filter(s => !s.data.supplierCode);
+    const counterRef = doc(db, 'settings', 'supplierCounter');
+    const counterSnap = await getDoc(counterRef);
+    let currentCount = counterSnap.exists() ? (counterSnap.data().count || 0) : 0;
+
+    if (missing.length === 0) {
+      return { totalMigrated: 0, nextCounter: currentCount };
+    }
+
+    missing.sort((a, b) => (a.data.createdAt || 0) - (b.data.createdAt || 0));
+    const batch = writeBatch(db);
+    let count = currentCount;
+    for (const item of missing) {
+      count++;
+      const generatedCode = `SUP-${String(count).padStart(4, '0')}`;
+      const suppRef = doc(db, 'suppliers', item.docId);
+      const openingBal = item.data.openingBalance ?? 0;
+      const totalPurch = item.data.totalPurchases || 0;
+      const totalPd = item.data.totalPaid || 0;
+      const currentBal = openingBal + totalPurch - totalPd;
+      batch.update(suppRef, { 
+        supplierCode: generatedCode,
+        status: item.data.status || 'active',
+        openingBalance: openingBal,
+        currentBalance: currentBal,
+        outstandingDue: currentBal
+      });
+    }
+    batch.set(counterRef, { count }, { merge: true });
+    await batch.commit();
+    dbCache.suppliers = null;
+    return { totalMigrated: missing.length, nextCounter: count };
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, 'suppliers/migrateSupplierCodes');
+    return { totalMigrated: 0, nextCounter: 0 };
+  }
+}
+
 export async function getSuppliers(): Promise<Supplier[]> {
   if (dbCache.suppliers) return dbCache.suppliers;
   try {
@@ -2092,9 +2246,41 @@ export async function getSuppliers(): Promise<Supplier[]> {
     const snapshot = await getDocs(q);
     const list: Supplier[] = [];
     snapshot.forEach(docSnap => {
-      list.push({ id: docSnap.id, ...docSnap.data() } as Supplier);
+      const data = docSnap.data();
+      const openingBal = data.openingBalance ?? 0;
+      const totalPurch = data.totalPurchases || 0;
+      const totalPd = data.totalPaid || 0;
+      const currentBal = openingBal + totalPurch - totalPd;
+      list.push({ 
+        id: docSnap.id, 
+        supplierCode: data.supplierCode || `SUP-${docSnap.id.substring(0, 4)}`,
+        name: data.name || '',
+        companyName: data.companyName || '',
+        contactPerson: data.contactPerson || '',
+        phone: data.phone || '',
+        email: data.email || '',
+        address: data.address || '',
+        supplierType: data.supplierType || 'Distributor',
+        productCategory: data.productCategory || '',
+        paymentMethod: data.paymentMethod || 'Cash',
+        openingBalance: openingBal,
+        currentBalance: currentBal,
+        creditLimit: data.creditLimit || 0,
+        creditDays: data.creditDays || 30,
+        bankInfo: data.bankInfo || {},
+        status: data.status || 'active',
+        notes: data.notes || '',
+        logoUrl: data.logoUrl || '',
+        documentUrls: data.documentUrls || [],
+        subBrand: data.subBrand || '',
+        totalPurchases: totalPurch,
+        totalPaid: totalPd,
+        outstandingDue: currentBal,
+        createdAt: data.createdAt || Date.now(),
+        createdBy: data.createdBy || ''
+      } as Supplier);
     });
-    dbCache.invoices = list;
+    dbCache.suppliers = list;
     return list;
   } catch (error) {
     handleFirestoreError(error, OperationType.LIST, 'suppliers');
@@ -2102,15 +2288,26 @@ export async function getSuppliers(): Promise<Supplier[]> {
   }
 }
 
-export async function addSupplier(supplierData: Omit<Supplier, 'id' | 'totalPurchases' | 'totalPaid' | 'outstandingDue' | 'createdAt'>): Promise<string> {
+export async function getActiveSuppliers(): Promise<Supplier[]> {
+  const all = await getSuppliers();
+  return all.filter(s => s.status !== 'inactive');
+}
+
+export async function addSupplier(supplierData: Omit<Supplier, 'id' | 'supplierCode' | 'totalPurchases' | 'totalPaid' | 'outstandingDue' | 'currentBalance' | 'createdAt'>): Promise<string> {
   dbCache.suppliers = null;
   try {
+    const supplierCode = await getNextSupplierCode();
+    const openingBal = supplierData.openingBalance ?? 0;
     const colRef = collection(db, 'suppliers');
     const payload: Omit<Supplier, 'id'> = {
       ...supplierData,
+      supplierCode,
+      openingBalance: openingBal,
+      currentBalance: openingBal,
       totalPurchases: 0,
       totalPaid: 0,
-      outstandingDue: 0,
+      outstandingDue: openingBal,
+      status: supplierData.status || 'active',
       createdAt: Date.now()
     };
     const sanitized = sanitizeData(payload);
@@ -2118,6 +2315,7 @@ export async function addSupplier(supplierData: Omit<Supplier, 'id' | 'totalPurc
     return docRef.id;
   } catch (error) {
     handleFirestoreError(error, OperationType.CREATE, 'suppliers');
+    return '';
   }
 }
 
@@ -2125,7 +2323,20 @@ export async function updateSupplier(id: string, updates: Partial<Supplier>): Pr
   dbCache.suppliers = null;
   try {
     const docRef = doc(db, 'suppliers', id);
-    const sanitized = sanitizeData(updates);
+    // If openingBalance or totalPurchases or totalPaid changes, recompute currentBalance / outstandingDue
+    const currentSnap = await getDoc(docRef);
+    let computedUpdates = { ...updates };
+    if (currentSnap.exists()) {
+      const data = currentSnap.data() as Supplier;
+      const openingBal = updates.openingBalance !== undefined ? updates.openingBalance : (data.openingBalance ?? 0);
+      const totalPurch = updates.totalPurchases !== undefined ? updates.totalPurchases : (data.totalPurchases || 0);
+      const totalPd = updates.totalPaid !== undefined ? updates.totalPaid : (data.totalPaid || 0);
+      const currentBal = openingBal + totalPurch - totalPd;
+      computedUpdates.currentBalance = currentBal;
+      computedUpdates.outstandingDue = currentBal;
+    }
+
+    const sanitized = sanitizeData(computedUpdates);
     await updateDoc(docRef, sanitized);
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, 'suppliers/' + id);
@@ -2304,6 +2515,99 @@ export async function markAllNotificationsRead(notifIds: string[]): Promise<void
 
 
 
+// ==========================================
+// EMPLOYEE ID & BRANCH OPERATIONS
+// ==========================================
+
+export async function getNextEmployeeId(txn?: any): Promise<string> {
+  const counterRef = doc(db, 'settings', 'employeeCounter');
+  if (txn) {
+    const snap = await txn.get(counterRef);
+    let currentCount = 0;
+    if (snap.exists()) {
+      currentCount = snap.data().count || 0;
+    }
+    const nextCount = currentCount + 1;
+    txn.set(counterRef, { count: nextCount }, { merge: true });
+    return `EMP-${String(nextCount).padStart(4, '0')}`;
+  } else {
+    let nextNum = 1;
+    await runTransaction(db, async (t) => {
+      const snap = await t.get(counterRef);
+      let currentCount = 0;
+      if (snap.exists()) {
+        currentCount = snap.data().count || 0;
+      }
+      nextNum = currentCount + 1;
+      t.set(counterRef, { count: nextNum }, { merge: true });
+    });
+    return `EMP-${String(nextNum).padStart(4, '0')}`;
+  }
+}
+
+export async function getBranches(): Promise<Branch[]> {
+  if (dbCache.branches) return dbCache.branches;
+  try {
+    const colRef = collection(db, 'branches');
+    const snapshot = await getDocs(colRef);
+    const list: Branch[] = [];
+    snapshot.forEach(docSnap => {
+      list.push({ id: docSnap.id, ...docSnap.data() } as Branch);
+    });
+    // Default if empty
+    if (list.length === 0) {
+      list.push(
+        { id: 'b1', name: 'Head Office - Dhaka', address: 'Gulshan, Dhaka', active: true },
+        { id: 'b2', name: 'Warehouse - Mirpur', address: 'Mirpur 10, Dhaka', active: true },
+        { id: 'b3', name: 'Branch - Chattogram', address: 'Agrabad, Chattogram', active: true }
+      );
+    }
+    dbCache.branches = list;
+    return list;
+  } catch (error) {
+    console.error('Failed to get branches:', error);
+    return [
+      { id: 'b1', name: 'Head Office - Dhaka', address: 'Gulshan, Dhaka', active: true },
+      { id: 'b2', name: 'Warehouse - Mirpur', address: 'Mirpur 10, Dhaka', active: true },
+      { id: 'b3', name: 'Branch - Chattogram', address: 'Agrabad, Chattogram', active: true }
+    ];
+  }
+}
+
+export async function addBranch(branchData: Omit<Branch, 'id'>): Promise<string> {
+  dbCache.branches = null;
+  try {
+    const colRef = collection(db, 'branches');
+    const sanitized = sanitizeData(branchData);
+    const docRef = await addDoc(colRef, sanitized);
+    return docRef.id;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, 'branches');
+    return '';
+  }
+}
+
+export async function updateBranch(id: string, updates: Partial<Branch>): Promise<void> {
+  dbCache.branches = null;
+  try {
+    const docRef = doc(db, 'branches', id);
+    const sanitized = sanitizeData(updates);
+    await updateDoc(docRef, sanitized);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, 'branches/' + id);
+  }
+}
+
+export async function deleteBranch(id: string): Promise<void> {
+  dbCache.branches = null;
+  try {
+    const docRef = doc(db, 'branches', id);
+    await deleteDoc(docRef);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, 'branches/' + id);
+  }
+}
+
 export async function exportAllData(): Promise<any> {
   const collections = ['products', 'orders', 'invoices', 'customers', 'suppliers', 'stockLogs', 'expenses', 'categories', 'brands', 'users', 'attendance'];
   const exportData: Record<string, any[]> = {};
@@ -2336,6 +2640,7 @@ export const dbCache = {
   users: null as any[] | null,
   suppliers: null as any[] | null,
   expenses: null as any[] | null,
+  branches: null as any[] | null,
   clearAll: () => {
     dbCache.products = null;
     dbCache.productsArchived = null;
@@ -2343,5 +2648,6 @@ export const dbCache = {
     dbCache.users = null;
     dbCache.suppliers = null;
     dbCache.expenses = null;
+    dbCache.branches = null;
   }
 };

@@ -17,6 +17,7 @@ import {
   syncProductStockStatuses,
   migrateProductBarcodes,
   migrateExistingCustomerIds,
+  migrateExistingInvoices,
   exportAllData
 } from './firebase/db';
 import {
@@ -33,6 +34,7 @@ import {
   exportEverythingWorkbook
 } from './utils/excelExport';
 import { UserProfile, Product, Category, Brand, CompanySettings, ProductColor, ProductModel } from './types';
+import { EMAILJS_CONFIG } from './config/emailjs';
 import { Menu, AlertTriangle, Sparkles, RefreshCw } from 'lucide-react';
 
 // Import Modular Components
@@ -147,6 +149,10 @@ export default function App() {
   };
 
   const enterOfflineDemoMode = () => {
+    try {
+      sessionStorage.setItem('sat_otp_verified', 'true');
+      localStorage.setItem('sat_otp_verified', 'true');
+    } catch (e) {}
     setIsOfflineDemoMode(true);
     setIsQuotaExceeded(false);
     
@@ -242,6 +248,27 @@ export default function App() {
     }
   };
 
+  const [isMigratingInvoices, setIsMigratingInvoices] = useState(false);
+  const [invoiceMigrationResult, setInvoiceMigrationResult] = useState<string | null>(null);
+
+  const handleMigrateInvoices = async () => {
+    setIsMigratingInvoices(true);
+    setInvoiceMigrationResult(null);
+    try {
+      const res = await migrateExistingInvoices();
+      if (res && res.totalMigrated > 0) {
+        setInvoiceMigrationResult(`Successfully updated ${res.totalMigrated} legacy invoice(s) with required fields.`);
+      } else {
+        setInvoiceMigrationResult('All existing invoices are already up to date.');
+      }
+    } catch (err: any) {
+      console.error('Invoice migration error:', err);
+      setInvoiceMigrationResult(`Migration failed: ${err.message || 'Error occurred'}`);
+    } finally {
+      setIsMigratingInvoices(false);
+    }
+  };
+
   // Listen to Auth State and Global Quota Exceeded event
   useEffect(() => {
     const handleQuotaEvent = (e: Event) => {
@@ -269,6 +296,17 @@ export default function App() {
             if (profile.active === false && profile.role !== 'superadmin') {
               console.warn('App: Attempted access by suspended account:', profile.email);
               await auth.signOut();
+              setUser(null);
+              return;
+            }
+
+            // Check if OTP was verified in this session or device
+            let isOtpVerified = true;
+            try {
+              isOtpVerified = sessionStorage.getItem('sat_otp_verified') === 'true' || localStorage.getItem('sat_otp_verified') === 'true';
+            } catch (e) {}
+            if (!isOtpVerified) {
+              console.log('App: User signed in to Firebase Auth, but OTP is not verified yet. Waiting for OTP challenge in SplashAndAuth...');
               setUser(null);
               return;
             }
@@ -376,6 +414,10 @@ export default function App() {
 
   // Handle Auth success from Login Screen
   const handleAuthSuccess = async (profile: UserProfile) => {
+    try {
+      sessionStorage.setItem('sat_otp_verified', 'true');
+      localStorage.setItem('sat_otp_verified', 'true');
+    } catch (e) {}
     setUser(profile);
     try {
       const settings = await getCompanySettings();
@@ -402,6 +444,10 @@ export default function App() {
 
   // Handle Logout
   const handleLogout = async () => {
+    try {
+      sessionStorage.removeItem('sat_otp_verified');
+      localStorage.removeItem('sat_otp_verified');
+    } catch (e) {}
     await signOut(auth);
     setUser(null);
     setCompanySettings(null);
@@ -690,7 +736,7 @@ export default function App() {
         isOpen={isSidebarOpen}
         setIsOpen={setIsSidebarOpen}
         companyName={companySettings?.companyName || 'Sky Automation Tech'}
-        logoUrl={companySettings?.logoUrl}
+        logoUrl={companySettings?.logoUrl || '/Sky Automation Tech Logo.jpeg'}
       />
 
       {/* Main Content Workspace */}
@@ -706,9 +752,9 @@ export default function App() {
               <Menu size={20} />
             </button>
             <div className="flex items-center gap-2">
-              <img src={companySettings?.logoUrl || "/logo.png"} alt="Company Logo" className="w-6 h-6 rounded object-contain" />
+              <img src={companySettings?.logoUrl || "/Sky Automation Tech Logo.jpeg"} alt="Sky Automation Tech Logo" className="w-6 h-6 rounded object-contain" />
               <h1 className="text-white font-bold tracking-tight text-sm uppercase">
-                {companySettings?.companyName || 'Sky Automation'}
+                {companySettings?.companyName || 'Sky Automation Tech'}
               </h1>
             </div>
           </div>
@@ -730,7 +776,7 @@ export default function App() {
           <div className="hidden lg:flex items-center justify-between pb-6 mb-6 border-b border-slate-200/80">
             <div>
               <div className="text-xs font-mono font-bold text-amber-600 uppercase tracking-widest">
-                {companySettings?.companyName || 'Sky Automation'} Platform
+                {companySettings?.companyName || 'Sky Automation Tech'} Platform
               </div>
               <h2 className="text-xl font-black text-slate-900 capitalize">
                 {currentTab.replace('_', ' ')}
@@ -1008,7 +1054,7 @@ export default function App() {
                       address: satAddress,
                       phone: satPhone,
                       email: satEmail,
-                      logoUrl: companySettings?.subBrandDetails?.SAT?.logoUrl || '/sat_logo.jpg',
+                      logoUrl: companySettings?.subBrandDetails?.SAT?.logoUrl || '/Sky Automation Tech Logo.jpeg',
                       invoiceTerms: satTerms || terms,
                       tagline: satTagline || taglineVal
                     },
@@ -1118,7 +1164,7 @@ export default function App() {
                   <div className="flex flex-col sm:flex-row items-center gap-4 bg-white p-3 rounded-xl border border-slate-200">
                     <div className="w-16 h-16 bg-slate-950 rounded-xl p-2 flex items-center justify-center shrink-0 border border-slate-800">
                       <img 
-                        src={settingsLogoUrl || companySettings?.logoUrl || "/logo.png"} 
+                        src={settingsLogoUrl || companySettings?.logoUrl || "/Sky Automation Tech Logo.jpeg"} 
                         alt="Logo Preview" 
                         className="w-full h-full object-contain"
                       />
@@ -1556,6 +1602,63 @@ export default function App() {
                       className="bg-white border border-slate-200 rounded-xl p-2 text-xs disabled:opacity-60"
                     />
                   </div>
+                  <div className="pt-2 flex justify-end">
+                    <button
+                      type="button"
+                      disabled={!(user?.role === 'superadmin' || user?.role === 'super_admin')}
+                      onClick={async () => {
+                        const form = document.querySelector('form') as HTMLFormElement;
+                        const sId = (form?.elements.namedItem('emailjs-service-id') as HTMLInputElement)?.value || EMAILJS_CONFIG.SERVICE_ID;
+                        const tId = (form?.elements.namedItem('emailjs-template-id') as HTMLInputElement)?.value || EMAILJS_CONFIG.OTP_TEMPLATE_ID;
+                        const pKey = (form?.elements.namedItem('emailjs-public-key') as HTMLInputElement)?.value || EMAILJS_CONFIG.PUBLIC_KEY;
+                        const recEmail = (form?.elements.namedItem('emailjs-recipient') as HTMLInputElement)?.value || user?.email || 'skyautomationtech@gmail.com';
+                        
+                        alert(`Testing EmailJS delivery to ${recEmail}...\nPlease wait while we send the verification test.`);
+                        try {
+                          const res = await fetch("https://api.emailjs.com/api/v1.0/email/send", {
+                            method: "POST",
+                            headers: { "Content-Type": "application/json" },
+                            body: JSON.stringify({
+                              service_id: sId,
+                              template_id: tId,
+                              user_id: pKey,
+                              template_params: {
+                                to_name: user?.name || "Admin",
+                                name: user?.name || "Admin",
+                                user_name: user?.name || "Admin",
+                                recipient_name: user?.name || "Admin",
+                                to_email: recEmail,
+                                email: recEmail,
+                                to: recEmail,
+                                recipient: recEmail,
+                                recipient_email: recEmail,
+                                user_email: recEmail,
+                                mail: recEmail,
+                                otp_code: "888999",
+                                otp: "888999",
+                                code: "888999",
+                                passcode: "888999",
+                                verification_code: "888999",
+                                message: "This is an automated test notification from your Sky Automation Tech system.",
+                                reply_to: "support@skyautomation.tech"
+                              }
+                            })
+                          });
+                          if (res.ok) {
+                            alert(`✅ SUCCESS! Test email sent to ${recEmail} via EmailJS (Service ID: ${sId}).\n\nPlease check your inbox and spam folder!`);
+                          } else {
+                            const errText = await res.text();
+                            alert(`❌ EMAILJS NOTICE (${res.status}): ${errText}\n\nTip: In your EmailJS Dashboard -> Email Templates -> Settings, check what variable name you used in the "To Email" field (e.g., {{to_email}} or {{email}} or {{recipient}}).`);
+                          }
+                        } catch (e: any) {
+                          alert(`❌ Network/System Error while calling EmailJS: ${e.message}`);
+                        }
+                      }}
+                      className="py-1.5 px-4 bg-blue-600 hover:bg-blue-700 text-white font-semibold text-xs rounded-lg shadow cursor-pointer transition-all flex items-center gap-1.5"
+                    >
+                      <span>🚀</span> Test EmailJS Connection & Delivery Now
+                    </button>
+                  </div>
                 </div>
               </div>
 
@@ -1711,6 +1814,21 @@ export default function App() {
                   </div>
                 </div>
 
+                <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-50 p-4 rounded-2xl border border-slate-100">
+                  <div>
+                    <h3 className="text-sm font-bold text-slate-800">Migrate Legacy Invoices</h3>
+                    <p className="text-sm text-slate-500 mt-1">Ensure all older invoices have required fields (generatedAt, voided, etc.) so they appear in the Invoice List.</p>
+                    {invoiceMigrationResult && <p className="text-sm font-bold text-emerald-600 mt-2">{invoiceMigrationResult}</p>}
+                  </div>
+                  <button
+                    type="button"
+                    onClick={handleMigrateInvoices}
+                    disabled={isMigratingInvoices}
+                    className="py-2 px-4 bg-slate-800 hover:bg-slate-900 text-white font-bold text-sm rounded-xl cursor-pointer disabled:opacity-50 shrink-0"
+                  >
+                    {isMigratingInvoices ? 'Migrating Invoices...' : 'Migrate Invoices'}
+                  </button>
+                </div>
                 <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-slate-50 p-4 rounded-2xl border border-slate-100">
                   <div>
                     <h3 className="text-sm font-bold text-slate-800">Assign Sequential Customer IDs (CUS-0001)</h3>

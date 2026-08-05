@@ -1,104 +1,159 @@
-/**
- * EmailJS Configuration and Integration
- * Replace these placeholder keys with your actual EmailJS credentials.
- */
-
-export const EMAILJS_SERVICE_ID = "service_sat_inv";   // Replace with your EmailJS Service ID
-export const EMAILJS_TEMPLATE_ID = "template_otp_sat"; // Replace with your EmailJS Template ID
-export const EMAILJS_PUBLIC_KEY = "user_sat_pub_key";  // Replace with your EmailJS Public Key
+import { EMAILJS_CONFIG } from '../config/emailjs';
 
 /**
  * Sends an OTP verification email using EmailJS REST API.
- * This approach does not require installing bulky extra npm modules.
  * @param email Recipient's email address
  * @param otp The 6-digit verification code
  * @param name Recipient's name
  */
-export async function sendOTPEmail(email: string, otp: string, name: string = "User"): Promise<boolean> {
-  // If the credentials are placeholders, we'll log to console and simulate success for the demo
-  if (
-    EMAILJS_SERVICE_ID === "service_sat_inv" || 
-    EMAILJS_TEMPLATE_ID === "template_otp_sat" || 
-    EMAILJS_PUBLIC_KEY === "user_sat_pub_key"
-  ) {
-    console.log(`[EmailJS Mock] Sending OTP ${otp} to ${email} (Name: ${name})`);
-    return true;
+export async function sendOTPEmail(email: string, otp: string, name: string = "User"): Promise<{ success: boolean; error?: string }> {
+  console.log(`[EmailJS Debug] sendOTPEmail called with email: "${email}", name: "${name}"`);
+  if (!email || !email.trim()) {
+    console.warn("[EmailJS Warning] Aborting sendOTPEmail: recipient email is empty!");
+    return { success: false, error: "Recipient email is empty" };
   }
-
   try {
+    const cleanEmail = email.trim();
+    const cleanName = name || "User";
     const response = await fetch("https://api.emailjs.com/api/v1.0/email/send", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        service_id: EMAILJS_SERVICE_ID,
-        template_id: EMAILJS_TEMPLATE_ID,
-        user_id: EMAILJS_PUBLIC_KEY,
+        service_id: EMAILJS_CONFIG.SERVICE_ID,
+        template_id: EMAILJS_CONFIG.OTP_TEMPLATE_ID,
+        user_id: EMAILJS_CONFIG.PUBLIC_KEY,
         template_params: {
-          to_name: name,
-          to_email: email,
+          to_name: cleanName,
+          name: cleanName,
+          user_name: cleanName,
+          recipient_name: cleanName,
+          to_email: cleanEmail,
+          email: cleanEmail,
+          to: cleanEmail,
+          recipient: cleanEmail,
+          recipient_email: cleanEmail,
+          user_email: cleanEmail,
+          userEmail: cleanEmail,
+          mail: cleanEmail,
+          client_email: cleanEmail,
+          applicant_email: cleanEmail,
+          employee_email: cleanEmail,
           otp_code: otp,
+          otp: otp,
+          code: otp,
+          passcode: otp,
+          verification_code: otp,
           reply_to: "support@skyautomation.tech"
         }
       })
     });
 
     if (response.ok) {
-      console.log(`[EmailJS] OTP sent successfully to ${email}`);
-      return true;
+      console.log(`[EmailJS] OTP sent successfully to ${cleanEmail}`);
+      return { success: true };
     } else {
       const errText = await response.text();
-      console.error("[EmailJS Error Response]", errText);
-      return false;
+      console.warn("[EmailJS Notice - Check Dashboard Template To Field]", errText);
+      return { success: false, error: `EmailJS API Error (${response.status}): ${errText}` };
     }
-  } catch (err) {
-    console.error("[EmailJS Network/System Error]", err);
-    return false;
+  } catch (err: any) {
+    console.warn("[EmailJS Network/System Notice]", err);
+    return { success: false, error: `Network/System Error: ${err?.message || 'Unknown error'}` };
   }
 }
 
 /**
- * Sends temporary credentials to a new user.
+ * Sends a welcome approval confirmation email to a newly approved employee using the Welcome Template ID.
+ * Parameters passed:
+ * - to_name: employee's name
+ * - email_subject: "Welcome to Sky Automation Tech!"
+ * - email_body: "Your account has been approved! Your Employee ID is [EMPLOYEE_ID]. You can now log in."
  */
-export async function sendCredentialsEmail(
-  email: string, 
-  password: string, 
-  name: string = "User"
-): Promise<boolean> {
-  // Use a generic template or a specific one if provided
-  // For now, using the same logic as OTP but with different params
-  if (
-    EMAILJS_SERVICE_ID === "service_sat_inv" || 
-    EMAILJS_PUBLIC_KEY === "user_sat_pub_key"
-  ) {
-    console.log(`[EmailJS Mock] Sending credentials to ${email}: PW=${password}`);
-    return true;
+export async function sendWelcomeEmail(
+  email: string,
+  employeeId: string,
+  name: string = "Employee"
+): Promise<{ success: boolean; error?: string }> {
+  console.log(`[EmailJS Debug] sendWelcomeEmail called with email: "${email}", employeeId: "${employeeId}", name: "${name}"`);
+  if (!email || !email.trim()) {
+    console.warn("[EmailJS Warning] Aborting sendWelcomeEmail: recipient email is empty!");
+    return { success: false, error: "Recipient email is empty" };
   }
-
   try {
+    const cleanEmail = email.trim();
+    const cleanName = name || "Employee";
+    const emailSubject = "Welcome to Sky Automation Tech!";
+    const emailBody = `Your account has been approved! Your Employee ID is ${employeeId}. You can now log in.`;
+
     const response = await fetch("https://api.emailjs.com/api/v1.0/email/send", {
       method: "POST",
       headers: {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        service_id: EMAILJS_SERVICE_ID,
-        template_id: "template_credentials_sat", // Placeholder for credentials template
-        user_id: EMAILJS_PUBLIC_KEY,
+        service_id: EMAILJS_CONFIG.SERVICE_ID,
+        template_id: EMAILJS_CONFIG.WELCOME_TEMPLATE_ID,
+        user_id: EMAILJS_CONFIG.PUBLIC_KEY,
         template_params: {
-          to_name: name,
-          to_email: email,
-          temp_password: password,
+          to_name: cleanName,
+          name: cleanName,
+          user_name: cleanName,
+          recipient_name: cleanName,
+          to_email: cleanEmail,
+          email: cleanEmail,
+          to: cleanEmail,
+          recipient: cleanEmail,
+          recipient_email: cleanEmail,
+          user_email: cleanEmail,
+          userEmail: cleanEmail,
+          mail: cleanEmail,
+          client_email: cleanEmail,
+          applicant_email: cleanEmail,
+          employee_email: cleanEmail,
+          email_subject: emailSubject,
+          subject: emailSubject,
+          email_body: emailBody,
+          message: emailBody,
+          body: emailBody,
+          employee_id: employeeId,
+          employeeId: employeeId,
           login_url: window.location.origin,
           reply_to: "support@skyautomation.tech"
         }
       })
     });
 
-    return response.ok;
-  } catch (err) {
-    console.error("[EmailJS Credentials Error]", err);
-    return false;
+    if (response.ok) {
+      console.log(`[EmailJS] Welcome email sent successfully to ${cleanEmail}`);
+      return { success: true };
+    } else {
+      const errText = await response.text();
+      console.warn("[EmailJS Welcome Email Notice - Check Dashboard Template To Field]", errText);
+      return { success: false, error: errText };
+    }
+  } catch (err: any) {
+    console.warn("[EmailJS Welcome Email Network/System Notice]", err);
+    return { success: false, error: err?.message || 'Network error' };
   }
+}
+
+// Kept for compatibility if imported elsewhere, but delegates to mock/no-op per instructions (Rejection handled in-app without email)
+export async function sendCredentialsEmail(
+  email: string, 
+  password: string, 
+  name: string = "User"
+): Promise<boolean> {
+  console.log(`[EmailJS] Credentials email skipped or handled in-app.`);
+  return true;
+}
+
+export async function sendRejectionEmail(
+  email: string,
+  reason: string,
+  name: string = "Applicant"
+): Promise<boolean> {
+  console.log(`[EmailJS] Rejection email skipped per user instruction (in-app only).`);
+  return true;
 }

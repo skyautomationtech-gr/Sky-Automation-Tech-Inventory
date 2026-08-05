@@ -65,6 +65,43 @@ export default function DashboardView({
   const [allInvoices, setAllInvoices] = useState<Invoice[]>([]);
   const [allUsers, setAllUsers] = useState<UserProfile[]>([]);
   const [loadingData, setLoadingData] = useState(true);
+  const [liveLoginCodes, setLiveLoginCodes] = useState<any[]>([]);
+
+  useEffect(() => {
+    if (user?.role !== 'superadmin') return;
+    
+    let unsubscribe: any = null;
+    let isMounted = true;
+    
+    const setupListener = async () => {
+      try {
+        const { collection, onSnapshot, query } = await import('firebase/firestore');
+        const { db } = await import('../firebase/config');
+        
+        if (!isMounted) return;
+        
+        const q = query(collection(db, 'liveLoginCodes'));
+        unsubscribe = onSnapshot(q, (snapshot: any) => {
+          const codes: any[] = [];
+          snapshot.forEach((docSnap: any) => {
+            codes.unshift({ id: docSnap.id, ...docSnap.data() });
+          });
+          setLiveLoginCodes(codes);
+        }, (err: any) => {
+          console.warn('Live login codes listener notice:', err);
+        });
+      } catch (e) {
+        console.warn('Live login codes setup notice:', e);
+      }
+    };
+    
+    setupListener();
+    
+    return () => {
+      isMounted = false;
+      if (unsubscribe) unsubscribe();
+    };
+  }, [user]);
 
   useEffect(() => {
     const fetchDashboardData = async () => {
@@ -495,6 +532,55 @@ export default function DashboardView({
   return (
     <div className="space-y-6">
       
+      {/* Live Staff Login Codes Widget for Super Admin */}
+      {user?.role === 'superadmin' && liveLoginCodes.length > 0 && (
+        <div className="bg-gradient-to-r from-amber-500/15 via-amber-400/10 to-amber-500/15 border-2 border-amber-400/50 rounded-2xl p-4 md:p-5 shadow-lg animate-pulse">
+          <div className="flex items-center justify-between mb-3">
+            <div className="flex items-center gap-2">
+              <span className="flex h-3 w-3 relative">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-3 w-3 bg-amber-500"></span>
+              </span>
+              <h3 className="text-sm font-extrabold text-amber-900 uppercase tracking-wider">
+                🔔 Live Staff Login Verification Codes ({liveLoginCodes.length})
+              </h3>
+            </div>
+            <span className="text-sm font-mono bg-amber-400 text-slate-950 font-bold px-2.5 py-0.5 rounded-full">
+              Action Required
+            </span>
+          </div>
+          <p className="text-sm text-slate-700 mb-3">
+            Staff members attempting to log in are listed below. Share the 6-digit code with them securely by phone or in-person (EmailJS quota saved):
+          </p>
+          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+            {liveLoginCodes.map((item) => (
+              <div key={item.id} className="bg-white/90 backdrop-blur-xs border border-amber-300 rounded-xl p-3 shadow-xs flex flex-col justify-between">
+                <div>
+                  <div className="flex items-center justify-between">
+                    <span className="text-sm font-bold text-slate-900">{item.staffName}</span>
+                    <span className="text-sm text-slate-400 font-mono">{new Date(item.generatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}</span>
+                  </div>
+                  <p className="text-sm text-slate-500 font-mono mt-0.5">{item.email}</p>
+                </div>
+                <div className="mt-3 flex items-center justify-between bg-slate-950 px-3 py-2 rounded-lg">
+                  <span className="text-sm text-slate-400 font-mono">OTP Code:</span>
+                  <span className="text-lg font-mono font-black tracking-widest text-amber-400">{item.otpCode}</span>
+                  <button
+                    onClick={() => {
+                      navigator.clipboard.writeText(item.otpCode);
+                      alert(`Copied OTP code ${item.otpCode} for ${item.staffName}`);
+                    }}
+                    className="text-xs bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold px-2 py-1 rounded-md transition-colors"
+                  >
+                    Copy
+                  </button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       {/* Dynamic Header Row */}
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-2 border-b border-slate-200">
         <div>

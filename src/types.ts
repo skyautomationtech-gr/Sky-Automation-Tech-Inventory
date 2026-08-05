@@ -1,7 +1,15 @@
-export type UserRole = 'superadmin' | 'admin' | 'staff';
+export type UserRole = 'superadmin' | 'admin' | 'manager' | 'staff';
 
 export interface PermissionOverrides {
   [key: string]: boolean;
+}
+
+export interface Branch {
+  id: string;
+  name: string;
+  address?: string;
+  phone?: string;
+  active?: boolean;
 }
 
 export interface UserProfile {
@@ -9,27 +17,45 @@ export interface UserProfile {
   name: string;
   email: string;
   phone?: string;
+  alternativeMobile?: string;
   photoUrl?: string;
+  dateOfBirth?: string;
+  gender?: 'Male' | 'Female' | 'Other' | string;
+  nidNumber?: string;
+  presentAddress?: string;
+  permanentAddress?: string;
   role: UserRole;
   subBrandAccess: string[]; // ['SAT', 'GZ', 'RTX'] etc
   onboardingCompleted?: boolean;
   createdBy?: string;
   active?: boolean;
   createdAt?: number;
+  updatedAt?: number;
   
   // Signup Approval Workflow
   status?: 'pending_approval' | 'approved' | 'rejected';
-  requestedRole?: 'staff' | 'admin';
+  requestedRole?: 'staff' | 'admin' | 'manager';
   requestedSubBrandAccess?: string[];
+  rejectionReason?: string;
 
-  // Employment Info (Public part)
+  // Employment Info (Confirmed / Assigned)
+  employeeId?: string;
+  department?: string;
   designation?: string;
+  branch?: string;
   joiningDate?: string;
-  nidNumber?: string;
-  address?: string;
+  employmentType?: 'Full-Time' | 'Part-Time' | 'Intern' | 'Contract' | string;
+
+  // Requested Employment Info
+  requestedDepartment?: string;
+  requestedDesignation?: string;
+  requestedBranch?: string;
+  requestedJoiningDate?: string;
+  requestedEmploymentType?: string;
 
   // Account Setup
   requirePasswordChange?: boolean;
+  customPassword?: string;
   permissionOverrides?: PermissionOverrides;
 
   // Attendance
@@ -195,15 +221,36 @@ export interface CompanySettings {
 
 export interface Supplier {
   id: string;
+  supplierCode?: string; // e.g. "SUP-0001"
   name: string;
+  companyName?: string;
+  contactPerson?: string;
   phone: string;
+  email?: string;
   address?: string;
+  supplierType?: 'Manufacturer' | 'Distributor' | 'Wholesaler' | 'Local Market' | 'Importer' | 'Other' | string;
+  productCategory?: string | string[];
+  paymentMethod?: 'Cash' | 'bKash' | 'Nagad' | 'Bank Transfer' | 'Multiple' | string;
+  openingBalance?: number;
+  currentBalance?: number;
+  creditLimit?: number;
+  creditDays?: number;
+  bankInfo?: {
+    bankName?: string;
+    accountNumber?: string;
+    accountName?: string;
+    branch?: string;
+  };
+  status?: 'active' | 'inactive';
   notes?: string;
+  logoUrl?: string;
+  documentUrls?: string[];
   subBrand?: 'SAT' | 'GZ' | 'RTX' | 'ALL' | '';
   totalPurchases: number;
   totalPaid: number;
   outstandingDue: number;
   createdAt: number;
+  createdBy?: string;
 }
 
 export interface SupplierPayment {

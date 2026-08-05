@@ -54,11 +54,29 @@ export default function SupplierManagement({ user, rolePermissions }: SupplierMa
   // Supplier Form State
   const [formData, setFormData] = useState({
     name: '',
+    companyName: '',
+    contactPerson: '',
     phone: '',
+    email: '',
     address: '',
+    supplierType: 'Distributor' as string,
+    productCategory: 'Mobile Accessories' as string,
+    paymentMethod: 'Cash' as string,
+    openingBalance: '0',
+    creditLimit: '',
+    creditDays: '30',
+    status: 'active' as 'active' | 'inactive',
     notes: '',
-    subBrand: '' as 'SAT' | 'GZ' | 'RTX' | 'ALL' | ''
+    logoUrl: '',
+    subBrand: '' as 'SAT' | 'GZ' | 'RTX' | 'ALL' | '',
+    showBankInfo: false,
+    bankName: '',
+    accountNumber: '',
+    accountName: '',
+    branch: ''
   });
+
+  const [statusFilter, setStatusFilter] = useState<string>('all');
 
   // Payment Form State
   const [paymentData, setPaymentData] = useState({
@@ -121,10 +139,26 @@ export default function SupplierManagement({ user, rolePermissions }: SupplierMa
     setEditingSupplier(null);
     setFormData({
       name: '',
+      companyName: '',
+      contactPerson: '',
       phone: '',
+      email: '',
       address: '',
+      supplierType: 'Distributor',
+      productCategory: 'Mobile Accessories',
+      paymentMethod: 'Cash',
+      openingBalance: '0',
+      creditLimit: '',
+      creditDays: '30',
+      status: 'active',
       notes: '',
-      subBrand: ''
+      logoUrl: '',
+      subBrand: '',
+      showBankInfo: false,
+      bankName: '',
+      accountNumber: '',
+      accountName: '',
+      branch: ''
     });
     setFormError(null);
     setIsAddModalOpen(true);
@@ -135,10 +169,26 @@ export default function SupplierManagement({ user, rolePermissions }: SupplierMa
     setEditingSupplier(supplier);
     setFormData({
       name: supplier.name,
+      companyName: supplier.companyName || '',
+      contactPerson: supplier.contactPerson || '',
       phone: supplier.phone,
+      email: supplier.email || '',
       address: supplier.address || '',
+      supplierType: supplier.supplierType || 'Distributor',
+      productCategory: typeof supplier.productCategory === 'string' ? supplier.productCategory : 'Mobile Accessories',
+      paymentMethod: supplier.paymentMethod || 'Cash',
+      openingBalance: supplier.openingBalance !== undefined ? String(supplier.openingBalance) : '0',
+      creditLimit: supplier.creditLimit !== undefined && supplier.creditLimit !== 0 ? String(supplier.creditLimit) : '',
+      creditDays: supplier.creditDays !== undefined ? String(supplier.creditDays) : '30',
+      status: supplier.status || 'active',
       notes: supplier.notes || '',
-      subBrand: supplier.subBrand || ''
+      logoUrl: supplier.logoUrl || '',
+      subBrand: supplier.subBrand || '',
+      showBankInfo: !!supplier.bankInfo?.bankName || !!supplier.bankInfo?.accountNumber,
+      bankName: supplier.bankInfo?.bankName || '',
+      accountNumber: supplier.bankInfo?.accountNumber || '',
+      accountName: supplier.bankInfo?.accountName || '',
+      branch: supplier.bankInfo?.branch || ''
     });
     setFormError(null);
     setIsAddModalOpen(true);
@@ -159,9 +209,26 @@ export default function SupplierManagement({ user, rolePermissions }: SupplierMa
   const handleSubmitSupplier = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!formData.name.trim() || !formData.phone.trim()) {
-      setFormError('Supplier Name and Phone number are required.');
+      setFormError('Supplier Name and Mobile Number are required.');
       return;
     }
+
+    const cleanPhone = formData.phone.replace(/\D/g, '');
+    if (cleanPhone.length < 11 || !cleanPhone.startsWith('01')) {
+      setFormError('Please enter a valid 11-digit Bangladesh mobile number (e.g. 01XXXXXXXXX).');
+      return;
+    }
+
+    const openingBal = parseFloat(formData.openingBalance) || 0;
+    const creditLim = formData.creditLimit ? parseFloat(formData.creditLimit) : 0;
+    const credDays = formData.creditDays ? parseInt(formData.creditDays, 10) : 30;
+
+    const bankInfoObj = (formData.bankName || formData.accountNumber || formData.accountName || formData.branch) ? {
+      bankName: formData.bankName.trim(),
+      accountNumber: formData.accountNumber.trim(),
+      accountName: formData.accountName.trim(),
+      branch: formData.branch.trim()
+    } : undefined;
 
     setSubmitting(true);
     setFormError(null);
@@ -169,25 +236,46 @@ export default function SupplierManagement({ user, rolePermissions }: SupplierMa
       if (editingSupplier) {
         await updateSupplier(editingSupplier.id, {
           name: formData.name.trim(),
+          companyName: formData.companyName.trim(),
+          contactPerson: formData.contactPerson.trim(),
           phone: formData.phone.trim(),
+          email: formData.email.trim(),
           address: formData.address.trim(),
+          supplierType: formData.supplierType,
+          productCategory: formData.productCategory,
+          paymentMethod: formData.paymentMethod,
+          openingBalance: openingBal,
+          creditLimit: creditLim,
+          creditDays: credDays,
+          bankInfo: bankInfoObj,
+          status: formData.status,
           notes: formData.notes.trim(),
+          logoUrl: formData.logoUrl.trim(),
           subBrand: formData.subBrand
         });
       } else {
         await addSupplier({
           name: formData.name.trim(),
+          companyName: formData.companyName.trim(),
+          contactPerson: formData.contactPerson.trim(),
           phone: formData.phone.trim(),
+          email: formData.email.trim(),
           address: formData.address.trim(),
+          supplierType: formData.supplierType,
+          productCategory: formData.productCategory,
+          paymentMethod: formData.paymentMethod,
+          openingBalance: openingBal,
+          creditLimit: creditLim,
+          creditDays: credDays,
+          bankInfo: bankInfoObj,
+          status: formData.status,
           notes: formData.notes.trim(),
+          logoUrl: formData.logoUrl.trim(),
           subBrand: formData.subBrand
         });
       }
       setIsAddModalOpen(false);
       fetchSuppliers();
-      if (selectedSupplier && editingSupplier?.id === selectedSupplier.id) {
-        setSelectedSupplier(prev => prev ? { ...prev, ...formData } : null);
-      }
     } catch (err: any) {
       setFormError(err.message || 'Failed to save supplier.');
     } finally {
@@ -599,15 +687,20 @@ export default function SupplierManagement({ user, rolePermissions }: SupplierMa
 
       {/* Add / Edit Supplier Modal */}
       {isAddModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4 backdrop-blur-xs">
-          <div className="bg-white rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-5 animate-in fade-in zoom-in-95 duration-150">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-4">
-              <h3 className="text-lg font-black text-slate-900">
-                {editingSupplier ? 'Edit Supplier Details' : 'Add New Vendor / Supplier'}
-              </h3>
+        <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4 backdrop-blur-xs overflow-y-auto">
+          <div className="bg-white rounded-2xl max-w-2xl w-full p-6 shadow-2xl space-y-5 my-8 max-h-[90vh] overflow-y-auto animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-4 sticky top-0 bg-white z-10">
+              <div>
+                <h3 className="text-lg font-black text-slate-900">
+                  {editingSupplier ? 'Edit Supplier Details' : 'Add New Vendor / Supplier'}
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  {editingSupplier ? `Supplier Code: ${editingSupplier.supplierCode || 'SUP-XXXX'}` : 'Supplier Code: Auto-generated (e.g. SUP-0001)'}
+                </p>
+              </div>
               <button
                 onClick={() => setIsAddModalOpen(false)}
-                className="p-1 text-slate-400 hover:text-slate-700 rounded-lg"
+                className="p-1 text-slate-400 hover:text-slate-700 rounded-lg cursor-pointer"
               >
                 <X size={18} />
               </button>
@@ -621,32 +714,120 @@ export default function SupplierManagement({ user, rolePermissions }: SupplierMa
             )}
 
             <form onSubmit={handleSubmitSupplier} className="space-y-4 text-xs">
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">Supplier / Company Name *</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. Baseus Official BD / Anker Global Distribution"
-                  value={formData.name}
-                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
-                />
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Supplier Name *</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. Anker Global Distribution"
+                    value={formData.name}
+                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Company Name (Optional)</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Anker Innovations Ltd."
+                    value={formData.companyName}
+                    onChange={(e) => setFormData({ ...formData, companyName: e.target.value })}
+                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Mobile Number * (BD Format)</label>
+                  <input
+                    type="text"
+                    required
+                    placeholder="e.g. 01700000000"
+                    value={formData.phone}
+                    onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Contact Person (Optional)</label>
+                  <input
+                    type="text"
+                    placeholder="e.g. Mr. Rahim"
+                    value={formData.contactPerson}
+                    onChange={(e) => setFormData({ ...formData, contactPerson: e.target.value })}
+                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Email Address (Optional)</label>
+                  <input
+                    type="email"
+                    placeholder="e.g. supplier@domain.com"
+                    value={formData.email}
+                    onChange={(e) => setFormData({ ...formData, email: e.target.value })}
+                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Supplier Type</label>
+                  <select
+                    value={formData.supplierType}
+                    onChange={(e) => setFormData({ ...formData, supplierType: e.target.value })}
+                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
+                  >
+                    <option value="Manufacturer">Manufacturer</option>
+                    <option value="Distributor">Distributor</option>
+                    <option value="Wholesaler">Wholesaler</option>
+                    <option value="Local Market">Local Market</option>
+                    <option value="Importer">Importer</option>
+                    <option value="Other">Other</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Product Category</label>
+                  <select
+                    value={formData.productCategory}
+                    onChange={(e) => setFormData({ ...formData, productCategory: e.target.value })}
+                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
+                  >
+                    <option value="Mobile Accessories">Mobile Accessories</option>
+                    <option value="Audio">Audio</option>
+                    <option value="Power & Charging">Power & Charging</option>
+                    <option value="Smart Gadgets">Smart Gadgets</option>
+                    <option value="Cables & Adapters">Cables & Adapters</option>
+                    <option value="General">General</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Payment Method</label>
+                  <select
+                    value={formData.paymentMethod}
+                    onChange={(e) => setFormData({ ...formData, paymentMethod: e.target.value })}
+                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
+                  >
+                    <option value="Cash">Cash</option>
+                    <option value="bKash">bKash</option>
+                    <option value="Nagad">Nagad</option>
+                    <option value="Bank Transfer">Bank Transfer</option>
+                    <option value="Multiple">Multiple</option>
+                  </select>
+                </div>
               </div>
 
               <div>
-                <label className="block font-bold text-slate-700 mb-1">Phone Number *</label>
-                <input
-                  type="text"
-                  required
-                  placeholder="e.g. 01700000000"
-                  value={formData.phone}
-                  onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 font-mono"
-                />
-              </div>
-
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">Address / Warehouse Location</label>
+                <label className="block font-bold text-slate-700 mb-1">Warehouse / Shop Address</label>
                 <input
                   type="text"
                   placeholder="e.g. Shop 12, Level 4, Multiplan Center, Dhaka"
@@ -656,26 +837,151 @@ export default function SupplierManagement({ user, rolePermissions }: SupplierMa
                 />
               </div>
 
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">Sub-Brand Association (Optional)</label>
-                <select
-                  value={formData.subBrand}
-                  onChange={(e) => setFormData({ ...formData, subBrand: e.target.value as any })}
-                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Opening Due / Balance (৳)</label>
+                  <input
+                    type="number"
+                    step="any"
+                    placeholder="0"
+                    value={formData.openingBalance}
+                    onChange={(e) => setFormData({ ...formData, openingBalance: e.target.value })}
+                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 font-mono font-bold"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Credit Limit (৳)</label>
+                  <input
+                    type="number"
+                    step="any"
+                    placeholder="e.g. 100000"
+                    value={formData.creditLimit}
+                    onChange={(e) => setFormData({ ...formData, creditLimit: e.target.value })}
+                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Credit Days (Terms)</label>
+                  <input
+                    type="number"
+                    placeholder="30"
+                    value={formData.creditDays}
+                    onChange={(e) => setFormData({ ...formData, creditDays: e.target.value })}
+                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 font-mono"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Sub-Brand Association</label>
+                  <select
+                    value={formData.subBrand}
+                    onChange={(e) => setFormData({ ...formData, subBrand: e.target.value as any })}
+                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
+                  >
+                    <option value="">All Sub-Brands / General</option>
+                    <option value="SAT">SAT (Sky Auto)</option>
+                    <option value="GZ">GZ (GadgetZu)</option>
+                    <option value="RTX">RTX (RTX Gadget)</option>
+                    <option value="ALL">ALL (Shared Supplier)</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block font-bold text-slate-700 mb-1">Supplier Status</label>
+                  <div className="flex items-center gap-4 mt-2">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="supplier-status"
+                        checked={formData.status === 'active'}
+                        onChange={() => setFormData({ ...formData, status: 'active' })}
+                        className="text-amber-500 focus:ring-amber-500"
+                      />
+                      <span className="font-bold text-emerald-700">Active</span>
+                    </label>
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="radio"
+                        name="supplier-status"
+                        checked={formData.status === 'inactive'}
+                        onChange={() => setFormData({ ...formData, status: 'inactive' })}
+                        className="text-amber-500 focus:ring-amber-500"
+                      />
+                      <span className="font-bold text-slate-500">Inactive</span>
+                    </label>
+                  </div>
+                </div>
+              </div>
+
+              {/* Collapsible Bank Info */}
+              <div className="border border-slate-200 rounded-xl p-3 bg-slate-50/50">
+                <button
+                  type="button"
+                  onClick={() => setFormData({ ...formData, showBankInfo: !formData.showBankInfo })}
+                  className="flex items-center justify-between w-full font-bold text-slate-800 text-xs cursor-pointer"
                 >
-                  <option value="">All Sub-Brands / General</option>
-                  <option value="SAT">SAT (Sky Auto)</option>
-                  <option value="GZ">GZ (GadgetZu)</option>
-                  <option value="RTX">RTX (RTX Gadget)</option>
-                  <option value="ALL">ALL (Shared Supplier)</option>
-                </select>
+                  <span className="flex items-center gap-2">
+                    <CreditCard size={14} className="text-amber-600" />
+                    <span>Bank Information (Optional)</span>
+                  </span>
+                  <span className="text-slate-400">{formData.showBankInfo ? '▲ Hide' : '▼ Add Bank Details'}</span>
+                </button>
+
+                {formData.showBankInfo && (
+                  <div className="mt-3 space-y-3 pt-3 border-t border-slate-200 grid grid-cols-1 md:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block font-bold text-slate-600 mb-1">Bank Name</label>
+                      <input
+                        type="text"
+                        placeholder="e.g. BRAC Bank / EBL"
+                        value={formData.bankName}
+                        onChange={(e) => setFormData({ ...formData, bankName: e.target.value })}
+                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-bold text-slate-600 mb-1">Account Number</label>
+                      <input
+                        type="text"
+                        placeholder="e.g. 1501234567890"
+                        value={formData.accountNumber}
+                        onChange={(e) => setFormData({ ...formData, accountNumber: e.target.value })}
+                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs font-mono"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-bold text-slate-600 mb-1">Account Holder Name</label>
+                      <input
+                        type="text"
+                        placeholder="e.g. M/S Supplier Traders"
+                        value={formData.accountName}
+                        onChange={(e) => setFormData({ ...formData, accountName: e.target.value })}
+                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs"
+                      />
+                    </div>
+                    <div>
+                      <label className="block font-bold text-slate-600 mb-1">Branch Name</label>
+                      <input
+                        type="text"
+                        placeholder="e.g. Gulshan Branch"
+                        value={formData.branch}
+                        onChange={(e) => setFormData({ ...formData, branch: e.target.value })}
+                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs"
+                      />
+                    </div>
+                  </div>
+                )}
               </div>
 
               <div>
-                <label className="block font-bold text-slate-700 mb-1">Vendor Notes / Payment Terms</label>
+                <label className="block font-bold text-slate-700 mb-1">Vendor Notes / Special Terms</label>
                 <textarea
                   rows={2}
-                  placeholder="e.g. Credit period 15 days, 10% advance required..."
+                  placeholder="e.g. Credit period 30 days, minimum order quantity 50 pcs..."
                   value={formData.notes}
                   onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
                   className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"

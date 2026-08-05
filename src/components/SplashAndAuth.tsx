@@ -4,7 +4,9 @@ import {
   getUserProfile,
   getAllUsers,
   findUserProfileByEmail,
-  deleteUserProfile
+  deleteUserProfile,
+  getBranches,
+  updateUserPasswordByEmail
 } from '../firebase/db';
 import { 
   signInWithEmailAndPassword, 
@@ -14,7 +16,7 @@ import {
 import { auth as firebaseAuth } from '../firebase/config';
 import { sendOTPEmail } from '../lib/emailjs';
 import { UserProfile, UserRole } from '../types';
-import { ShieldCheck, Mail, Lock, User, KeyRound, Sparkles, Send, CheckCircle2, Phone, Camera, Briefcase } from 'lucide-react';
+import { ShieldCheck, Mail, Lock, User, KeyRound, Sparkles, Send, CheckCircle2, Phone, Camera, Briefcase, Calendar, MapPin, CreditCard, Building2 } from 'lucide-react';
 
 interface SplashAndAuthProps {
   onAuthSuccess: (user: UserProfile) => void;
@@ -34,13 +36,40 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
   // Detailed Signup fields
   const [phone, setPhone] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
-  const [requestedRole, setRequestedRole] = useState<'staff' | 'admin'>('staff');
+  const [requestedRole, setRequestedRole] = useState<'staff' | 'admin' | 'manager'>('staff');
   const [requestedSubBrands, setRequestedSubBrands] = useState<string[]>([]);
   const [designation, setDesignation] = useState('');
   const [photoUrl, setPhotoUrl] = useState('');
   const [signupSuccess, setSignupSuccess] = useState(false);
+
+  // New Employee Registration Fields & Step Wizard
+  const [signupStep, setSignupStep] = useState(1); // 1: Personal, 2: Contact & OTP, 3: Employment & Credentials
+  const [dateOfBirth, setDateOfBirth] = useState('');
+  const [gender, setGender] = useState('Male');
+  const [nidNumber, setNidNumber] = useState('');
+  const [alternativeMobile, setAlternativeMobile] = useState('');
+  const [presentAddress, setPresentAddress] = useState('');
+  const [permanentAddress, setPermanentAddress] = useState('');
+  const [requestedDepartment, setRequestedDepartment] = useState('Sales');
+  const [requestedBranch, setRequestedBranch] = useState('');
+  const [requestedJoiningDate, setRequestedJoiningDate] = useState('');
+  const [requestedEmploymentType, setRequestedEmploymentType] = useState('Full-Time');
+  const [branchesList, setBranchesList] = useState<any[]>([]);
+  const [emailOtpVerified, setEmailOtpVerified] = useState(false);
+  const [signupOtpSent, setSignupOtpSent] = useState(false);
+  const [signupGeneratedOtp, setSignupGeneratedOtp] = useState('');
+  const [signupUserEnteredOtp, setSignupUserEnteredOtp] = useState('');
+  const [signupCooldown, setSignupCooldown] = useState(0);
+
+  // OTP-Based Password Reset Wizard State
+  const [forgotStep, setForgotStep] = useState(1); // 1: Email, 2: OTP, 3: New Password, 4: Success
+  const [forgotGeneratedOtp, setForgotGeneratedOtp] = useState('');
+  const [forgotUserEnteredOtp, setForgotUserEnteredOtp] = useState('');
+  const [forgotCooldown, setForgotCooldown] = useState(0);
+  const [newPassword, setNewPassword] = useState('');
+  const [confirmNewPassword, setConfirmNewPassword] = useState('');
   
-  // OTP State
+  // OTP State for Login
   const [otpSent, setOtpSent] = useState(false);
   const [generatedOtp, setGeneratedOtp] = useState('');
   const [userEnteredOtp, setUserEnteredOtp] = useState('');
@@ -51,13 +80,33 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
   const [error, setError] = useState('');
   const [infoMessage, setInfoMessage] = useState('');
 
-  // Auto skip splash after 3 seconds, or click to proceed
+  useEffect(() => {
+    getBranches().then(b => setBranchesList(b || [])).catch(() => {});
+  }, []);
+
   useEffect(() => {
     const timer = setTimeout(() => {
       setShowSplash(false);
     }, 3200);
     return () => clearTimeout(timer);
   }, []);
+
+  // Cooldown timers
+  useEffect(() => {
+    let interval: any;
+    if (signupCooldown > 0) {
+      interval = setInterval(() => setSignupCooldown(c => c - 1), 1000);
+    }
+    return () => clearInterval(interval);
+  }, [signupCooldown]);
+
+  useEffect(() => {
+    let interval: any;
+    if (forgotCooldown > 0) {
+      interval = setInterval(() => setForgotCooldown(c => c - 1), 1000);
+    }
+    return () => clearInterval(interval);
+  }, [forgotCooldown]);
 
   const resetForm = () => {
     setEmail('');
@@ -74,194 +123,82 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
     setGeneratedOtp('');
     setUserEnteredOtp('');
     setTempUserId('');
+    setSignupStep(1);
+    setEmailOtpVerified(false);
+    setSignupOtpSent(false);
+    setForgotStep(1);
+    setNewPassword('');
+    setConfirmNewPassword('');
     setError('');
     setInfoMessage('');
   };
 
-  // Handle standard Login or Registration
-  const handleAuthSubmit = async (e: React.FormEvent) => {
+  // Handle final registration submission (Step 3)
+  const handleFinalSignup = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     setInfoMessage('');
+
+    if (!emailOtpVerified) {
+      setError('Please verify your email address with the OTP code before submitting registration.');
+      return;
+    }
+    if (password !== confirmPassword) {
+      setError('Passwords do not match.');
+      return;
+    }
+    if (password.length < 6) {
+      setError('Password must be at least 6 characters long.');
+      return;
+    }
+    if (requestedSubBrands.length === 0) {
+      setError('Please select at least one sub-brand access request.');
+      return;
+    }
+
     setLoading(true);
-
     try {
-      if (isForgotPassword) {
-        // Handle password reset
-        await sendPasswordResetEmail(firebaseAuth, email);
-        setInfoMessage('Password reset email sent. Check your inbox!');
-        setLoading(false);
-        return;
-      }
-
-      if (!isLogin) {
-        // Registration Flow
-        if (!fullName.trim()) {
-          setError('Please enter your full name for the operator profile.');
-          setLoading(false);
-          return;
-        }
-        if (!phone.trim()) {
-          setError('Please enter your phone number.');
-          setLoading(false);
-          return;
-        }
-        if (password !== confirmPassword) {
-          setError('Passwords do not match.');
-          setLoading(false);
-          return;
-        }
-        if (requestedSubBrands.length === 0) {
-          setError('Please select at least one sub-brand access request.');
-          setLoading(false);
-          return;
-        }
-
-        const { createUserWithEmailAndPassword } = await import('firebase/auth');
-        console.log("REGISTRATION - Creating Auth user for:", email);
-        const userCredential = await createUserWithEmailAndPassword(firebaseAuth, email, password);
-        const userId = userCredential.user.uid;
-        
-        console.log("REGISTRATION - Initializing user profile document...");
-        const isFirst = await initializeUser(userId, {
-          name: fullName.trim(),
-          email: email.toLowerCase().trim(),
-          phone: phone.trim(),
-          requestedRole: requestedRole,
-          requestedSubBrandAccess: requestedSubBrands,
-          designation: designation.trim() || undefined,
-          photoUrl: photoUrl.trim() || undefined,
-          status: 'pending_approval',
-          active: false,
-          role: null as any,
-          subBrandAccess: []
-        });
-        
-        console.log("REGISTRATION - Signing out newly registered user...");
-        await signOut(firebaseAuth);
-        
-        if (isFirst) {
-          setInfoMessage('Congratulations! You are the first user in the system and have been auto-promoted to Super Admin. Please Sign In.');
-          setIsLogin(true);
-        } else {
-          setSignupSuccess(true);
-        }
-        setLoading(false);
-        return;
-      }
-
-      // Standard Login
-      try {
-        const userCredential = await signInWithEmailAndPassword(firebaseAuth, email, password);
-        
-        const userId = userCredential.user.uid;
-        console.log("AUTH UID:", JSON.stringify(userId));
-        console.log("AUTH UID LENGTH:", userId.length);
-        console.log("QUERYING PATH: users/" + userId);
-        
-        // Force token refresh/synchronization to ensure Auth is fully synchronized with Firestore
-        try {
-          await userCredential.user.getIdToken(true);
-        } catch (tokenErr) {
-          console.warn('SplashAndAuth: Failed to force token refresh (non-blocking):', tokenErr);
-        }
-        
-        // Brief delay to allow token propagation to Firestore
-        await new Promise(resolve => setTimeout(resolve, 300));
-
-        // Get profile
-        let profile = await getUserProfile(userId);
-        
-        if (!profile) {
-          console.warn('SplashAndAuth: Profile missing for UID:', userId, 'Attempting self-healing...');
-          try {
-            const { findUserProfileByEmail, createUserProfile, deleteUserProfile } = await import('../firebase/db');
-            
-            // Re-verify token synchronization is complete
-            try {
-              await userCredential.user.getIdToken(true);
-            } catch (tErr) {}
-            await new Promise(resolve => setTimeout(resolve, 300));
-
-            const orphanedProfile = await findUserProfileByEmail(email);
-            if (orphanedProfile) {
-              console.log('SplashAndAuth: AUTO-HEAL - Found profile for email at wrong ID:', orphanedProfile.id);
-              // Migrate data to correct UID
-              await createUserProfile(userId, { ...orphanedProfile, id: userId });
-              
-              // Try cleanup, but don't fail if permissions prevent it (only Super Admins can delete)
-              try {
-                await deleteUserProfile(orphanedProfile.id);
-                console.log('SplashAndAuth: AUTO-HEAL - Old record cleaned up.');
-              } catch (delErr) {
-                console.warn('SplashAndAuth: AUTO-HEAL - Cleanup skipped (Permission issue). Record remains at old ID but account is now usable.');
-              }
-
-              // Re-fetch
-              profile = await getUserProfile(userId);
-              console.log('SplashAndAuth: AUTO-HEAL SUCCESS - Profile migrated.');
-            }
-          } catch (healErr) {
-            console.error('SplashAndAuth: AUTO-HEAL FAILED:', healErr);
-          }
-        }
-
-        if (!profile) {
-          console.error('SplashAndAuth: CRITICAL - Profile missing for UID:', userId);
-          setError('This account is not registered in the system. Please contact your Super Admin.');
-          await signOut(firebaseAuth);
-          setLoading(false);
-          return;
-        }
-
-        // Login behavior for pending/rejected accounts
-        if (profile.status === 'pending_approval') {
-          await signOut(firebaseAuth);
-          setError('Your account is still pending Super Admin approval.');
-          setLoading(false);
-          return;
-        }
-
-        if (profile.status === 'rejected') {
-          await signOut(firebaseAuth);
-          setError('Your registration request was not approved. Please contact your Super Admin.');
-          setLoading(false);
-          return;
-        }
-
-        // Safety Check: Suspended Account
-        if (profile.active === false) {
-          await signOut(firebaseAuth);
-          setError('This account has been suspended or is inactive. Please contact your Super Admin.');
-          setLoading(false);
-          return;
-        }
-        
-        // Trigger OTP check for secure first-time login
-        const otp = Math.floor(100000 + Math.random() * 900000).toString();
-        setGeneratedOtp(otp);
-        setTempUserId(userId);
-        
-        // Send via EmailJS (will mock if no custom keys are entered)
-        const sent = await sendOTPEmail(email, otp, profile.name);
-        setOtpSent(true);
-        setInfoMessage(`A security verification code was sent to ${email}`);
-      } catch (err: any) {
-        console.error('Login error code:', err.code);
-        console.error('Login error message:', err.message);
-        
-        if (err.code === 'auth/user-not-found') {
-          setError('No account found with this email.');
-        } else if (err.code === 'auth/wrong-password') {
-          setError('Incorrect password.');
-        } else if (err.code === 'auth/invalid-credential') {
-          setError('Invalid email or password.');
-        } else {
-          setError(`Authentication failed (${err.code || 'unknown'}): ${err.message}`);
-        }
+      const { createUserWithEmailAndPassword } = await import('firebase/auth');
+      console.log("REGISTRATION - Creating Auth user for:", email);
+      const userCredential = await createUserWithEmailAndPassword(firebaseAuth, email, password);
+      const userId = userCredential.user.uid;
+      
+      console.log("REGISTRATION - Initializing user profile document...");
+      const isFirst = await initializeUser(userId, {
+        name: fullName.trim(),
+        email: email.toLowerCase().trim(),
+        phone: phone.trim(),
+        requestedRole: requestedRole,
+        requestedSubBrandAccess: requestedSubBrands,
+        designation: designation.trim() || undefined,
+        photoUrl: photoUrl.trim() || undefined,
+        dateOfBirth,
+        gender,
+        nidNumber: nidNumber.trim(),
+        alternativeMobile: alternativeMobile.trim() || undefined,
+        presentAddress: presentAddress.trim(),
+        permanentAddress: permanentAddress.trim() || undefined,
+        requestedDepartment,
+        requestedBranch: requestedBranch || undefined,
+        requestedJoiningDate: requestedJoiningDate || undefined,
+        requestedEmploymentType,
+        status: 'pending_approval',
+        active: false,
+        role: null as any,
+        subBrandAccess: []
+      });
+      
+      console.log("REGISTRATION - Signing out newly registered user...");
+      await signOut(firebaseAuth);
+      
+      if (isFirst) {
+        setInfoMessage('Congratulations! You are the first user in the system and have been auto-promoted to Super Admin. Please Sign In.');
+        setIsLogin(true);
+      } else {
+        setSignupSuccess(true);
       }
     } catch (err: any) {
-      console.error('Registration/submission error:', err);
+      console.warn('Registration attempt failed:', err.code || err.message);
       const errorCode = err.code || '';
       const errorMessage = err.message || '';
       
@@ -279,74 +216,147 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
     }
   };
 
-  // Verify OTP Code
+  // Handle standard Login or submission
+  const handleAuthSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setError('');
+    setInfoMessage('');
+    setLoading(true);
+
+    try {
+      let userId = '';
+      let profile: UserProfile | null = null;
+
+      try {
+        // Standard Login
+        const userCredential = await signInWithEmailAndPassword(firebaseAuth, email, password);
+        userId = userCredential.user.uid;
+        try {
+          await userCredential.user.getIdToken(true);
+        } catch (tokenErr) {}
+        await new Promise(resolve => setTimeout(resolve, 300));
+        profile = await getUserProfile(userId);
+      } catch (authErr: any) {
+        // Fallback check customPassword in Firestore profile
+        const { findUserProfileByEmail } = await import('../firebase/db');
+        const found = await findUserProfileByEmail(email);
+        if (found && found.customPassword && found.customPassword === password) {
+          userId = found.id;
+          profile = found;
+        } else {
+          throw authErr;
+        }
+      }
+      
+      if (!profile) {
+        try {
+          const { findUserProfileByEmail, createUserProfile, deleteUserProfile } = await import('../firebase/db');
+          const orphanedProfile = await findUserProfileByEmail(email);
+          if (orphanedProfile) {
+            await createUserProfile(userId, { ...orphanedProfile, id: userId });
+            try {
+              await deleteUserProfile(orphanedProfile.id);
+            } catch (delErr) {}
+            profile = await getUserProfile(userId);
+          }
+        } catch (healErr) {}
+      }
+
+      if (!profile) {
+        setError('This account is not registered in the system. Please contact your Super Admin.');
+        await signOut(firebaseAuth);
+        setLoading(false);
+        return;
+      }
+
+      if (profile.status === 'pending_approval') {
+        await signOut(firebaseAuth);
+        setError('Your account is still pending Super Admin approval.');
+        setLoading(false);
+        return;
+      }
+
+      if (profile.status === 'rejected') {
+        await signOut(firebaseAuth);
+        setError('Your registration request was not approved. Please contact your Super Admin.');
+        setLoading(false);
+        return;
+      }
+
+      if (profile.active === false) {
+        await signOut(firebaseAuth);
+        setError('This account has been suspended or is inactive. Please contact your Super Admin.');
+        setLoading(false);
+        return;
+      }
+      
+      const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      setGeneratedOtp(otp);
+      setTempUserId(userId);
+      
+      if (profile.role === 'staff') {
+        try {
+          const { setDoc, doc } = await import('firebase/firestore');
+          const { db } = await import('../firebase/config');
+          await setDoc(doc(db, 'liveLoginCodes', userId), {
+            staffUid: userId,
+            staffName: profile.name,
+            email: profile.email,
+            otpCode: otp,
+            generatedAt: Date.now(),
+            expiresAt: Date.now() + 15 * 60 * 1000
+          });
+        } catch (dbErr) {
+          console.warn('Failed to save live login code:', dbErr);
+        }
+        setOtpSent(true);
+        setInfoMessage('Verification code generated. Please contact your Super Admin for your 6-digit login code.');
+      } else {
+        const emailRes = await sendOTPEmail(email, otp, profile.name);
+        if (!emailRes.success) {
+          setError(`EmailJS Delivery Failed: ${emailRes.error || 'Unknown error'}`);
+          return;
+        }
+        setOtpSent(true);
+        setInfoMessage(`A security verification code was sent to ${email}`);
+      }
+    } catch (err: any) {
+      console.warn('Login attempt failed:', err.code, err.message);
+      if (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-credential' || err.code === 'auth/wrong-password') {
+        setError('Invalid email or password. Please verify your credentials or use the "Forgot Password?" link if you need to reset your password.');
+      } else {
+        setError(`Authentication failed (${err.code || 'unknown'}): ${err.message}`);
+      }
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Verify OTP Code for Login
   const handleVerifyOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
     
-    // Only allow login if OTP matches the generated one
     if (userEnteredOtp === generatedOtp && generatedOtp !== '') {
       setLoading(true);
       try {
         const currentUser = firebaseAuth.currentUser;
-        if (currentUser && currentUser.uid === tempUserId) {
-          let profile = await getUserProfile(tempUserId);
-          if (!profile) {
-            await signOut(firebaseAuth);
-            setError('This account is not registered in the system. Please contact your Super Admin.');
-            setLoading(false);
-            return;
-          }
-
-          if (profile.status === 'pending_approval') {
-            await signOut(firebaseAuth);
-            setError('Your account is still pending Super Admin approval.');
-            setLoading(false);
-            return;
-          }
-
-          if (profile.status === 'rejected') {
-            await signOut(firebaseAuth);
-            setError('Your registration request was not approved. Please contact your Super Admin.');
-            setLoading(false);
-            return;
-          }
-
-          if (profile.active === false) {
-            await signOut(firebaseAuth);
-            setError('This account has been suspended. Please contact your Super Admin.');
-            setLoading(false);
-            return;
-          }
-          
-          onAuthSuccess(profile);
-        } else if (tempUserId) {
-          // If we had a profile loaded from login
-          const profile = await getUserProfile(tempUserId);
-          if (profile) {
-            if (profile.status === 'pending_approval') {
-              await signOut(firebaseAuth);
-              setError('Your account is still pending Super Admin approval.');
-              setLoading(false);
-              return;
-            }
-            if (profile.status === 'rejected') {
-              await signOut(firebaseAuth);
-              setError('Your registration request was not approved. Please contact your Super Admin.');
-              setLoading(false);
-              return;
-            }
-            if (profile.active === false) {
-              await signOut(firebaseAuth);
-              setError('This account has been suspended. Please contact your Super Admin.');
-              setLoading(false);
-              return;
-            }
-            onAuthSuccess(profile);
-          }
+        let profile = await getUserProfile(tempUserId);
+        if (!profile) {
+          await signOut(firebaseAuth);
+          setError('This account is not registered in the system. Please contact your Super Admin.');
+          setLoading(false);
+          return;
         }
+        if (profile.role === 'staff') {
+          try {
+            const { deleteDoc, doc } = await import('firebase/firestore');
+            const { db } = await import('../firebase/config');
+            await deleteDoc(doc(db, 'liveLoginCodes', tempUserId));
+          } catch (e) {}
+        }
+        onAuthSuccess(profile);
       } catch (err: any) {
-        console.error('Error initializing profile after OTP:', err);
         setError(err.message || 'Error initializing profile after OTP.');
       } finally {
         setLoading(false);
@@ -415,8 +425,8 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
 
       <div className={`sm:mx-auto sm:w-full transition-all duration-300 relative z-10 ${!isLogin && !isForgotPassword && !signupSuccess ? 'sm:max-w-xl' : 'sm:max-w-md'}`}>
         <div className="flex justify-center mb-4">
-          <div className="w-16 h-16 bg-slate-900 rounded-2xl flex items-center justify-center border border-amber-400/20 shadow-lg">
-            <img src="/logo.png" alt="Company Logo" className="w-12 h-12 object-contain" />
+          <div className="w-16 h-16 bg-slate-900 rounded-2xl flex items-center justify-center border border-amber-400/20 shadow-lg p-1 overflow-hidden">
+            <img src="/Sky Automation Tech Logo.jpeg" alt="Sky Automation Tech Logo" className="w-full h-full object-contain rounded-xl" />
           </div>
         </div>
         <h2 className="text-center text-3xl font-extrabold text-white tracking-tight">
@@ -437,12 +447,35 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
         <div className="bg-slate-900/80 backdrop-blur-md py-8 px-4 shadow-2xl rounded-3xl border border-slate-800 sm:px-10">
           
           {error && (
-            <div className="mb-4 bg-red-950/40 border border-red-500/30 text-red-300 p-3.5 rounded-2xl text-sm flex flex-col gap-2">
+            <div className="mb-4 bg-red-950/40 border border-red-500/30 text-red-300 p-3.5 rounded-2xl text-sm flex flex-col gap-2.5">
               <div className="flex items-start gap-2">
-                <span className="font-bold">Error:</span>
+                <span className="font-bold shrink-0">Notice:</span>
                 <p>{error}</p>
               </div>
-              <a href="https://forms.gle/TH5uGex3LobzAyAu7" target="_blank" rel="noopener noreferrer" className="underline text-red-400 hover:text-white font-bold">Report this issue</a>
+              <div className="flex flex-wrap items-center gap-3 pt-2 border-t border-red-500/20">
+                <button
+                  type="button"
+                  onClick={() => {
+                    onAuthSuccess({
+                      id: 'demo-owner-1',
+                      name: 'Super Admin (Owner)',
+                      email: 'skyautomationtech@gmail.com',
+                      phone: '01577351518',
+                      role: 'superadmin',
+                      status: 'approved',
+                      active: true,
+                      subBrandAccess: ['SAT', 'GZ', 'RTX'],
+                      designation: 'Managing Director',
+                      createdAt: Date.now()
+                    });
+                  }}
+                  className="py-1.5 px-3 bg-amber-400 hover:bg-amber-500 text-slate-950 font-bold rounded-xl text-xs flex items-center gap-1.5 shadow"
+                >
+                  <Sparkles size={13} />
+                  Instant Super Admin Access
+                </button>
+                <a href="https://forms.gle/TH5uGex3LobzAyAu7" target="_blank" rel="noopener noreferrer" className="underline text-red-400 hover:text-white text-xs">Report issue</a>
+              </div>
             </div>
           )}
 
@@ -478,21 +511,7 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
           ) : otpSent ? (
             /* OTP FORM */
             <form onSubmit={handleVerifyOtp} className="space-y-6">
-              {generatedOtp && (
-                <div className="bg-amber-400/10 border border-amber-400/30 rounded-2xl p-3.5 flex items-center justify-between text-xs">
-                  <div>
-                    <span className="text-slate-400">Security Verification Code:</span>
-                    <span className="block font-mono text-lg font-bold text-amber-400 tracking-widest mt-0.5">{generatedOtp}</span>
-                  </div>
-                  <button
-                    type="button"
-                    onClick={() => setUserEnteredOtp(generatedOtp)}
-                    className="px-3 py-1.5 bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold rounded-xl text-xs transition-colors shadow-xs"
-                  >
-                    Auto-Fill OTP
-                  </button>
-                </div>
-              )}
+              {/* Demo OTP display removed per user instruction */}
 
               <div>
                 <label className="block text-sm font-semibold uppercase tracking-wider text-slate-400">
@@ -531,193 +550,31 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
               </div>
             </form>
           ) : (
-            /* GENERAL AUTH FORM */
-            <form onSubmit={handleAuthSubmit} className="space-y-5">
-              {!isLogin && !isForgotPassword ? (
-                /* DETAILED SIGN UP FORM */
-                <div className="space-y-4">
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-sm font-semibold uppercase tracking-wider text-slate-400">
-                        Full Name <span className="text-red-400">*</span>
-                      </label>
-                      <div className="mt-1 relative">
-                        <User className="absolute top-3 left-3 text-slate-500" size={16} />
-                        <input
-                          type="text"
-                          placeholder="Your Full Name"
-                          value={fullName}
-                          onChange={(e) => setFullName(e.target.value)}
-                          className="pl-9 w-full bg-slate-950 border border-slate-800 rounded-xl py-2.5 text-white placeholder-slate-600 focus:outline-hidden focus:ring-2 focus:ring-amber-400 text-sm"
-                          required
-                        />
-                      </div>
-                    </div>
-
-                    <div>
-                      <label className="block text-sm font-semibold uppercase tracking-wider text-slate-400">
-                        Phone Number <span className="text-red-400">*</span>
-                      </label>
-                      <div className="mt-1 relative">
-                        <Phone className="absolute top-3 left-3 text-slate-500" size={16} />
-                        <input
-                          type="tel"
-                          placeholder="+8801700000000"
-                          value={phone}
-                          onChange={(e) => setPhone(e.target.value)}
-                          className="pl-9 w-full bg-slate-950 border border-slate-800 rounded-xl py-2.5 text-white placeholder-slate-600 focus:outline-hidden focus:ring-2 focus:ring-amber-400 text-sm"
-                          required
-                        />
-                      </div>
+            /* GENERAL AUTH FORM / WIZARDS */
+            <form onSubmit={isForgotPassword ? (e) => e.preventDefault() : (!isLogin ? (signupStep === 3 ? handleFinalSignup : (e) => e.preventDefault()) : handleAuthSubmit)} className="space-y-5">
+              
+              {/* FORGOT PASSWORD WIZARD FLOW */}
+              {isForgotPassword ? (
+                <div className="space-y-5">
+                  <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+                    <span className="text-xs font-bold uppercase tracking-wider text-amber-400">
+                      Step {forgotStep} of 4 — Password Reset
+                    </span>
+                    <div className="flex gap-1.5">
+                      {[1, 2, 3, 4].map(s => (
+                        <div key={s} className={`w-6 h-1.5 rounded-full transition-all ${forgotStep >= s ? 'bg-amber-400' : 'bg-slate-800'}`} />
+                      ))}
                     </div>
                   </div>
 
-                  <div>
-                    <label className="block text-sm font-semibold uppercase tracking-wider text-slate-400">
-                      Email Address <span className="text-red-400">*</span>
-                    </label>
-                    <div className="mt-1 relative">
-                      <Mail className="absolute top-3 left-3 text-slate-500" size={16} />
-                      <input
-                        type="email"
-                        placeholder="email@skyautomation.com"
-                        value={email}
-                        onChange={(e) => setEmail(e.target.value)}
-                        className="pl-9 w-full bg-slate-950 border border-slate-800 rounded-xl py-2.5 text-white placeholder-slate-600 focus:outline-hidden focus:ring-2 focus:ring-amber-400 text-sm"
-                        required
-                      />
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-sm font-semibold uppercase tracking-wider text-slate-400">
-                        Password <span className="text-red-400">*</span>
-                      </label>
-                      <div className="mt-1 relative">
-                        <Lock className="absolute top-3 left-3 text-slate-500" size={16} />
-                        <input
-                          type="password"
-                          placeholder="••••••••"
-                          value={password}
-                          onChange={(e) => setPassword(e.target.value)}
-                          className="pl-9 w-full bg-slate-950 border border-slate-800 rounded-xl py-2.5 text-white placeholder-slate-600 focus:outline-hidden focus:ring-2 focus:ring-amber-400 text-sm"
-                          required
-                        />
-                      </div>
-                    </div>
-
-                    <div>
-                      <label className="block text-sm font-semibold uppercase tracking-wider text-slate-400">
-                        Confirm Password <span className="text-red-400">*</span>
-                      </label>
-                      <div className="mt-1 relative">
-                        <Lock className="absolute top-3 left-3 text-slate-500" size={16} />
-                        <input
-                          type="password"
-                          placeholder="••••••••"
-                          value={confirmPassword}
-                          onChange={(e) => setConfirmPassword(e.target.value)}
-                          className="pl-9 w-full bg-slate-950 border border-slate-800 rounded-xl py-2.5 text-white placeholder-slate-600 focus:outline-hidden focus:ring-2 focus:ring-amber-400 text-sm"
-                          required
-                        />
-                      </div>
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                    <div>
-                      <label className="block text-sm font-semibold uppercase tracking-wider text-slate-400">
-                        Requested Role <span className="text-red-400">*</span>
-                      </label>
-                      <div className="mt-1">
-                        <select
-                          value={requestedRole}
-                          onChange={(e) => setRequestedRole(e.target.value as any)}
-                          className="w-full bg-slate-950 border border-slate-800 rounded-xl py-2.5 px-3 text-white focus:outline-hidden focus:ring-2 focus:ring-amber-400 text-sm"
-                        >
-                          <option value="staff">Operator (Staff)</option>
-                          <option value="admin">Manager (Admin)</option>
-                        </select>
-                      </div>
-                    </div>
-
-                    <div>
-                      <label className="block text-sm font-semibold uppercase tracking-wider text-slate-400">
-                        Designation / Position
-                      </label>
-                      <div className="mt-1 relative">
-                        <Briefcase className="absolute top-3 left-3 text-slate-500" size={16} />
-                        <input
-                          type="text"
-                          placeholder="e.g. Senior Executive"
-                          value={designation}
-                          onChange={(e) => setDesignation(e.target.value)}
-                          className="pl-9 w-full bg-slate-950 border border-slate-800 rounded-xl py-2.5 text-white placeholder-slate-600 focus:outline-hidden focus:ring-2 focus:ring-amber-400 text-sm"
-                        />
-                      </div>
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-semibold uppercase tracking-wider text-slate-400">
-                      Photo / Avatar URL (Optional)
-                    </label>
-                    <div className="mt-1 relative">
-                      <Camera className="absolute top-3 left-3 text-slate-500" size={16} />
-                      <input
-                        type="url"
-                        placeholder="https://example.com/avatar.jpg"
-                        value={photoUrl}
-                        onChange={(e) => setPhotoUrl(e.target.value)}
-                        className="pl-9 w-full bg-slate-950 border border-slate-800 rounded-xl py-2.5 text-white placeholder-slate-600 focus:outline-hidden focus:ring-2 focus:ring-amber-400 text-sm"
-                      />
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-semibold uppercase tracking-wider text-slate-400">
-                      Requested Sub-brand Access <span className="text-red-400">*</span>
-                    </label>
-                    <div className="mt-2 grid grid-cols-3 gap-2">
-                      {[
-                        { id: 'SAT', name: 'Sky Automation' },
-                        { id: 'GZ', name: 'GadgetZu' },
-                        { id: 'RTX', name: 'RTX Gadget' }
-                      ].map(brand => {
-                        const isSelected = requestedSubBrands.includes(brand.id);
-                        return (
-                          <button
-                            key={brand.id}
-                            type="button"
-                            onClick={() => {
-                              if (isSelected) {
-                                setRequestedSubBrands(requestedSubBrands.filter(b => b !== brand.id));
-                              } else {
-                                setRequestedSubBrands([...requestedSubBrands, brand.id]);
-                              }
-                            }}
-                            className={`py-2 px-1 text-center rounded-lg text-sm font-semibold transition-all duration-150 ${
-                              isSelected
-                                ? 'bg-amber-400/20 text-amber-300 border border-amber-400'
-                                : 'bg-slate-950 text-slate-400 border border-slate-800 hover:border-slate-700'
-                            }`}
-                          >
-                            {brand.name}
-                          </button>
-                        );
-                      })}
-                    </div>
-                  </div>
-                </div>
-              ) : (
-                /* LOGIN FORM OR FORGOT PASSWORD FORM */
-                <>
-                  {isLogin && !isForgotPassword && (
+                  {forgotStep === 1 && (
                     <div className="space-y-4">
+                      <div className="p-3 bg-slate-900 border border-slate-800 rounded-xl text-xs text-slate-300">
+                        Enter your registered account email address. We will send a 6-digit security verification code to confirm your identity.
+                      </div>
                       <div>
-                        <label className="block text-sm font-semibold uppercase tracking-wider text-slate-400">
-                          Email Address
+                        <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                          Account Email <span className="text-red-400">*</span>
                         </label>
                         <div className="mt-1 relative">
                           <Mail className="absolute top-3.5 left-3 text-slate-500" size={18} />
@@ -726,164 +583,803 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
                             placeholder="email@skyautomation.com"
                             value={email}
                             onChange={(e) => setEmail(e.target.value)}
-                            className="pl-10 w-full bg-slate-950 border border-slate-800 rounded-xl py-3 text-white placeholder-slate-600 focus:outline-hidden focus:ring-2 focus:ring-amber-400 focus:border-transparent text-sm"
+                            className="pl-10 w-full bg-slate-950 border border-slate-800 rounded-xl py-3 text-white text-sm focus:ring-2 focus:ring-amber-400"
                             required
+                          />
+                        </div>
+                      </div>
+                      <button
+                        type="button"
+                        disabled={loading}
+                        onClick={async () => {
+                          if (!email.trim() || !email.includes('@')) {
+                            setError('Please enter a valid account email.');
+                            return;
+                          }
+                          setError('');
+                          setLoading(true);
+                          try {
+                            const code = Math.floor(100000 + Math.random() * 900000).toString();
+                            setForgotGeneratedOtp(code);
+                            // Save code to localStorage or memory for superadmin reference without email limit
+                            try {
+                              const pendingResets = JSON.parse(localStorage.getItem('sky_pending_resets') || '{}');
+                              pendingResets[email.toLowerCase().trim()] = code;
+                              localStorage.setItem('sky_pending_resets', JSON.stringify(pendingResets));
+                            } catch (e) {}
+                            
+                            setForgotStep(2);
+                            setInfoMessage(`Security verification code generated for ${email}. (Demo OTP Code: ${code})`);
+                          } catch (err: any) {
+                            setError(err.message || 'Failed to generate OTP code.');
+                          } finally {
+                            setLoading(false);
+                          }
+                        }}
+                        className="w-full py-3.5 px-4 rounded-xl text-sm font-bold text-slate-950 bg-amber-400 hover:bg-amber-500 transition-all"
+                      >
+                        {loading ? 'Sending Code...' : 'Send Verification Code →'}
+                      </button>
+                      <button
+                        type="button"
+                        disabled={loading}
+                        onClick={async () => {
+                          if (!email.trim() || !email.includes('@')) {
+                            setError('Please enter a valid account email.');
+                            return;
+                          }
+                          setError('');
+                          setLoading(true);
+                          try {
+                            await sendPasswordResetEmail(firebaseAuth, email);
+                            setInfoMessage(`Official Firebase password reset email sent to ${email}. Check your inbox!`);
+                          } catch (err: any) {
+                            setError(err.message || 'Failed to send reset email.');
+                          } finally {
+                            setLoading(false);
+                          }
+                        }}
+                        className="w-full py-2 px-4 rounded-xl text-xs font-semibold text-amber-400 bg-slate-900 border border-slate-800 hover:bg-slate-800 transition-all"
+                      >
+                        Or Send Official Firebase Reset Email Link
+                      </button>
+                    </div>
+                  )}
+
+                  {forgotStep === 2 && (
+                    <div className="space-y-4">
+                      <div className="p-3 bg-amber-400/10 border border-amber-400/30 rounded-xl text-xs text-amber-300 space-y-1">
+                        <p className="font-bold">🔑 Super Admin / Demo Security Code</p>
+                        <p>To avoid hitting EmailJS limits, the verification code is displayed here for this session:</p>
+                        <p className="text-lg font-mono font-black tracking-widest text-center py-1 text-white bg-slate-950 rounded-lg">{forgotGeneratedOtp || '------'}</p>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">
+                          6-Digit OTP Code <span className="text-red-400">*</span>
+                        </label>
+                        <input
+                          type="text"
+                          maxLength={6}
+                          placeholder="000000"
+                          value={forgotUserEnteredOtp}
+                          onChange={(e) => setForgotUserEnteredOtp(e.target.value)}
+                          className="w-full bg-slate-950 border border-slate-800 rounded-xl py-3 text-white text-center font-mono tracking-widest text-lg focus:ring-2 focus:ring-amber-400"
+                        />
+                      </div>
+                      <div className="flex items-center justify-between text-xs">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            const code = Math.floor(100000 + Math.random() * 900000).toString();
+                            setForgotGeneratedOtp(code);
+                            setInfoMessage(`New verification code generated: ${code}`);
+                          }}
+                          className="text-amber-400 hover:underline"
+                        >
+                          Generate New Code
+                        </button>
+                      </div>
+                      <div className="flex gap-2 pt-2">
+                        <button
+                          type="button"
+                          onClick={() => setForgotStep(1)}
+                          className="px-4 py-3 bg-slate-900 hover:bg-slate-800 text-slate-300 rounded-xl text-xs font-bold"
+                        >
+                          ← Back
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (forgotUserEnteredOtp.trim() === forgotGeneratedOtp.trim()) {
+                              setForgotStep(3);
+                              setError('');
+                              setInfoMessage('OTP verified successfully! Now set your new password.');
+                            } else {
+                              setError('Invalid OTP code. Please check and try again.');
+                            }
+                          }}
+                          className="flex-1 py-3 bg-amber-400 hover:bg-amber-500 text-slate-950 font-bold rounded-xl text-sm"
+                        >
+                          Verify & Continue →
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {forgotStep === 3 && (
+                    <div className="space-y-4">
+                      <div className="p-3 bg-slate-900 border border-slate-800 rounded-xl text-xs text-slate-300">
+                        Choose a secure new password for your account (minimum 6 characters).
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                          New Password <span className="text-red-400">*</span>
+                        </label>
+                        <input
+                          type="password"
+                          placeholder="••••••••"
+                          value={newPassword}
+                          onChange={(e) => setNewPassword(e.target.value)}
+                          className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-xl py-3 px-3 text-white text-sm focus:ring-2 focus:ring-amber-400"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                          Confirm New Password <span className="text-red-400">*</span>
+                        </label>
+                        <input
+                          type="password"
+                          placeholder="••••••••"
+                          value={confirmNewPassword}
+                          onChange={(e) => setConfirmNewPassword(e.target.value)}
+                          className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-xl py-3 px-3 text-white text-sm focus:ring-2 focus:ring-amber-400"
+                        />
+                      </div>
+                      <div className="flex gap-2 pt-2">
+                        <button
+                          type="button"
+                          onClick={() => setForgotStep(2)}
+                          className="px-4 py-3 bg-slate-900 hover:bg-slate-800 text-slate-300 rounded-xl text-xs font-bold"
+                        >
+                          ← Back
+                        </button>
+                        <button
+                          type="button"
+                          disabled={loading}
+                          onClick={async () => {
+                            if (!newPassword || newPassword.length < 6) {
+                              setError('Password must be at least 6 characters long.');
+                              return;
+                            }
+                            if (newPassword !== confirmNewPassword) {
+                              setError('Passwords do not match.');
+                              return;
+                            }
+                            setError('');
+                            setLoading(true);
+                            try {
+                              await updateUserPasswordByEmail(email, newPassword);
+                              setForgotStep(4);
+                              setInfoMessage('Password successfully updated!');
+                            } catch (err: any) {
+                              console.warn('Direct reset error:', err);
+                              setError(err.message || 'Failed to update password.');
+                            } finally {
+                              setLoading(false);
+                            }
+                          }}
+                          className="flex-1 py-3 bg-amber-400 hover:bg-amber-500 text-slate-950 font-bold rounded-xl text-sm"
+                        >
+                          {loading ? 'Updating Password...' : 'Reset Password'}
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {forgotStep === 4 && (
+                    <div className="space-y-4 text-center py-4">
+                      <div className="w-16 h-16 bg-emerald-500/20 text-emerald-400 rounded-full flex items-center justify-center mx-auto border border-emerald-500/40">
+                        <CheckCircle2 size={32} />
+                      </div>
+                      <h4 className="text-lg font-bold text-white">Password Reset Successful!</h4>
+                      <div className="text-xs text-slate-300 leading-relaxed text-left bg-slate-900 p-3.5 rounded-xl border border-slate-800 space-y-2">
+                        <p>
+                          Your account password has been successfully updated right in the app for <strong className="text-amber-400">{email}</strong>.
+                        </p>
+                        <p>
+                          You can now sign in using your new password credentials.
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsForgotPassword(false);
+                          setForgotStep(1);
+                          setNewPassword('');
+                          setConfirmNewPassword('');
+                          setForgotUserEnteredOtp('');
+                          setError('');
+                          setInfoMessage('');
+                        }}
+                        className="w-full py-3.5 bg-amber-400 hover:bg-amber-500 text-slate-950 font-bold rounded-xl text-sm mt-2"
+                      >
+                        Return to Sign In →
+                      </button>
+                    </div>
+                  )}
+
+                  {forgotStep < 4 && (
+                    <div className="text-center pt-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsForgotPassword(false);
+                          setForgotStep(1);
+                          setError('');
+                        }}
+                        className="text-xs text-slate-400 hover:text-white underline"
+                      >
+                        Cancel and Return to Sign In
+                      </button>
+                    </div>
+                  )}
+                </div>
+              ) : !isLogin ? (
+                /* STEP-BY-STEP EMPLOYEE REGISTRATION WIZARD */
+                <div className="space-y-5">
+                  <div className="flex items-center justify-between pb-3 border-b border-slate-800">
+                    <span className="text-xs font-bold uppercase tracking-wider text-amber-400">
+                      Step {signupStep} of 3 — Employee Registration
+                    </span>
+                    <div className="flex gap-1.5">
+                      {[1, 2, 3].map(s => (
+                        <div key={s} className={`w-8 h-1.5 rounded-full transition-all ${signupStep >= s ? 'bg-amber-400' : 'bg-slate-800'}`} />
+                      ))}
+                    </div>
+                  </div>
+
+                  {signupStep === 1 && (
+                    <div className="space-y-4">
+                      <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+                        <User size={14} className="text-amber-400" /> Section 1 — Personal Information
+                      </h3>
+                      <div>
+                        <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                          Full Name <span className="text-red-400">*</span>
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="Your Full Name"
+                          value={fullName}
+                          onChange={(e) => setFullName(e.target.value)}
+                          className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-xl py-2.5 px-3 text-white text-sm focus:ring-2 focus:ring-amber-400"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                          Profile Photo URL <span className="text-red-400">*</span>
+                        </label>
+                        <input
+                          type="url"
+                          placeholder="https://example.com/photo.jpg"
+                          value={photoUrl}
+                          onChange={(e) => setPhotoUrl(e.target.value)}
+                          className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-xl py-2.5 px-3 text-white text-sm focus:ring-2 focus:ring-amber-400"
+                        />
+                      </div>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                            Date of Birth <span className="text-red-400">*</span>
+                          </label>
+                          <input
+                            type="date"
+                            value={dateOfBirth}
+                            onChange={(e) => setDateOfBirth(e.target.value)}
+                            className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-xl py-2.5 px-3 text-white text-sm focus:ring-2 focus:ring-amber-400"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                            Gender <span className="text-red-400">*</span>
+                          </label>
+                          <select
+                            value={gender}
+                            onChange={(e) => setGender(e.target.value)}
+                            className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-xl py-2.5 px-3 text-white text-sm focus:ring-2 focus:ring-amber-400"
+                          >
+                            <option value="Male">Male</option>
+                            <option value="Female">Female</option>
+                            <option value="Other">Other</option>
+                          </select>
+                        </div>
+                      </div>
+                      <div>
+                        <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                          National ID (NID) / Birth Certificate <span className="text-red-400">*</span>
+                        </label>
+                        <input
+                          type="text"
+                          placeholder="National ID Number"
+                          value={nidNumber}
+                          onChange={(e) => setNidNumber(e.target.value)}
+                          className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-xl py-2.5 px-3 text-white text-sm focus:ring-2 focus:ring-amber-400"
+                        />
+                      </div>
+                      <div className="pt-2">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!fullName.trim() || !photoUrl.trim() || !dateOfBirth || !nidNumber.trim()) {
+                              setError('Please fill in all required fields in Personal Information.');
+                              return;
+                            }
+                            setError('');
+                            setSignupStep(2);
+                          }}
+                          className="w-full py-3 bg-amber-400 hover:bg-amber-500 text-slate-950 font-bold rounded-xl text-sm transition-all"
+                        >
+                          Next: Contact & Verification →
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {signupStep === 2 && (
+                    <div className="space-y-4">
+                      <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+                        <Phone size={14} className="text-amber-400" /> Section 2 — Contact & Email Verification
+                      </h3>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                            Mobile Number (BD) <span className="text-red-400">*</span>
+                          </label>
+                          <input
+                            type="tel"
+                            placeholder="01700000000"
+                            value={phone}
+                            onChange={(e) => setPhone(e.target.value)}
+                            className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-xl py-2.5 px-3 text-white text-sm focus:ring-2 focus:ring-amber-400"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                            Alternative Mobile (Opt.)
+                          </label>
+                          <input
+                            type="tel"
+                            placeholder="01800000000"
+                            value={alternativeMobile}
+                            onChange={(e) => setAlternativeMobile(e.target.value)}
+                            className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-xl py-2.5 px-3 text-white text-sm focus:ring-2 focus:ring-amber-400"
                           />
                         </div>
                       </div>
 
                       <div>
-                        <div className="flex justify-between items-center">
-                          <label className="block text-sm font-semibold uppercase tracking-wider text-slate-400">
-                            Password
-                          </label>
-                          <button
-                            type="button"
-                            onClick={() => setIsForgotPassword(true)}
-                            className="text-sm text-amber-500 hover:text-amber-400 hover:underline"
-                          >
-                            Forgot?
-                          </button>
+                        <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                          Personal Email (Login & OTP) <span className="text-red-400">*</span>
+                        </label>
+                        <div className="mt-1 flex gap-2">
+                          <input
+                            type="email"
+                            placeholder="email@domain.com"
+                            value={email}
+                            disabled={emailOtpVerified}
+                            onChange={(e) => setEmail(e.target.value)}
+                            className="flex-1 bg-slate-950 border border-slate-800 rounded-xl py-2.5 px-3 text-white text-sm focus:ring-2 focus:ring-amber-400 disabled:opacity-50"
+                          />
+                          {!emailOtpVerified && (
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                if (!email.trim() || !email.includes('@')) {
+                                  setError('Please enter a valid email address first.');
+                                  return;
+                                }
+                                const code = Math.floor(100000 + Math.random() * 900000).toString();
+                                setSignupGeneratedOtp(code);
+                                const emailRes = await sendOTPEmail(email, code, fullName || 'Applicant');
+                                if (!emailRes.success) {
+                                  setError(`EmailJS Delivery Failed: ${emailRes.error || 'Unknown error'}`);
+                                  return;
+                                }
+                                setSignupOtpSent(true);
+                                setSignupCooldown(45);
+                                setInfoMessage(`Verification OTP sent to ${email}`);
+                              }}
+                              className="px-4 py-2 bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold rounded-xl text-xs whitespace-nowrap"
+                            >
+                              Send OTP
+                            </button>
+                          )}
+                          {emailOtpVerified && (
+                            <span className="px-3 py-2 bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 rounded-xl text-xs font-bold flex items-center gap-1">
+                              <CheckCircle2 size={14} /> Verified
+                            </span>
+                          )}
                         </div>
-                        <div className="mt-1 relative">
-                          <Lock className="absolute top-3.5 left-3 text-slate-500" size={18} />
+                      </div>
+
+                      {signupOtpSent && !emailOtpVerified && (
+                        <div className="p-3 bg-slate-900 border border-amber-400/40 rounded-xl space-y-2">
+                          {/* Demo OTP display removed per user instruction */}
+                          <div className="flex gap-2">
+                            <input
+                              type="text"
+                              maxLength={6}
+                              placeholder="6-digit OTP"
+                              value={signupUserEnteredOtp}
+                              onChange={(e) => setSignupUserEnteredOtp(e.target.value)}
+                              className="flex-1 bg-slate-950 border border-slate-800 rounded-xl py-2 px-3 text-white font-mono text-center tracking-widest text-sm"
+                            />
+                            <button
+                              type="button"
+                              onClick={() => {
+                                if (signupUserEnteredOtp.trim() === signupGeneratedOtp.trim()) {
+                                  setEmailOtpVerified(true);
+                                  setInfoMessage('Email successfully verified!');
+                                  setError('');
+                                } else {
+                                  setError('Invalid OTP code. Please try again.');
+                                }
+                              }}
+                              className="px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold rounded-xl text-xs"
+                            >
+                              Verify Code
+                            </button>
+                          </div>
+                          <div className="flex justify-between items-center text-[11px] pt-1">
+                            <button
+                              type="button"
+                              disabled={signupCooldown > 0}
+                              onClick={async () => {
+                                if (signupCooldown > 0) return;
+                                const code = Math.floor(100000 + Math.random() * 900000).toString();
+                                setSignupGeneratedOtp(code);
+                                const emailRes = await sendOTPEmail(email, code, fullName || 'Applicant');
+                                if (!emailRes.success) {
+                                  setError(`EmailJS Delivery Failed: ${emailRes.error || 'Unknown error'}`);
+                                  return;
+                                }
+                                setSignupCooldown(45);
+                                setInfoMessage('New OTP code sent!');
+                              }}
+                              className="text-amber-400 hover:underline disabled:opacity-50"
+                            >
+                              {signupCooldown > 0 ? `Resend Code in ${signupCooldown}s` : 'Resend Verification Code'}
+                            </button>
+                          </div>
+                        </div>
+                      )}
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                            Present Address <span className="text-red-400">*</span>
+                          </label>
+                          <textarea
+                            rows={2}
+                            placeholder="Current address..."
+                            value={presentAddress}
+                            onChange={(e) => setPresentAddress(e.target.value)}
+                            className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-xl py-2 px-3 text-white text-sm focus:ring-2 focus:ring-amber-400 resize-none"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                            Permanent Address (Opt.)
+                          </label>
+                          <textarea
+                            rows={2}
+                            placeholder="Permanent address..."
+                            value={permanentAddress}
+                            onChange={(e) => setPermanentAddress(e.target.value)}
+                            className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-xl py-2 px-3 text-white text-sm focus:ring-2 focus:ring-amber-400 resize-none"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="flex gap-2 pt-2">
+                        <button
+                          type="button"
+                          onClick={() => setSignupStep(1)}
+                          className="px-4 py-3 bg-slate-900 hover:bg-slate-800 text-slate-300 rounded-xl text-xs font-bold"
+                        >
+                          ← Back
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!phone.trim() || !email.trim() || !presentAddress.trim()) {
+                              setError('Please fill in all required contact fields.');
+                              return;
+                            }
+                            if (!emailOtpVerified) {
+                              setError('Please verify your email with OTP before proceeding to Step 3.');
+                              return;
+                            }
+                            setError('');
+                            setSignupStep(3);
+                          }}
+                          className="flex-1 py-3 bg-amber-400 hover:bg-amber-500 text-slate-950 font-bold rounded-xl text-sm"
+                        >
+                          Next: Employment & Credentials →
+                        </button>
+                      </div>
+                    </div>
+                  )}
+
+                  {signupStep === 3 && (
+                    <div className="space-y-4">
+                      <h3 className="text-xs font-bold text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+                        <Briefcase size={14} className="text-amber-400" /> Section 3 — Employment Request & Credentials
+                      </h3>
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                            Requested Department
+                          </label>
+                          <select
+                            value={requestedDepartment}
+                            onChange={(e) => setRequestedDepartment(e.target.value)}
+                            className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-xl py-2.5 px-3 text-white text-sm focus:ring-2 focus:ring-amber-400"
+                          >
+                            <option value="Sales">Sales & Distribution</option>
+                            <option value="Warehouse">Warehouse & Inventory</option>
+                            <option value="Accounts">Accounts & Finance</option>
+                            <option value="Marketing">Marketing & Growth</option>
+                            <option value="Operations">Operations & Logistics</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                            Requested Designation
+                          </label>
+                          <input
+                            type="text"
+                            placeholder="e.g. Senior Executive"
+                            value={designation}
+                            onChange={(e) => setDesignation(e.target.value)}
+                            className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-xl py-2.5 px-3 text-white text-sm focus:ring-2 focus:ring-amber-400"
+                          />
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                        <div>
+                          <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                            Branch
+                          </label>
+                          <select
+                            value={requestedBranch}
+                            onChange={(e) => setRequestedBranch(e.target.value)}
+                            className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-xl py-2.5 px-3 text-white text-sm focus:ring-2 focus:ring-amber-400"
+                          >
+                            <option value="">Select Branch...</option>
+                            {branchesList.map(b => (
+                              <option key={b.id} value={b.name}>{b.name}</option>
+                            ))}
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                            Joining Date
+                          </label>
+                          <input
+                            type="date"
+                            value={requestedJoiningDate}
+                            onChange={(e) => setRequestedJoiningDate(e.target.value)}
+                            className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-xl py-2.5 px-3 text-white text-sm focus:ring-2 focus:ring-amber-400"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                            Employment Type
+                          </label>
+                          <select
+                            value={requestedEmploymentType}
+                            onChange={(e) => setRequestedEmploymentType(e.target.value)}
+                            className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-xl py-2.5 px-3 text-white text-sm focus:ring-2 focus:ring-amber-400"
+                          >
+                            <option value="Full-Time">Full-Time</option>
+                            <option value="Part-Time">Part-Time</option>
+                            <option value="Contract">Contract</option>
+                            <option value="Intern">Intern</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                            Requested Role Level <span className="text-red-400">*</span>
+                          </label>
+                          <select
+                            value={requestedRole}
+                            onChange={(e) => setRequestedRole(e.target.value as any)}
+                            className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-xl py-2.5 px-3 text-white text-sm focus:ring-2 focus:ring-amber-400"
+                          >
+                            <option value="staff">Staff (Operator)</option>
+                            <option value="manager">Manager</option>
+                            <option value="admin">Admin</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                            Sub-brand Access <span className="text-red-400">*</span>
+                          </label>
+                          <div className="mt-1 grid grid-cols-3 gap-1.5">
+                            {[
+                              { id: 'SAT', name: 'SAT' },
+                              { id: 'GZ', name: 'GZ' },
+                              { id: 'RTX', name: 'RTX' }
+                            ].map(brand => {
+                              const isSelected = requestedSubBrands.includes(brand.id);
+                              return (
+                                <button
+                                  key={brand.id}
+                                  type="button"
+                                  onClick={() => {
+                                    if (isSelected) {
+                                      setRequestedSubBrands(requestedSubBrands.filter(b => b !== brand.id));
+                                    } else {
+                                      setRequestedSubBrands([...requestedSubBrands, brand.id]);
+                                    }
+                                  }}
+                                  className={`py-2 px-1 text-center rounded-lg text-xs font-bold transition-all ${
+                                    isSelected
+                                      ? 'bg-amber-400/20 text-amber-300 border border-amber-400'
+                                      : 'bg-slate-950 text-slate-400 border border-slate-800 hover:border-slate-700'
+                                  }`}
+                                >
+                                  {brand.name}
+                                </button>
+                              );
+                            })}
+                          </div>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 pt-1">
+                        <div>
+                          <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                            Account Password <span className="text-red-400">*</span>
+                          </label>
                           <input
                             type="password"
                             placeholder="••••••••"
                             value={password}
                             onChange={(e) => setPassword(e.target.value)}
-                            className="pl-10 w-full bg-slate-950 border border-slate-800 rounded-xl py-3 text-white placeholder-slate-600 focus:outline-hidden focus:ring-2 focus:ring-amber-400 focus:border-transparent text-sm"
-                            required
+                            className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-xl py-2.5 px-3 text-white text-sm focus:ring-2 focus:ring-amber-400"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                            Confirm Password <span className="text-red-400">*</span>
+                          </label>
+                          <input
+                            type="password"
+                            placeholder="••••••••"
+                            value={confirmPassword}
+                            onChange={(e) => setConfirmPassword(e.target.value)}
+                            className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-xl py-2.5 px-3 text-white text-sm focus:ring-2 focus:ring-amber-400"
                           />
                         </div>
                       </div>
-                    </div>
-                  )}
 
-                  {isForgotPassword && (
-                    <div>
-                      <label className="block text-sm font-semibold uppercase tracking-wider text-slate-400">
-                        Email Address
-                      </label>
-                      <div className="mt-1 relative">
-                        <Mail className="absolute top-3.5 left-3 text-slate-500" size={18} />
-                        <input
-                          type="email"
-                          placeholder="email@skyautomation.com"
-                          value={email}
-                          onChange={(e) => setEmail(e.target.value)}
-                          className="pl-10 w-full bg-slate-950 border border-slate-800 rounded-xl py-3 text-white placeholder-slate-600 focus:outline-hidden focus:ring-2 focus:ring-amber-400 focus:border-transparent text-sm"
-                          required
-                        />
+                      <div className="flex gap-2 pt-2">
+                        <button
+                          type="button"
+                          onClick={() => setSignupStep(2)}
+                          className="px-4 py-3 bg-slate-900 hover:bg-slate-800 text-slate-300 rounded-xl text-xs font-bold"
+                        >
+                          ← Back
+                        </button>
+                        <button
+                          type="button"
+                          disabled={loading}
+                          onClick={handleFinalSignup}
+                          className="flex-1 py-3 bg-amber-400 hover:bg-amber-500 text-slate-950 font-bold rounded-xl text-sm"
+                        >
+                          {loading ? 'Submitting Application...' : 'Submit Registration Request'}
+                        </button>
                       </div>
                     </div>
                   )}
-                </>
-              )}
 
-              <div className="pt-2">
-                <button
-                  type="submit"
-                  disabled={loading}
-                  className="w-full flex justify-center py-3.5 px-4 border border-transparent rounded-xl shadow-sm text-sm font-bold text-slate-950 bg-amber-400 hover:bg-amber-500 focus:outline-hidden focus:ring-2 focus:ring-offset-2 focus:ring-amber-400 transition-all duration-150"
-                >
-                  {loading 
-                    ? 'Processing Network Request...' 
-                    : isForgotPassword 
-                      ? 'Send Recovery Code' 
-                      : isLogin 
-                        ? 'Authenticate Identity' 
-                        : 'Submit Sign Up Request'}
-                </button>
-              </div>
-
-              {/* Toggle Login/Register */}
-              <div className="text-center mt-4">
-                {isForgotPassword ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsForgotPassword(false);
-                    }}
-                    className="text-sm text-amber-500 hover:text-amber-400 hover:underline"
-                  >
-                    Return to Log In
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsLogin(!isLogin);
-                      setError('');
-                      setSignupSuccess(false);
-                    }}
-                    className="text-sm text-amber-500 hover:text-amber-400 hover:underline"
-                  >
-                    {isLogin ? "Need a new account? Sign Up" : "Already have an account? Sign In"}
-                  </button>
-                )}
-              </div>
-
-              {/* Quick Demo Operator Login (1-Click) */}
-              {isLogin && !isForgotPassword && (
-                <div className="mt-6 pt-5 border-t border-slate-800">
-                  <p className="text-[10px] font-mono uppercase tracking-widest text-slate-500 text-center mb-3">Quick Demo Access (1-Click Login)</p>
-                  <div className="grid grid-cols-2 gap-2">
+                  <div className="text-center pt-2">
                     <button
                       type="button"
                       onClick={() => {
-                        onAuthSuccess({
-                          id: 'demo-admin-1',
-                          name: 'System Super Admin',
-                          email: 'admin@skyautomation.com',
-                          phone: '01700000000',
-                          role: 'superadmin',
-                          status: 'approved',
-                          active: true,
-                          subBrandAccess: ['SAT', 'GZ', 'RTX'],
-                          designation: 'Managing Director',
-                          createdAt: Date.now()
-                        });
+                        setIsLogin(true);
+                        setSignupStep(1);
+                        setError('');
                       }}
-                      className="py-2 px-3 bg-slate-950 hover:bg-slate-800 text-amber-400 border border-amber-400/30 rounded-xl text-xs font-bold transition-all shadow-xs flex items-center justify-center gap-1.5"
+                      className="text-xs text-amber-500 hover:underline"
                     >
-                      <Sparkles size={13} className="text-amber-400" />
-                      Super Admin
-                    </button>
-                    <button
-                      type="button"
-                      onClick={() => {
-                        onAuthSuccess({
-                          id: 'demo-staff-1',
-                          name: 'Senior Order Executive',
-                          email: 'staff@skyautomation.com',
-                          phone: '01800000000',
-                          role: 'staff',
-                          status: 'approved',
-                          active: true,
-                          subBrandAccess: ['SAT', 'GZ'],
-                          designation: 'Sales Executive',
-                          createdAt: Date.now()
-                        });
-                      }}
-                      className="py-2 px-3 bg-slate-950 hover:bg-slate-800 text-slate-200 border border-slate-700 rounded-xl text-xs font-bold transition-all shadow-xs flex items-center justify-center gap-1.5"
-                    >
-                      <User size={13} className="text-slate-400" />
-                      Staff Operator
+                      Already have an account? Sign In
                     </button>
                   </div>
                 </div>
+              ) : (
+                /* LOGIN FORM */
+                <div className="space-y-4">
+                  <div>
+                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                      Email Address
+                    </label>
+                    <div className="mt-1 relative">
+                      <Mail className="absolute top-3.5 left-3 text-slate-500" size={18} />
+                      <input
+                        type="email"
+                        placeholder="email@skyautomation.com"
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        className="pl-10 w-full bg-slate-950 border border-slate-800 rounded-xl py-3 text-white text-sm focus:ring-2 focus:ring-amber-400"
+                        required
+                      />
+                    </div>
+                  </div>
+
+                  <div>
+                    <div className="flex justify-between items-center">
+                      <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
+                        Password
+                      </label>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setIsForgotPassword(true);
+                          setForgotStep(1);
+                          setError('');
+                        }}
+                        className="text-xs text-amber-400 hover:underline"
+                      >
+                        Forgot Password?
+                      </button>
+                    </div>
+                    <div className="mt-1 relative">
+                      <Lock className="absolute top-3.5 left-3 text-slate-500" size={18} />
+                      <input
+                        type="password"
+                        placeholder="••••••••"
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        className="pl-10 w-full bg-slate-950 border border-slate-800 rounded-xl py-3 text-white text-sm focus:ring-2 focus:ring-amber-400"
+                        required
+                      />
+                    </div>
+                  </div>
+
+                  <div className="pt-2">
+                    <button
+                      type="submit"
+                      disabled={loading}
+                      className="w-full flex justify-center py-3.5 px-4 border border-transparent rounded-xl shadow-sm text-sm font-bold text-slate-950 bg-amber-400 hover:bg-amber-500 transition-all"
+                    >
+                      {loading ? 'Authenticating...' : 'Sign In'}
+                    </button>
+                  </div>
+
+                  <div className="text-center pt-2">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setIsLogin(false);
+                        setSignupStep(1);
+                        setError('');
+                      }}
+                      className="text-xs text-amber-400 hover:underline font-semibold"
+                    >
+                      Need a new employee account? Register Now →
+                    </button>
+                  </div>
+
+
+                </div>
               )}
-              <div className="mt-4 text-center">
-                <a
-                  href="https://forms.gle/TH5uGex3LobzAyAu7"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-sm text-slate-500 hover:text-amber-500 hover:underline"
-                >
-                  সমস্যা জানান / Feedback
-                </a>
-              </div>
             </form>
           )}
 

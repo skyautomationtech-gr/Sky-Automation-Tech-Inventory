@@ -240,13 +240,26 @@ export default function ProductManagement({
       if (!formMainCategory) {
         errors.mainCategory = 'Main Category is required';
       }
-      if (!formSubCategory) {
+
+      // Sub Category is only required if there are sub-categories available under the selected Main Category
+      const mainParentId = categories.find(p => p.name === formMainCategory && (p.level === 'main' || !p.level))?.id;
+      const availableSubCats = formMainCategory
+        ? categories.filter(c => c.level === 'sub' && c.parentId === mainParentId)
+        : [];
+      if (availableSubCats.length > 0 && !formSubCategory) {
         errors.subCategory = 'Sub Category is required';
       }
-      if (!formChildCategory) {
+
+      // Child Category is only required if there are child-categories available under the selected Sub Category
+      const subParentId = categories.find(s => s.name === formSubCategory && s.level === 'sub' && s.parentId === mainParentId)?.id;
+      const availableChildCats = formSubCategory
+        ? categories.filter(c => c.level === 'child' && c.parentId === subParentId)
+        : [];
+      if (availableChildCats.length > 0 && !formChildCategory) {
         errors.childCategory = 'Child Category is required';
       }
-      if (!formBrand) {
+
+      if (!formBrand && brands.length > 0) {
         errors.brand = 'Brand is required';
       }
     } else if (step === 2) {
@@ -3403,70 +3416,86 @@ export default function ProductManagement({
                           </div>
 
                           <div>
-                            <label className="block text-sm font-bold uppercase tracking-wider text-slate-500 mb-1">
-                              Sub Category <span className="text-red-500">*</span>
-                            </label>
-                            <select
-                              value={formSubCategory}
-                              disabled={!formMainCategory}
-                              onChange={(e) => {
-                                const val = e.target.value;
-                                setFormSubCategory(val);
-                                setFormChildCategory('');
-                                if (stepErrors.subCategory) setStepErrors(prev => ({ ...prev, subCategory: '' }));
-                              }}
-                              className={`w-full bg-white border rounded-xl py-2.5 px-3 text-sm text-slate-800 focus:outline-hidden focus:ring-4 transition-all cursor-pointer ${
-                                !formMainCategory ? 'opacity-50 cursor-not-allowed bg-slate-50' : ''
-                              } ${
-                                stepErrors.subCategory
-                                  ? 'border-red-350 focus:border-red-400 focus:ring-red-100'
-                                  : 'border-slate-200 focus:border-amber-400 focus:ring-amber-400/10'
-                              }`}
-                            >
-                              <option value="">{formMainCategory ? '-- Select Sub --' : 'Select Main first'}</option>
-                              {categories.filter(c => {
-                                const isSub = c.level === 'sub';
-                                const mainParentId = categories.find(p => p.name === formMainCategory && (p.level === 'main' || !p.level))?.id;
-                                return isSub && c.parentId === mainParentId;
-                              }).map(c => (
-                                <option key={c.id} value={c.name}>{c.name}</option>
-                              ))}
-                            </select>
+                            {(() => {
+                              const mainParentId = categories.find(p => p.name === formMainCategory && (p.level === 'main' || !p.level))?.id;
+                              const availableSubCats = formMainCategory ? categories.filter(c => c.level === 'sub' && c.parentId === mainParentId) : [];
+                              return (
+                                <>
+                                  <label className="block text-sm font-bold uppercase tracking-wider text-slate-500 mb-1">
+                                    Sub Category {availableSubCats.length > 0 && <span className="text-red-500">*</span>}
+                                  </label>
+                                  <select
+                                    value={formSubCategory}
+                                    disabled={!formMainCategory}
+                                    onChange={(e) => {
+                                      const val = e.target.value;
+                                      setFormSubCategory(val);
+                                      setFormChildCategory('');
+                                      if (stepErrors.subCategory) setStepErrors(prev => ({ ...prev, subCategory: '' }));
+                                    }}
+                                    className={`w-full bg-white border rounded-xl py-2.5 px-3 text-sm text-slate-800 focus:outline-hidden focus:ring-4 transition-all cursor-pointer ${
+                                      !formMainCategory ? 'opacity-50 cursor-not-allowed bg-slate-50' : ''
+                                    } ${
+                                      stepErrors.subCategory
+                                        ? 'border-red-350 focus:border-red-400 focus:ring-red-100'
+                                        : 'border-slate-200 focus:border-amber-400 focus:ring-amber-400/10'
+                                    }`}
+                                  >
+                                    <option value="">
+                                      {formMainCategory 
+                                        ? (availableSubCats.length > 0 ? '-- Select Sub --' : 'None (N/A)') 
+                                        : 'Select Main first'}
+                                    </option>
+                                    {availableSubCats.map(c => (
+                                      <option key={c.id} value={c.name}>{c.name}</option>
+                                    ))}
+                                  </select>
+                                </>
+                              );
+                            })()}
                             {stepErrors.subCategory && (
                               <p className="text-sm font-semibold text-red-500 mt-1">{stepErrors.subCategory}</p>
                             )}
                           </div>
 
                           <div>
-                            <label className="block text-sm font-bold uppercase tracking-wider text-slate-500 mb-1">
-                              Child Category <span className="text-red-500">*</span>
-                            </label>
-                            <select
-                              value={formChildCategory}
-                              disabled={!formSubCategory}
-                              onChange={(e) => {
-                                const val = e.target.value;
-                                setFormChildCategory(val);
-                                if (stepErrors.childCategory) setStepErrors(prev => ({ ...prev, childCategory: '' }));
-                              }}
-                              className={`w-full bg-white border rounded-xl py-2.5 px-3 text-sm text-slate-800 focus:outline-hidden focus:ring-4 transition-all cursor-pointer ${
-                                !formSubCategory ? 'opacity-50 cursor-not-allowed bg-slate-50' : ''
-                              } ${
-                                stepErrors.childCategory
-                                  ? 'border-red-350 focus:border-red-400 focus:ring-red-100'
-                                  : 'border-slate-200 focus:border-amber-400 focus:ring-amber-400/10'
-                              }`}
-                            >
-                              <option value="">{formSubCategory ? '-- Select Child --' : 'Select Sub first'}</option>
-                              {categories.filter(c => {
-                                const isChild = c.level === 'child';
-                                const mainParentId = categories.find(p => p.name === formMainCategory && (p.level === 'main' || !p.level))?.id;
-                                const subParentId = categories.find(s => s.name === formSubCategory && s.level === 'sub' && s.parentId === mainParentId)?.id;
-                                return isChild && c.parentId === subParentId;
-                              }).map(c => (
-                                <option key={c.id} value={c.name}>{c.name}</option>
-                              ))}
-                            </select>
+                            {(() => {
+                              const mainParentId = categories.find(p => p.name === formMainCategory && (p.level === 'main' || !p.level))?.id;
+                              const subParentId = categories.find(s => s.name === formSubCategory && s.level === 'sub' && s.parentId === mainParentId)?.id;
+                              const availableChildCats = formSubCategory ? categories.filter(c => c.level === 'child' && c.parentId === subParentId) : [];
+                              return (
+                                <>
+                                  <label className="block text-sm font-bold uppercase tracking-wider text-slate-500 mb-1">
+                                    Child Category {availableChildCats.length > 0 && <span className="text-red-500">*</span>}
+                                  </label>
+                                  <select
+                                    value={formChildCategory}
+                                    disabled={!formSubCategory}
+                                    onChange={(e) => {
+                                      const val = e.target.value;
+                                      setFormChildCategory(val);
+                                      if (stepErrors.childCategory) setStepErrors(prev => ({ ...prev, childCategory: '' }));
+                                    }}
+                                    className={`w-full bg-white border rounded-xl py-2.5 px-3 text-sm text-slate-800 focus:outline-hidden focus:ring-4 transition-all cursor-pointer ${
+                                      !formSubCategory ? 'opacity-50 cursor-not-allowed bg-slate-50' : ''
+                                    } ${
+                                      stepErrors.childCategory
+                                        ? 'border-red-350 focus:border-red-400 focus:ring-red-100'
+                                        : 'border-slate-200 focus:border-amber-400 focus:ring-amber-400/10'
+                                    }`}
+                                  >
+                                    <option value="">
+                                      {formSubCategory 
+                                        ? (availableChildCats.length > 0 ? '-- Select Child --' : 'None (N/A)') 
+                                        : 'Select Sub first'}
+                                    </option>
+                                    {availableChildCats.map(c => (
+                                      <option key={c.id} value={c.name}>{c.name}</option>
+                                    ))}
+                                  </select>
+                                </>
+                              );
+                            })()}
                             {stepErrors.childCategory && (
                               <p className="text-sm font-semibold text-red-500 mt-1">{stepErrors.childCategory}</p>
                             )}
@@ -3475,7 +3504,7 @@ export default function ProductManagement({
 
                         <div className="flex flex-col justify-start">
                           <label className="block text-sm font-bold uppercase tracking-wider text-slate-500 mb-1">
-                            Brand <span className="text-red-500">*</span>
+                            Brand {brands.length > 0 && <span className="text-red-500">*</span>}
                           </label>
                           <select
                             value={formBrand}
@@ -3489,6 +3518,7 @@ export default function ProductManagement({
                                 : 'border-slate-200 focus:border-amber-400 focus:ring-amber-400/10'
                             }`}
                           >
+                            <option value="">-- Select Brand --</option>
                             {brands.map(b => <option key={b.id} value={b.name}>{b.name}</option>)}
                           </select>
                           {stepErrors.brand && (
@@ -3702,6 +3732,9 @@ export default function ProductManagement({
                                     }`}
                                   >
                                     <option value="">-- Select Color --</option>
+                                    {variant.color && !productColors.some(c => c.name.toLowerCase() === variant.color.toLowerCase()) && (
+                                      <option value={variant.color}>{variant.color}</option>
+                                    )}
                                     {productColors.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
                                     <option value="__add_custom__" className="text-amber-600 font-bold">+ Add custom color...</option>
                                   </select>
@@ -3767,6 +3800,9 @@ export default function ProductManagement({
                                     }`}
                                   >
                                     <option value="">-- Select Size/Model --</option>
+                                    {variant.model && !productModels.some(s => s.name.toLowerCase() === variant.model.toLowerCase()) && (
+                                      <option value={variant.model}>{variant.model}</option>
+                                    )}
                                     {productModels.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
                                     <option value="__add_custom__" className="text-amber-600 font-bold">+ Add custom size...</option>
                                   </select>

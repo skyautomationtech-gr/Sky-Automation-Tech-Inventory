@@ -8,7 +8,8 @@ import {
   updateUserProfile, 
   deleteSokolDemoData,
   getPrivateEmploymentInfo,
-  updatePrivateEmploymentInfo
+  updatePrivateEmploymentInfo,
+  getNextEmployeeId
 } from '../firebase/db';
 import { 
   UserPlus, 
@@ -43,13 +44,23 @@ import {
 } from 'lucide-react';
 import { storage, auth } from '../firebase/config';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { sendCredentialsEmail } from '../lib/emailjs';
+import { sendCredentialsEmail, sendWelcomeEmail, sendRejectionEmail } from '../lib/emailjs';
 
 const DEFAULT_PERMISSIONS = {
   admin: {
     addProduct: true,
     editProduct: true,
     deleteProduct: true,
+    manageCategories: true,
+    stockIn: true,
+    stockOut: true,
+    stockAdjustment: true,
+    manageOrders: true
+  },
+  manager: {
+    addProduct: true,
+    editProduct: true,
+    deleteProduct: false,
     manageCategories: true,
     stockIn: true,
     stockOut: true,
@@ -216,7 +227,10 @@ export default function UserManagement({ user }: UserManagementProps) {
       });
 
       const result = await response.json();
-      if (!response.ok) throw new Error(result.error || 'Server repair failed');
+      if (result.restricted || !response.ok) {
+        setError(`Notice: ${result.error || 'Server repair restricted in cloud sandbox.'}`);
+        return;
+      }
 
       setSuccess(`Repair Successful: ${result.message}`);
       setShowRepairTool(false);
@@ -226,8 +240,8 @@ export default function UserManagement({ user }: UserManagementProps) {
         await fetchUsersList();
       }, 1000);
     } catch (err: any) {
-      console.error('Repair error:', err);
-      setError(`Repair failed: ${err.message}`);
+      console.warn('Repair notice:', err);
+      setError(`Repair notice: ${err.message}`);
     } finally {
       setLoading(false);
     }
@@ -255,7 +269,10 @@ export default function UserManagement({ user }: UserManagementProps) {
       });
 
       const result = await response.json();
-      if (!response.ok) throw new Error(result.error || 'Bulk repair failed');
+      if (result.restricted || !response.ok) {
+        setError(`Notice: ${result.error || 'Bulk repair restricted in cloud sandbox.'}`);
+        return;
+      }
 
       setSuccess(`Scan Complete: Scanned ${result.scanned} users, Repaired ${result.repaired} mismatches.`);
       if (result.repaired > 0) {
@@ -264,8 +281,8 @@ export default function UserManagement({ user }: UserManagementProps) {
         }, 1000);
       }
     } catch (err: any) {
-      console.error('Bulk repair error:', err);
-      setError(`Bulk repair failed: ${err.message}`);
+      console.warn('Bulk repair notice:', err);
+      setError(`Bulk repair notice: ${err.message}`);
     } finally {
       setLoading(false);
     }
@@ -335,7 +352,7 @@ export default function UserManagement({ user }: UserManagementProps) {
         userCredential = await createUserWithEmailAndPassword(secondaryAuth, email.toLowerCase().trim(), tempPassword);
         console.log('UserManagement: STEP 1 SUCCESS - Auth account created. UID:', userCredential.user.uid);
       } catch (authErr: any) {
-        console.error('UserManagement: STEP 1 FAILED - Auth account creation error:', authErr.code, authErr.message);
+        console.warn('UserManagement: STEP 1 FAILED - Auth account creation error:', authErr.code, authErr.message);
         if (authErr.code === 'auth/email-already-in-use') {
           // Check if profile exists
           const existingProfile = await findUserProfileByEmail(email);
@@ -389,7 +406,7 @@ export default function UserManagement({ user }: UserManagementProps) {
         designation: designation || '',
         joiningDate: joiningDate || '',
         nidNumber: nidNumber || '',
-        address: address || '',
+        presentAddress: address || '',
         requirePasswordChange: !!requirePasswordChange,
         active: !!isActiveAccount,
         createdBy: user.id,
@@ -509,19 +526,29 @@ export default function UserManagement({ user }: UserManagementProps) {
     setSuccess('');
     setLoading(true);
     try {
-      // Approve user: set status to 'approved' and active to true
-      // and set their initial sub-brand access to whatever they requested (or default SAT)
+      const employeeId = await getNextEmployeeId();
       const finalBrands = targetUser.requestedSubBrandAccess || targetUser.subBrandAccess || ['SAT'];
       const finalRole = targetUser.requestedRole || targetUser.role || 'staff';
 
       await updateUserProfile(targetUser.id, {
         status: 'approved',
         active: true,
+        employeeId,
         role: finalRole,
+        department: targetUser.requestedDepartment || targetUser.department || 'Operations',
+        designation: targetUser.designation || targetUser.requestedDesignation || 'Executive',
+        branch: targetUser.branch || targetUser.requestedBranch || 'Main Branch',
+        joiningDate: targetUser.joiningDate || targetUser.requestedJoiningDate || new Date().toISOString().split('T')[0],
+        employmentType: targetUser.employmentType || targetUser.requestedEmploymentType || 'Full-Time',
         subBrandAccess: finalBrands
       });
 
-      setSuccess(`Successfully approved registration request for ${targetUser.name}. They are now an active ${finalRole === 'admin' ? 'Manager (Admin)' : 'Operator (Staff)'}.`);
+      const welcomeRes = await sendWelcomeEmail(targetUser.email, employeeId, targetUser.name);
+      if (welcomeRes.success) {
+        setSuccess(`Successfully approved registration for ${targetUser.name}. Assigned Employee ID: ${employeeId}. Welcome email sent.`);
+      } else {
+        setSuccess(`Successfully approved registration for ${targetUser.name}. Assigned Employee ID: ${employeeId}, but the welcome email couldn't be sent — please notify the employee manually.`);
+      }
       await fetchUsersList();
     } catch (err: any) {
       console.error('Error approving user:', err);
@@ -532,18 +559,21 @@ export default function UserManagement({ user }: UserManagementProps) {
   };
 
   const handleRejectUser = async (targetUser: UserProfile) => {
-    if (!window.confirm(`Are you sure you want to REJECT the application from ${targetUser.name}?`)) {
-      return;
-    }
+    const reason = window.prompt(`Enter rejection reason for ${targetUser.name}:`, 'Application requirements not met or position filled.');
+    if (reason === null) return;
+
     setError('');
     setSuccess('');
     setLoading(true);
     try {
       await updateUserProfile(targetUser.id, {
         status: 'rejected',
-        active: false
+        active: false,
+        rejectionReason: reason
       });
-      setSuccess(`Rejected registration request for ${targetUser.name}.`);
+
+      // No email sent per instructions (in-app tracking only)
+      setSuccess(`Rejected registration request for ${targetUser.name}. Rejection reason saved in-app.`);
       await fetchUsersList();
     } catch (err: any) {
       console.error('Error rejecting user:', err);
@@ -663,7 +693,7 @@ export default function UserManagement({ user }: UserManagementProps) {
     return matchesSearch && matchesRole && matchesStatus;
   });
 
-  const pendingUsers = users.filter(u => u.status === 'pending_approval');
+  const pendingUsers = users.filter(u => u.status === 'pending_approval' || u.status === 'rejected');
 
   if (!canManageUsers) {
     return (
@@ -1711,6 +1741,18 @@ export default function UserManagement({ user }: UserManagementProps) {
                         )}
                       </div>
                     </div>
+
+                    {u.status === 'rejected' && (
+                      <div className="bg-red-50 border border-red-200 p-3 rounded-xl">
+                        <p className="text-xs font-bold text-red-700 uppercase tracking-wider mb-0.5 flex items-center gap-1.5">
+                          <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span>
+                          Application Rejected
+                        </p>
+                        <p className="text-xs text-red-600 font-medium">
+                          <span className="font-bold">Reason:</span> {u.rejectionReason || 'No reason specified'}
+                        </p>
+                      </div>
+                    )}
 
                     {/* Approve / Reject buttons */}
                     <div className="flex gap-2 pt-2">
