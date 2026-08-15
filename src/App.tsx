@@ -53,6 +53,7 @@ import DuePayments from './components/DuePayments';
 import FinancialOverview from './components/FinancialOverview';
 import SupplierManagement from './components/SupplierManagement';
 import ReportsAnalytics from './components/ReportsAnalytics';
+import { AuditLogView } from './components/AuditLogView';
 import NotificationCenter from './components/NotificationCenter';
 
 // Mock/Fallback Data in case of Firestore permission/network errors
@@ -944,6 +945,11 @@ export default function App() {
         {/* Tab Reports: Reports & Analytics View */}
         {currentTab === 'reports' && (
           <ReportsAnalytics user={user} />
+        )}
+
+        {/* Tab Audit Logs: Audit Log View */}
+        {currentTab === 'audit_logs' && (
+          <AuditLogView user={user} />
         )}
 
         {/* Tab 5: Settings View */}

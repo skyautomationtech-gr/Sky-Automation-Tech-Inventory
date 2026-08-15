@@ -387,3 +387,16 @@ export interface Expense {
   createdAt: number;
 }
 
+export interface AuditLog {
+  id: string;
+  action: 'CREATE' | 'UPDATE' | 'DELETE' | 'PRICE_CHANGE' | 'STOCK_ADJUSTMENT' | 'STATUS_CHANGE';
+  targetType: 'Product' | 'Order' | 'Customer' | 'Supplier' | 'User' | 'Expense';
+  targetId: string;
+  targetName: string;
+  details: string;
+  userId: string;
+  userName: string;
+  userRole: string;
+  timestamp: number;
+}
+

@@ -25,6 +25,21 @@ import {
   Truck,
   Percent
 } from 'lucide-react';
+import { 
+  ResponsiveContainer, 
+  BarChart, 
+  Bar, 
+  LineChart, 
+  Line, 
+  PieChart, 
+  Pie, 
+  Cell, 
+  XAxis, 
+  YAxis, 
+  Tooltip, 
+  Legend, 
+  CartesianGrid 
+} from 'recharts';
 import { Product, UserProfile, Order, Customer, Invoice } from '../types';
 import { 
   checkInUser, 
@@ -465,6 +480,19 @@ export default function DashboardView({
   };
   const weeklySalesTrend = getWeeklySalesTrend();
 
+  const getCategoryStockData = () => {
+    const catMap: Record<string, number> = {};
+    products.forEach(p => {
+      if (p.archived || p.status !== 'approved') return;
+      const cat = p.mainCategory || p.category || 'Uncategorized';
+      const stock = p.variants.reduce((sum, v) => sum + (v.stock || 0), 0);
+      catMap[cat] = (catMap[cat] || 0) + stock;
+    });
+    return Object.entries(catMap).map(([name, value]) => ({ name, value }));
+  };
+  const categoryStockData = getCategoryStockData();
+  const COLORS = ['#008080', '#D4AF37', '#f97316', '#6366f1', '#ec4899', '#8b5cf6', '#10b981'];
+
   // Recent Orders (5)
   const recentOrders = [...allOrders]
     .sort((a, b) => b.createdAt - a.createdAt)
@@ -749,96 +777,96 @@ export default function DashboardView({
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
         
         {/* Stat: Today's Sales */}
-        <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs flex flex-col justify-between min-h-40">
+        <div className="bg-gradient-to-br from-white via-slate-50 to-slate-100/50 border border-slate-200/80 rounded-2xl p-5 shadow-xs flex flex-col justify-between min-h-40 hover:shadow-md transition-all duration-300">
           <div>
-            <div className="flex justify-between items-start">
-              <p className="text-sm font-bold text-slate-400 uppercase tracking-widest">Today's Sales</p>
-              <span className="text-sm font-mono font-bold bg-slate-50 text-slate-600 border border-slate-200 px-1.5 py-0.5 rounded">
-                {todayOrdersCount} Order{todayOrdersCount !== 1 ? 's' : ''}
+            <div className="flex justify-between items-center gap-2">
+              <span className="text-xs font-bold text-slate-600 uppercase tracking-wide truncate">Today's Sales</span>
+              <span className="text-[11px] font-mono font-bold bg-teal-50 text-teal-700 border border-teal-200 px-2 py-0.5 rounded-full whitespace-nowrap">
+                {todayOrdersCount} {todayOrdersCount === 1 ? 'Order' : 'Orders'}
               </span>
             </div>
-            <h3 className="text-2xl md:text-3xl font-black text-slate-950 tracking-tight mt-2">৳ {todaySales.toLocaleString()}</h3>
+            <h3 className="text-2xl md:text-3xl font-black text-slate-950 tracking-tight mt-3">৳ {todaySales.toLocaleString()}</h3>
           </div>
-          <div className="text-sm text-slate-500 space-y-1 border-t border-slate-100 pt-2 flex flex-col mt-3">
+          <div className="text-xs text-slate-500 space-y-1.5 border-t border-slate-200/60 pt-3 flex flex-col mt-3">
             <div className="flex items-center justify-between">
-              <span>Vs yesterday:</span>
-              <span className={`font-bold font-mono ${vsYesterdayPercent > 0 ? 'text-emerald-600' : vsYesterdayPercent < 0 ? 'text-red-500' : 'text-amber-600'}`}>
-                {vsYesterdayPercent > 0 ? `+${vsYesterdayPercent}` : vsYesterdayPercent}%
+              <span className="text-slate-500">Vs yesterday:</span>
+              <span className={`font-bold font-mono ${vsYesterdayPercent > 0 ? 'text-emerald-600' : vsYesterdayPercent < 0 ? 'text-red-500' : 'text-slate-600'}`}>
+                {vsYesterdayPercent > 0 ? `+${vsYesterdayPercent}%` : `${vsYesterdayPercent}%`}
               </span>
             </div>
             <div className="flex items-center justify-between">
-              <span>Vs last month same day:</span>
-              <span className={`font-bold font-mono ${vsLastMonthSameDayPercent > 0 ? 'text-emerald-600' : vsLastMonthSameDayPercent < 0 ? 'text-red-500' : 'text-amber-600'}`}>
-                {vsLastMonthSameDayPercent > 0 ? `+${vsLastMonthSameDayPercent}` : vsLastMonthSameDayPercent}%
+              <span className="text-slate-500">Vs last month:</span>
+              <span className={`font-bold font-mono ${vsLastMonthSameDayPercent > 0 ? 'text-emerald-600' : vsLastMonthSameDayPercent < 0 ? 'text-red-500' : 'text-slate-600'}`}>
+                {vsLastMonthSameDayPercent > 0 ? `+${vsLastMonthSameDayPercent}%` : `${vsLastMonthSameDayPercent}%`}
               </span>
             </div>
           </div>
         </div>
 
         {/* Stat: Profit Summary */}
-        <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs flex flex-col justify-between min-h-40">
+        <div className="bg-gradient-to-br from-white via-emerald-50/20 to-emerald-50/50 border border-emerald-100/80 rounded-2xl p-5 shadow-xs flex flex-col justify-between min-h-40 hover:shadow-md transition-all duration-300">
           <div>
-            <div className="flex justify-between items-start">
-              <p className="text-sm font-bold text-slate-400 uppercase tracking-widest">Profit Summary</p>
-              <span className="text-sm font-mono font-bold bg-emerald-50 text-emerald-700 border border-emerald-100 px-1.5 py-0.5 rounded">
+            <div className="flex justify-between items-center gap-2">
+              <span className="text-xs font-bold text-emerald-900 uppercase tracking-wide truncate">Profit Summary</span>
+              <span className="text-[11px] font-mono font-bold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full whitespace-nowrap">
                 Net Margin
               </span>
             </div>
-            <h3 className="text-2xl md:text-3xl font-black text-emerald-600 tracking-tight mt-2">৳ {todayProfit.toLocaleString()}</h3>
-            <p className="text-sm text-slate-400 mt-1">Today's net profit (confirmed / delivered)</p>
+            <h3 className="text-2xl md:text-3xl font-black text-emerald-700 tracking-tight mt-3">৳ {todayProfit.toLocaleString()}</h3>
+            <p className="text-xs text-slate-500 mt-1">Today's net profit</p>
           </div>
-          <div className="border-t border-slate-100 pt-2 flex items-center justify-between text-sm mt-3">
-            <span className="text-slate-500">This Month's Profit:</span>
-            <span className="font-extrabold text-slate-800 font-mono">৳ {thisMonthProfit.toLocaleString()}</span>
+          <div className="border-t border-emerald-100 pt-3 flex items-center justify-between text-xs mt-3">
+            <span className="text-slate-600 font-medium">This Month's Profit:</span>
+            <span className="font-extrabold text-slate-900 font-mono">৳ {thisMonthProfit.toLocaleString()}</span>
           </div>
         </div>
 
         {/* Stat: Due Payments Summary */}
-        <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs flex flex-col justify-between min-h-40">
+        <div className="bg-gradient-to-br from-white via-rose-50/20 to-rose-50/50 border border-rose-100/80 rounded-2xl p-5 shadow-xs flex flex-col justify-between min-h-40 hover:shadow-md transition-all duration-300">
           <div>
-            <div className="flex justify-between items-start">
-              <p className="text-sm font-bold text-slate-400 uppercase tracking-widest">Due Summary</p>
+            <div className="flex justify-between items-center gap-2">
+              <span className="text-xs font-bold text-rose-900 uppercase tracking-wide truncate">Due Summary</span>
               <button 
                 onClick={() => onNavigateToTab('receivables')}
-                className="text-sm font-bold text-amber-600 hover:underline flex items-center gap-0.5"
+                className="text-[11px] font-bold text-rose-600 hover:underline flex items-center gap-0.5 bg-rose-50 px-2 py-0.5 rounded-full whitespace-nowrap"
               >
                 View Logs <ArrowRight size={10} />
               </button>
             </div>
-            <h3 className="text-2xl md:text-3xl font-black text-red-500 tracking-tight mt-2">৳ {totalDue.toLocaleString()}</h3>
-            <p className="text-sm text-slate-400 mt-1">Over {dueOrders.length} outstanding accounts</p>
+            <h3 className="text-2xl md:text-3xl font-black text-rose-600 tracking-tight mt-3">৳ {totalDue.toLocaleString()}</h3>
+            <p className="text-xs text-slate-500 mt-1">{dueOrders.length} outstanding accounts</p>
           </div>
-          <div className="border-t border-slate-100 pt-2 mt-3 space-y-1 text-sm text-slate-500">
+          <div className="border-t border-rose-100 pt-3 mt-3 space-y-1.5 text-xs text-slate-600">
             <div className="flex justify-between items-center">
-              <span>Collection rate:</span>
-              <span className="font-bold text-slate-800 font-mono">{collectionRate}%</span>
+              <span className="font-medium">Collection rate:</span>
+              <span className="font-bold text-slate-900 font-mono">{collectionRate}%</span>
             </div>
-            <div className="w-full bg-slate-100 rounded-full h-1">
-              <div className="bg-emerald-500 h-1 rounded-full" style={{ width: `${collectionRate}%` }}></div>
+            <div className="w-full bg-slate-100 rounded-full h-1.5 overflow-hidden">
+              <div className="bg-emerald-500 h-1.5 rounded-full transition-all duration-500" style={{ width: `${collectionRate}%` }}></div>
             </div>
           </div>
         </div>
 
         {/* Stat: Inventory Valuation */}
-        <div className="bg-[#008080] text-white border border-teal-800 rounded-2xl p-5 shadow-md flex flex-col justify-between min-h-40 transition-all duration-300 hover:shadow-lg">
+        <div className="bg-gradient-to-br from-[#008080] via-teal-800 to-slate-900 text-white border border-teal-700/50 rounded-2xl p-5 shadow-md flex flex-col justify-between min-h-40 transition-all duration-300 hover:shadow-lg">
           <div>
-            <div className="flex justify-between items-start">
-              <p className="text-sm font-bold text-teal-100 uppercase tracking-widest">Inventory Valuation</p>
-              <span className="text-sm font-mono font-bold bg-teal-900/40 text-teal-200 border border-teal-700 px-1.5 py-0.5 rounded">
-                Live Asset
+            <div className="flex justify-between items-center gap-2">
+              <span className="text-xs font-bold text-teal-200 uppercase tracking-wide truncate">Inventory Asset</span>
+              <span className="text-[11px] font-mono font-bold bg-amber-400 text-slate-950 px-2 py-0.5 rounded-full whitespace-nowrap">
+                Live Valuation
               </span>
             </div>
             {isStaff ? (
-              <h3 className="text-base font-bold text-teal-100 font-mono italic tracking-tight mt-4">Protected Context</h3>
+              <h3 className="text-sm font-bold text-teal-200 font-mono italic tracking-tight mt-4">Protected Staff Context</h3>
             ) : (
-              <h3 className="text-2xl md:text-3xl font-black tracking-tight mt-2">
+              <h3 className="text-2xl md:text-3xl font-black tracking-tight mt-3 text-white">
                 ৳ {totalStockValue.toLocaleString()}
               </h3>
             )}
           </div>
-          <div className="text-sm text-teal-100 flex items-center justify-between border-t border-teal-700/60 pt-2 mt-3">
-            <span>Total Units In Stock:</span>
-            <span className="font-bold font-mono text-white">{totalStockUnits.toLocaleString()}</span>
+          <div className="text-xs text-teal-100 flex items-center justify-between border-t border-teal-700/60 pt-3 mt-3">
+            <span className="opacity-90">Total Stock Units:</span>
+            <span className="font-bold font-mono text-amber-300">{totalStockUnits.toLocaleString()} units</span>
           </div>
         </div>
 
@@ -892,6 +920,104 @@ export default function DashboardView({
                 <span className="text-sm font-bold text-slate-800">New Order</span>
                 <span className="text-[9px] text-slate-400 mt-0.5">Book sales ticket</span>
               </button>
+            </div>
+          </div>
+
+          {/* Visual Analytics & Charts Section */}
+          <div className="bg-white border border-slate-200 rounded-2xl p-5 shadow-xs space-y-6">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-2">
+                <BarChart3 size={18} className="text-[#008080]" />
+                <h3 className="text-sm font-bold text-slate-900 uppercase tracking-wider">Visual Analytics & Performance Trends</h3>
+              </div>
+              <span className="text-xs font-mono bg-teal-50 text-teal-700 px-2 py-0.5 rounded font-bold">Real-time Recharts</span>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+              {/* Sales Trend (Last 7 Days) */}
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
+                <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wide mb-3 flex items-center justify-between">
+                  <span>📈 7-Day Sales Velocity (৳)</span>
+                  <span className="text-[10px] font-mono text-slate-400">Revenue</span>
+                </h4>
+                <div className="h-56 w-full">
+                  <ResponsiveContainer width="100%" height="100%">
+                    <LineChart data={weeklySalesTrend}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                      <XAxis dataKey="day" stroke="#64748b" fontSize={11} />
+                      <YAxis stroke="#64748b" fontSize={11} />
+                      <Tooltip 
+                        contentStyle={{ backgroundColor: '#0f172a', border: 'none', borderRadius: '8px', color: '#fff', fontSize: '12px' }}
+                        formatter={(val: any) => [`৳ ${Number(val).toLocaleString()}`, 'Revenue']}
+                      />
+                      <Line type="monotone" dataKey="amount" stroke="#008080" strokeWidth={3} dot={{ r: 4, fill: '#D4AF37' }} />
+                    </LineChart>
+                  </ResponsiveContainer>
+                </div>
+              </div>
+
+              {/* Category Stock Distribution */}
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
+                <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wide mb-3 flex items-center justify-between">
+                  <span>📊 Category Stock Distribution</span>
+                  <span className="text-[10px] font-mono text-slate-400">Units</span>
+                </h4>
+                <div className="h-56 w-full flex items-center justify-center">
+                  {categoryStockData.length > 0 ? (
+                    <ResponsiveContainer width="100%" height="100%">
+                      <PieChart>
+                        <Pie
+                          data={categoryStockData}
+                          cx="50%"
+                          cy="50%"
+                          innerRadius={50}
+                          outerRadius={80}
+                          paddingAngle={3}
+                          dataKey="value"
+                          label={({ name, percent }) => `${name} (${(percent * 100).toFixed(0)}%)`}
+                          labelLine={false}
+                        >
+                          {categoryStockData.map((entry, index) => (
+                            <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                          ))}
+                        </Pie>
+                        <Tooltip 
+                          contentStyle={{ backgroundColor: '#0f172a', border: 'none', borderRadius: '8px', color: '#fff', fontSize: '12px' }}
+                          formatter={(val: any) => [`${val} units`, 'Stock']}
+                        />
+                      </PieChart>
+                    </ResponsiveContainer>
+                  ) : (
+                    <p className="text-xs text-slate-400 italic">No stock inventory data available</p>
+                  )}
+                </div>
+              </div>
+            </div>
+
+            {/* Top Selling Products Bar Chart */}
+            <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
+              <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wide mb-3 flex items-center justify-between">
+                <span>🏆 Top Selling Products (By Quantity Sold)</span>
+                <span className="text-[10px] font-mono text-slate-400">Top 5</span>
+              </h4>
+              <div className="h-48 w-full">
+                {topSellingProducts.length > 0 ? (
+                  <ResponsiveContainer width="100%" height="100%">
+                    <BarChart data={topSellingProducts} layout="vertical" margin={{ top: 5, right: 30, left: 40, bottom: 5 }}>
+                      <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
+                      <XAxis type="number" stroke="#64748b" fontSize={11} />
+                      <YAxis type="category" dataKey="name" stroke="#64748b" fontSize={10} width={100} />
+                      <Tooltip 
+                        contentStyle={{ backgroundColor: '#0f172a', border: 'none', borderRadius: '8px', color: '#fff', fontSize: '12px' }}
+                        formatter={(val: any, name: string) => [name === 'qty' ? `${val} units` : `৳ ${val.toLocaleString()}`, name === 'qty' ? 'Quantity Sold' : 'Revenue']}
+                      />
+                      <Bar dataKey="qty" fill="#D4AF37" radius={[0, 4, 4, 0]} />
+                    </BarChart>
+                  </ResponsiveContainer>
+                ) : (
+                  <p className="text-xs text-slate-400 italic text-center py-10">No sales data recorded yet</p>
+                )}
+              </div>
             </div>
           </div>
 

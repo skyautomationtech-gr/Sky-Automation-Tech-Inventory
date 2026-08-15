@@ -37,7 +37,8 @@ import {
   Supplier,
   SupplierPayment,
   AppNotification,
-  Branch
+  Branch,
+  AuditLog
 } from '../types';
 
 // --- Data Sanitization Helper ---
@@ -2628,6 +2629,49 @@ export async function exportAllData(): Promise<any> {
   }
   
   return exportData;
+}
+
+export async function logAuditAction(
+  action: AuditLog['action'],
+  targetType: AuditLog['targetType'],
+  targetId: string,
+  targetName: string,
+  details: string,
+  user: UserProfile | null
+): Promise<void> {
+  try {
+    const colRef = collection(db, 'auditLogs');
+    const logEntry: Omit<AuditLog, 'id'> = {
+      action,
+      targetType,
+      targetId,
+      targetName,
+      details,
+      userId: user?.id || 'system',
+      userName: user?.name || 'System / Guest',
+      userRole: user?.role || 'system',
+      timestamp: Date.now()
+    };
+    await addDoc(colRef, sanitizeData(logEntry));
+  } catch (error) {
+    console.error('Failed to log audit action:', error);
+  }
+}
+
+export async function getAuditLogs(): Promise<AuditLog[]> {
+  try {
+    const colRef = collection(db, 'auditLogs');
+    const q = query(colRef, orderBy('timestamp', 'desc'), limit(100));
+    const snapshot = await getDocs(q);
+    const logs: AuditLog[] = [];
+    snapshot.forEach(docSnap => {
+      logs.push({ id: docSnap.id, ...docSnap.data() } as AuditLog);
+    });
+    return logs;
+  } catch (error) {
+    console.error('Failed to fetch audit logs:', error);
+    return [];
+  }
 }
 
 // --- Data Caching Layer ---
