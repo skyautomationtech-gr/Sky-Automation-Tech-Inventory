@@ -373,24 +373,88 @@ export interface Invoice {
   voidedAt?: number;
 }
 
-export type ExpenseCategory = 'Rent' | 'Salary' | 'Utility Bill' | 'Marketing' | 'Courier/Delivery Charge' | 'Office Supplies' | 'Maintenance' | 'Other';
+export type ExpenseCategory = 
+  | 'Product Purchase'
+  | 'Supplier Delivery/Transport'
+  | 'Packaging'
+  | 'Warehouse/Rent'
+  | 'Electricity'
+  | 'Internet'
+  | 'Mobile/Phone Bill'
+  | 'Staff Salary'
+  | 'Courier/Delivery Expense'
+  | 'Facebook/Instagram Ads'
+  | 'Marketing/Design'
+  | 'Software/Subscription'
+  | 'Equipment/Repair'
+  | 'Bank/MFS Charge'
+  | 'Supplier Payment'
+  | 'Customer Refund'
+  | 'Other Expense'
+  | 'Rent'
+  | 'Salary'
+  | 'Utility Bill'
+  | 'Marketing'
+  | 'Courier/Delivery Charge'
+  | 'Office Supplies'
+  | 'Maintenance'
+  | 'Other';
+
+export type ExpensePaymentMethod = 'Cash' | 'bKash' | 'Nagad' | 'Rocket' | 'Bank' | 'Upay' | 'Other';
 
 export interface Expense {
   id: string;
+  expenseId?: string; // e.g. "EXP-20260815-4921"
   category: ExpenseCategory;
   amount: number;
   date: string; // YYYY-MM-DD
-  subBrand?: 'SAT' | 'GZ' | 'RTX' | '';
+  time?: string; // e.g. "04:30 PM"
+  paymentMethod?: ExpensePaymentMethod;
+  supplierName?: string; // Supplier / Vendor Name (Optional)
+  reference?: string; // Reference / Transaction ID
+  invoiceNo?: string; // Invoice / Reference No (Optional)
+  subBrand?: 'SAT' | 'GZ' | 'RTX' | 'ALL' | '';
   notes?: string;
   receiptUrl?: string;
-  createdBy: string;
+  createdBy?: string;
+  addedBy?: string;
   createdAt: number;
+}
+
+export type IncomeCategory = 
+  | 'Product Sale'
+  | 'Delivery/Courier Income'
+  | 'Digital Service / Top-up'
+  | 'Other Income'
+  | 'Customer Refund Received'
+  | 'Other Business Income';
+
+export type IncomePaymentMethod = 'Cash' | 'bKash' | 'Nagad' | 'Rocket' | 'Bank' | 'Other';
+
+export interface Income {
+  id: string;
+  incomeId: string; // e.g. "INC-20260815-9481"
+  category: IncomeCategory;
+  amount: number;
+  date: string; // YYYY-MM-DD
+  time?: string; // e.g. "04:30 PM"
+  paymentMethod: IncomePaymentMethod;
+  customerName?: string;
+  invoiceNo?: string;
+  reference?: string; // Reference / Transaction ID
+  notes?: string;
+  subBrand?: 'SAT' | 'GZ' | 'RTX' | 'ALL' | '';
+  addedBy: string;
+  createdAt: number;
+  source: 'manual' | 'order_sale';
+  orderId?: string;
+  receiptUrl?: string;
 }
 
 export interface AuditLog {
   id: string;
   action: 'CREATE' | 'UPDATE' | 'DELETE' | 'PRICE_CHANGE' | 'STOCK_ADJUSTMENT' | 'STATUS_CHANGE';
-  targetType: 'Product' | 'Order' | 'Customer' | 'Supplier' | 'User' | 'Expense';
+  targetType: 'Product' | 'Order' | 'Customer' | 'Supplier' | 'User' | 'Expense' | 'Income';
   targetId: string;
   targetName: string;
   details: string;

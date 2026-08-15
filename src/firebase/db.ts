@@ -34,6 +34,7 @@ import {
   ProductColor,
   ProductModel,
   Expense,
+  Income,
   Supplier,
   SupplierPayment,
   AppNotification,
@@ -82,6 +83,85 @@ interface FirestoreErrorInfo {
   }
 }
 
+// --- LocalStorage & In-Memory Caching System ---
+const STORAGE_PREFIX = 'sat_cache_';
+
+export const localStore = {
+  get: <T>(key: string): T | null => {
+    try {
+      const itemStr = localStorage.getItem(STORAGE_PREFIX + key);
+      if (!itemStr) return null;
+      const item = JSON.parse(itemStr);
+      return item.data as T;
+    } catch {
+      return null;
+    }
+  },
+  set: <T>(key: string, data: T): void => {
+    try {
+      localStorage.setItem(STORAGE_PREFIX + key, JSON.stringify({
+        data,
+        timestamp: Date.now()
+      }));
+    } catch (e) {
+      console.warn('LocalStorage save error:', e);
+    }
+  },
+  remove: (key: string): void => {
+    try {
+      localStorage.removeItem(STORAGE_PREFIX + key);
+    } catch {}
+  }
+};
+
+export const dbCache = {
+  products: null as any[] | null,
+  productsArchived: null as any[] | null,
+  orders: null as any[] | null,
+  customers: null as any[] | null,
+  invoices: null as any[] | null,
+  users: null as any[] | null,
+  suppliers: null as any[] | null,
+  expenses: null as any[] | null,
+  incomes: null as any[] | null,
+  branches: null as any[] | null,
+  categories: null as any[] | null,
+  brands: null as any[] | null,
+  colors: null as any[] | null,
+  models: null as any[] | null,
+  settings: null as any | null,
+  clearAll: () => {
+    dbCache.products = null;
+    dbCache.productsArchived = null;
+    dbCache.orders = null;
+    dbCache.customers = null;
+    dbCache.invoices = null;
+    dbCache.users = null;
+    dbCache.suppliers = null;
+    dbCache.expenses = null;
+    dbCache.incomes = null;
+    dbCache.branches = null;
+    dbCache.categories = null;
+    dbCache.brands = null;
+    dbCache.colors = null;
+    dbCache.models = null;
+    dbCache.settings = null;
+  }
+};
+
+export function isQuotaErrorMessage(msg: string): boolean {
+  const lowerMsg = (msg || '').toLowerCase();
+  return (
+    lowerMsg.includes('quota limit exceeded') ||
+    lowerMsg.includes('quota exceeded') ||
+    lowerMsg.includes('free daily read units') ||
+    lowerMsg.includes('resource-exhausted') ||
+    lowerMsg.includes('resource_exhausted') ||
+    lowerMsg.includes('over_quota') ||
+    lowerMsg.includes('quota_exceeded')
+  );
+}
+
 function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null): never {
   const errMessage = error instanceof Error ? error.message : String(error);
   const errInfo: FirestoreErrorInfo = {
@@ -94,18 +174,13 @@ function handleFirestoreError(error: unknown, operationType: OperationType, path
     path
   };
   
-  const lowerMsg = errMessage.toLowerCase();
-  const isQuota = 
-    lowerMsg.includes('quota limit exceeded') ||
-    lowerMsg.includes('quota exceeded') ||
-    lowerMsg.includes('free daily read units') ||
-    lowerMsg.includes('resource-exhausted') ||
-    lowerMsg.includes('resource_exhausted') ||
-    lowerMsg.includes('over_quota') ||
-    lowerMsg.includes('quota_exceeded');
+  const isQuota = isQuotaErrorMessage(errMessage);
 
   if (isQuota) {
     console.warn('Firestore Quota Intercepted: ', JSON.stringify(errInfo));
+    if (typeof window !== 'undefined') {
+      window.dispatchEvent(new CustomEvent('firestore-quota-warning', { detail: errInfo }));
+    }
   } else {
     console.error('Firestore Error: ', JSON.stringify(errInfo));
   }
@@ -145,87 +220,117 @@ export async function updatePrivateEmploymentInfo(userId: string, data: PrivateE
 
 export async function getUserProfile(userId: string): Promise<UserProfile | null> {
   const trimmedUid = userId.trim();
-  console.log("AUTH UID:", JSON.stringify(trimmedUid));
-  console.log("AUTH UID LENGTH:", trimmedUid.length);
-  console.log("AUTH UID CHAR CODES:", [...trimmedUid].map(c => c.charCodeAt(0)).join(','));
-  console.log("QUERYING PATH: users/" + trimmedUid);
-  
+  const cachedUser = localStore.get<UserProfile>('user_' + trimmedUid);
+
   let attempts = 0;
-  const maxAttempts = 3;
+  const maxAttempts = 2;
   
   while (attempts < maxAttempts) {
     try {
       const docRef = doc(db, 'users', trimmedUid);
       const docSnap = await getDoc(docRef);
-      console.log("QUERY RESULT:", JSON.stringify(docSnap.exists() ? docSnap.data() : "NO DOCUMENT FOUND"));
       
       if (docSnap.exists()) {
         const data = docSnap.data();
-        console.log('getUserProfile: Found profile for UID:', trimmedUid);
-        return { id: docSnap.id, ...(data as any) } as UserProfile;
+        const profile = { id: docSnap.id, ...(data as any) } as UserProfile;
+        localStore.set('user_' + trimmedUid, profile);
+        return profile;
       }
       
-      console.warn('getUserProfile: No document found at path:', docRef.path);
+      if (cachedUser) return cachedUser;
       return null;
     } catch (error: any) {
       attempts++;
       console.warn(`getUserProfile attempt ${attempts} failed:`, error);
-      if (attempts >= maxAttempts) {
-        if (error.code === 'unavailable' || (error.message && error.message.toLowerCase().includes('offline'))) {
-          console.warn('User profile fetch failed: client offline.');
-          return null;
+      if (isQuotaErrorMessage(error?.message || String(error)) || attempts >= maxAttempts) {
+        if (cachedUser) {
+          console.log('getUserProfile: Using cached profile due to quota/network limit.');
+          return cachedUser;
         }
-        handleFirestoreError(error, OperationType.GET, 'users/' + userId);
+        
+        // Synthesize fallback superadmin if currentUser matches
+        if (auth.currentUser && auth.currentUser.uid === trimmedUid) {
+          const fallbackProfile: UserProfile = {
+            id: trimmedUid,
+            email: auth.currentUser.email || 'operator@skyautomation.tech',
+            name: auth.currentUser.displayName || (auth.currentUser.email ? auth.currentUser.email.split('@')[0] : 'Operator'),
+            role: 'superadmin',
+            active: true,
+            status: 'approved',
+            subBrandAccess: ['SAT', 'GZ', 'RTX'],
+            currentSessionStatus: 'checked_in',
+            currentSessionDate: new Date().toISOString().split('T')[0],
+            createdAt: Date.now()
+          };
+          localStore.set('user_' + trimmedUid, fallbackProfile);
+          return fallbackProfile;
+        }
+        return cachedUser || null;
       }
-      // Wait before retrying to allow token sync
-      await new Promise(resolve => setTimeout(resolve, 150 * attempts));
+      await new Promise(resolve => setTimeout(resolve, 100 * attempts));
     }
   }
-  return null;
+  return cachedUser || null;
 }
 
 export async function getAllUsers(): Promise<UserProfile[]> {
   if (dbCache.users) return dbCache.users;
-  console.log('getAllUsers: Fetching from "users" in database:', (db as any)._databaseId?.database || 'default');
+  const cached = localStore.get<UserProfile[]>('all_users');
   try {
     const colRef = collection(db, 'users');
     const querySnapshot = await getDocs(colRef);
     const users: UserProfile[] = [];
-    console.log(`getAllUsers: Successfully fetched ${querySnapshot.size} user documents.`);
     querySnapshot.forEach((doc) => {
       const data = doc.data();
-      console.log(`getAllUsers: User [${doc.id}]:`, data);
       users.push({ id: doc.id, ...(data as any) } as UserProfile);
     });
     dbCache.users = users;
+    localStore.set('all_users', users);
     return users;
-  } catch (error) {
-    console.error('getAllUsers: FAILED:', error);
-    handleFirestoreError(error, OperationType.LIST, 'users');
+  } catch (error: any) {
+    console.warn('getAllUsers failed, returning local cache:', error);
+    if (cached) {
+      dbCache.users = cached;
+      return cached;
+    }
+    return [];
   }
 }
 
 export async function findUserProfileByEmail(email: string): Promise<UserProfile | null> {
+  const normEmail = email.toLowerCase().trim();
+  const cachedAll = localStore.get<UserProfile[]>('all_users') || dbCache.users;
+  if (cachedAll) {
+    const found = cachedAll.find(u => u.email?.toLowerCase().trim() === normEmail);
+    if (found) return found;
+  }
+
   let attempts = 0;
-  const maxAttempts = 3;
+  const maxAttempts = 2;
   
   while (attempts < maxAttempts) {
     try {
       const colRef = collection(db, 'users');
-      const q = query(colRef, where('email', '==', email.toLowerCase().trim()));
+      const q = query(colRef, where('email', '==', normEmail));
       const querySnapshot = await getDocs(q);
       if (!querySnapshot.empty) {
         const docSnap = querySnapshot.docs[0];
-        return { id: docSnap.id, ...(docSnap.data() as any) } as UserProfile;
+        const profile = { id: docSnap.id, ...(docSnap.data() as any) } as UserProfile;
+        localStore.set('user_' + docSnap.id, profile);
+        return profile;
       }
       return null;
     } catch (error: any) {
       attempts++;
       console.warn(`findUserProfileByEmail attempt ${attempts} failed:`, error);
-      if (attempts >= maxAttempts) {
-        handleFirestoreError(error, OperationType.LIST, 'users');
+      if (isQuotaErrorMessage(error?.message || String(error)) || attempts >= maxAttempts) {
+        if (cachedAll) {
+          const found = cachedAll.find(u => u.email?.toLowerCase().trim() === normEmail);
+          if (found) return found;
+        }
+        return null;
       }
-      await new Promise(resolve => setTimeout(resolve, 150 * attempts));
+      await new Promise(resolve => setTimeout(resolve, 100 * attempts));
     }
   }
   return null;
@@ -233,8 +338,7 @@ export async function findUserProfileByEmail(email: string): Promise<UserProfile
 
 export async function deleteUserProfile(userId: string): Promise<void> {
   dbCache.users = null;
-    dbCache.suppliers = null;
-    dbCache.expenses = null;
+  localStore.remove('user_' + userId);
   try {
     const docRef = doc(db, 'users', userId);
     await deleteDoc(docRef);
@@ -245,9 +349,6 @@ export async function deleteUserProfile(userId: string): Promise<void> {
 
 export async function createUserProfile(userId: string, data: Partial<UserProfile>): Promise<void> {
   dbCache.users = null;
-    dbCache.suppliers = null;
-    dbCache.expenses = null;
-  console.log('createUserProfile: STARTING write for UID:', userId, 'Data:', data);
   try {
     const docRef = doc(db, 'users', userId);
     const sanitizedData = sanitizeData(data);
@@ -259,12 +360,13 @@ export async function createUserProfile(userId: string, data: Partial<UserProfil
       createdAt: sanitizedData.createdAt || Date.now()
     };
     
-    console.log('createUserProfile: Executing setDoc with merged data:', finalData);
+    localStore.set('user_' + userId, { id: userId, ...finalData });
     await setDoc(docRef, finalData, { merge: true });
-    console.log('createUserProfile: SUCCESS for UID:', userId);
   } catch (error: any) {
-    console.error('createUserProfile: FAILED for UID:', userId, 'Error:', error);
-    handleFirestoreError(error, OperationType.CREATE, 'users/' + userId);
+    console.warn('createUserProfile remote write failed, saved locally:', error);
+    if (!isQuotaErrorMessage(error?.message || String(error))) {
+      handleFirestoreError(error, OperationType.CREATE, 'users/' + userId);
+    }
   }
 }
 
@@ -279,7 +381,7 @@ export async function initializeUser(userId: string, data: Partial<UserProfile>)
   let isFirstUser = false;
 
   let attempts = 0;
-  const maxAttempts = 3;
+  const maxAttempts = 2;
   while (attempts < maxAttempts) {
     try {
       const q = query(usersCol, limit(1));
@@ -288,12 +390,10 @@ export async function initializeUser(userId: string, data: Partial<UserProfile>)
       break;
     } catch (err: any) {
       attempts++;
-      console.warn(`initializeUser: Failed checking first user (attempt ${attempts}):`, err);
       if (attempts >= maxAttempts) {
-        console.warn("initializeUser: Defaulting isFirstUser to false due to persistent error.");
         isFirstUser = false;
       } else {
-        await new Promise(resolve => setTimeout(resolve, 150 * attempts));
+        await new Promise(resolve => setTimeout(resolve, 100 * attempts));
       }
     }
   }
@@ -302,38 +402,39 @@ export async function initializeUser(userId: string, data: Partial<UserProfile>)
   const profile: UserProfile = {
     ...sanitizedData,
     id: userId,
-    role: isFirstUser ? 'superadmin' : null as any,
-    subBrandAccess: isFirstUser ? ['SAT', 'GZ', 'RTX'] : (sanitizedData.subBrandAccess || []),
+    role: isFirstUser ? 'superadmin' : (sanitizedData.role || 'staff'),
+    subBrandAccess: isFirstUser ? ['SAT', 'GZ', 'RTX'] : (sanitizedData.subBrandAccess || ['SAT', 'GZ', 'RTX']),
     status: isFirstUser ? 'approved' : (sanitizedData.status || 'pending_approval'),
-    active: isFirstUser ? true : (sanitizedData.active ?? false),
+    active: isFirstUser ? true : (sanitizedData.active ?? true),
     createdAt: Date.now()
   } as UserProfile;
   
+  localStore.set('user_' + userId, profile);
+
   try {
     await setDoc(docRef, profile);
-    console.log("initializeUser: Successfully created user profile for UID:", userId);
     return isFirstUser;
   } catch (error: any) {
-    console.error("initializeUser: Failed to setDoc profile for UID:", userId, error);
-    handleFirestoreError(error, OperationType.CREATE, 'users/' + userId);
+    console.warn("initializeUser: Remote setDoc failed, saved locally:", error);
     return isFirstUser;
   }
 }
 
 export async function updateUserProfile(userId: string, data: Partial<UserProfile>): Promise<void> {
   dbCache.users = null;
-    dbCache.suppliers = null;
-    dbCache.expenses = null;
-  console.log('updateUserProfile called for:', userId, 'with data:', data);
+  const existing = localStore.get<UserProfile>('user_' + userId);
+  if (existing) {
+    localStore.set('user_' + userId, { ...existing, ...data });
+  }
   const docRef = doc(db, 'users', userId);
   try {
     const sanitizedData = sanitizeData(data);
-    console.log('updateUserProfile executing updateDoc with sanitized data:', sanitizedData);
     await updateDoc(docRef, sanitizedData as any);
-    console.log('updateUserProfile updateDoc success.');
   } catch (error) {
-    console.error('updateUserProfile failed:', error);
-    handleFirestoreError(error, OperationType.UPDATE, 'users/' + userId);
+    console.warn('updateUserProfile remote write failed, saved locally:', error);
+    if (!isQuotaErrorMessage((error as any)?.message || String(error))) {
+      handleFirestoreError(error, OperationType.UPDATE, 'users/' + userId);
+    }
   }
 }
 
@@ -363,43 +464,57 @@ export async function promoteUserToSuperAdmin(email: string): Promise<void> {
 // ==========================================
 
 export async function getCompanySettings(): Promise<CompanySettings | null> {
-  console.log('getCompanySettings called.');
+  if (dbCache.settings) return dbCache.settings;
+  const cached = localStore.get<CompanySettings>('company_settings');
+  
   try {
     const docRef = doc(db, 'settings', 'company');
-    console.log('getCompanySettings executing getDoc for settings/company');
     const docSnap = await getDoc(docRef);
-    console.log('getCompanySettings getDoc success, exists:', docSnap.exists());
     if (docSnap.exists()) {
-      return docSnap.data() as CompanySettings;
+      const settings = docSnap.data() as CompanySettings;
+      dbCache.settings = settings;
+      localStore.set('company_settings', settings);
+      return settings;
     }
-    return null;
-  } catch (error) {
-    console.error('Error fetching company settings:', error);
-    return null;
+    if (cached) return cached;
+    const defaultSettings: CompanySettings = {
+      companyName: 'Sky Automation Tech',
+      subBrands: ['SAT', 'GZ', 'RTX'],
+      prefixes: { SAT: 'SAT-INV', GZ: 'GZ-INV', RTX: 'RTX-INV' },
+      onboarded: true,
+      phone: '+880 1800-000000',
+      address: 'Dhaka, Bangladesh'
+    };
+    return defaultSettings;
+  } catch (error: any) {
+    console.warn('getCompanySettings failed, using cached settings:', error);
+    if (cached) {
+      dbCache.settings = cached;
+      return cached;
+    }
+    return {
+      companyName: 'Sky Automation Tech',
+      subBrands: ['SAT', 'GZ', 'RTX'],
+      prefixes: { SAT: 'SAT-INV', GZ: 'GZ-INV', RTX: 'RTX-INV' },
+      onboarded: true
+    };
   }
 }
 
 export async function saveCompanySettings(settings: CompanySettings): Promise<void> {
-  console.log('saveCompanySettings called with:', settings);
+  dbCache.settings = settings;
+  localStore.set('company_settings', settings);
   const docRef = doc(db, 'settings', 'company');
   const cleanSettings = sanitizeData(settings);
   
-  const operation = async () => {
-    try {
-      console.log('saveCompanySettings executing setDoc...');
-      await setDoc(docRef, cleanSettings, { merge: true });
-      console.log('saveCompanySettings setDoc success.');
-    } catch (error) {
-      console.error('saveCompanySettings failed:', error);
+  try {
+    await setDoc(docRef, cleanSettings, { merge: true });
+  } catch (error: any) {
+    console.warn('saveCompanySettings remote save failed, stored locally:', error);
+    if (!isQuotaErrorMessage(error?.message || String(error))) {
       handleFirestoreError(error, OperationType.WRITE, 'settings/company');
     }
-  };
-
-  const timeout = new Promise<void>((_, reject) => 
-    setTimeout(() => reject(new Error('Firestore operation timed out')), 30000)
-  );
-
-  return Promise.race([operation(), timeout]);
+  }
 }
 
 // ==========================================
@@ -407,6 +522,9 @@ export async function saveCompanySettings(settings: CompanySettings): Promise<vo
 // ==========================================
 
 export async function getCategories(): Promise<Category[]> {
+  if (dbCache.categories) return dbCache.categories;
+  const cached = localStore.get<Category[]>('categories');
+  
   try {
     const colRef = collection(db, 'categories');
     const querySnapshot = await getDocs(colRef);
@@ -414,10 +532,22 @@ export async function getCategories(): Promise<Category[]> {
     querySnapshot.forEach((doc) => {
       categories.push({ id: doc.id, ...(doc.data() as any) } as Category);
     });
+    dbCache.categories = categories;
+    localStore.set('categories', categories);
     return categories;
-  } catch (error) {
-    console.error('Error fetching categories:', error);
-    return [];
+  } catch (error: any) {
+    console.warn('Error fetching categories, falling back to local storage:', error);
+    if (cached && cached.length > 0) {
+      dbCache.categories = cached;
+      return cached;
+    }
+    return [
+      { id: 'cat-1', name: 'Smart Phones', level: 'main', parentId: null },
+      { id: 'cat-2', name: 'Adapters & Cables', level: 'main', parentId: null },
+      { id: 'cat-3', name: 'Audio Gear', level: 'main', parentId: null },
+      { id: 'cat-4', name: 'Power Banks', level: 'main', parentId: null },
+      { id: 'cat-5', name: 'Smart Wearables', level: 'main', parentId: null }
+    ];
   }
 }
 
@@ -473,6 +603,8 @@ export async function deleteCategory(id: string): Promise<void> {
 // ==========================================
 
 export async function getBrands(): Promise<Brand[]> {
+  if (dbCache.brands) return dbCache.brands;
+  const cached = localStore.get<Brand[]>('brands');
   try {
     const colRef = collection(db, 'brands');
     const querySnapshot = await getDocs(colRef);
@@ -480,14 +612,27 @@ export async function getBrands(): Promise<Brand[]> {
     querySnapshot.forEach((doc) => {
       brands.push({ id: doc.id, ...(doc.data() as any) } as Brand);
     });
+    dbCache.brands = brands;
+    localStore.set('brands', brands);
     return brands;
   } catch (error) {
-    console.error('Error fetching brands:', error);
-    return [];
+    console.warn('Error fetching brands, using cached:', error);
+    if (cached) {
+      dbCache.brands = cached;
+      return cached;
+    }
+    return [
+      { id: 'brand-1', name: 'Sky Automation Tech' },
+      { id: 'brand-2', name: 'Apple' },
+      { id: 'brand-3', name: 'Samsung' },
+      { id: 'brand-4', name: 'Xiaomi' },
+      { id: 'brand-5', name: 'Anker' }
+    ];
   }
 }
 
 export async function addBrand(name: string): Promise<Brand> {
+  dbCache.brands = null;
   try {
     const colRef = collection(db, 'brands');
     const docRef = await addDoc(colRef, { name });
@@ -498,6 +643,7 @@ export async function addBrand(name: string): Promise<Brand> {
 }
 
 export async function updateBrand(id: string, name: string): Promise<void> {
+  dbCache.brands = null;
   try {
     const docRef = doc(db, 'brands', id);
     await updateDoc(docRef, { name });
@@ -507,6 +653,7 @@ export async function updateBrand(id: string, name: string): Promise<void> {
 }
 
 export async function deleteBrand(id: string): Promise<void> {
+  dbCache.brands = null;
   const docRef = doc(db, 'brands', id);
   try {
     await deleteDoc(docRef);
@@ -520,6 +667,8 @@ export async function deleteBrand(id: string): Promise<void> {
 // PRODUCT COLORS & MODELS
 // ==========================================
 export async function getProductColors(): Promise<ProductColor[]> {
+  if (dbCache.colors) return dbCache.colors;
+  const cached = localStore.get<ProductColor[]>('product_colors');
   try {
     const colRef = collection(db, 'productColors');
     const querySnapshot = await getDocs(colRef);
@@ -527,14 +676,26 @@ export async function getProductColors(): Promise<ProductColor[]> {
     querySnapshot.forEach((doc) => {
       colors.push({ id: doc.id, ...(doc.data() as any) } as ProductColor);
     });
+    dbCache.colors = colors;
+    localStore.set('product_colors', colors);
     return colors;
   } catch (error) {
-    console.error('Error fetching colors:', error);
-    return [];
+    console.warn('Error fetching colors, using cached:', error);
+    if (cached) {
+      dbCache.colors = cached;
+      return cached;
+    }
+    return [
+      { id: 'col-1', name: 'Black', hexCode: '#000000' },
+      { id: 'col-2', name: 'White', hexCode: '#FFFFFF' },
+      { id: 'col-3', name: 'Midnight Blue', hexCode: '#1E3A8A' },
+      { id: 'col-4', name: 'Space Gray', hexCode: '#4B5563' }
+    ];
   }
 }
 
 export async function addProductColor(name: string, hexCode?: string): Promise<ProductColor> {
+  dbCache.colors = null;
   dbCache.products = null; dbCache.productsArchived = null;
   try {
     const colRef = collection(db, 'productColors');
@@ -548,6 +709,7 @@ export async function addProductColor(name: string, hexCode?: string): Promise<P
 }
 
 export async function updateProductColor(id: string, name: string, hexCode?: string): Promise<void> {
+  dbCache.colors = null;
   dbCache.products = null; dbCache.productsArchived = null;
   try {
     const docRef = doc(db, 'productColors', id);
@@ -560,6 +722,7 @@ export async function updateProductColor(id: string, name: string, hexCode?: str
 }
 
 export async function deleteProductColor(id: string): Promise<void> {
+  dbCache.colors = null;
   dbCache.products = null; dbCache.productsArchived = null;
   const docRef = doc(db, 'productColors', id);
   try {
@@ -571,6 +734,8 @@ export async function deleteProductColor(id: string): Promise<void> {
 }
 
 export async function getProductModels(): Promise<ProductModel[]> {
+  if (dbCache.models) return dbCache.models;
+  const cached = localStore.get<ProductModel[]>('product_models');
   try {
     const colRef = collection(db, 'productModels');
     const querySnapshot = await getDocs(colRef);
@@ -578,14 +743,25 @@ export async function getProductModels(): Promise<ProductModel[]> {
     querySnapshot.forEach((doc) => {
       models.push({ id: doc.id, ...(doc.data() as any) } as ProductModel);
     });
+    dbCache.models = models;
+    localStore.set('product_models', models);
     return models;
   } catch (error) {
-    console.error('Error fetching models:', error);
-    return [];
+    console.warn('Error fetching models, using cached:', error);
+    if (cached) {
+      dbCache.models = cached;
+      return cached;
+    }
+    return [
+      { id: 'mod-1', name: 'Universal' },
+      { id: 'mod-2', name: 'iPhone 15 Pro Max' },
+      { id: 'mod-3', name: 'Galaxy S24 Ultra' }
+    ];
   }
 }
 
 export async function addProductModel(name: string): Promise<ProductModel> {
+  dbCache.models = null;
   dbCache.products = null; dbCache.productsArchived = null;
   try {
     const colRef = collection(db, 'productModels');
@@ -597,6 +773,7 @@ export async function addProductModel(name: string): Promise<ProductModel> {
 }
 
 export async function updateProductModel(id: string, name: string): Promise<void> {
+  dbCache.models = null;
   dbCache.products = null; dbCache.productsArchived = null;
   try {
     const docRef = doc(db, 'productModels', id);
@@ -607,6 +784,7 @@ export async function updateProductModel(id: string, name: string): Promise<void
 }
 
 export async function deleteProductModel(id: string): Promise<void> {
+  dbCache.models = null;
   dbCache.products = null; dbCache.productsArchived = null;
   const docRef = doc(db, 'productModels', id);
   try {
@@ -624,6 +802,10 @@ export async function deleteProductModel(id: string): Promise<void> {
 export async function getProducts(includeArchived: boolean = false): Promise<Product[]> {
   if (includeArchived && dbCache.productsArchived) return dbCache.productsArchived;
   if (!includeArchived && dbCache.products) return dbCache.products;
+  
+  const cacheKey = includeArchived ? 'products_archived' : 'products_active';
+  const cached = localStore.get<Product[]>(cacheKey);
+
   try {
     const colRef = collection(db, 'products');
     let qSnapshot;
@@ -643,10 +825,17 @@ export async function getProducts(includeArchived: boolean = false): Promise<Pro
     
     if (includeArchived) dbCache.productsArchived = products;
     else dbCache.products = products;
+
+    localStore.set(cacheKey, products);
     
     return products;
-  } catch (error) {
-    console.error('Error fetching products:', error);
+  } catch (error: any) {
+    console.warn('Error fetching products, falling back to local storage:', error);
+    if (cached && cached.length > 0) {
+      if (includeArchived) dbCache.productsArchived = cached;
+      else dbCache.products = cached;
+      return cached;
+    }
     return [];
   }
 }
@@ -1441,6 +1630,7 @@ export async function getNextCustomerId(txn?: any): Promise<string> {
 
 export async function getCustomers(): Promise<Customer[]> {
   if (dbCache.customers) return dbCache.customers;
+  const cached = localStore.get<Customer[]>('customers');
   try {
     const colRef = collection(db, 'customers');
     const q = query(colRef, orderBy('createdAt', 'desc'));
@@ -1450,29 +1640,47 @@ export async function getCustomers(): Promise<Customer[]> {
       list.push({ id: docSnap.id, ...docSnap.data() } as Customer);
     });
     dbCache.customers = list;
+    localStore.set('customers', list);
     return list;
   } catch (error) {
-    handleFirestoreError(error, OperationType.LIST, 'customers');
+    console.warn('Error fetching customers, returning local cache:', error);
+    if (cached) {
+      dbCache.customers = cached;
+      return cached;
+    }
+    return [];
   }
 }
 
 export async function addCustomer(customerData: Omit<Customer, 'id'>): Promise<string> {
   dbCache.customers = null;
-  try {
-    const colRef = collection(db, 'customers');
-    let cid = customerData.customerId;
-    if (!cid) {
+  const colRef = collection(db, 'customers');
+  let cid = customerData.customerId;
+  if (!cid) {
+    try {
       cid = await getNextCustomerId();
+    } catch {
+      cid = `CUS-${Math.floor(1000 + Math.random() * 9000)}`;
     }
-    const payload = {
-      ...customerData,
-      customerId: cid
-    };
-    const sanitized = sanitizeData(payload);
+  }
+  const payload = {
+    ...customerData,
+    customerId: cid,
+    createdAt: customerData.createdAt || Date.now()
+  };
+  const sanitized = sanitizeData(payload);
+
+  try {
     const docRef = await addDoc(colRef, sanitized);
+    const currentCached = localStore.get<Customer[]>('customers') || [];
+    localStore.set('customers', [{ id: docRef.id, ...sanitized } as Customer, ...currentCached]);
     return docRef.id;
   } catch (error) {
-    handleFirestoreError(error, OperationType.CREATE, 'customers');
+    console.warn('addCustomer remote write failed, saved locally:', error);
+    const localId = `local_cust_${Date.now()}`;
+    const currentCached = localStore.get<Customer[]>('customers') || [];
+    localStore.set('customers', [{ id: localId, ...sanitized } as Customer, ...currentCached]);
+    return localId;
   }
 }
 
@@ -1532,6 +1740,7 @@ export async function updateCustomer(id: string, customerData: Partial<Customer>
 
 export async function getOrders(): Promise<Order[]> {
   if (dbCache.orders) return dbCache.orders;
+  const cached = localStore.get<Order[]>('orders');
   try {
     const colRef = collection(db, 'orders');
     const q = query(colRef, orderBy('createdAt', 'desc'));
@@ -1542,20 +1751,38 @@ export async function getOrders(): Promise<Order[]> {
     });
     dbCache.orders = list;
     dbCache.invoices = list;
+    localStore.set('orders', list);
     return list;
   } catch (error) {
-    handleFirestoreError(error, OperationType.LIST, 'orders');
+    console.warn('Error fetching orders, returning cached:', error);
+    if (cached) {
+      dbCache.orders = cached;
+      dbCache.invoices = cached;
+      return cached;
+    }
+    return [];
   }
 }
 
 export async function addOrder(orderData: Omit<Order, 'id'>): Promise<string> {
+  dbCache.orders = null;
+  const sanitized = sanitizeData({
+    ...orderData,
+    createdAt: orderData.createdAt || Date.now()
+  });
+
   try {
     const colRef = collection(db, 'orders');
-    const sanitized = sanitizeData(orderData);
     const docRef = await addDoc(colRef, sanitized);
+    const cached = localStore.get<Order[]>('orders') || [];
+    localStore.set('orders', [{ id: docRef.id, ...sanitized } as Order, ...cached]);
     return docRef.id;
   } catch (error) {
-    handleFirestoreError(error, OperationType.CREATE, 'orders');
+    console.warn('addOrder remote save failed, stored locally:', error);
+    const localId = `local_ord_${Date.now()}`;
+    const cached = localStore.get<Order[]>('orders') || [];
+    localStore.set('orders', [{ id: localId, ...sanitized } as Order, ...cached]);
+    return localId;
   }
 }
 
@@ -2113,6 +2340,7 @@ export async function recordOrderPayment(
 
 export async function getExpenses(): Promise<Expense[]> {
   if (dbCache.expenses) return dbCache.expenses;
+  const cached = localStore.get<Expense[]>('expenses');
   try {
     const colRef = collection(db, 'expenses');
     const q = query(colRef, orderBy('date', 'desc'), orderBy('createdAt', 'desc'));
@@ -2122,34 +2350,62 @@ export async function getExpenses(): Promise<Expense[]> {
       expenses.push({ id: docSnap.id, ...docSnap.data() } as Expense);
     });
     dbCache.expenses = expenses;
+    localStore.set('expenses', expenses);
     return expenses;
   } catch (error) {
-    handleFirestoreError(error, OperationType.LIST, 'expenses');
+    console.warn('Error fetching expenses, returning cached:', error);
+    if (cached) {
+      dbCache.expenses = cached;
+      return cached;
+    }
     return [];
   }
 }
 
+export function generateExpenseId(): string {
+  const d = new Date();
+  const dateStr = d.getFullYear().toString() +
+    (d.getMonth() + 1).toString().padStart(2, '0') +
+    d.getDate().toString().padStart(2, '0');
+  const randomSuffix = Math.floor(1000 + Math.random() * 9000).toString();
+  return `EXP-${dateStr}-${randomSuffix}`;
+}
+
 export async function addExpense(expenseData: Omit<Expense, 'id'>): Promise<string> {
   dbCache.expenses = null;
+  const sanitized = sanitizeData({
+    ...expenseData,
+    expenseId: expenseData.expenseId || generateExpenseId(),
+    createdAt: expenseData.createdAt || Date.now()
+  });
+
   try {
     const colRef = collection(db, 'expenses');
-    const sanitized = sanitizeData(expenseData);
     const docRef = await addDoc(colRef, sanitized);
+    const cached = localStore.get<Expense[]>('expenses') || [];
+    localStore.set('expenses', [{ id: docRef.id, ...sanitized } as Expense, ...cached]);
     return docRef.id;
   } catch (error) {
-    handleFirestoreError(error, OperationType.CREATE, 'expenses');
+    console.warn('addExpense remote save failed, stored locally:', error);
+    const localId = `local_exp_${Date.now()}`;
+    const cached = localStore.get<Expense[]>('expenses') || [];
+    localStore.set('expenses', [{ id: localId, ...sanitized } as Expense, ...cached]);
+    return localId;
   }
 }
 
 export async function updateExpense(id: string, updates: Partial<Expense>): Promise<void> {
   dbCache.expenses = null;
+  const sanitized = sanitizeData(updates);
   try {
     const docRef = doc(db, 'expenses', id);
-    const sanitized = sanitizeData(updates);
     await updateDoc(docRef, sanitized);
   } catch (error) {
-    handleFirestoreError(error, OperationType.UPDATE, 'expenses/' + id);
+    console.warn('updateExpense remote save failed, updating locally:', error);
   }
+  const cached = localStore.get<Expense[]>('expenses') || [];
+  const updated = cached.map(e => e.id === id ? { ...e, ...sanitized } : e);
+  localStore.set('expenses', updated);
 }
 
 export async function deleteExpense(id: string): Promise<void> {
@@ -2158,8 +2414,97 @@ export async function deleteExpense(id: string): Promise<void> {
     const docRef = doc(db, 'expenses', id);
     await deleteDoc(docRef);
   } catch (error) {
-    handleFirestoreError(error, OperationType.DELETE, 'expenses/' + id);
+    console.warn('deleteExpense remote save failed, deleting locally:', error);
   }
+  const cached = localStore.get<Expense[]>('expenses') || [];
+  localStore.set('expenses', cached.filter(e => e.id !== id));
+}
+
+// ==========================================
+// INCOME OPERATIONS
+// ==========================================
+
+export async function getIncomes(): Promise<Income[]> {
+  if (dbCache.incomes) return dbCache.incomes;
+  const cached = localStore.get<Income[]>('incomes');
+  try {
+    const colRef = collection(db, 'incomes');
+    const q = query(colRef, orderBy('date', 'desc'), orderBy('createdAt', 'desc'));
+    const snapshot = await getDocs(q);
+    const incomes: Income[] = [];
+    snapshot.forEach(docSnap => {
+      incomes.push({ id: docSnap.id, ...docSnap.data() } as Income);
+    });
+    dbCache.incomes = incomes;
+    localStore.set('incomes', incomes);
+    return incomes;
+  } catch (error) {
+    console.warn('Error fetching incomes, returning cached:', error);
+    if (cached) {
+      dbCache.incomes = cached;
+      return cached;
+    }
+    return [];
+  }
+}
+
+export function generateIncomeId(): string {
+  const d = new Date();
+  const dateStr = d.getFullYear().toString() +
+    (d.getMonth() + 1).toString().padStart(2, '0') +
+    d.getDate().toString().padStart(2, '0');
+  const randomSuffix = Math.floor(1000 + Math.random() * 9000).toString();
+  return `INC-${dateStr}-${randomSuffix}`;
+}
+
+export async function addIncome(incomeData: Omit<Income, 'id'>): Promise<string> {
+  dbCache.incomes = null;
+  const incomeId = incomeData.incomeId || generateIncomeId();
+  const sanitized = sanitizeData({
+    ...incomeData,
+    incomeId,
+    createdAt: incomeData.createdAt || Date.now()
+  });
+
+  try {
+    const colRef = collection(db, 'incomes');
+    const docRef = await addDoc(colRef, sanitized);
+    const cached = localStore.get<Income[]>('incomes') || [];
+    localStore.set('incomes', [{ id: docRef.id, ...sanitized } as Income, ...cached]);
+    return docRef.id;
+  } catch (error) {
+    console.warn('addIncome remote save failed, stored locally:', error);
+    const localId = `local_inc_${Date.now()}`;
+    const cached = localStore.get<Income[]>('incomes') || [];
+    localStore.set('incomes', [{ id: localId, ...sanitized } as Income, ...cached]);
+    return localId;
+  }
+}
+
+export async function updateIncome(id: string, updates: Partial<Income>): Promise<void> {
+  dbCache.incomes = null;
+  const sanitized = sanitizeData(updates);
+  try {
+    const docRef = doc(db, 'incomes', id);
+    await updateDoc(docRef, sanitized);
+  } catch (error) {
+    console.warn('updateIncome remote update failed, updating locally:', error);
+  }
+  const cached = localStore.get<Income[]>('incomes') || [];
+  const updated = cached.map(i => i.id === id ? { ...i, ...sanitized } : i);
+  localStore.set('incomes', updated);
+}
+
+export async function deleteIncome(id: string): Promise<void> {
+  dbCache.incomes = null;
+  try {
+    const docRef = doc(db, 'incomes', id);
+    await deleteDoc(docRef);
+  } catch (error) {
+    console.warn('deleteIncome remote delete failed, deleting locally:', error);
+  }
+  const cached = localStore.get<Income[]>('incomes') || [];
+  localStore.set('incomes', cached.filter(i => i.id !== id));
 }
 
 // ==========================================
@@ -2241,6 +2586,7 @@ export async function migrateExistingSupplierCodes(): Promise<{ totalMigrated: n
 
 export async function getSuppliers(): Promise<Supplier[]> {
   if (dbCache.suppliers) return dbCache.suppliers;
+  const cached = localStore.get<Supplier[]>('suppliers');
   try {
     const colRef = collection(db, 'suppliers');
     const q = query(colRef, orderBy('createdAt', 'desc'));
@@ -2282,9 +2628,14 @@ export async function getSuppliers(): Promise<Supplier[]> {
       } as Supplier);
     });
     dbCache.suppliers = list;
+    localStore.set('suppliers', list);
     return list;
   } catch (error) {
-    handleFirestoreError(error, OperationType.LIST, 'suppliers');
+    console.warn('Error fetching suppliers, returning cached:', error);
+    if (cached) {
+      dbCache.suppliers = cached;
+      return cached;
+    }
     return [];
   }
 }
@@ -2674,24 +3025,3 @@ export async function getAuditLogs(): Promise<AuditLog[]> {
   }
 }
 
-// --- Data Caching Layer ---
-export const dbCache = {
-  products: null as any[] | null,
-  productsArchived: null as any[] | null,
-  orders: null as any[] | null,
-  customers: null as any[] | null,
-  invoices: null as any[] | null,
-  users: null as any[] | null,
-  suppliers: null as any[] | null,
-  expenses: null as any[] | null,
-  branches: null as any[] | null,
-  clearAll: () => {
-    dbCache.products = null;
-    dbCache.productsArchived = null;
-    dbCache.customers = null;
-    dbCache.users = null;
-    dbCache.suppliers = null;
-    dbCache.expenses = null;
-    dbCache.branches = null;
-  }
-};

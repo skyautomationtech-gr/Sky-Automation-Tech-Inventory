@@ -911,7 +911,7 @@ export default function App() {
 
         {/* Tab Financials: Income & Expense Financial Overview View */}
         {currentTab === 'financials' && (
-          user.role === 'superadmin' ? (
+          (user.role === 'superadmin' || user.role === 'admin' || user.role === 'manager') ? (
             <FinancialOverview 
               user={user} 
               products={products} 
@@ -926,7 +926,7 @@ export default function App() {
               </div>
               <h2 className="text-base font-extrabold text-red-800 uppercase tracking-tight">Access Restricted</h2>
               <p className="text-sm text-red-600 leading-relaxed">
-                The Income & Expense financial control panel is strictly reserved for Super Administrator roles only. Your current role is not authorized to access this ledger or run aggregate operational summaries.
+                The Income & Expense financial control panel is reserved for authorized administrative roles. Your current role is not authorized to access this ledger.
               </p>
             </div>
           )
