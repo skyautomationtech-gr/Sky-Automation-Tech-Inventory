@@ -2116,13 +2116,26 @@ export default function ProductManagement({
                       <h2 className="text-xl sm:text-2xl font-black text-slate-900 mt-1">{selectedProduct.name}</h2>
                       <p className="text-xs font-mono text-slate-500">SKU: {selectedProduct.sku}</p>
                     </div>
-                    <button
-                      onClick={() => setSelectedProduct(null)}
-                      className="p-2.5 bg-slate-100 text-slate-600 hover:text-slate-900 hover:bg-slate-200 rounded-full transition-colors cursor-pointer flex items-center justify-center"
-                      title="Close Full Screen View"
-                    >
-                      <X size={20} />
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const prod = selectedProduct;
+                          setSelectedProduct(null);
+                          openEditDrawer(prod);
+                        }}
+                        className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shadow-xs"
+                      >
+                        <Edit3 size={14} /> Edit Product
+                      </button>
+                      <button
+                        onClick={() => setSelectedProduct(null)}
+                        className="p-2 bg-slate-100 text-slate-600 hover:text-slate-900 hover:bg-slate-200 rounded-full transition-colors cursor-pointer flex items-center justify-center"
+                        title="Close Full Screen View"
+                      >
+                        <X size={20} />
+                      </button>
+                    </div>
                   </div>
 
                   {/* Modal Content */}
@@ -3364,29 +3377,32 @@ export default function ProductManagement({
         </div>
       )}
 
-      {/* DRAWER FOR ADDING / EDITING PRODUCTS */}
+      {/* FULL-FEATURED MODAL FOR ADDING / EDITING PRODUCTS */}
       {isDrawerOpen && (
-        <div className="fixed inset-0 z-50 overflow-hidden" role="dialog" aria-modal="true">
-          <div className="absolute inset-0 bg-slate-950/60 backdrop-blur-xs transition-opacity" onClick={handleCancelForm} />
-          
-          <div className="absolute inset-y-0 right-0 max-w-full flex pl-0 md:pl-10">
-            <div className="w-screen md:max-w-md bg-white text-slate-900 shadow-2xl flex flex-col justify-between">
-              
-              {/* Drawer Header */}
-              <div className="p-5 md:p-6 border-b border-slate-100 flex justify-between items-center bg-slate-900 text-white">
+        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-md flex items-center justify-center p-3 sm:p-6 overflow-y-auto animate-in fade-in duration-200" role="dialog" aria-modal="true">
+          <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-4xl max-h-[92vh] flex flex-col overflow-hidden my-auto">
+            
+            {/* Modal Header */}
+            <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-900 text-white flex-shrink-0">
+              <div className="flex items-center gap-3">
+                <span className="text-[10px] font-mono tracking-widest font-extrabold text-amber-400 bg-amber-400/10 border border-amber-400/20 px-2.5 py-1 rounded-full uppercase">
+                  {editModeProduct ? 'Edit Mode' : 'New Product'}
+                </span>
                 <div>
-                  <h2 className="text-sm font-black uppercase tracking-widest text-amber-400">
-                    {editModeProduct ? 'Update Catalog Record' : 'Publish New Gadget'}
+                  <h2 className="text-base sm:text-lg font-black text-white">
+                    {editModeProduct ? `Editing: ${formName || editModeProduct.name}` : 'Publish New Catalog Gadget'}
                   </h2>
-                  <p className="text-sm text-slate-300 mt-0.5">Define variant details, thresholds & branding specs.</p>
+                  <p className="text-xs text-slate-300">Set specs, pricing, variants, photography, and live inventory rules.</p>
                 </div>
-                <button
-                  onClick={handleCancelForm}
-                  className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-full cursor-pointer transition-colors"
-                >
-                  <X size={18} />
-                </button>
               </div>
+              <button
+                onClick={handleCancelForm}
+                className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-full cursor-pointer transition-colors"
+                title="Close Editor"
+              >
+                <X size={20} />
+              </button>
+            </div>
 
               {/* Drawer Scrollable Content */}
               <form onSubmit={handleFormSubmit} className="flex-grow overflow-y-auto p-5 md:p-6 space-y-6">
@@ -4242,7 +4258,7 @@ export default function ProductManagement({
                 )}
 
                 {wizardStep < 5 ? (
-                  <>
+                  <div className="flex items-center gap-2 flex-grow justify-end">
                     {wizardStep > 1 && (
                       <button
                         type="button"
@@ -4253,15 +4269,26 @@ export default function ProductManagement({
                         Cancel
                       </button>
                     )}
+                    {editModeProduct && (
+                      <button
+                        type="button"
+                        disabled={submitting}
+                        onClick={(e) => handleFormSubmit(e as any)}
+                        className="px-5 py-3 bg-teal-600 hover:bg-teal-700 text-white font-bold rounded-xl text-sm transition-all shadow-md active:scale-95 disabled:opacity-50 flex items-center justify-center gap-1.5 cursor-pointer"
+                      >
+                        <Check size={15} />
+                        <span>Save Changes</span>
+                      </button>
+                    )}
                     <button
                       type="button"
                       disabled={submitting}
                       onClick={handleNextStep}
-                      className="flex-grow py-3 bg-slate-900 hover:bg-slate-950 text-white font-bold rounded-xl text-sm transition-all shadow-md flex items-center justify-center gap-1.5 cursor-pointer ml-auto"
+                      className="px-6 py-3 bg-slate-900 hover:bg-slate-950 text-white font-bold rounded-xl text-sm transition-all shadow-md flex items-center justify-center gap-1.5 cursor-pointer"
                     >
                       Continue <ArrowRight size={14} />
                     </button>
-                  </>
+                  </div>
                 ) : (
                   <>
                     <button
@@ -4299,8 +4326,7 @@ export default function ProductManagement({
 
             </div>
           </div>
-        </div>
-      )}
+        )}
 
       {/* BULK CSV IMPORT MODAL */}
       {isCsvModalOpen && (
