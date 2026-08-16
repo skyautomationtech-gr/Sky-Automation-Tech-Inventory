@@ -362,32 +362,25 @@ export default function App() {
   const refreshApplicationData = async () => {
     setDataLoading(true);
     try {
-      await seedInitialDataIfEmpty();
-      await syncProductStockStatuses();
-      
-      // Retrieve collections
-      const prodsList = await getProducts(true);
-      const catsList = await getCategories();
-      const brandsList = await getBrands();
-      const colorsList = await getProductColors();
-      const modelsList = await getProductModels();
+      // Parallelize non-blocking reads to minimize latency & network round-trips
+      const [prodsList, catsList, brandsList, colorsList, modelsList] = await Promise.all([
+        getProducts(true),
+        getCategories(),
+        getBrands(),
+        getProductColors(),
+        getProductModels()
+      ]);
 
-      setProducts(prodsList);
-      setCategories(catsList);
-      setBrands(brandsList);
-      setProductColors(colorsList);
-      setProductModels(modelsList);
+      if (prodsList && prodsList.length > 0) setProducts(prodsList);
+      if (catsList && catsList.length > 0) setCategories(catsList);
+      if (brandsList && brandsList.length > 0) setBrands(brandsList);
+      if (colorsList && colorsList.length > 0) setProductColors(colorsList);
+      if (modelsList && modelsList.length > 0) setProductModels(modelsList);
     } catch (error: any) {
-      console.warn("Firestore access error:", error);
+      console.warn("Firestore access error in refreshApplicationData:", error);
       if (checkIfQuotaError(error)) {
         setIsQuotaExceeded(true);
       }
-      // Fallback
-      setProducts([]);
-      setCategories([]);
-      setBrands([]);
-      setProductColors([]);
-      setProductModels([]);
     } finally {
       setDataLoading(false);
     }
