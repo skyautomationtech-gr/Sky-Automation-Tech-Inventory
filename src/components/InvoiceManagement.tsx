@@ -707,12 +707,12 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                       }
                     `}} />
 
-                    <div className="p-8 space-y-4">
+                    <div className="p-8 space-y-4 font-bold text-[#0f172a]">
                       {/* 1. HEADER & BRAND IDENTITY */}
                       <div className="flex justify-between items-start pb-4 border-b-2 border-[#0f172a]">
                         {/* Left: Brand Logo & Details */}
                         <div className="flex gap-4 items-center">
-                          <div className="w-16 h-16 bg-[#ffffff] border border-[#e2e8f0] rounded-xl flex items-center justify-center p-1 overflow-hidden shrink-0 shadow-xs">
+                          <div className="w-16 h-16 bg-[#ffffff] border-2 border-[#cbd5e1] rounded-xl flex items-center justify-center p-1 overflow-hidden shrink-0 shadow-xs">
                             <img 
                               src={subBrandInfo.logoUrl} 
                               alt={subBrandInfo.companyName} 
@@ -724,24 +724,24 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                               <h1 className="text-2xl font-black text-[#0f172a] m-0 tracking-tight uppercase">
                                 {subBrandInfo.companyName}
                               </h1>
-                              <span className="text-[10px] bg-[#0f172a] text-[#ffffff] font-bold px-2 py-0.5 rounded-sm uppercase tracking-wider">
+                              <span className="text-[10px] bg-[#0f172a] text-[#ffffff] font-black px-2 py-0.5 rounded-sm uppercase tracking-wider">
                                 {selectedInvoice.subBrand}
                               </span>
                             </div>
-                            <p className="text-[#64748b] text-xs mt-0.5 font-medium">{subBrandInfo.tagline}</p>
+                            <p className="text-[#1e293b] text-xs mt-0.5 font-bold">{subBrandInfo.tagline}</p>
                             
-                            <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-[#334155]">
-                              <div className="flex items-center gap-1.5 font-medium">
-                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>
-                                <span>{subBrandInfo.address}</span>
+                            <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-[#0f172a]">
+                              <div className="flex items-center gap-1.5 font-bold">
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"></path><circle cx="12" cy="10" r="3"></circle></svg>
+                                <span className="font-bold">{subBrandInfo.address}</span>
                               </div>
-                              <div className="flex items-center gap-1.5 font-medium">
-                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>
-                                <span className="font-bold text-[#0f172a]">{subBrandInfo.phone}</span>
+                              <div className="flex items-center gap-1.5 font-bold">
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>
+                                <span className="font-black text-[#0f172a]">{subBrandInfo.phone}</span>
                               </div>
-                              <div className="flex items-center gap-1.5 font-medium">
-                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg>
-                                <span>{subBrandInfo.email}</span>
+                              <div className="flex items-center gap-1.5 font-bold">
+                                <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg>
+                                <span className="font-bold">{subBrandInfo.email}</span>
                               </div>
                             </div>
                           </div>
@@ -750,38 +750,38 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                         {/* Right: Invoice Label & Official Email */}
                         <div className="text-right flex flex-col items-end shrink-0">
                           <div className="text-3xl font-black text-[#0f172a] tracking-tight">INVOICE</div>
-                          <div className="text-[10px] font-bold text-[#64748b] uppercase tracking-widest mt-0.5">
+                          <div className="text-[10px] font-black text-[#334155] uppercase tracking-widest mt-0.5">
                             Customer Copy
                           </div>
-                          <div className="mt-2 bg-[#0f172a] text-[#ffffff] text-[11px] font-semibold px-3 py-1 rounded-lg flex items-center gap-1.5 shadow-xs">
-                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg>
+                          <div className="mt-2 bg-[#0f172a] text-[#ffffff] text-[11px] font-black px-3 py-1 rounded-lg flex items-center gap-1.5 shadow-xs">
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg>
                             <span>skyautomationtech@gmail.com</span>
                           </div>
                         </div>
                       </div>
 
                       {/* 2. INVOICE META STRIP */}
-                      <div className="bg-[#f8fafc] border border-[#cbd5e1] rounded-xl overflow-hidden shadow-xs">
-                        <div className="bg-[#0f172a] text-[#ffffff] px-4 py-2 flex justify-between items-center text-xs font-bold">
+                      <div className="bg-[#f8fafc] border-2 border-[#94a3b8] rounded-xl overflow-hidden shadow-xs">
+                        <div className="bg-[#0f172a] text-[#ffffff] px-4 py-2 flex justify-between items-center text-xs font-black">
                           <span className="tracking-wide">INVOICE #{selectedInvoice.invoiceNumber}</span>
-                          <span className="text-[#94a3b8] font-normal">Order Ref: {selectedInvoice.orderId.substring(0, 10)}</span>
+                          <span className="text-[#e2e8f0] font-bold">Order Ref: {selectedInvoice.orderId.substring(0, 10)}</span>
                         </div>
-                        <div className="p-3 grid grid-cols-4 gap-3 text-xs divide-x divide-[#e2e8f0]">
+                        <div className="p-3 grid grid-cols-4 gap-3 text-xs divide-x-2 divide-[#cbd5e1]">
                           <div className="pr-2">
-                            <div className="text-[10px] text-[#64748b] font-bold uppercase tracking-wider mb-0.5">Invoice Date</div>
-                            <div className="font-bold text-[#0f172a]">{new Date(selectedInvoice.generatedAt).toLocaleDateString('en-GB')}</div>
+                            <div className="text-[10px] text-[#475569] font-black uppercase tracking-wider mb-0.5">Invoice Date</div>
+                            <div className="font-black text-[#0f172a]">{new Date(selectedInvoice.generatedAt).toLocaleDateString('en-GB')}</div>
                           </div>
                           <div className="px-3">
-                            <div className="text-[10px] text-[#64748b] font-bold uppercase tracking-wider mb-0.5">Customer ID</div>
-                            <div className="font-bold text-[#0f172a] truncate">{selectedInvoice.customerId || 'CUS-0001'}</div>
+                            <div className="text-[10px] text-[#475569] font-black uppercase tracking-wider mb-0.5">Customer ID</div>
+                            <div className="font-black text-[#0f172a] truncate">{selectedInvoice.customerId || 'CUS-0001'}</div>
                           </div>
                           <div className="px-3">
-                            <div className="text-[10px] text-[#64748b] font-bold uppercase tracking-wider mb-0.5">Courier Partner</div>
-                            <div className="font-bold text-[#0f172a] truncate">{selectedInvoice.courier || relatedOrder?.courier || 'Direct Dispatch'}</div>
+                            <div className="text-[10px] text-[#475569] font-black uppercase tracking-wider mb-0.5">Courier Partner</div>
+                            <div className="font-black text-[#0f172a] truncate">{selectedInvoice.courier || relatedOrder?.courier || 'Direct Dispatch'}</div>
                           </div>
                           <div className="pl-3">
-                            <div className="text-[10px] text-[#64748b] font-bold uppercase tracking-wider mb-0.5">Payment Terms</div>
-                            <div className="font-extrabold text-[#0f172a]">
+                            <div className="text-[10px] text-[#475569] font-black uppercase tracking-wider mb-0.5">Payment Terms</div>
+                            <div className="font-black text-[#0f172a]">
                               {isCOD ? (paidAmt > 0 ? `Partial COD (৳${paidAmt} Paid)` : 'Cash on Delivery (COD)') : 'Paid in Advance'}
                             </div>
                           </div>
@@ -789,38 +789,38 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                       </div>
 
                       {/* 3. OPTIMIZED CUSTOMER & DELIVERY INFORMATION */}
-                      <div className="border border-[#cbd5e1] rounded-xl overflow-hidden shadow-xs">
-                        <div className="bg-[#f1f5f9] px-4 py-1.5 border-b border-[#cbd5e1] flex items-center justify-between">
-                          <div className="text-[10px] font-extrabold text-[#334155] uppercase tracking-wider flex items-center gap-1.5">
-                            <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
+                      <div className="border-2 border-[#94a3b8] rounded-xl overflow-hidden shadow-xs">
+                        <div className="bg-[#e2e8f0] px-4 py-1.5 border-b-2 border-[#94a3b8] flex items-center justify-between">
+                          <div className="text-[11px] font-black text-[#0f172a] uppercase tracking-wider flex items-center gap-1.5">
+                            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"></path><circle cx="12" cy="7" r="4"></circle></svg>
                             Customer & Delivery Information
                           </div>
-                          <div className="text-[9px] font-bold text-[#64748b] uppercase">
+                          <div className="text-[10px] font-black text-[#0f172a] uppercase">
                             Sales Channel: {relatedOrder?.salesChannel || 'Direct'}
                           </div>
                         </div>
-                        <div className="p-3 grid grid-cols-2 gap-4 text-xs">
+                        <div className="p-3.5 grid grid-cols-2 gap-4 text-xs">
                           {/* Left: Customer Info */}
-                          <div className="border-r border-[#e2e8f0] pr-3 space-y-1">
-                            <div className="text-[10px] font-bold text-[#64748b] uppercase tracking-wider">Bill To Customer:</div>
-                            <div className="font-bold text-sm text-[#0f172a]">{selectedInvoice.customerName}</div>
-                            <div className="text-xs font-semibold text-[#0f172a] flex items-center gap-1">
-                              <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>
+                          <div className="border-r-2 border-[#cbd5e1] pr-3 space-y-1.5">
+                            <div className="text-[10px] font-black text-[#475569] uppercase tracking-wider">Bill To Customer:</div>
+                            <div className="font-black text-base text-[#0f172a]">{selectedInvoice.customerName}</div>
+                            <div className="text-xs font-black text-[#0f172a] flex items-center gap-1">
+                              <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"></path></svg>
                               {selectedInvoice.customerPhone}
                             </div>
-                            <div className="text-[10px] text-[#64748b]">
-                              Sub-Brand Preference: <strong className="text-[#0f172a]">{selectedInvoice.subBrand}</strong>
+                            <div className="text-[11px] font-bold text-[#334155]">
+                              Sub-Brand Preference: <strong className="text-[#0f172a] font-black">{selectedInvoice.subBrand}</strong>
                             </div>
                           </div>
 
                           {/* Right: Shipping Address & Landmark */}
-                          <div className="space-y-1">
-                            <div className="text-[10px] font-bold text-[#64748b] uppercase tracking-wider">Ship To Destination:</div>
-                            <div className="text-xs text-[#0f172a] font-medium leading-relaxed">
+                          <div className="space-y-1.5">
+                            <div className="text-[10px] font-black text-[#475569] uppercase tracking-wider">Ship To Destination:</div>
+                            <div className="text-xs text-[#0f172a] font-bold leading-relaxed">
                               {relatedOrder?.deliveryAddress || 'Direct Store Delivery / In-person Pickup'}
                             </div>
                             {selectedInvoice.courierTrackingNumber && (
-                              <div className="text-[10px] text-[#0f172a] font-bold mt-1 bg-[#f8fafc] px-2 py-0.5 rounded border border-[#e2e8f0] inline-block">
+                              <div className="text-[11px] text-[#0f172a] font-black mt-1 bg-[#e2e8f0] px-2.5 py-0.5 rounded border border-[#94a3b8] inline-block">
                                 Tracking No: {selectedInvoice.courierTrackingNumber}
                               </div>
                             )}
@@ -829,40 +829,40 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                       </div>
 
                       {/* 4. ITEMS TABLE (CLEAN MEANINGFUL SKU & VARIANTS) */}
-                      <div className="w-full text-xs rounded-xl overflow-hidden border border-[#cbd5e1] shadow-xs">
+                      <div className="w-full text-xs rounded-xl overflow-hidden border-2 border-[#94a3b8] shadow-xs">
                         <table className="w-full text-left border-collapse">
                           <thead>
                             <tr className="bg-[#0f172a] text-[#ffffff]">
-                              <th className="py-2.5 px-3 font-bold w-10 text-center uppercase text-[10px] tracking-wider">SL</th>
-                              <th className="py-2.5 px-3 font-bold uppercase text-[10px] tracking-wider">Item Description</th>
-                              <th className="py-2.5 px-3 font-bold uppercase text-[10px] tracking-wider w-36">SKU / Code</th>
-                              <th className="py-2.5 px-3 font-bold text-center w-14 uppercase text-[10px] tracking-wider">Qty</th>
-                              <th className="py-2.5 px-3 font-bold text-right w-24 uppercase text-[10px] tracking-wider">Unit Price</th>
-                              <th className="py-2.5 px-3 font-bold text-right w-24 uppercase text-[10px] tracking-wider">Total</th>
+                              <th className="py-2.5 px-3 font-black w-10 text-center uppercase text-[10px] tracking-wider">SL</th>
+                              <th className="py-2.5 px-3 font-black uppercase text-[10px] tracking-wider">Item Description</th>
+                              <th className="py-2.5 px-3 font-black uppercase text-[10px] tracking-wider w-36">SKU / Code</th>
+                              <th className="py-2.5 px-3 font-black text-center w-14 uppercase text-[10px] tracking-wider">Qty</th>
+                              <th className="py-2.5 px-3 font-black text-right w-24 uppercase text-[10px] tracking-wider">Unit Price</th>
+                              <th className="py-2.5 px-3 font-black text-right w-24 uppercase text-[10px] tracking-wider">Total</th>
                             </tr>
                           </thead>
-                          <tbody className="divide-y divide-[#e2e8f0]">
+                          <tbody className="divide-y-2 divide-[#cbd5e1]">
                             {selectedInvoice.items.map((item, idx) => (
                               <tr key={idx} style={{ backgroundColor: idx % 2 === 0 ? '#ffffff' : '#f8fafc' }}>
-                                <td className="py-2.5 px-3 text-center text-xs font-semibold text-[#64748b]">{idx + 1}</td>
+                                <td className="py-2.5 px-3 text-center text-xs font-black text-[#0f172a]">{idx + 1}</td>
                                 <td className="py-2.5 px-3">
                                   <div>
-                                    <div className="font-extrabold text-[#0f172a] text-xs leading-tight">{item.productName}</div>
+                                    <div className="font-black text-[#0f172a] text-xs leading-tight">{item.productName}</div>
                                     {item.variantLabel && (
-                                      <div className="text-[10px] text-[#64748b] font-medium mt-0.5">
+                                      <div className="text-[10px] text-[#334155] font-bold mt-0.5">
                                         Variant: {item.variantLabel}
                                       </div>
                                     )}
                                   </div>
                                 </td>
                                 <td className="py-2.5 px-3">
-                                  <span className="font-mono font-bold text-[11px] text-[#334155] bg-[#e2e8f0]/60 px-1.5 py-0.5 rounded">
+                                  <span className="font-mono font-black text-[11px] text-[#0f172a] bg-[#e2e8f0] px-1.5 py-0.5 rounded border border-[#cbd5e1]">
                                     {getCleanSku(item)}
                                   </span>
                                 </td>
-                                <td className="py-2.5 px-3 text-center font-bold text-[#0f172a] text-xs">{item.qty}</td>
-                                <td className="py-2.5 px-3 text-right text-xs font-semibold text-[#334155]">৳{item.unitPrice.toLocaleString()}</td>
-                                <td className="py-2.5 px-3 text-right font-extrabold text-[#0f172a] text-xs">৳{(item.qty * item.unitPrice).toLocaleString()}</td>
+                                <td className="py-2.5 px-3 text-center font-black text-[#0f172a] text-xs">{item.qty}</td>
+                                <td className="py-2.5 px-3 text-right text-xs font-bold text-[#0f172a]">৳{item.unitPrice.toLocaleString()}</td>
+                                <td className="py-2.5 px-3 text-right font-black text-[#0f172a] text-xs">৳{(item.qty * item.unitPrice).toLocaleString()}</td>
                               </tr>
                             ))}
                           </tbody>
@@ -874,25 +874,25 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                         {/* Left: Terms & Ledger if any */}
                         <div className="flex-1 space-y-3">
                           {relatedOrder?.paymentHistory && relatedOrder.paymentHistory.length > 0 && (
-                            <div className="border border-[#cbd5e1] rounded-xl p-2.5 bg-[#f8fafc]">
-                              <div className="text-[10px] text-[#0f172a] font-extrabold uppercase mb-1 flex items-center justify-between">
+                            <div className="border-2 border-[#94a3b8] rounded-xl p-2.5 bg-[#f8fafc]">
+                              <div className="text-[10px] text-[#0f172a] font-black uppercase mb-1 flex items-center justify-between">
                                 <span>Advance Payment Record</span>
-                                <span className="text-[#059669]">Received: ৳{paidAmt.toLocaleString()}</span>
+                                <span className="text-[#047857] font-black">Received: ৳{paidAmt.toLocaleString()}</span>
                               </div>
                               <table className="w-full text-left text-[10px]">
                                 <thead>
-                                  <tr className="border-b border-[#e2e8f0] text-[#64748b]">
-                                    <th className="pb-1 font-semibold">Date</th>
-                                    <th className="pb-1 font-semibold">Method</th>
-                                    <th className="pb-1 font-semibold text-right">Amount</th>
+                                  <tr className="border-b-2 border-[#cbd5e1] text-[#0f172a]">
+                                    <th className="pb-1 font-black">Date</th>
+                                    <th className="pb-1 font-black">Method</th>
+                                    <th className="pb-1 font-black text-right">Amount</th>
                                   </tr>
                                 </thead>
                                 <tbody>
                                   {relatedOrder.paymentHistory.map((ph, idx) => (
-                                    <tr key={idx} className="border-b border-[#f1f5f9] last:border-0">
-                                      <td className="py-0.5 text-[#475569]">{new Date(ph.date).toLocaleDateString('en-GB')}</td>
-                                      <td className="py-0.5 text-[#0f172a] font-medium">{ph.method}</td>
-                                      <td className="py-0.5 text-[#059669] font-bold text-right">৳{ph.amount.toLocaleString()}</td>
+                                    <tr key={idx} className="border-b border-[#e2e8f0] last:border-0 font-bold">
+                                      <td className="py-0.5 text-[#0f172a] font-bold">{new Date(ph.date).toLocaleDateString('en-GB')}</td>
+                                      <td className="py-0.5 text-[#0f172a] font-bold">{ph.method}</td>
+                                      <td className="py-0.5 text-[#047857] font-black text-right">৳{ph.amount.toLocaleString()}</td>
                                     </tr>
                                   ))}
                                 </tbody>
@@ -900,9 +900,9 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                             </div>
                           )}
 
-                          <div className="border border-[#cbd5e1] rounded-xl p-2.5 bg-[#ffffff]">
-                            <div className="text-[10px] text-[#475569] font-bold uppercase mb-0.5">Terms & Return Policy</div>
-                            <div className="text-[10px] text-[#64748b] leading-relaxed">
+                          <div className="border-2 border-[#94a3b8] rounded-xl p-2.5 bg-[#ffffff]">
+                            <div className="text-[10px] text-[#0f172a] font-black uppercase mb-0.5">Terms & Return Policy</div>
+                            <div className="text-[10px] text-[#1e293b] font-bold leading-relaxed">
                               {subBrandInfo.invoiceTerms}
                             </div>
                           </div>
@@ -920,7 +920,7 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                               <div className="text-[7px] font-black tracking-wider uppercase bg-[#0f172a] text-[#ffffff] px-1.5 py-0.2 rounded-xs">
                                 OFFICIAL SEAL
                               </div>
-                              <div className="text-[6px] text-[#475569] mt-0.5 font-bold">VERIFIED & AUTH</div>
+                              <div className="text-[7px] text-[#0f172a] mt-0.5 font-black">VERIFIED & AUTH</div>
                             </div>
 
                             {/* Authorised Signature Line */}
@@ -932,61 +932,61 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                                   className="h-11 object-contain hidden relative z-10" 
                                   style={{ mixBlendMode: 'multiply' }}
                                 />
-                                <div className="cursive-font text-2xl text-[#0f172a]" id="fallback-signature">
+                                <div className="cursive-font text-2xl font-bold text-[#0f172a]" id="fallback-signature">
                                   {subBrandInfo.companyName}
                                 </div>
                               </div>
-                              <div className="border-t-2 border-[#0f172a] pt-1 text-[10px] font-extrabold text-[#0f172a] uppercase tracking-wider">
+                              <div className="border-t-2 border-[#0f172a] pt-1 text-[10px] font-black text-[#0f172a] uppercase tracking-wider">
                                 Authorised Signatory
                               </div>
-                              <div className="text-[8px] text-[#64748b] font-medium">Sky Automation Tech Accounts</div>
+                              <div className="text-[9px] text-[#0f172a] font-bold">Sky Automation Tech Accounts</div>
                             </div>
                           </div>
                         </div>
                         
                         {/* Right: Totals Box & COD Highlight */}
                         <div className="w-72 space-y-2">
-                          <div className="p-3 bg-[#f8fafc] rounded-xl border border-[#cbd5e1] space-y-1.5 text-xs shadow-xs">
+                          <div className="p-3 bg-[#f8fafc] rounded-xl border-2 border-[#94a3b8] space-y-1.5 text-xs shadow-xs">
                             <div className="flex justify-between">
-                              <span className="text-[#64748b] font-semibold">Subtotal</span>
-                              <span className="text-[#0f172a] font-bold">৳{itemSubtotal.toLocaleString()}</span>
+                              <span className="text-[#334155] font-bold">Subtotal</span>
+                              <span className="text-[#0f172a] font-black">৳{itemSubtotal.toLocaleString()}</span>
                             </div>
                             {discountAmt > 0 && (
-                              <div className="flex justify-between text-[#059669]">
-                                <span className="font-semibold">Discount</span>
-                                <span className="font-bold">-৳{discountAmt.toLocaleString()}</span>
+                              <div className="flex justify-between text-[#047857]">
+                                <span className="font-bold">Discount</span>
+                                <span className="font-black">-৳{discountAmt.toLocaleString()}</span>
                               </div>
                             )}
                             {shippingAmt > 0 && (
-                              <div className="flex justify-between text-[#334155]">
-                                <span className="font-semibold">Shipping Charge</span>
-                                <span className="font-bold">+৳{shippingAmt.toLocaleString()}</span>
+                              <div className="flex justify-between text-[#0f172a]">
+                                <span className="font-bold">Shipping Charge</span>
+                                <span className="font-black">+৳{shippingAmt.toLocaleString()}</span>
                               </div>
                             )}
-                            <div className="flex justify-between border-t border-[#e2e8f0] pt-1.5 font-bold text-[#0f172a]">
+                            <div className="flex justify-between border-t-2 border-[#cbd5e1] pt-1.5 font-black text-[#0f172a]">
                               <span>Net Grand Total</span>
-                              <span className="text-sm">৳{grandTotal.toLocaleString()}</span>
+                              <span className="text-sm font-black">৳{grandTotal.toLocaleString()}</span>
                             </div>
-                            <div className="flex justify-between text-[#059669] font-semibold border-t border-[#e2e8f0] pt-1.5">
+                            <div className="flex justify-between text-[#047857] font-black border-t-2 border-[#cbd5e1] pt-1.5">
                               <span>Total Paid / Advance</span>
                               <span>৳{paidAmt.toLocaleString()}</span>
                             </div>
-                            <div className="flex justify-between items-center text-[#dc2626] font-extrabold text-sm border-t-2 border-[#e2e8f0] pt-1.5">
+                            <div className="flex justify-between items-center text-[#dc2626] font-black text-sm border-t-2 border-[#cbd5e1] pt-1.5">
                               <span>Balance Due</span>
-                              <span>৳{dueAmt.toLocaleString()}</span>
+                              <span className="text-base">৳{dueAmt.toLocaleString()}</span>
                             </div>
                           </div>
 
                           {/* COD Highlight Banner (Crucial for Rider / Delivery) */}
-                          <div className={`p-3 rounded-xl font-black text-center border ${
+                          <div className={`p-3 rounded-xl font-black text-center border-2 ${
                             dueAmt > 0 
                               ? 'bg-[#0f172a] text-[#ffffff] border-[#0f172a]' 
-                              : 'bg-[#ecfdf5] text-[#047857] border-[#a7f3d0]'
+                              : 'bg-[#ecfdf5] text-[#047857] border-[#059669]'
                           }`}>
-                            <div className="text-[10px] uppercase tracking-wider opacity-90">
+                            <div className="text-[10px] uppercase font-black tracking-wider opacity-90">
                               {dueAmt > 0 ? 'Amount to Collect on Delivery (COD)' : 'Payment Status'}
                             </div>
-                            <div className="text-xl mt-0.5 tracking-tight">
+                            <div className="text-xl mt-0.5 font-black tracking-tight">
                               {dueAmt > 0 ? `৳${dueAmt.toLocaleString()}` : 'FULL PAYMENT RECEIVED'}
                             </div>
                           </div>
@@ -994,24 +994,24 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                       </div>
 
                       {/* 7. BOTTOM: PAYMENT METHODS, SCAN-TO-VERIFY QR, & APPRECIATION */}
-                      <div className="pt-2 flex justify-between items-end gap-4 border-t border-[#e2e8f0]">
+                      <div className="pt-2 flex justify-between items-end gap-4 border-t-2 border-[#0f172a]">
                         <div className="bg-[#0f172a] rounded-xl p-3.5 flex-1 flex justify-between items-center text-[#ffffff] shadow-xs">
                           <div className="space-y-1.5">
-                            <div className="text-[10px] uppercase font-bold text-[#94a3b8] tracking-wider">
+                            <div className="text-[10px] uppercase font-black text-[#cbd5e1] tracking-wider">
                               Official Payment Channels
                             </div>
-                            <div className="space-y-1 text-xs text-[#e2e8f0]">
+                            <div className="space-y-1 text-xs text-[#f1f5f9] font-bold">
                               <div className="flex items-center gap-2">
-                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="2" y="5" width="20" height="14" rx="2"></rect><line x1="2" y1="10" x2="22" y2="10"></line></svg>
-                                <span>bKash / Nagad (Personal/Merchant): <strong className="text-[#ffffff] ml-1">{subBrandInfo.bkashNagadPhone}</strong></span>
+                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><rect x="2" y="5" width="20" height="14" rx="2"></rect><line x1="2" y1="10" x2="22" y2="10"></line></svg>
+                                <span>bKash / Nagad (Personal/Merchant): <strong className="text-[#ffffff] font-black ml-1">{subBrandInfo.bkashNagadPhone}</strong></span>
                               </div>
                               <div className="flex items-center gap-2">
-                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
-                                <span>Bank Transfer: <strong className="text-[#ffffff] ml-1">{subBrandInfo.bankDetails}</strong></span>
+                                <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><rect x="3" y="11" width="18" height="11" rx="2" ry="2"></rect><path d="M7 11V7a5 5 0 0 1 10 0v4"></path></svg>
+                                <span>Bank Transfer: <strong className="text-[#ffffff] font-black ml-1">{subBrandInfo.bankDetails}</strong></span>
                               </div>
                             </div>
-                            <div className="text-[9px] text-[#94a3b8] italic pt-1 border-t border-[#334155]">
-                              Please WhatsApp payment receipt to: <strong className="text-[#e2e8f0]">{subBrandInfo.whatsappContact}</strong>
+                            <div className="text-[9px] text-[#cbd5e1] font-bold italic pt-1 border-t border-[#334155]">
+                              Please WhatsApp payment receipt to: <strong className="text-[#ffffff] font-black">{subBrandInfo.whatsappContact}</strong>
                             </div>
                           </div>
                           
@@ -1046,8 +1046,8 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
 
                         {/* Thank You Note */}
                         <div className="text-right w-44 shrink-0 pb-1">
-                          <div className="cursive-font text-3xl text-[#0f172a] leading-none mb-1">Thank you!</div>
-                          <div className="text-[9px] font-bold text-[#64748b] uppercase tracking-wider">
+                          <div className="cursive-font text-3xl font-bold text-[#0f172a] leading-none mb-1">Thank you!</div>
+                          <div className="text-[10px] font-black text-[#0f172a] uppercase tracking-wider">
                             For your trust & support
                           </div>
                         </div>
