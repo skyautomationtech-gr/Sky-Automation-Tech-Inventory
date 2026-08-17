@@ -41,13 +41,19 @@ export function getSubBrandCompanyInfo(
   const defaultLogo = BRAND_LOGOS[brandKey] || companySettings?.logoUrl || '/Sky Automation Tech Logo.jpeg';
   const defaultPhone = custom?.phone || companySettings?.phone || '01577351518';
 
+  const defaultEmails: Record<string, string> = {
+    SAT: 'skyautomationtech@gmail.com',
+    GZ: 'support@gadgetzu.com',
+    RTX: 'support@rtxgadget.com'
+  };
+
   return {
     companyName: custom?.companyName || (brandKey === 'SAT' && companySettings?.companyName ? companySettings.companyName : defaultName),
     address: custom?.address || companySettings?.address || 'House #12, Road #3, Block-A, Banasree, Dhaka',
     phone: defaultPhone,
-    email: custom?.email || companySettings?.email || 'skyautomationtech@gmail.com',
+    email: custom?.email || defaultEmails[brandKey] || companySettings?.email || 'skyautomationtech@gmail.com',
     logoUrl: custom?.logoUrl || defaultLogo,
-    invoiceTerms: custom?.invoiceTerms || companySettings?.invoiceTerms || 'Goods once sold will not be taken back. Please make payment within the due date.',
+    invoiceTerms: custom?.invoiceTerms || companySettings?.invoiceTerms || 'Goods once sold are non-refundable. Please verify items upon delivery.',
     tagline: custom?.tagline || companySettings?.footerTagline || 'Smart solutions, better future',
     bkashNagadPhone: companySettings?.paymentMethodsInfo?.bkashNagad || defaultPhone,
     bankDetails: companySettings?.paymentMethodsInfo?.bankInfo || 'DBBL - 105.***.***.18',

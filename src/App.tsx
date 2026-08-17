@@ -55,6 +55,7 @@ import SupplierManagement from './components/SupplierManagement';
 import ReportsAnalytics from './components/ReportsAnalytics';
 import { AuditLogView } from './components/AuditLogView';
 import NotificationCenter from './components/NotificationCenter';
+import { PublicInvoiceVerification } from './components/PublicInvoiceVerification';
 
 // Mock/Fallback Data in case of Firestore permission/network errors
 const MOCK_PRODUCTS: Product[] = [
@@ -209,6 +210,24 @@ export default function App() {
   const [productModels, setProductModels] = useState<ProductModel[]>([]);
   const [dataLoading, setDataLoading] = useState(false);
   const [showCheckInModal, setShowCheckInModal] = useState(false);
+
+  // Public QR Invoice Verification state
+  const [isPublicVerification, setIsPublicVerification] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      const search = window.location.search || '';
+      const hash = window.location.hash || '';
+      const href = window.location.href || '';
+      return (
+        search.includes('verify_inv') ||
+        search.includes('inv=') ||
+        hash.includes('verify_inv') ||
+        hash.includes('inv=') ||
+        href.includes('verify_inv=') ||
+        href.includes('?inv=')
+      );
+    }
+    return false;
+  });
 
   // Deep-linking search target states
   const [initialProductId, setInitialProductId] = useState<string | null>(null);
@@ -637,6 +656,31 @@ export default function App() {
 
     return true;
   };
+
+  // If public verification requested via QR code scan
+  if (isPublicVerification) {
+    return (
+      <PublicInvoiceVerification 
+        onDismiss={() => {
+          setIsPublicVerification(false);
+          try {
+            const url = new URL(window.location.href);
+            url.searchParams.delete('verify_inv');
+            url.searchParams.delete('inv');
+            url.searchParams.delete('brand');
+            url.searchParams.delete('total');
+            url.searchParams.delete('due');
+            url.searchParams.delete('paid');
+            url.searchParams.delete('phone');
+            url.searchParams.delete('name');
+            url.searchParams.delete('date');
+            url.searchParams.delete('order');
+            window.history.replaceState({}, '', url.pathname + (url.search ? url.search : ''));
+          } catch (e) {}
+        }}
+      />
+    );
+  }
 
   if (authChecking) {
     return (
