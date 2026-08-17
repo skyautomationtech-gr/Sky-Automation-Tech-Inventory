@@ -545,33 +545,14 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                 )}
 
                 <a
-                  href={(() => {
-                    let origin = 'https://ais-pre-jlvy4yjbm64spydbxln25t-698042614411.asia-southeast1.run.app';
-                    if (typeof window !== 'undefined' && window.location.origin) {
-                      const locOrigin = window.location.origin;
-                      if (!locOrigin.includes('localhost') && !locOrigin.includes('127.0.0.1') && !locOrigin.includes('0.0.0.0')) {
-                        origin = locOrigin;
-                      }
-                    }
-                    const params = new URLSearchParams({
-                      verify_inv: selectedInvoice.invoiceNumber || selectedInvoice.id,
-                      brand: selectedInvoice.subBrand || 'SAT',
-                      total: (selectedInvoice.totalAmount || 0).toString(),
-                      due: (selectedInvoice.dueAmount || 0).toString(),
-                      paid: (selectedInvoice.paidAmount || 0).toString(),
-                      phone: selectedInvoice.customerPhone || '',
-                      name: selectedInvoice.customerName || '',
-                      date: new Date(selectedInvoice.generatedAt || Date.now()).toISOString().split('T')[0],
-                    });
-                    return `${origin}/?${params.toString()}`;
-                  })()}
+                  href={`https://sky-automation-tech-inventory.vercel.app/?inv=${encodeURIComponent(selectedInvoice.invoiceNumber || selectedInvoice.id)}`}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="flex items-center gap-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-sm font-bold px-3.5 py-2 rounded-xl border border-emerald-200 shadow-xs transition-all cursor-pointer"
-                  title="Open and test the public QR invoice verification link in a new tab"
+                  title="Open live invoice verification page on Vercel"
                 >
-                  <QrCode size={14} />
-                  <span>Test QR Link</span>
+                  <ExternalLink size={14} />
+                  <span>Test Vercel Verification Link</span>
                 </a>
 
                 <button
@@ -1034,42 +1015,28 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                             </div>
                           </div>
                           
-                          {/* DYNAMIC QR CODE WITH CLEAR SCAN CAPTION */}
+                          {/* DYNAMIC QR CODE WITH CLEAR SCAN CAPTION (LINKED TO OFFICIAL VERCEL APP) */}
                           {(() => {
-                            let origin = 'https://ais-pre-jlvy4yjbm64spydbxln25t-698042614411.asia-southeast1.run.app';
-                            if (typeof window !== 'undefined' && window.location.origin) {
-                              const locOrigin = window.location.origin;
-                              if (!locOrigin.includes('localhost') && !locOrigin.includes('127.0.0.1') && !locOrigin.includes('0.0.0.0')) {
-                                origin = locOrigin;
-                              }
-                            }
-                            const qrParams = new URLSearchParams({
-                              verify_inv: selectedInvoice.invoiceNumber || selectedInvoice.id,
-                              brand: selectedInvoice.subBrand || 'SAT',
-                              total: grandTotal.toString(),
-                              due: dueAmt.toString(),
-                              paid: paidAmt.toString(),
-                              phone: selectedInvoice.customerPhone || '',
-                              name: selectedInvoice.customerName || '',
-                              date: new Date(selectedInvoice.generatedAt || Date.now()).toISOString().split('T')[0],
-                            });
-                            const qrUrl = `${origin}/?${qrParams.toString()}`;
+                            const invCode = selectedInvoice.invoiceNumber || selectedInvoice.id;
+                            const qrUrl = `https://sky-automation-tech-inventory.vercel.app/?inv=${encodeURIComponent(invCode)}`;
 
                             return (
                               <div 
-                                className="bg-[#ffffff] p-2 rounded-lg flex flex-col items-center gap-1 shrink-0 ml-3 shadow-xs cursor-pointer hover:ring-2 hover:ring-[#0f172a] transition-all"
+                                className="bg-[#ffffff] p-2 rounded-xl flex flex-col items-center gap-1 shrink-0 ml-3 shadow-md border border-slate-200 cursor-pointer hover:ring-2 hover:ring-emerald-500 transition-all"
                                 onClick={() => window.open(qrUrl, '_blank')}
-                                title="Click to test live verification page in a new tab"
+                                title="Click to test live verification page on Vercel"
                               >
-                                <QRCodeSVG 
-                                  value={qrUrl} 
-                                  size={62} 
-                                  level="M" 
-                                  includeMargin={false}
-                                  fgColor="#0f172a"
-                                  bgColor="#ffffff"
-                                />
-                                <div className="text-[8px] font-bold text-[#0f172a] uppercase tracking-wider text-center leading-none">
+                                <div className="bg-[#ffffff] p-0.5 rounded-lg flex items-center justify-center">
+                                  <QRCodeSVG 
+                                    value={qrUrl} 
+                                    size={84} 
+                                    level="M" 
+                                    includeMargin={true}
+                                    fgColor="#0f172a"
+                                    bgColor="#ffffff"
+                                  />
+                                </div>
+                                <div className="text-[8px] font-black text-[#0f172a] uppercase tracking-wider text-center leading-none">
                                   Scan to Verify
                                 </div>
                               </div>
