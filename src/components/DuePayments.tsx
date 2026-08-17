@@ -12,10 +12,12 @@ import {
   TrendingUp, 
   User, 
   Clock, 
-  UserCircle 
+  UserCircle,
+  Trash2,
+  AlertCircle
 } from 'lucide-react';
 import { Order, UserProfile } from '../types';
-import { getOrders, recordOrderPayment } from '../firebase/db';
+import { getOrders, recordOrderPayment, deleteOrderPayment } from '../firebase/db';
 
 interface DuePaymentsProps {
   user: UserProfile | null;
@@ -37,6 +39,17 @@ export default function DuePayments({ user, requireCheckIn }: DuePaymentsProps) 
   // Modal / Interaction states
   const [selectedOrderForPayment, setSelectedOrderForPayment] = useState<Order | null>(null);
   const [selectedOrderForDetails, setSelectedOrderForDetails] = useState<Order | null>(null);
+  
+  // Payment deletion state
+  const [deletePaymentConfirm, setDeletePaymentConfirm] = useState<{
+    isOpen: boolean;
+    orderId: string;
+    paymentIndex: number;
+    amount: number;
+    method: string;
+    date: number;
+  } | null>(null);
+  const [deletingPayment, setDeletingPayment] = useState(false);
   
   // Form fields
   const [paymentAmount, setPaymentAmount] = useState('');
@@ -118,6 +131,30 @@ export default function DuePayments({ user, requireCheckIn }: DuePaymentsProps) 
     } catch (err: any) {
       console.error('Failed to record payment:', err);
       setError('Could not save payment to transaction logs. Please try again.');
+    }
+  };
+
+  const handleConfirmDeletePayment = async () => {
+    if (!deletePaymentConfirm) return;
+    setDeletingPayment(true);
+    setError('');
+    setSuccess('');
+    try {
+      const updatedOrder = await deleteOrderPayment(
+        deletePaymentConfirm.orderId,
+        deletePaymentConfirm.paymentIndex
+      );
+      setSuccess(`Payment record of ৳${deletePaymentConfirm.amount.toLocaleString()} (${deletePaymentConfirm.method}) deleted successfully. Due balance restored.`);
+      setSelectedOrderForDetails(updatedOrder);
+      setOrders(prev => prev.map(o => o.id === updatedOrder.id ? updatedOrder : o));
+      setDeletePaymentConfirm(null);
+      setTimeout(() => setSuccess(''), 4000);
+    } catch (err: any) {
+      console.error('Failed to delete payment:', err);
+      setError(`Failed to delete payment entry: ${err.message || err}`);
+      setTimeout(() => setError(''), 4000);
+    } finally {
+      setDeletingPayment(false);
     }
   };
 
@@ -522,35 +559,35 @@ export default function DuePayments({ user, requireCheckIn }: DuePaymentsProps) 
       {/* Order Collection History slide-out / Detail Modal */}
       {selectedOrderForDetails && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl w-full max-w-lg p-6 shadow-2xl border border-slate-100 space-y-4">
+          <div className="bg-white rounded-3xl w-full max-w-2xl p-6 shadow-2xl border border-slate-100 space-y-4">
             <div className="flex justify-between items-center pb-3 border-b border-slate-100">
               <div>
-                <h3 className="text-sm font-bold text-slate-900 uppercase tracking-tight">Payment Ledger Card</h3>
-                <p className="text-sm text-slate-400 mt-0.5">Reference ID: #{selectedOrderForDetails.id.substring(0, 8).toUpperCase()}</p>
+                <h3 className="text-base font-bold text-slate-900 uppercase tracking-tight">Payment Ledger Card</h3>
+                <p className="text-xs text-slate-400 mt-0.5">Reference ID: #{selectedOrderForDetails.id.substring(0, 8).toUpperCase()}</p>
               </div>
-              <button onClick={() => setSelectedOrderForDetails(null)} className="text-slate-400 hover:text-slate-600"><X size={16} /></button>
+              <button onClick={() => setSelectedOrderForDetails(null)} className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-xl cursor-pointer transition-colors"><X size={18} /></button>
             </div>
 
             {/* Customer Details */}
-            <div className="space-y-3">
-              <div className="grid grid-cols-2 gap-3 text-sm border border-slate-100 p-3 rounded-2xl bg-slate-50/50">
+            <div className="space-y-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm border border-slate-100 p-3 rounded-2xl bg-slate-50/50">
                 <div>
-                  <span className="text-sm uppercase font-bold text-slate-400">Customer Name</span>
+                  <span className="text-xs uppercase font-bold text-slate-400">Customer Name</span>
                   <p className="font-bold text-slate-700 mt-0.5">{selectedOrderForDetails.customerName}</p>
                 </div>
                 <div>
-                  <span className="text-sm uppercase font-bold text-slate-400">Phone Contact</span>
+                  <span className="text-xs uppercase font-bold text-slate-400">Phone Contact</span>
                   <p className="font-mono font-semibold text-slate-700 mt-0.5">{selectedOrderForDetails.customerPhone}</p>
                 </div>
               </div>
 
               {/* Items breakdown list */}
               <div>
-                <h4 className="text-sm uppercase font-bold text-slate-400 tracking-wider mb-2">Ordered Items Breakdown</h4>
-                <div className="space-y-1.5 max-h-32 overflow-y-auto">
+                <h4 className="text-xs uppercase font-bold text-slate-400 tracking-wider mb-1.5">Ordered Items Breakdown</h4>
+                <div className="space-y-1.5 max-h-28 overflow-y-auto">
                   {selectedOrderForDetails.items.map((it, idx) => (
-                    <div key={idx} className="flex justify-between text-sm py-1.5 px-3 bg-slate-50 border border-slate-100 rounded-xl">
-                      <span>{it.productName} <span className="text-slate-400 text-sm">({it.variantLabel})</span></span>
+                    <div key={idx} className="flex justify-between text-xs py-1.5 px-3 bg-slate-50 border border-slate-100 rounded-xl">
+                      <span>{it.productName} <span className="text-slate-400">({it.variantLabel})</span></span>
                       <strong className="font-mono">Qty: {it.qty}</strong>
                     </div>
                   ))}
@@ -559,42 +596,72 @@ export default function DuePayments({ user, requireCheckIn }: DuePaymentsProps) 
 
               {/* Payment History Log Table */}
               <div>
-                <h4 className="text-sm uppercase font-bold text-slate-400 tracking-wider mb-2">Payment Collections History Log</h4>
+                <div className="flex items-center justify-between mb-2">
+                  <h4 className="text-xs uppercase font-bold text-slate-500 tracking-wider">Payment Collections History Log</h4>
+                  <span className="text-[11px] font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-md">
+                    Total Entries: {selectedOrderForDetails.paymentHistory?.length || 0}
+                  </span>
+                </div>
                 {!selectedOrderForDetails.paymentHistory || selectedOrderForDetails.paymentHistory.length === 0 ? (
-                  <p className="text-sm text-slate-400 italic bg-amber-50/30 border border-amber-100/50 p-3 rounded-xl text-center">
+                  <p className="text-xs text-slate-400 italic bg-amber-50/30 border border-amber-100/50 p-3 rounded-xl text-center">
                     No payment collection entries recorded yet. Outstanding due is fully unpaid.
                   </p>
                 ) : (
-                  <div className="border border-slate-100 rounded-2xl overflow-hidden text-sm max-h-44 overflow-y-auto">
-                    <table className="w-full text-left">
+                  <div className="border border-slate-200 rounded-2xl overflow-x-auto text-xs max-h-56 overflow-y-auto shadow-2xs">
+                    <table className="w-full text-left min-w-[520px]">
                       <thead>
-                        <tr className="bg-slate-50 border-b border-slate-100 text-[9px] uppercase font-bold text-slate-400">
-                          <th className="py-2 px-4">Date</th>
-                          <th className="py-2 px-4">Method</th>
-                          <th className="py-2 px-4">Collected By</th>
-                          <th className="py-2 px-4 text-right">Amount</th>
+                        <tr className="bg-slate-100/80 border-b border-slate-200 text-[10px] uppercase font-black text-slate-600 sticky top-0 z-10 backdrop-blur-xs">
+                          <th className="py-2.5 px-3.5">Date</th>
+                          <th className="py-2.5 px-3.5">Method</th>
+                          <th className="py-2.5 px-3.5">Collected By</th>
+                          <th className="py-2.5 px-3.5 text-right">Amount</th>
+                          <th className="py-2.5 px-3.5 text-center w-24">Action</th>
                         </tr>
                       </thead>
-                      <tbody className="divide-y divide-slate-100 text-sm">
+                      <tbody className="divide-y divide-slate-100 bg-white">
                         {selectedOrderForDetails.paymentHistory.map((ph, idx) => (
-                          <tr key={idx} className="hover:bg-slate-50/40">
-                            <td className="py-2.5 px-4 font-mono text-slate-400">
+                          <tr key={idx} className="hover:bg-slate-50/70 transition-colors">
+                            <td className="py-2.5 px-3.5 font-mono text-slate-500 font-semibold whitespace-nowrap">
                               {new Date(ph.date).toLocaleDateString('en-GB')}
                             </td>
-                            <td className="py-2.5 px-4 font-semibold text-slate-600">{ph.method}</td>
-                            <td className="py-2.5 px-4 text-slate-500">{ph.recordedBy}</td>
-                            <td className="py-2.5 px-4 text-right font-mono font-bold text-slate-900">৳{ph.amount.toLocaleString()}</td>
+                            <td className="py-2.5 px-3.5 whitespace-nowrap">
+                              <span className="px-2.5 py-1 bg-slate-100 text-slate-700 rounded-lg text-xs font-bold border border-slate-200/60">
+                                {ph.method}
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-3.5 text-slate-600 font-medium whitespace-nowrap">{ph.recordedBy}</td>
+                            <td className="py-2.5 px-3.5 text-right font-mono font-black text-slate-900 text-sm whitespace-nowrap">
+                              ৳{ph.amount.toLocaleString()}
+                            </td>
+                            <td className="py-2.5 px-3.5 text-center whitespace-nowrap">
+                              <button
+                                type="button"
+                                onClick={() => setDeletePaymentConfirm({
+                                  isOpen: true,
+                                  orderId: selectedOrderForDetails.id,
+                                  paymentIndex: idx,
+                                  amount: ph.amount,
+                                  method: ph.method,
+                                  date: ph.date
+                                })}
+                                title="Delete this payment record"
+                                className="inline-flex items-center gap-1 px-2 py-1 bg-rose-50 hover:bg-rose-100 text-rose-600 hover:text-rose-700 rounded-lg text-[11px] font-bold border border-rose-200 transition-all cursor-pointer shadow-2xs hover:scale-105 active:scale-95"
+                              >
+                                <Trash2 size={12} />
+                                <span>Delete</span>
+                              </button>
+                            </td>
                           </tr>
                         ))}
-                        <tr className="bg-slate-50/50">
-                          <td colSpan={4} className="py-3 px-4 text-right">
+                        <tr className="bg-slate-50/80 font-bold border-t border-slate-200">
+                          <td colSpan={5} className="py-3 px-4 text-right">
                             {selectedOrderForDetails.amountDue === 0 ? (
                               <div className="flex items-center justify-end gap-1.5 text-emerald-600">
-                                <CheckCircle size={14} />
-                                <span className="font-bold text-sm">Fully Settled</span>
+                                <CheckCircle size={15} />
+                                <span className="font-bold text-xs">Fully Settled</span>
                               </div>
                             ) : (
-                              <span className="font-bold text-sm text-red-600 font-mono">
+                              <span className="font-bold text-xs text-red-600 font-mono">
                                 Remaining Due: ৳{selectedOrderForDetails.amountDue.toLocaleString()}
                               </span>
                             )}
@@ -610,9 +677,53 @@ export default function DuePayments({ user, requireCheckIn }: DuePaymentsProps) 
             <div className="flex justify-end pt-2 border-t border-slate-100">
               <button
                 onClick={() => setSelectedOrderForDetails(null)}
-                className="py-2 px-5 bg-slate-900 hover:bg-slate-800 text-[#D4AF37] text-sm font-bold rounded-xl cursor-pointer shadow-xs"
+                className="py-2.5 px-6 bg-slate-900 hover:bg-slate-800 text-[#D4AF37] hover:text-white text-xs font-bold rounded-xl cursor-pointer shadow-xs transition-colors"
               >
                 Close Ledger
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* DELETE PAYMENT CONFIRMATION MODAL */}
+      {deletePaymentConfirm && deletePaymentConfirm.isOpen && (
+        <div className="fixed inset-0 z-60 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-start gap-4 mb-4">
+              <div className="p-3 rounded-2xl bg-rose-50 text-rose-600 border border-rose-100 shrink-0">
+                <AlertCircle size={24} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <h3 className="text-base font-black text-slate-900">
+                  Delete Payment Collection (পেমেন্ট রেকর্ড মুছুন)
+                </h3>
+                <p className="text-xs text-slate-600 mt-1.5 leading-relaxed">
+                  Are you sure you want to delete this payment record of <strong className="text-slate-900 font-mono">৳{deletePaymentConfirm.amount.toLocaleString()}</strong> ({deletePaymentConfirm.method}) recorded on <strong className="text-slate-900">{new Date(deletePaymentConfirm.date).toLocaleDateString('en-GB')}</strong>?
+                </p>
+                <div className="mt-3 p-3 bg-amber-50 rounded-xl border border-amber-200/60 text-[11px] text-amber-800">
+                  ⚠️ Deleting this entry will reduce the recorded paid amount and automatically restore the customer's outstanding due balance.
+                </div>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2.5 mt-5 pt-3 border-t border-slate-100">
+              <button
+                type="button"
+                disabled={deletingPayment}
+                onClick={() => setDeletePaymentConfirm(null)}
+                className="px-4 py-2.5 rounded-xl border border-slate-200 text-slate-700 text-xs font-bold hover:bg-slate-100 transition-colors cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={deletingPayment}
+                onClick={handleConfirmDeletePayment}
+                className="px-5 py-2.5 rounded-xl text-white text-xs font-black shadow-md bg-rose-600 hover:bg-rose-700 active:scale-95 transition-all cursor-pointer flex items-center gap-1.5"
+              >
+                <Trash2 size={13} />
+                <span>{deletingPayment ? 'Deleting...' : 'Delete Payment Entry'}</span>
               </button>
             </div>
           </div>

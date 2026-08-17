@@ -27,6 +27,7 @@ import {
   PrivateEmploymentInfo,
   Customer,
   Order,
+  OrderItem,
   StockLogType,
   OrderStatus,
   Invoice,
@@ -1171,7 +1172,7 @@ export async function seedInitialDataIfEmpty(): Promise<void> {
 
 export async function clearSampleData(): Promise<void> {
   console.log('Attempting to clear sample/demo data...');
-  const collections = ['categories', 'brands', 'products', 'stockLogs'];
+  const collections = ['categories', 'brands', 'products', 'stockLogs', 'expenses', 'incomes'];
   for (const colName of collections) {
     try {
       const colRef = collection(db, colName);
@@ -1196,7 +1197,185 @@ export async function clearSampleData(): Promise<void> {
       throw e;
     }
   }
+  dbCache.clearAll();
+  localStore.remove('products');
+  localStore.remove('categories');
+  localStore.remove('brands');
+  localStore.remove('expenses');
+  localStore.remove('incomes');
   console.log('Finished clearing sample data.');
+}
+
+export async function clearAllExpenses(): Promise<void> {
+  dbCache.expenses = null;
+  localStore.remove('expenses');
+  try {
+    const colRef = collection(db, 'expenses');
+    const snapshot = await getDocs(colRef);
+    let batch = writeBatch(db);
+    let count = 0;
+    for (const docSnap of snapshot.docs) {
+      batch.delete(doc(db, 'expenses', docSnap.id));
+      count++;
+      if (count === 400) {
+        await batch.commit();
+        batch = writeBatch(db);
+        count = 0;
+      }
+    }
+    if (count > 0) {
+      await batch.commit();
+    }
+  } catch (e) {
+    console.warn('clearAllExpenses remote error:', e);
+  }
+}
+
+export async function clearAllIncomes(): Promise<void> {
+  dbCache.incomes = null;
+  localStore.remove('incomes');
+  try {
+    const colRef = collection(db, 'incomes');
+    const snapshot = await getDocs(colRef);
+    let batch = writeBatch(db);
+    let count = 0;
+    for (const docSnap of snapshot.docs) {
+      batch.delete(doc(db, 'incomes', docSnap.id));
+      count++;
+      if (count === 400) {
+        await batch.commit();
+        batch = writeBatch(db);
+        count = 0;
+      }
+    }
+    if (count > 0) {
+      await batch.commit();
+    }
+  } catch (e) {
+    console.warn('clearAllIncomes remote error:', e);
+  }
+}
+
+export async function clearDemoFinancials(): Promise<{ deletedExpenses: number; deletedIncomes: number }> {
+  dbCache.expenses = null;
+  dbCache.incomes = null;
+  
+  const demoExpenseRefs = new Set([
+    'BANK-LC-88412', 'BK-TRX-19482', 'UPAY-TX-77319', 'SALARY-2026-AUG', 
+    'RENT-REC-08', 'NG-TRX-55102', 'RK-TRX-33190', 'GZ-INV-2026-99', 
+    'CB-9942', 'ADS-AUG-01', 'PAYROLL-08', 'RENT-AUG-2026', 'ST-INV-4410', 'CARGO-7721'
+  ]);
+  const demoExpenseSuppliers = new Set([
+    'Guangzhou Baseus Direct Co', 'Chawkbazar Poly & Bubble Store', 'Meta Ads BD Agency',
+    'Store Staff & Dispatch Team', 'Motijheel Commercial Complex', 'Steadfast Courier Line',
+    'Airport Cargo Pickup Transport'
+  ]);
+
+  const demoIncomeRefs = new Set([
+    'COD-SETTLE-8831', 'BK-TRX-948123', 'NG-REB-20419', 'BANK-TRF-55201'
+  ]);
+  const demoIncomeCustomers = new Set([
+    'Steadfast Courier COD Settlement', 'Ahmed Tanvir', 'Supplier Partial Rebate', 'Dhaka Recyclers Ltd'
+  ]);
+
+  const isDemoExpense = (data: Partial<Expense>) => {
+    if (!data) return false;
+    const ref = (data.reference || '').trim();
+    const inv = (data.invoiceNo || '').trim();
+    const sup = (data.supplierName || '').trim();
+    const notes = (data.notes || '').toLowerCase();
+    return (
+      (ref && demoExpenseRefs.has(ref)) ||
+      (inv && demoExpenseRefs.has(inv)) ||
+      (sup && demoExpenseSuppliers.has(sup)) ||
+      notes.includes('sample') ||
+      notes.includes('demo') ||
+      sup.includes('guangzhou baseus') ||
+      sup.includes('chawkbazar') ||
+      sup.includes('meta ads bd') ||
+      sup.includes('motijheel commercial')
+    );
+  };
+
+  const isDemoIncome = (data: Partial<Income>) => {
+    if (!data) return false;
+    const ref = (data.reference || '').trim();
+    const cust = (data.customerName || '').trim();
+    const notes = (data.notes || '').toLowerCase();
+    return (
+      (ref && demoIncomeRefs.has(ref)) ||
+      (cust && demoIncomeCustomers.has(cust)) ||
+      notes.includes('sample') ||
+      notes.includes('demo') ||
+      cust.includes('dhaka recyclers') ||
+      cust.includes('steadfast courier cod settlement') ||
+      cust.includes('supplier partial rebate')
+    );
+  };
+
+  let deletedExpenses = 0;
+  let deletedIncomes = 0;
+
+  // Clear demo expenses
+  try {
+    const expSnap = await getDocs(collection(db, 'expenses'));
+    let batch = writeBatch(db);
+    let count = 0;
+    for (const docSnap of expSnap.docs) {
+      const data = docSnap.data() as Expense;
+      if (isDemoExpense(data)) {
+        batch.delete(doc(db, 'expenses', docSnap.id));
+        deletedExpenses++;
+        count++;
+        if (count === 400) {
+          await batch.commit();
+          batch = writeBatch(db);
+          count = 0;
+        }
+      }
+    }
+    if (count > 0) {
+      await batch.commit();
+    }
+  } catch (e) {
+    console.warn('Error deleting remote demo expenses:', e);
+  }
+
+  // Clear demo incomes
+  try {
+    const incSnap = await getDocs(collection(db, 'incomes'));
+    let batch = writeBatch(db);
+    let count = 0;
+    for (const docSnap of incSnap.docs) {
+      const data = docSnap.data() as Income;
+      if (isDemoIncome(data)) {
+        batch.delete(doc(db, 'incomes', docSnap.id));
+        deletedIncomes++;
+        count++;
+        if (count === 400) {
+          await batch.commit();
+          batch = writeBatch(db);
+          count = 0;
+        }
+      }
+    }
+    if (count > 0) {
+      await batch.commit();
+    }
+  } catch (e) {
+    console.warn('Error deleting remote demo incomes:', e);
+  }
+
+  // Clean local caches
+  const cachedExp = localStore.get<Expense[]>('expenses') || [];
+  const filteredExp = cachedExp.filter(e => !isDemoExpense(e));
+  localStore.set('expenses', filteredExp);
+
+  const cachedInc = localStore.get<Income[]>('incomes') || [];
+  const filteredInc = cachedInc.filter(i => !isDemoIncome(i));
+  localStore.set('incomes', filteredInc);
+
+  return { deletedExpenses, deletedIncomes };
 }
 
 // ==========================================
@@ -2035,6 +2214,174 @@ export async function updateOrderAndHandleStock(
   }
 }
 
+// Full Order Edit helper with stock delta management & invoice sync
+export async function updateOrderFullDetails(
+  orderId: string,
+  updatedOrderData: Partial<Order> & { items: OrderItem[] },
+  userId: string,
+  userName: string
+): Promise<Order> {
+  try {
+    const orderDocRef = doc(db, 'orders', orderId);
+    let resultOrder: Order | null = null;
+
+    await runTransaction(db, async (transaction) => {
+      const orderSnap = await transaction.get(orderDocRef);
+      if (!orderSnap.exists()) {
+        throw new Error(`Order ${orderId} not found`);
+      }
+
+      const existingOrder = orderSnap.data() as Order;
+      const isStockDeducted = ['Confirmed', 'Packed', 'Shipped', 'Delivered'].includes(existingOrder.status);
+
+      // 1. Calculate stock differences if this order already had its stock deducted
+      const oldQtyMap = new Map<string, { productId: string; variantId: string; qty: number }>();
+      (existingOrder.items || []).forEach(item => {
+        const key = `${item.productId}__${item.variantId}`;
+        const curr = oldQtyMap.get(key) || { productId: item.productId, variantId: item.variantId, qty: 0 };
+        curr.qty += (item.qty || 0);
+        oldQtyMap.set(key, curr);
+      });
+
+      const newQtyMap = new Map<string, { productId: string; variantId: string; qty: number; productName: string }>();
+      (updatedOrderData.items || []).forEach(item => {
+        const key = `${item.productId}__${item.variantId}`;
+        const curr = newQtyMap.get(key) || { productId: item.productId, variantId: item.variantId, qty: 0, productName: item.productName };
+        curr.qty += (item.qty || 0);
+        newQtyMap.set(key, curr);
+      });
+
+      const allVariantKeys = new Set([...oldQtyMap.keys(), ...newQtyMap.keys()]);
+      const uniqueProductIds = new Set<string>();
+
+      if (isStockDeducted) {
+        allVariantKeys.forEach(k => {
+          const pid = k.split('__')[0];
+          uniqueProductIds.add(pid);
+        });
+      }
+
+      // --- ALL READS FIRST ---
+      const productSnaps = new Map<string, any>();
+      if (isStockDeducted) {
+        for (const pid of Array.from(uniqueProductIds)) {
+          const pRef = doc(db, 'products', pid);
+          const pSnap = await transaction.get(pRef);
+          productSnaps.set(pid, pSnap);
+        }
+      }
+
+      let invoiceSnap = null;
+      if (existingOrder.invoiceId) {
+        const invoiceRef = doc(db, 'invoices', existingOrder.invoiceId);
+        invoiceSnap = await transaction.get(invoiceRef);
+      }
+
+      // --- ALL WRITES ---
+      // 1. Handle stock adjustments (delta)
+      if (isStockDeducted) {
+        for (const key of Array.from(allVariantKeys)) {
+          const oldEntry = oldQtyMap.get(key);
+          const newEntry = newQtyMap.get(key);
+          const oldQty = oldEntry?.qty || 0;
+          const newQty = newEntry?.qty || 0;
+          const delta = newQty - oldQty; // If delta > 0: need to deduct more; if delta < 0: restore stock
+
+          if (delta !== 0) {
+            const productId = key.split('__')[0];
+            const variantId = key.split('__')[1];
+            const pSnap = productSnaps.get(productId);
+
+            if (pSnap && pSnap.exists()) {
+              const productData = pSnap.data() as Product;
+              const updatedVariants = productData.variants.map((v: Variant) => {
+                if (v.id === variantId) {
+                  const beforeQty = v.stock;
+                  const afterQty = Math.max(0, beforeQty - delta);
+
+                  const logRef = doc(collection(db, 'stockLogs'));
+                  const stockLog: Omit<StockLog, 'id'> = {
+                    productId,
+                    productName: productData.name,
+                    type: delta > 0 ? 'sale' : 'adjustment',
+                    qty: -delta,
+                    reason: delta > 0 ? `Order Edit (#${orderId.substring(0, 8)}) - Increased Qty` : `Order Edit (#${orderId.substring(0, 8)}) - Decreased Qty / Restock`,
+                    userId,
+                    userName,
+                    timestamp: Date.now(),
+                    beforeQty,
+                    afterQty,
+                    orderId,
+                    refNo: `ORDER-EDIT-${orderId}`
+                  };
+                  transaction.set(logRef, sanitizeData(stockLog));
+
+                  return { ...v, stock: afterQty };
+                }
+                return v;
+              });
+
+              const productRef = doc(db, 'products', productId);
+              const totalStock = updatedVariants.reduce((sum: number, v: Variant) => sum + (v.stock || 0), 0);
+              const stockStatus = totalStock <= 0 ? 'out_of_stock' : 'in_stock';
+              transaction.update(productRef, { variants: updatedVariants, stockStatus });
+            }
+          }
+        }
+      }
+
+      // 2. Build updated order payload
+      const sanitizedOrderPayload = sanitizeData({
+        ...existingOrder,
+        ...updatedOrderData,
+        updatedAt: Date.now(),
+        updatedBy: userName
+      });
+      delete sanitizedOrderPayload.id;
+
+      transaction.update(orderDocRef, sanitizedOrderPayload);
+
+      resultOrder = {
+        ...existingOrder,
+        ...updatedOrderData,
+        id: orderId,
+        updatedAt: Date.now(),
+        updatedBy: userName
+      } as Order;
+
+      // 3. Update Invoice if linked and not voided
+      if (invoiceSnap && invoiceSnap.exists() && !invoiceSnap.data().voided) {
+        const invRef = doc(db, 'invoices', existingOrder.invoiceId!);
+        transaction.update(invRef, sanitizeData({
+          customerName: updatedOrderData.customerName || existingOrder.customerName,
+          customerPhone: updatedOrderData.customerPhone || existingOrder.customerPhone,
+          items: updatedOrderData.items,
+          discountAmount: updatedOrderData.discountAmount ?? existingOrder.discountAmount ?? 0,
+          shippingCharge: updatedOrderData.shippingCharge ?? existingOrder.shippingCharge ?? 0,
+          totalAmount: updatedOrderData.totalAmount,
+          amountPaid: updatedOrderData.amountPaid ?? existingOrder.amountPaid,
+          amountDue: updatedOrderData.amountDue,
+          paymentStatus: updatedOrderData.paymentStatus,
+          courier: updatedOrderData.courier || existingOrder.courier,
+          courierTrackingNumber: updatedOrderData.courierTrackingNumber ?? existingOrder.courierTrackingNumber ?? '',
+          subBrand: updatedOrderData.subBrand || existingOrder.subBrand,
+          updatedAt: Date.now()
+        }));
+      }
+    });
+
+    // Invalidate caches
+    dbCache.orders = null;
+    dbCache.invoices = null;
+    dbCache.products = null;
+
+    return resultOrder!;
+  } catch (error: any) {
+    handleFirestoreError(error, OperationType.UPDATE, 'orders/' + orderId);
+    throw error;
+  }
+}
+
 // ==========================================
 // INVOICE OPERATIONS
 // ==========================================
@@ -2338,6 +2685,86 @@ export async function recordOrderPayment(
   }
 }
 
+export async function deleteOrderPayment(
+  orderId: string,
+  paymentIndex: number
+): Promise<Order> {
+  try {
+    const orderRef = doc(db, 'orders', orderId);
+    let updatedOrderResult: Order | null = null;
+
+    await runTransaction(db, async (transaction) => {
+      const orderSnap = await transaction.get(orderRef);
+      if (!orderSnap.exists()) {
+        throw new Error('Order not found');
+      }
+
+      const order = orderSnap.data() as Order;
+
+      let invoiceSnap = null;
+      if (order.invoiceId) {
+        const invoiceRef = doc(db, 'invoices', order.invoiceId);
+        invoiceSnap = await transaction.get(invoiceRef);
+      }
+
+      const paymentHistory = [...(order.paymentHistory || [])];
+      if (paymentIndex < 0 || paymentIndex >= paymentHistory.length) {
+        throw new Error('Payment record index out of range');
+      }
+
+      // Remove payment record at paymentIndex
+      paymentHistory.splice(paymentIndex, 1);
+
+      const newAmountPaid = paymentHistory.reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+      const newAmountDue = Math.max(0, (order.totalAmount || 0) - newAmountPaid);
+
+      let newPaymentStatus: PaymentStatus = 'Due';
+      if (newAmountDue <= 0) {
+        newPaymentStatus = 'Paid';
+      } else if (newAmountPaid > 0) {
+        newPaymentStatus = 'Partial';
+      } else {
+        newPaymentStatus = 'Due';
+      }
+
+      const orderUpdates = {
+        paymentHistory,
+        amountPaid: newAmountPaid,
+        amountDue: newAmountDue,
+        paymentStatus: newPaymentStatus
+      };
+
+      transaction.update(orderRef, orderUpdates);
+
+      if (invoiceSnap && invoiceSnap.exists() && !invoiceSnap.data().voided) {
+        const invoiceRef = doc(db, 'invoices', order.invoiceId);
+        transaction.update(invoiceRef, {
+          amountPaid: newAmountPaid,
+          amountDue: newAmountDue,
+          paymentStatus: newPaymentStatus
+        });
+      }
+
+      updatedOrderResult = {
+        ...order,
+        id: orderId,
+        ...orderUpdates
+      };
+    });
+
+    // Update local cache
+    const cached = localStore.get<Order[]>('orders') || [];
+    if (updatedOrderResult) {
+      localStore.set('orders', cached.map(o => o.id === orderId ? updatedOrderResult! : o));
+    }
+
+    return updatedOrderResult!;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, `orders/${orderId}/deletePayment`);
+    throw error;
+  }
+}
+
 export async function getExpenses(): Promise<Expense[]> {
   if (dbCache.expenses) return dbCache.expenses;
   const cached = localStore.get<Expense[]>('expenses');
@@ -2408,16 +2835,30 @@ export async function updateExpense(id: string, updates: Partial<Expense>): Prom
   localStore.set('expenses', updated);
 }
 
-export async function deleteExpense(id: string): Promise<void> {
+export async function deleteExpense(id: string, expenseId?: string): Promise<void> {
   dbCache.expenses = null;
   try {
     const docRef = doc(db, 'expenses', id);
     await deleteDoc(docRef);
   } catch (error) {
-    console.warn('deleteExpense remote save failed, deleting locally:', error);
+    console.warn('deleteExpense remote save failed by doc id, attempting query:', error);
   }
+
+  try {
+    const target = expenseId || id;
+    if (target) {
+      const q = query(collection(db, 'expenses'), where('expenseId', '==', target));
+      const snap = await getDocs(q);
+      for (const d of snap.docs) {
+        await deleteDoc(doc(db, 'expenses', d.id));
+      }
+    }
+  } catch (e) {
+    console.warn('deleteExpense query cleanup error:', e);
+  }
+
   const cached = localStore.get<Expense[]>('expenses') || [];
-  localStore.set('expenses', cached.filter(e => e.id !== id));
+  localStore.set('expenses', cached.filter(e => e.id !== id && e.expenseId !== id && (!expenseId || e.expenseId !== expenseId)));
 }
 
 // ==========================================
@@ -2495,16 +2936,30 @@ export async function updateIncome(id: string, updates: Partial<Income>): Promis
   localStore.set('incomes', updated);
 }
 
-export async function deleteIncome(id: string): Promise<void> {
+export async function deleteIncome(id: string, incomeId?: string): Promise<void> {
   dbCache.incomes = null;
   try {
     const docRef = doc(db, 'incomes', id);
     await deleteDoc(docRef);
   } catch (error) {
-    console.warn('deleteIncome remote delete failed, deleting locally:', error);
+    console.warn('deleteIncome remote delete failed by doc id, attempting query:', error);
   }
+
+  try {
+    const target = incomeId || id;
+    if (target) {
+      const q = query(collection(db, 'incomes'), where('incomeId', '==', target));
+      const snap = await getDocs(q);
+      for (const d of snap.docs) {
+        await deleteDoc(doc(db, 'incomes', d.id));
+      }
+    }
+  } catch (e) {
+    console.warn('deleteIncome query cleanup error:', e);
+  }
+
   const cached = localStore.get<Income[]>('incomes') || [];
-  localStore.set('incomes', cached.filter(i => i.id !== id));
+  localStore.set('incomes', cached.filter(i => i.id !== id && i.incomeId !== id && (!incomeId || i.incomeId !== incomeId)));
 }
 
 // ==========================================

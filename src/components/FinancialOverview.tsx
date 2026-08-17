@@ -37,17 +37,21 @@ import {
   addExpense, 
   updateExpense, 
   deleteExpense, 
+  clearAllExpenses,
   generateExpenseId,
   getIncomes,
   addIncome,
   updateIncome,
   deleteIncome,
+  clearAllIncomes,
+  clearDemoFinancials,
   generateIncomeId,
   getOrders, 
   getStockLogs 
 } from '../firebase/db';
 import { storage } from '../firebase/config';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { NetProfitBreakdownModal } from './NetProfitBreakdownModal';
 import { 
   UserProfile, 
   Order, 
@@ -223,8 +227,30 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
 
+  // Confirmation Modal State (replaces browser confirm)
+  const [confirmDialog, setConfirmDialog] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    confirmText?: string;
+    cancelText?: string;
+    isDanger?: boolean;
+    onConfirm: () => Promise<void> | void;
+  }>({
+    isOpen: false,
+    title: '',
+    message: '',
+    confirmText: 'Confirm',
+    cancelText: 'Cancel',
+    isDanger: true,
+    onConfirm: () => {}
+  });
+
   // UI state for image light-box
   const [viewingReceiptUrl, setViewingReceiptUrl] = useState<string | null>(null);
+
+  // Net Profit Breakdown Modal State
+  const [showNetProfitModal, setShowNetProfitModal] = useState(false);
 
   // File input ref
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -355,33 +381,32 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
       .filter(inc => inc.source === 'manual')
       .reduce((sum, inc) => sum + (inc.amount || 0), 0);
 
-    // 2. Product Cost (sum of purchasePrice * quantity for stockLogs of type "in" in range)
+    // 2. Sold Products Purchase Cost (COGS - বিক্রিত পণ্যের ক্রয়মূল্য / কেনা দাম)
     const productCostMap = new Map<string, number>();
     products.forEach(p => {
       productCostMap.set(p.id, p.costPrice || 0);
     });
 
-    const filteredStockIns = stockLogs.filter(log => {
-      const logDate = log.timestamp || 0;
-      const dateInMatch = logDate >= startMs && logDate <= endMs;
-      const typeMatch = log.type === 'in';
-      
-      let subBrandMatch = true;
-      if (subBrandFilter !== 'All') {
-        const prod = products.find(p => p.id === log.productId);
-        subBrandMatch = prod ? prod.subBrand === subBrandFilter : false;
-      }
+    const salesOrderIds = new Set(
+      filteredIncomes
+        .filter(inc => inc.source === 'order_sale' && inc.orderId)
+        .map(inc => inc.orderId!)
+    );
 
-      return dateInMatch && typeMatch && subBrandMatch;
+    let totalSoldProductCost = 0;
+    orders.forEach(order => {
+      if (salesOrderIds.has(order.id) && order.status !== 'Returned/Cancelled') {
+        const orderCost = (order.items || []).reduce((sum, item) => {
+          const cost = productCostMap.has(item.productId)
+            ? productCostMap.get(item.productId)!
+            : (item.unitPrice * 0.7); // Fallback to 70% cost if costPrice not specified
+          return sum + (cost * (item.qty || 1));
+        }, 0);
+        totalSoldProductCost += orderCost;
+      }
     });
 
-    const totalProductCost = filteredStockIns.reduce((sum, log) => {
-      const price = log.purchasePrice !== undefined ? log.purchasePrice : (productCostMap.get(log.productId) || 0);
-      const quantity = Math.abs(log.qty || 0);
-      return sum + (price * quantity);
-    }, 0);
-
-    // 3. Other Business Expenses (from manually entered expenses)
+    // 3. Business Expenses (from manually entered and tracked expenses)
     const filteredExpenses = expenses.filter(exp => {
       const expTime = new Date(exp.date + 'T00:00:00').getTime();
       const dateInMatch = expTime >= startMs && expTime <= endMs;
@@ -391,8 +416,11 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
 
     const totalExpenses = filteredExpenses.reduce((sum, exp) => sum + (exp.amount || 0), 0);
 
-    // 4. Net Profit/Loss
-    const netProfit = totalIncome - totalProductCost - totalExpenses;
+    // 4. Gross Profit & True Net Profit/Loss
+    // Gross Profit from Sales = Sales Revenue - Cost of Sold Products
+    const grossProfit = totalSalesIncome - totalSoldProductCost;
+    // Net Profit = Total Income (Sales + Other) - Sold Products Purchase Cost - Business Expenses
+    const netProfit = totalIncome - totalSoldProductCost - totalExpenses;
     const profitMargin = totalIncome > 0 ? (netProfit / totalIncome) * 100 : 0;
 
     // 5. Today & This Month Calculations
@@ -483,7 +511,9 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
       totalIncome,
       totalSalesIncome,
       totalManualIncome,
-      totalProductCost,
+      totalProductCost: totalSoldProductCost,
+      totalSoldProductCost,
+      grossProfit,
       totalExpenses,
       netProfit,
       profitMargin,
@@ -509,10 +539,9 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
       incomeByPaymentMethod,
       expenseByCategory,
       filteredIncomesCount: filteredIncomes.length,
-      filteredStockInsCount: filteredStockIns.length,
       filteredExpensesCount: filteredExpenses.length
     };
-  }, [startDate, endDate, subBrandFilter, allCombinedIncomes, stockLogs, expenses, products]);
+  }, [startDate, endDate, subBrandFilter, allCombinedIncomes, orders, expenses, products]);
 
   // Filtered Income Ledger Rows
   const filteredLedgerIncomes = useMemo(() => {
@@ -631,23 +660,32 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
   };
 
   // Handle Delete Income
-  const handleDeleteIncomeClick = async (income: Income) => {
+  const handleDeleteIncomeClick = (income: Income) => {
     if (!canManageFinances || income.source === 'order_sale') return;
-    if (confirm(`Are you sure you want to permanently delete income record ${income.incomeId} of ৳${income.amount}?`)) {
-      setLoading(true);
-      try {
-        await deleteIncome(income.id);
-        setSuccessMsg(`Income record ${income.incomeId} deleted successfully.`);
-        await loadFinancialData();
-        if (onRefreshData) onRefreshData();
-        setTimeout(() => setSuccessMsg(''), 3500);
-      } catch (err: any) {
-        setErrorMsg(`Failed to delete income: ${err.message || err}`);
-        setTimeout(() => setErrorMsg(''), 4000);
-      } finally {
-        setLoading(false);
+    setConfirmDialog({
+      isOpen: true,
+      title: 'Delete Income Record (আয় রেকর্ড মুছুন)',
+      message: `Are you sure you want to permanently delete income record "${income.incomeId}" (${income.category}) for ৳${income.amount.toLocaleString()}?`,
+      confirmText: 'Delete Income',
+      cancelText: 'Cancel',
+      isDanger: true,
+      onConfirm: async () => {
+        setLoading(true);
+        try {
+          await deleteIncome(income.id, income.incomeId);
+          setSuccessMsg(`Income record ${income.incomeId} deleted successfully.`);
+          await loadFinancialData();
+          if (onRefreshData) onRefreshData();
+          setTimeout(() => setSuccessMsg(''), 3500);
+        } catch (err: any) {
+          setErrorMsg(`Failed to delete income: ${err.message || err}`);
+          setTimeout(() => setErrorMsg(''), 4000);
+        } finally {
+          setLoading(false);
+          setConfirmDialog(prev => ({ ...prev, isOpen: false }));
+        }
       }
-    }
+    });
   };
 
   // Submit Income Form
@@ -992,6 +1030,93 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
     }
   };
 
+  // Clear Demo Financials (Incomes + Expenses)
+  const [clearingDemo, setClearingDemo] = useState(false);
+  const handleClearDemoData = () => {
+    if (!canManageFinances) return;
+    setConfirmDialog({
+      isOpen: true,
+      title: 'Delete Demo / Sample Financials (ডেমো ডাটা মুছুন)',
+      message: 'Are you sure you want to delete all demo/sample income and expense records? Real manual entries and order sales will NOT be deleted.',
+      confirmText: 'Delete Demo Data',
+      cancelText: 'Cancel',
+      isDanger: true,
+      onConfirm: async () => {
+        setClearingDemo(true);
+        setErrorMsg('');
+        try {
+          const { deletedExpenses, deletedIncomes } = await clearDemoFinancials();
+          setSuccessMsg(`Cleared ${deletedExpenses} demo expense(s) and ${deletedIncomes} demo income(s) successfully.`);
+          await loadFinancialData();
+          if (onRefreshData) onRefreshData();
+          setTimeout(() => setSuccessMsg(''), 4000);
+        } catch (err: any) {
+          console.error("Failed to clear demo data:", err);
+          setErrorMsg("Failed to clear demo records: " + (err.message || err));
+        } finally {
+          setClearingDemo(false);
+          setConfirmDialog(prev => ({ ...prev, isOpen: false }));
+        }
+      }
+    });
+  };
+
+  // Clear All Incomes
+  const handleClearAllIncomes = () => {
+    if (!canManageFinances) return;
+    setConfirmDialog({
+      isOpen: true,
+      title: '⚠️ Clear All Manual Incomes (সকল ম্যানুয়াল আয় মুছুন)',
+      message: 'This will permanently delete ALL recorded manual income entries. Auto-linked order sales will remain intact. Are you sure you want to proceed?',
+      confirmText: 'Yes, Clear All Incomes',
+      cancelText: 'Cancel',
+      isDanger: true,
+      onConfirm: async () => {
+        setLoading(true);
+        try {
+          await clearAllIncomes();
+          setSuccessMsg("All manual income records deleted successfully.");
+          await loadFinancialData();
+          if (onRefreshData) onRefreshData();
+          setTimeout(() => setSuccessMsg(''), 4000);
+        } catch (err: any) {
+          setErrorMsg("Failed to delete incomes: " + (err.message || err));
+        } finally {
+          setLoading(false);
+          setConfirmDialog(prev => ({ ...prev, isOpen: false }));
+        }
+      }
+    });
+  };
+
+  // Clear All Expenses
+  const handleClearAllExpenses = () => {
+    if (!canManageFinances) return;
+    setConfirmDialog({
+      isOpen: true,
+      title: '⚠️ Clear All Expenses (সকল খরচ মুছুন)',
+      message: 'This will permanently delete ALL recorded expense entries. Are you sure you want to proceed?',
+      confirmText: 'Yes, Clear All Expenses',
+      cancelText: 'Cancel',
+      isDanger: true,
+      onConfirm: async () => {
+        setLoading(true);
+        try {
+          await clearAllExpenses();
+          setSuccessMsg("All expense records deleted successfully.");
+          await loadFinancialData();
+          if (onRefreshData) onRefreshData();
+          setTimeout(() => setSuccessMsg(''), 4000);
+        } catch (err: any) {
+          setErrorMsg("Failed to delete expenses: " + (err.message || err));
+        } finally {
+          setLoading(false);
+          setConfirmDialog(prev => ({ ...prev, isOpen: false }));
+        }
+      }
+    });
+  };
+
   // Handle Edit Expense Action
   const handleEditExpenseClick = (expense: Expense) => {
     if (!canManageFinances) return;
@@ -1013,23 +1138,32 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
   };
 
   // Handle Delete Expense Action
-  const handleDeleteExpenseClick = (id: string, category: string, amount: number) => {
+  const handleDeleteExpenseClick = (id: string, category: string, amount: number, expenseId?: string) => {
     if (!canManageFinances) return;
-    if (confirm(`Are you sure you want to permanently delete this expense record of ৳${amount.toLocaleString()} for "${category}"?`)) {
-      setLoading(true);
-      deleteExpense(id)
-        .then(() => {
+    setConfirmDialog({
+      isOpen: true,
+      title: 'Delete Expense Record (খরচ রেকর্ড মুছুন)',
+      message: `Are you sure you want to permanently delete this expense record of ৳${amount.toLocaleString()} for "${category}"?`,
+      confirmText: 'Delete Expense',
+      cancelText: 'Cancel',
+      isDanger: true,
+      onConfirm: async () => {
+        setLoading(true);
+        try {
+          await deleteExpense(id, expenseId);
           setSuccessMsg("Expense record deleted successfully.");
-          loadFinancialData();
+          await loadFinancialData();
           if (onRefreshData) onRefreshData();
           setTimeout(() => setSuccessMsg(''), 3000);
-        })
-        .catch(err => {
+        } catch (err: any) {
           setErrorMsg(`Delete failed: ${err.message || err}`);
           setTimeout(() => setErrorMsg(''), 3000);
-        })
-        .finally(() => setLoading(false));
-    }
+        } finally {
+          setLoading(false);
+          setConfirmDialog(prev => ({ ...prev, isOpen: false }));
+        }
+      }
+    });
   };
 
   // Submit Expense Form (Modal & Form)
@@ -1301,40 +1435,51 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
             </p>
           </div>
           
-          {/* Main Module Tabs */}
-          <div className="bg-slate-800/90 p-1.5 rounded-2xl flex border border-slate-700/50 self-start shadow-inner">
+          {/* Main Module Tabs & Quick Action */}
+          <div className="flex flex-wrap items-center gap-2 self-start">
+            <div className="bg-slate-800/90 p-1.5 rounded-2xl flex border border-slate-700/50 shadow-inner">
+              <button
+                onClick={() => setActiveTab('overview')}
+                className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                  activeTab === 'overview'
+                    ? 'bg-[#D4AF37] text-slate-950 shadow-md font-black'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <TrendingUp size={14} />
+                <span>Overview</span>
+              </button>
+              <button
+                onClick={() => setActiveTab('income')}
+                className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                  activeTab === 'income'
+                    ? 'bg-emerald-500 text-slate-950 shadow-md font-black'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <DollarSign size={14} />
+                <span>💵 Income (আয়)</span>
+              </button>
+              <button
+                onClick={() => setActiveTab('expenses')}
+                className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                  activeTab === 'expenses'
+                    ? 'bg-[#D4AF37] text-slate-950 shadow-md font-black'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <Building size={14} />
+                <span>🧾 Expenses (ব্যয়)</span>
+              </button>
+            </div>
+
             <button
-              onClick={() => setActiveTab('overview')}
-              className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
-                activeTab === 'overview'
-                  ? 'bg-[#D4AF37] text-slate-950 shadow-md font-black'
-                  : 'text-slate-400 hover:text-white'
-              }`}
+              onClick={() => setShowNetProfitModal(true)}
+              className="px-3.5 sm:px-4 py-2.5 rounded-2xl text-xs sm:text-sm font-black transition-all flex items-center gap-1.5 cursor-pointer bg-gradient-to-r from-emerald-500 to-teal-500 hover:from-emerald-400 hover:to-teal-400 text-slate-950 shadow-lg shadow-emerald-500/20 active:scale-95"
+              title="Click to view detailed Profit Breakdown: কোন পণ্যে ও কোন অর্ডারে কত টাকা লাভ"
             >
-              <TrendingUp size={14} />
-              <span>Overview</span>
-            </button>
-            <button
-              onClick={() => setActiveTab('income')}
-              className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
-                activeTab === 'income'
-                  ? 'bg-emerald-500 text-slate-950 shadow-md font-black'
-                  : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              <DollarSign size={14} />
-              <span>💵 Income (আয়)</span>
-            </button>
-            <button
-              onClick={() => setActiveTab('expenses')}
-              className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
-                activeTab === 'expenses'
-                  ? 'bg-[#D4AF37] text-slate-950 shadow-md font-black'
-                  : 'text-slate-400 hover:text-white'
-              }`}
-            >
-              <Building size={14} />
-              <span>🧾 Expenses (ব্যয়)</span>
+              <Sparkles size={15} />
+              <span>📊 Profit Breakdown (লাভের হিসাব ↗)</span>
             </button>
           </div>
         </div>
@@ -1386,7 +1531,7 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
             All Time
           </button>
 
-          {/* Quick Add Income & Expense buttons directly in header bar */}
+          {/* Quick Add Income & Expense & Clear Demo buttons directly in header bar */}
           {canManageFinances && (
             <div className="flex items-center gap-1.5 ml-auto sm:ml-2">
               <button
@@ -1404,6 +1549,16 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
               >
                 <Plus size={13} />
                 <span>Add Expense</span>
+              </button>
+              <button
+                type="button"
+                onClick={handleClearDemoData}
+                disabled={clearingDemo}
+                className="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer transition-colors"
+                title="Delete all demo/sample income & expense entries"
+              >
+                <Trash2 size={12} className="text-rose-600" />
+                <span>{clearingDemo ? 'Deleting...' : 'Delete Demo'}</span>
               </button>
             </div>
           )}
@@ -1522,24 +1677,42 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
                 </div>
               </div>
 
-              {/* 3. Net Profit (Income - Expense) */}
-              <div className={`p-4 rounded-2xl border shadow-2xs relative overflow-hidden flex flex-col justify-between min-h-[125px] transition-all ${
+              {/* 3. Net Profit (Income - Cost - Expense) */}
+              <div 
+                onClick={() => setShowNetProfitModal(true)}
+                role="button"
+                tabIndex={0}
+                title="Click to view detailed Net Profit breakdown: কোন পণ্যে কত লাভ, কোন অর্ডারে কত লাভ"
+                className={`p-4 rounded-2xl border shadow-2xs relative overflow-hidden flex flex-col justify-between min-h-[130px] transition-all cursor-pointer hover:scale-[1.02] active:scale-[0.99] group ring-2 ring-transparent hover:ring-white/40 select-none ${
                 financialMetrics.netProfit >= 0 
-                  ? 'bg-gradient-to-br from-emerald-500 to-emerald-600 border-emerald-600 text-white shadow-emerald-500/10' 
-                  : 'bg-gradient-to-br from-rose-500 to-rose-600 border-rose-600 text-white shadow-rose-500/10'
+                  ? 'bg-gradient-to-br from-emerald-500 to-emerald-600 border-emerald-600 text-white shadow-emerald-500/20' 
+                  : 'bg-gradient-to-br from-rose-500 to-rose-600 border-rose-600 text-white shadow-rose-500/20'
               }`}>
                 <div className="flex items-center justify-between">
-                  <span className="text-[10px] sm:text-xs font-bold text-emerald-100 uppercase tracking-tight">Net Profit (নিট লাভ)</span>
-                  <span className="p-1.5 bg-white/20 text-white rounded-xl backdrop-blur-xs"><DollarSign size={15} /></span>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[10px] sm:text-xs font-black text-emerald-100 uppercase tracking-tight">Net Profit (নিট লাভ)</span>
+                    <span className="text-[9px] bg-white/20 text-white px-1.5 py-0.2 rounded-full font-bold group-hover:bg-white group-hover:text-emerald-800 transition-colors">
+                      বিস্তারিত ↗
+                    </span>
+                  </div>
+                  <span className="p-1.5 bg-white/20 text-white rounded-xl backdrop-blur-xs group-hover:bg-white group-hover:text-emerald-700 transition-colors">
+                    <DollarSign size={15} />
+                  </span>
                 </div>
                 <div className="mt-1">
-                  <h3 className="text-xl lg:text-2xl font-black font-mono tracking-tight text-white">
-                    {financialMetrics.netProfit < 0 ? '-' : ''}৳{Math.abs(financialMetrics.netProfit).toLocaleString()}
+                  <h3 className="text-xl lg:text-2xl font-black font-mono tracking-tight text-white flex items-center justify-between">
+                    <span>{financialMetrics.netProfit < 0 ? '-' : ''}৳{Math.abs(financialMetrics.netProfit).toLocaleString()}</span>
                   </h3>
-                  <div className="text-[10px] text-emerald-100/90 mt-1 font-semibold flex items-center gap-1">
-                    <span>Income − Expense</span>
+                  <div className="text-[10px] text-emerald-100/90 mt-1 font-semibold flex items-center justify-between flex-wrap gap-1">
+                    <span>Cost: ৳{financialMetrics.totalSoldProductCost.toLocaleString()}</span>
+                    <span>•</span>
+                    <span>Exp: ৳{financialMetrics.totalExpenses.toLocaleString()}</span>
                     <span>•</span>
                     <span>{Math.round(financialMetrics.profitMargin)}% Margin</span>
+                  </div>
+                  <div className="mt-1.5 pt-1.5 border-t border-white/20 text-[10px] font-bold text-emerald-100 flex items-center justify-between">
+                    <span>🔍 ক্লিক করুন: কোনটায় কত টাকা লাভ</span>
+                    <span className="group-hover:translate-x-0.5 transition-transform text-xs">→</span>
                   </div>
                 </div>
               </div>
@@ -1903,15 +2076,28 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
                   </button>
                 )}
 
-                {canManageFinances && incomes.length === 0 && (
+                {canManageFinances && (
                   <button
                     type="button"
-                    onClick={handleSeedSampleIncomes}
-                    disabled={seedingIncomes}
-                    className="px-3 py-2 bg-amber-50 hover:bg-amber-100 text-amber-800 rounded-xl text-xs font-bold border border-amber-200 flex items-center gap-1.5 cursor-pointer"
+                    onClick={handleClearDemoData}
+                    disabled={clearingDemo}
+                    className="px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-xl text-xs font-bold border border-rose-200 flex items-center gap-1.5 cursor-pointer transition-colors"
+                    title="Delete demo income and expense data"
                   >
-                    <Sparkles size={13} className="text-amber-600" />
-                    <span>{seedingIncomes ? 'Adding Samples...' : 'Seed Sample Incomes'}</span>
+                    <Trash2 size={13} className="text-rose-600" />
+                    <span>{clearingDemo ? 'Deleting...' : 'Delete Demo Data (ডেমো মুছুন)'}</span>
+                  </button>
+                )}
+
+                {canManageFinances && incomes.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleClearAllIncomes}
+                    className="px-3 py-2 bg-slate-100 hover:bg-rose-50 text-slate-600 hover:text-rose-700 rounded-xl text-xs font-bold border border-slate-200 hover:border-rose-200 flex items-center gap-1.5 cursor-pointer transition-colors"
+                    title="Permanently clear all manual income entries"
+                  >
+                    <Trash2 size={13} />
+                    <span>Clear All Incomes</span>
                   </button>
                 )}
 
@@ -2175,15 +2361,28 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
                   </button>
                 )}
 
-                {canManageFinances && expenses.length === 0 && (
+                {canManageFinances && (
                   <button
                     type="button"
-                    onClick={handleSeedSampleExpenses}
-                    disabled={seedingExpenses}
-                    className="px-3 py-2 bg-amber-50 hover:bg-amber-100 text-amber-800 rounded-xl text-xs font-bold border border-amber-200 flex items-center gap-1.5 cursor-pointer transition-colors"
+                    onClick={handleClearDemoData}
+                    disabled={clearingDemo}
+                    className="px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-xl text-xs font-bold border border-rose-200 flex items-center gap-1.5 cursor-pointer transition-colors"
+                    title="Delete demo expense and income records"
                   >
-                    <Sparkles size={13} className="text-amber-600" />
-                    <span>{seedingExpenses ? 'Seeding...' : 'Seed Sample Expenses'}</span>
+                    <Trash2 size={13} className="text-rose-600" />
+                    <span>{clearingDemo ? 'Deleting...' : 'Delete Demo Data (ডেমো মুছুন)'}</span>
+                  </button>
+                )}
+
+                {canManageFinances && expenses.length > 0 && (
+                  <button
+                    type="button"
+                    onClick={handleClearAllExpenses}
+                    className="px-3 py-2 bg-slate-100 hover:bg-rose-50 text-slate-600 hover:text-rose-700 rounded-xl text-xs font-bold border border-slate-200 hover:border-rose-200 flex items-center gap-1.5 cursor-pointer transition-colors"
+                    title="Permanently delete all expense entries"
+                  >
+                    <Trash2 size={13} />
+                    <span>Clear All Expenses</span>
                   </button>
                 )}
 
@@ -2428,7 +2627,7 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
                               </button>
                               <button
                                 type="button"
-                                onClick={() => handleDeleteExpenseClick(exp.id, exp.category, exp.amount)}
+                                onClick={() => handleDeleteExpenseClick(exp.id, exp.category, exp.amount, exp.expenseId)}
                                 disabled={!canManageFinances}
                                 title="Delete Expense Record"
                                 className="p-1.5 bg-slate-50 hover:bg-red-50 text-slate-500 hover:text-red-600 rounded-lg transition-colors disabled:opacity-30 cursor-pointer"
@@ -3053,6 +3252,67 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
           </div>
         </div>
       )}
+
+      {/* CONFIRMATION DIALOG MODAL (In-App, sandbox safe) */}
+      {confirmDialog.isOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 animate-in fade-in zoom-in-95 duration-150">
+            <div className="flex items-start gap-4 mb-4">
+              <div className={`p-3 rounded-2xl ${confirmDialog.isDanger ? 'bg-rose-50 text-rose-600 border border-rose-100' : 'bg-amber-50 text-amber-600 border border-amber-100'} shrink-0`}>
+                <AlertCircle size={24} />
+              </div>
+              <div className="flex-1 min-w-0">
+                <h3 className="text-base font-black text-slate-900">
+                  {confirmDialog.title}
+                </h3>
+                <p className="text-xs text-slate-600 mt-1.5 leading-relaxed">
+                  {confirmDialog.message}
+                </p>
+              </div>
+            </div>
+
+            <div className="flex items-center justify-end gap-2.5 mt-6 pt-4 border-t border-slate-100">
+              <button
+                type="button"
+                onClick={() => setConfirmDialog(prev => ({ ...prev, isOpen: false }))}
+                className="px-4 py-2.5 rounded-xl border border-slate-200 text-slate-700 text-xs font-bold hover:bg-slate-100 transition-colors cursor-pointer"
+              >
+                {confirmDialog.cancelText || 'Cancel'}
+              </button>
+              <button
+                type="button"
+                onClick={async () => {
+                  if (confirmDialog.onConfirm) {
+                    await confirmDialog.onConfirm();
+                  }
+                }}
+                className={`px-5 py-2.5 rounded-xl text-white text-xs font-black shadow-md transition-all cursor-pointer flex items-center gap-1.5 ${
+                  confirmDialog.isDanger 
+                    ? 'bg-rose-600 hover:bg-rose-700 active:scale-95' 
+                    : 'bg-indigo-600 hover:bg-indigo-700 active:scale-95'
+                }`}
+              >
+                <Trash2 size={13} />
+                <span>{confirmDialog.confirmText || 'Confirm'}</span>
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* NET PROFIT BREAKDOWN MODAL (কোনটায় কত টাকা লাভ) */}
+      <NetProfitBreakdownModal
+        isOpen={showNetProfitModal}
+        onClose={() => setShowNetProfitModal(false)}
+        orders={orders}
+        incomes={allCombinedIncomes}
+        expenses={expenses}
+        products={products}
+        startDate={startDate}
+        endDate={endDate}
+        subBrandFilter={subBrandFilter}
+        financialMetrics={financialMetrics}
+      />
     </div>
   );
 }

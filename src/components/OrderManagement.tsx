@@ -25,7 +25,20 @@ import {
   Activity,
   UserCheck,
 } from 'lucide-react';
-import { Order, Customer, Product, Variant, UserProfile, OrderItem, OrderStatusHistory, OrderStatus } from '../types';
+import { 
+  Order, 
+  Customer, 
+  Product, 
+  Variant, 
+  UserProfile, 
+  OrderItem, 
+  OrderStatusHistory, 
+  OrderStatus,
+  SalesChannel,
+  CourierName,
+  PaymentMethod,
+  PaymentStatus
+} from '../types';
 import { 
   getOrders, 
   getCustomers, 
@@ -36,7 +49,9 @@ import {
   recalculateCustomerStats,
   deleteOrder,
   generateInvoiceForOrder,
-  recordOrderPayment
+  recordOrderPayment,
+  deleteOrderPayment,
+  updateOrderFullDetails
 } from '../firebase/db';
 
 interface OrderManagementProps {
@@ -127,6 +142,30 @@ export default function OrderManagement({
   const [paymentMethod, setPaymentMethod] = useState<'Cash' | 'bKash' | 'Nagad' | 'Bank'>('Cash');
   const [paymentSubmitting, setPaymentSubmitting] = useState(false);
   const [invoiceGenerating, setInvoiceGenerating] = useState(false);
+
+  // Edit Order Modal States
+  const [showEditModal, setShowEditModal] = useState(false);
+  const [editingOrder, setEditingOrder] = useState<Order | null>(null);
+  const [editCustomerName, setEditCustomerName] = useState('');
+  const [editCustomerPhone, setEditCustomerPhone] = useState('');
+  const [editDeliveryAddress, setEditDeliveryAddress] = useState('');
+  const [editSubBrand, setEditSubBrand] = useState<'SAT' | 'GZ' | 'RTX'>('SAT');
+  const [editSalesChannel, setEditSalesChannel] = useState<SalesChannel>('Direct/WhatsApp');
+  const [editCourier, setEditCourier] = useState<CourierName>('CarryBee (Inside Dhaka)');
+  const [editCourierTrackingNumber, setEditCourierTrackingNumber] = useState('');
+  const [editOrderNotes, setEditOrderNotes] = useState('');
+  const [editItems, setEditItems] = useState<OrderItem[]>([]);
+  const [editShippingCharge, setEditShippingCharge] = useState<string>('0');
+  const [editDiscountAmount, setEditDiscountAmount] = useState<string>('0');
+  const [editAmountPaid, setEditAmountPaid] = useState<string>('0');
+  const [editPaymentMethod, setEditPaymentMethod] = useState<PaymentMethod>('Cash');
+  const [editPaymentStatus, setEditPaymentStatus] = useState<PaymentStatus>('Due');
+
+  // Quick Add item states inside edit modal
+  const [editAddItemProductId, setEditAddItemProductId] = useState('');
+  const [editAddItemVariantId, setEditAddItemVariantId] = useState('');
+  const [editAddItemPrice, setEditAddItemPrice] = useState<number>(0);
+  const [editAddItemQty, setEditAddItemQty] = useState<number>(1);
 
   const isSuperAdmin = user?.role === 'superadmin';
   const hasManageOrders = isSuperAdmin || 
@@ -610,6 +649,213 @@ export default function OrderManagement({
     }
   };
 
+  const [paymentToDelete, setPaymentToDelete] = useState<{
+    orderId: string;
+    index: number;
+    amount: number;
+    method: string;
+  } | null>(null);
+
+  const handleDeletePaymentEntry = async (index: number, ph: { amount: number; method: string }) => {
+    if (!selectedOrder) return;
+    setPaymentToDelete({
+      orderId: selectedOrder.id,
+      index,
+      amount: ph.amount,
+      method: ph.method
+    });
+  };
+
+  const handleConfirmDeletePaymentEntry = async () => {
+    if (!paymentToDelete || !selectedOrder) return;
+    try {
+      const updated = await deleteOrderPayment(paymentToDelete.orderId, paymentToDelete.index);
+      setSelectedOrder(updated);
+      setOrders(prev => prev.map(o => o.id === updated.id ? updated : o));
+      setPaymentToDelete(null);
+    } catch (err: any) {
+      console.error('Error deleting payment entry:', err);
+      setError(`Failed to delete payment entry: ${err.message || err}`);
+    }
+  };
+
+  // Open Full Order Edit Modal
+  const handleOpenEditModal = (order: Order) => {
+    if (requireCheckIn && !requireCheckIn()) return;
+    setEditingOrder(order);
+    setEditCustomerName(order.customerName || '');
+    setEditCustomerPhone(order.customerPhone || '');
+    setEditDeliveryAddress(order.deliveryAddress || '');
+    setEditSubBrand(order.subBrand || 'SAT');
+    setEditSalesChannel(order.salesChannel || 'Direct/WhatsApp');
+    setEditCourier(order.courier || 'CarryBee (Inside Dhaka)');
+    setEditCourierTrackingNumber(order.courierTrackingNumber || '');
+    setEditOrderNotes(order.notes || '');
+    setEditItems((order.items || []).map(i => ({ ...i })));
+    setEditShippingCharge(String(order.shippingCharge ?? 0));
+    setEditDiscountAmount(String(order.discountAmount ?? 0));
+    setEditAmountPaid(String(order.amountPaid ?? 0));
+    setEditPaymentMethod(order.paymentMethod || 'Cash');
+    setEditPaymentStatus(order.paymentStatus || 'Due');
+
+    // Reset item selector
+    setEditAddItemProductId('');
+    setEditAddItemVariantId('');
+    setEditAddItemPrice(0);
+    setEditAddItemQty(1);
+
+    setError('');
+    setSuccess('');
+    setShowEditModal(true);
+  };
+
+  const handleUpdateEditItemQty = (index: number, newQty: number) => {
+    if (newQty < 1) return;
+    setEditItems(prev => {
+      const updated = [...prev];
+      updated[index] = { ...updated[index], qty: newQty };
+      return updated;
+    });
+  };
+
+  const handleUpdateEditItemPrice = (index: number, newPrice: number) => {
+    if (isNaN(newPrice) || newPrice < 0) return;
+    setEditItems(prev => {
+      const updated = [...prev];
+      updated[index] = { ...updated[index], unitPrice: newPrice };
+      return updated;
+    });
+  };
+
+  const handleRemoveEditItem = (index: number) => {
+    if (editItems.length <= 1) {
+      setError('An order must have at least 1 line item.');
+      return;
+    }
+    setEditItems(prev => prev.filter((_, i) => i !== index));
+  };
+
+  const handleAddEditItemToOrder = () => {
+    if (!editAddItemProductId || !editAddItemVariantId) {
+      setError('Please select a product and variant to add.');
+      return;
+    }
+    const prod = products.find(p => p.id === editAddItemProductId);
+    const variant = prod?.variants.find(v => v.id === editAddItemVariantId);
+    if (!prod || !variant) return;
+
+    const existingIdx = editItems.findIndex(i => i.productId === editAddItemProductId && i.variantId === editAddItemVariantId);
+    if (existingIdx >= 0) {
+      setEditItems(prev => {
+        const updated = [...prev];
+        updated[existingIdx] = {
+          ...updated[existingIdx],
+          qty: updated[existingIdx].qty + (editAddItemQty || 1),
+          unitPrice: editAddItemPrice > 0 ? editAddItemPrice : updated[existingIdx].unitPrice
+        };
+        return updated;
+      });
+    } else {
+      const newItem: OrderItem = {
+        productId: editAddItemProductId,
+        variantId: editAddItemVariantId,
+        productName: prod.name,
+        variantLabel: `${variant.color || ''} ${variant.model || ''}`.trim() || 'Standard',
+        qty: editAddItemQty || 1,
+        unitPrice: editAddItemPrice
+      };
+      setEditItems(prev => [...prev, newItem]);
+    }
+
+    // Reset item selector
+    setEditAddItemProductId('');
+    setEditAddItemVariantId('');
+    setEditAddItemPrice(0);
+    setEditAddItemQty(1);
+    setError('');
+  };
+
+  const handleSaveEditedOrder = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editingOrder) return;
+    if (requireCheckIn && !requireCheckIn()) return;
+
+    if (editItems.length === 0) {
+      setError('The order must contain at least 1 item.');
+      return;
+    }
+    if (!editCustomerName.trim()) {
+      setError('Customer name is required.');
+      return;
+    }
+    if (!editCustomerPhone.trim()) {
+      setError('Customer phone number is required.');
+      return;
+    }
+
+    setSubmitting(true);
+    setError('');
+    setSuccess('');
+
+    try {
+      const subtotal = editItems.reduce((acc, it) => acc + (Number(it.unitPrice || 0) * Number(it.qty || 1)), 0);
+      const ship = parseFloat(editShippingCharge) || 0;
+      const disc = parseFloat(editDiscountAmount) || 0;
+      const paid = parseFloat(editAmountPaid) || 0;
+      const totalAmount = Math.max(0, subtotal + ship - disc);
+      const amountDue = Math.max(0, totalAmount - paid);
+
+      let finalPaymentStatus: PaymentStatus = editPaymentStatus;
+      if (amountDue === 0 && totalAmount > 0) {
+        finalPaymentStatus = 'Paid';
+      } else if (paid > 0 && amountDue > 0) {
+        finalPaymentStatus = 'Partial';
+      } else if (paid === 0) {
+        finalPaymentStatus = 'Due';
+      }
+
+      const updated = await updateOrderFullDetails(
+        editingOrder.id,
+        {
+          customerName: editCustomerName.trim(),
+          customerPhone: editCustomerPhone.trim(),
+          deliveryAddress: editDeliveryAddress.trim(),
+          subBrand: editSubBrand,
+          salesChannel: editSalesChannel,
+          courier: editCourier,
+          courierTrackingNumber: editCourierTrackingNumber.trim(),
+          notes: editOrderNotes.trim(),
+          items: editItems,
+          discountAmount: disc,
+          shippingCharge: ship,
+          totalAmount,
+          amountPaid: paid,
+          amountDue,
+          paymentStatus: finalPaymentStatus,
+          paymentMethod: editPaymentMethod
+        },
+        user?.id || 'sys',
+        user?.name || 'Operator'
+      );
+
+      if (editingOrder.customerId) {
+        await recalculateCustomerStats(editingOrder.customerId);
+      }
+
+      setSuccess(`Order #${editingOrder.id.substring(0, 8).toUpperCase()} updated successfully!`);
+      setSelectedOrder(updated);
+      setOrders(prev => prev.map(o => o.id === updated.id ? updated : o));
+      setShowEditModal(false);
+      setEditingOrder(null);
+      await fetchData();
+    } catch (err: any) {
+      console.error('Error updating order:', err);
+      setError(`Failed to update order: ${err.message || err}`);
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const resetWizard = () => {
     setWizardStep(1);
     setIsNewCustomer(false);
@@ -886,7 +1132,20 @@ export default function OrderManagement({
                             </span>
                           </td>
                           <td className="py-3 px-4 text-right">
-                            <ChevronRight size={16} className="text-slate-300 ml-auto" />
+                            <div className="flex items-center justify-end gap-1">
+                              <button
+                                type="button"
+                                onClick={(e) => {
+                                  e.stopPropagation();
+                                  handleOpenEditModal(order);
+                                }}
+                                title="Edit Order Details & Prices"
+                                className="p-1.5 hover:bg-amber-100 text-slate-400 hover:text-amber-800 rounded-lg transition-colors cursor-pointer"
+                              >
+                                <Edit size={14} />
+                              </button>
+                              <ChevronRight size={16} className="text-slate-300" />
+                            </div>
                           </td>
                         </tr>
                       );
@@ -931,6 +1190,14 @@ export default function OrderManagement({
                     </span>
                   </div>
                 </div>
+
+                <button
+                  type="button"
+                  onClick={() => handleOpenEditModal(selectedOrder)}
+                  className="w-full py-2.5 bg-amber-400 hover:bg-amber-300 text-slate-950 font-black text-xs uppercase tracking-wider rounded-xl shadow-xs flex items-center justify-center gap-1.5 cursor-pointer transition-all mt-2"
+                >
+                  <Edit size={14} /> Edit Order (অর্ডার ও প্রাইস এডিট)
+                </button>
               </div>
 
               {/* Status transition Controls */}
@@ -1125,7 +1392,17 @@ export default function OrderManagement({
                             <p className="font-semibold text-slate-700">৳{ph.amount.toLocaleString()} ({ph.method})</p>
                             <p className="text-[8px] text-slate-400">By {ph.recordedBy}</p>
                           </div>
-                          <span className="font-mono text-slate-400">{new Date(ph.date).toLocaleDateString('en-GB')}</span>
+                          <div className="flex items-center gap-2">
+                            <span className="font-mono text-slate-400">{new Date(ph.date).toLocaleDateString('en-GB')}</span>
+                            <button
+                              type="button"
+                              onClick={() => handleDeletePaymentEntry(idx, ph)}
+                              title="Delete payment entry"
+                              className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-md transition-colors cursor-pointer"
+                            >
+                              <Trash2 size={12} />
+                            </button>
+                          </div>
                         </div>
                       ))}
                       <div className="pt-2 mt-2 border-t border-slate-200 text-right">
@@ -1168,7 +1445,16 @@ export default function OrderManagement({
 
                 {/* Items Ordered */}
                 <div className="space-y-2">
-                  <h5 className="font-bold text-slate-400 uppercase text-[9px] tracking-wider">Sales Catalog lines</h5>
+                  <div className="flex justify-between items-center">
+                    <h5 className="font-bold text-slate-400 uppercase text-[9px] tracking-wider">Sales Catalog lines</h5>
+                    <button
+                      type="button"
+                      onClick={() => handleOpenEditModal(selectedOrder)}
+                      className="text-[11px] font-bold text-amber-600 hover:text-amber-700 flex items-center gap-1 cursor-pointer"
+                    >
+                      <Edit size={11} /> Edit Items & Prices
+                    </button>
+                  </div>
                   <div className="p-3 bg-slate-50 border border-slate-100 rounded-2xl divide-y divide-slate-200/55 max-h-[160px] overflow-y-auto space-y-2">
                     {selectedOrder.items.map((item, idx) => (
                       <div key={idx} className="flex justify-between items-center text-sm pt-2 first:pt-0">
@@ -1759,6 +2045,519 @@ export default function OrderManagement({
         </div>
       )}
 
+      {/* EDIT ORDER FULL MODAL */}
+      {showEditModal && editingOrder && (
+        <div className="fixed inset-0 bg-slate-950/80 z-50 flex items-center justify-center p-2 sm:p-4 backdrop-blur-xs">
+          <div className="bg-white rounded-3xl border border-slate-100 w-full max-w-4xl shadow-2xl overflow-hidden flex flex-col max-h-[92vh] animate-scale-up">
+            
+            {/* Modal Header */}
+            <div className="bg-slate-950 text-white p-5 sm:p-6 flex justify-between items-center flex-shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="p-2.5 bg-amber-400 text-slate-950 rounded-xl font-bold">
+                  <Edit size={20} />
+                </div>
+                <div>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-lg font-black font-sans uppercase tracking-tight text-white">
+                      Edit Sales Order
+                    </h3>
+                    <span className="font-mono text-xs font-bold text-amber-400 bg-amber-400/10 border border-amber-400/20 px-2 py-0.5 rounded-md">
+                      #{editingOrder.id.substring(0, 8).toUpperCase()}
+                    </span>
+                    <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${
+                      editingOrder.status === 'Delivered' ? 'bg-emerald-500/20 text-emerald-300' :
+                      editingOrder.status === 'Returned/Cancelled' ? 'bg-red-500/20 text-red-300' :
+                      'bg-slate-800 text-slate-300'
+                    }`}>
+                      {editingOrder.status}
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-400 mt-0.5">
+                    Modify line items, selling prices, quantities, delivery charges, discounts, and customer details.
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={() => {
+                  setShowEditModal(false);
+                  setEditingOrder(null);
+                }}
+                className="p-2 hover:bg-slate-800 text-slate-400 hover:text-white rounded-xl transition-colors cursor-pointer"
+              >
+                <X size={20} />
+              </button>
+            </div>
+
+            {/* Modal Body */}
+            <form onSubmit={handleSaveEditedOrder} className="flex-1 overflow-y-auto p-5 sm:p-6 space-y-6">
+              {error && (
+                <div className="p-3.5 bg-red-50 border border-red-200 text-red-700 rounded-2xl text-xs flex items-center gap-2 font-medium">
+                  <AlertCircle size={16} className="shrink-0 text-red-600" />
+                  <span>{error}</span>
+                </div>
+              )}
+
+              {/* SECTION 1: Customer & Fulfillment Details */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* Customer Details Card */}
+                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 space-y-3">
+                  <div className="flex items-center gap-1.5 text-xs font-black uppercase tracking-wider text-slate-600 pb-1 border-b border-slate-200/60">
+                    <User size={13} className="text-amber-500" />
+                    Customer Recipient Info
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-bold uppercase text-slate-500 mb-1">Customer Name *</label>
+                    <input
+                      type="text"
+                      required
+                      value={editCustomerName}
+                      onChange={(e) => setEditCustomerName(e.target.value)}
+                      className="w-full bg-white border border-slate-200 rounded-xl py-2 px-3 text-sm focus:outline-hidden focus:border-amber-400 font-semibold text-slate-800"
+                      placeholder="e.g. Shakib Al Hasan"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-bold uppercase text-slate-500 mb-1">Phone Number *</label>
+                    <input
+                      type="text"
+                      required
+                      value={editCustomerPhone}
+                      onChange={(e) => setEditCustomerPhone(e.target.value)}
+                      className="w-full bg-white border border-slate-200 rounded-xl py-2 px-3 text-sm focus:outline-hidden focus:border-amber-400 font-mono font-bold text-slate-800"
+                      placeholder="01XXXXXXXXX"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-bold uppercase text-slate-500 mb-1">Delivery Address *</label>
+                    <textarea
+                      required
+                      rows={2}
+                      value={editDeliveryAddress}
+                      onChange={(e) => setEditDeliveryAddress(e.target.value)}
+                      className="w-full bg-white border border-slate-200 rounded-xl py-2 px-3 text-sm focus:outline-hidden focus:border-amber-400 text-slate-800 leading-normal"
+                      placeholder="House, Road, Area, District"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-bold uppercase text-slate-500 mb-1">Order Notes / Instructions</label>
+                    <input
+                      type="text"
+                      value={editOrderNotes}
+                      onChange={(e) => setEditOrderNotes(e.target.value)}
+                      className="w-full bg-white border border-slate-200 rounded-xl py-1.5 px-3 text-xs focus:outline-hidden focus:border-amber-400 text-slate-600"
+                      placeholder="e.g. Call before delivery"
+                    />
+                  </div>
+                </div>
+
+                {/* Logistics & Fulfillment Card */}
+                <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100 space-y-3">
+                  <div className="flex items-center gap-1.5 text-xs font-black uppercase tracking-wider text-slate-600 pb-1 border-b border-slate-200/60">
+                    <Truck size={13} className="text-amber-500" />
+                    Logistics & Channel Info
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[11px] font-bold uppercase text-slate-500 mb-1">Sub-Brand *</label>
+                      <select
+                        value={editSubBrand}
+                        onChange={(e) => setEditSubBrand(e.target.value as any)}
+                        className="w-full bg-white border border-slate-200 rounded-xl py-2 px-3 text-sm focus:outline-hidden focus:border-amber-400 font-bold text-slate-800"
+                      >
+                        <option value="SAT">SAT (Smart & Tech)</option>
+                        <option value="GZ">GZ (Gadget Zone)</option>
+                        <option value="RTX">RTX (Retail X)</option>
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-bold uppercase text-slate-500 mb-1">Sales Channel *</label>
+                      <select
+                        value={editSalesChannel}
+                        onChange={(e) => setEditSalesChannel(e.target.value as any)}
+                        className="w-full bg-white border border-slate-200 rounded-xl py-2 px-3 text-sm focus:outline-hidden focus:border-amber-400 font-semibold text-slate-800"
+                      >
+                        <option value="Facebook">Facebook</option>
+                        <option value="TikTok">TikTok</option>
+                        <option value="Instagram">Instagram</option>
+                        <option value="Daraz">Daraz</option>
+                        <option value="CartUp">CartUp</option>
+                        <option value="Packly">Packly</option>
+                        <option value="Direct/WhatsApp">Direct / WhatsApp</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-bold uppercase text-slate-500 mb-1">Courier Partner *</label>
+                    <select
+                      value={editCourier}
+                      onChange={(e) => setEditCourier(e.target.value as any)}
+                      className="w-full bg-white border border-slate-200 rounded-xl py-2 px-3 text-sm focus:outline-hidden focus:border-amber-400 font-semibold text-slate-800"
+                    >
+                      <option value="CarryBee (Inside Dhaka)">CarryBee (Inside Dhaka)</option>
+                      <option value="Steadfast (Outside Dhaka)">Steadfast (Outside Dhaka)</option>
+                    </select>
+                  </div>
+
+                  <div>
+                    <label className="block text-[11px] font-bold uppercase text-slate-500 mb-1">Courier Tracking Code</label>
+                    <input
+                      type="text"
+                      value={editCourierTrackingNumber}
+                      onChange={(e) => setEditCourierTrackingNumber(e.target.value)}
+                      className="w-full bg-white border border-slate-200 rounded-xl py-2 px-3 text-sm focus:outline-hidden focus:border-amber-400 font-mono font-bold text-slate-800"
+                      placeholder="e.g. CB-893420 / STF-1934"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* SECTION 2: Order Items & Pricing Table (Core Feature) */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <Package size={16} className="text-amber-500" />
+                    <h4 className="font-black text-sm text-slate-900 uppercase tracking-tight">
+                      Order Items & Price Customization
+                    </h4>
+                  </div>
+                  <span className="text-xs font-mono font-bold text-slate-500">
+                    {editItems.length} {editItems.length === 1 ? 'item' : 'items'} in order
+                  </span>
+                </div>
+
+                {/* Items List Table */}
+                <div className="border border-slate-200 rounded-2xl overflow-hidden shadow-2xs">
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="bg-slate-100 text-[11px] font-mono font-black uppercase text-slate-600 tracking-wider border-b border-slate-200">
+                        <th className="py-2.5 px-3">Product & Variant</th>
+                        <th className="py-2.5 px-3 text-center w-36">Unit Price (৳)</th>
+                        <th className="py-2.5 px-3 text-center w-32">Qty</th>
+                        <th className="py-2.5 px-3 text-right w-28">Subtotal</th>
+                        <th className="py-2.5 px-2 text-center w-12"></th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 text-sm">
+                      {editItems.map((item, idx) => {
+                        const lineTotal = Number(item.unitPrice || 0) * Number(item.qty || 1);
+                        return (
+                          <tr key={idx} className="hover:bg-slate-50/70 transition-colors">
+                            <td className="py-2.5 px-3">
+                              <p className="font-bold text-slate-900 leading-tight">{item.productName}</p>
+                              <span className="text-xs text-slate-500 font-mono">
+                                Variant: <span className="text-amber-700 font-semibold">{item.variantLabel}</span>
+                              </span>
+                            </td>
+                            <td className="py-2.5 px-3 text-center">
+                              <div className="relative">
+                                <span className="absolute left-2.5 top-1/2 -translate-y-1/2 text-slate-400 font-bold text-xs">৳</span>
+                                <input
+                                  type="number"
+                                  min="0"
+                                  step="any"
+                                  value={item.unitPrice}
+                                  onChange={(e) => handleUpdateEditItemPrice(idx, parseFloat(e.target.value) || 0)}
+                                  className="w-full bg-white border border-slate-200 rounded-lg py-1 pl-6 pr-2 text-right text-xs font-mono font-black text-slate-900 focus:outline-hidden focus:border-amber-400"
+                                  title="Edit unit selling price"
+                                />
+                              </div>
+                            </td>
+                            <td className="py-2.5 px-3 text-center">
+                              <div className="inline-flex items-center border border-slate-200 rounded-lg overflow-hidden bg-white">
+                                <button
+                                  type="button"
+                                  onClick={() => handleUpdateEditItemQty(idx, item.qty - 1)}
+                                  disabled={item.qty <= 1}
+                                  className="px-2 py-1 hover:bg-slate-100 text-slate-600 disabled:opacity-30 cursor-pointer font-bold text-xs"
+                                >
+                                  -
+                                </button>
+                                <input
+                                  type="number"
+                                  min="1"
+                                  value={item.qty}
+                                  onChange={(e) => handleUpdateEditItemQty(idx, parseInt(e.target.value) || 1)}
+                                  className="w-10 text-center py-1 text-xs font-mono font-bold text-slate-900 border-x border-slate-200 focus:outline-hidden"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => handleUpdateEditItemQty(idx, item.qty + 1)}
+                                  className="px-2 py-1 hover:bg-slate-100 text-slate-600 cursor-pointer font-bold text-xs"
+                                >
+                                  +
+                                </button>
+                              </div>
+                            </td>
+                            <td className="py-2.5 px-3 text-right font-mono font-black text-slate-900">
+                              ৳{lineTotal.toLocaleString()}
+                            </td>
+                            <td className="py-2.5 px-2 text-center">
+                              <button
+                                type="button"
+                                onClick={() => handleRemoveEditItem(idx)}
+                                title="Remove line item"
+                                className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
+                              >
+                                <Trash2 size={14} />
+                              </button>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Quick Add Extra Products to Order */}
+                <div className="bg-slate-50 p-3.5 rounded-2xl border border-dashed border-slate-200 space-y-2">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-bold text-slate-700 uppercase tracking-wide flex items-center gap-1">
+                      <Plus size={13} className="text-amber-600" />
+                      Add Product to Order (অর্ডারে নতুন পণ্য যোগ করুন)
+                    </span>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-12 gap-2 items-end">
+                    <div className="sm:col-span-4">
+                      <label className="block text-[10px] font-bold uppercase text-slate-400 mb-0.5">Select Product</label>
+                      <select
+                        value={editAddItemProductId}
+                        onChange={(e) => {
+                          const pid = e.target.value;
+                          setEditAddItemProductId(pid);
+                          const prod = products.find(p => p.id === pid);
+                          if (prod) {
+                            setEditAddItemPrice(prod.sellingPrice || 0);
+                            if (prod.variants && prod.variants.length > 0) {
+                              setEditAddItemVariantId(prod.variants[0].id);
+                            } else {
+                              setEditAddItemVariantId('');
+                            }
+                          } else {
+                            setEditAddItemVariantId('');
+                            setEditAddItemPrice(0);
+                          }
+                        }}
+                        className="w-full bg-white border border-slate-200 rounded-xl py-1.5 px-2.5 text-xs focus:outline-hidden focus:border-amber-400 text-slate-800"
+                      >
+                        <option value="">-- Choose Product --</option>
+                        {products.map((p) => (
+                          <option key={p.id} value={p.id}>
+                            {p.name} ({p.sku || 'No SKU'})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="sm:col-span-3">
+                      <label className="block text-[10px] font-bold uppercase text-slate-400 mb-0.5">Variant</label>
+                      <select
+                        value={editAddItemVariantId}
+                        onChange={(e) => setEditAddItemVariantId(e.target.value)}
+                        disabled={!editAddItemProductId}
+                        className="w-full bg-white border border-slate-200 rounded-xl py-1.5 px-2.5 text-xs focus:outline-hidden focus:border-amber-400 text-slate-800 disabled:opacity-50"
+                      >
+                        <option value="">-- Choose Variant --</option>
+                        {products.find(p => p.id === editAddItemProductId)?.variants.map((v) => (
+                          <option key={v.id} value={v.id}>
+                            {v.color || ''} {v.model || ''} (Stock: {v.stock})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div className="sm:col-span-2">
+                      <label className="block text-[10px] font-bold uppercase text-slate-400 mb-0.5">Unit Price (৳)</label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="any"
+                        value={editAddItemPrice}
+                        onChange={(e) => setEditAddItemPrice(parseFloat(e.target.value) || 0)}
+                        placeholder="৳ Price"
+                        className="w-full bg-white border border-slate-200 rounded-xl py-1.5 px-2.5 text-xs font-mono font-bold text-slate-900 focus:outline-hidden focus:border-amber-400"
+                      />
+                    </div>
+
+                    <div className="sm:col-span-1">
+                      <label className="block text-[10px] font-bold uppercase text-slate-400 mb-0.5">Qty</label>
+                      <input
+                        type="number"
+                        min="1"
+                        value={editAddItemQty}
+                        onChange={(e) => setEditAddItemQty(parseInt(e.target.value) || 1)}
+                        className="w-full bg-white border border-slate-200 rounded-xl py-1.5 px-2 text-xs font-mono font-bold text-slate-900 text-center focus:outline-hidden focus:border-amber-400"
+                      />
+                    </div>
+
+                    <div className="sm:col-span-2">
+                      <button
+                        type="button"
+                        onClick={handleAddEditItemToOrder}
+                        disabled={!editAddItemProductId || !editAddItemVariantId}
+                        className="w-full py-2 bg-slate-900 hover:bg-slate-800 text-[#D4AF37] disabled:opacity-40 font-bold text-xs rounded-xl shadow-xs transition-all cursor-pointer flex items-center justify-center gap-1"
+                      >
+                        <Plus size={13} /> Add Line
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* SECTION 3: Financial & Payment Recalculations */}
+              <div className="bg-slate-950 text-white p-5 rounded-2xl space-y-4">
+                <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                  <span className="text-xs font-mono font-black uppercase text-amber-400 tracking-wider flex items-center gap-1.5">
+                    <DollarSign size={14} /> Financial Summary & Billing
+                  </span>
+                  <span className="text-xs font-mono text-slate-400">All amounts in BDT (৳)</span>
+                </div>
+
+                {(() => {
+                  const subtotal = editItems.reduce((acc, it) => acc + (Number(it.unitPrice || 0) * Number(it.qty || 1)), 0);
+                  const ship = parseFloat(editShippingCharge) || 0;
+                  const disc = parseFloat(editDiscountAmount) || 0;
+                  const paid = parseFloat(editAmountPaid) || 0;
+                  const grandTotal = Math.max(0, subtotal + ship - disc);
+                  const due = Math.max(0, grandTotal - paid);
+
+                  return (
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                      {/* Left: Calculation inputs */}
+                      <div className="space-y-2.5 font-mono text-xs">
+                        <div className="flex justify-between items-center text-slate-300">
+                          <span>Items Subtotal:</span>
+                          <strong className="text-white text-sm">৳{subtotal.toLocaleString()}</strong>
+                        </div>
+
+                        <div className="flex justify-between items-center gap-2">
+                          <label className="text-slate-300">Delivery / Shipping Charge (৳):</label>
+                          <input
+                            type="number"
+                            min="0"
+                            step="any"
+                            value={editShippingCharge}
+                            onChange={(e) => setEditShippingCharge(e.target.value)}
+                            className="w-28 bg-slate-900 border border-slate-800 rounded-lg py-1 px-2 text-right text-white font-mono font-bold focus:outline-hidden focus:border-amber-400 text-xs"
+                          />
+                        </div>
+
+                        <div className="flex justify-between items-center gap-2">
+                          <label className="text-slate-300">Special Discount (৳):</label>
+                          <input
+                            type="number"
+                            min="0"
+                            step="any"
+                            value={editDiscountAmount}
+                            onChange={(e) => setEditDiscountAmount(e.target.value)}
+                            className="w-28 bg-slate-900 border border-slate-800 rounded-lg py-1 px-2 text-right text-emerald-400 font-mono font-bold focus:outline-hidden focus:border-emerald-400 text-xs"
+                          />
+                        </div>
+
+                        <div className="flex justify-between items-center pt-2 border-t border-slate-800 font-sans">
+                          <span className="text-xs uppercase font-bold text-slate-300">Grand Total Amount:</span>
+                          <span className="text-base font-black text-amber-400 font-mono">
+                            ৳{grandTotal.toLocaleString()}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Right: Payment status and collection */}
+                      <div className="space-y-2.5 font-mono text-xs border-t md:border-t-0 md:border-l border-slate-800 md:pl-5 pt-3 md:pt-0">
+                        <div className="flex justify-between items-center gap-2">
+                          <label className="text-slate-300">Amount Paid (৳):</label>
+                          <input
+                            type="number"
+                            min="0"
+                            step="any"
+                            value={editAmountPaid}
+                            onChange={(e) => setEditAmountPaid(e.target.value)}
+                            className="w-28 bg-slate-900 border border-slate-800 rounded-lg py-1 px-2 text-right text-emerald-400 font-mono font-bold focus:outline-hidden focus:border-emerald-400 text-xs"
+                          />
+                        </div>
+
+                        <div className="flex justify-between items-center text-slate-300">
+                          <span>Outstanding Due (৳):</span>
+                          <strong className={`text-sm font-mono font-black ${due === 0 ? 'text-emerald-400' : 'text-red-400'}`}>
+                            ৳{due.toLocaleString()}
+                          </strong>
+                        </div>
+
+                        <div className="grid grid-cols-2 gap-2 pt-1">
+                          <div>
+                            <label className="block text-[10px] uppercase text-slate-400 font-sans font-bold mb-1">Payment Method</label>
+                            <select
+                              value={editPaymentMethod}
+                              onChange={(e) => setEditPaymentMethod(e.target.value as any)}
+                              className="w-full bg-slate-900 border border-slate-800 rounded-lg py-1.5 px-2 text-xs text-slate-200 font-sans focus:outline-hidden focus:border-amber-400"
+                            >
+                              <option value="Cash">Cash</option>
+                              <option value="bKash">bKash (MFS)</option>
+                              <option value="Nagad">Nagad (MFS)</option>
+                              <option value="Bank Transfer">Bank Transfer</option>
+                            </select>
+                          </div>
+
+                          <div>
+                            <label className="block text-[10px] uppercase text-slate-400 font-sans font-bold mb-1">Payment Status</label>
+                            <select
+                              value={editPaymentStatus}
+                              onChange={(e) => setEditPaymentStatus(e.target.value as any)}
+                              className="w-full bg-slate-900 border border-slate-800 rounded-lg py-1.5 px-2 text-xs font-sans font-bold text-amber-400 focus:outline-hidden focus:border-amber-400"
+                            >
+                              <option value="Paid">Paid (পরিশোধিত)</option>
+                              <option value="Partial">Partial (আংশিক)</option>
+                              <option value="Due">Due (বকেয়া)</option>
+                            </select>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+
+              {/* Modal Footer Controls */}
+              <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowEditModal(false);
+                    setEditingOrder(null);
+                  }}
+                  className="px-5 py-2.5 bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold uppercase rounded-xl transition-colors cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={submitting}
+                  className="px-6 py-2.5 bg-amber-500 hover:bg-amber-600 text-slate-950 text-xs font-black uppercase tracking-wider rounded-xl shadow-md transition-all cursor-pointer flex items-center gap-1.5 disabled:opacity-50"
+                >
+                  {submitting ? (
+                    <>Saving Changes...</>
+                  ) : (
+                    <>
+                      <Check size={15} /> Save Changes (পরিবর্তন সংরক্ষণ করুন)
+                    </>
+                  )}
+                </button>
+              </div>
+
+            </form>
+          </div>
+        </div>
+      )}
+
     {/* Payment Record Modal */}
     {showPaymentModal && selectedOrder && (
       <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
@@ -1868,6 +2667,44 @@ export default function OrderManagement({
               className="px-4 py-2 bg-slate-900 hover:bg-slate-950 text-white rounded-xl text-sm font-bold transition-all shadow-md cursor-pointer"
             >
               Confirm
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+
+    {/* Delete Payment Entry Confirmation Modal */}
+    {paymentToDelete && (
+      <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs animate-fade-in">
+        <div className="bg-white rounded-2xl border border-slate-150 p-6 max-w-sm w-full space-y-4 shadow-xl">
+          <div className="flex items-start gap-3">
+            <div className="p-2.5 bg-rose-50 text-rose-600 rounded-xl shrink-0">
+              <AlertCircle size={20} />
+            </div>
+            <div className="space-y-1">
+              <h3 className="text-sm font-black text-slate-900 uppercase tracking-wide">
+                Delete Payment Entry
+              </h3>
+              <p className="text-xs text-slate-500 leading-relaxed">
+                Are you sure you want to delete this payment record of <strong className="text-slate-900">৳{paymentToDelete.amount.toLocaleString()}</strong> ({paymentToDelete.method})? The customer's due balance will be restored automatically.
+              </p>
+            </div>
+          </div>
+          <div className="flex gap-2.5 justify-end pt-2 border-t border-slate-100">
+            <button
+              type="button"
+              onClick={() => setPaymentToDelete(null)}
+              className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl text-xs font-bold transition-all cursor-pointer"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              onClick={handleConfirmDeletePaymentEntry}
+              className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold transition-all shadow-md cursor-pointer flex items-center gap-1.5"
+            >
+              <Trash2 size={12} />
+              Delete Entry
             </button>
           </div>
         </div>
