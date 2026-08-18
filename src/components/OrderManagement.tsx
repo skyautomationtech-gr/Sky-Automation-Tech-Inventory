@@ -43,6 +43,9 @@ import {
   getOrders, 
   getCustomers, 
   getProducts, 
+  subscribeToOrders,
+  subscribeToCustomers,
+  subscribeToProducts,
   addOrder, 
   addCustomer, 
   updateOrderAndHandleStock, 
@@ -174,6 +177,22 @@ export default function OrderManagement({
 
   useEffect(() => {
     fetchData();
+    const unsubOrders = subscribeToOrders((ordersData) => {
+      setOrders(ordersData || []);
+      setLoading(false);
+    });
+    const unsubCustomers = subscribeToCustomers((customersData) => {
+      setCustomers(customersData || []);
+    });
+    const unsubProducts = subscribeToProducts((productsData) => {
+      const approvedProducts = (productsData || []).filter(p => p.status === 'approved' && !p.archived);
+      setProducts(approvedProducts);
+    });
+    return () => {
+      unsubOrders();
+      unsubCustomers();
+      unsubProducts();
+    };
   }, []);
 
   const fetchData = async () => {

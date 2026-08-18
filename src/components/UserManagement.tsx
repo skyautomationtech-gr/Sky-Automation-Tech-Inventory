@@ -3,6 +3,7 @@ import { motion } from 'motion/react';
 import { UserProfile, UserRole } from '../types';
 import { 
   getAllUsers, 
+  subscribeToUsers,
   createUserProfile, 
   findUserProfileByEmail,
   updateUserProfile, 
@@ -143,6 +144,11 @@ export default function UserManagement({ user }: UserManagementProps) {
 
   useEffect(() => {
     deleteSokolDemoData().then(() => fetchUsersList());
+    const unsub = subscribeToUsers((list) => {
+      setUsers(list || []);
+      setLoading(false);
+    });
+    return () => unsub();
   }, []);
 
   const fetchUsersList = async () => {

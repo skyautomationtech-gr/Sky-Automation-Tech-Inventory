@@ -18,7 +18,7 @@ import {
   AlertCircle
 } from 'lucide-react';
 import { Customer, Order, UserProfile } from '../types';
-import { getCustomers, addCustomer, updateCustomer, getOrders } from '../firebase/db';
+import { getCustomers, addCustomer, updateCustomer, getOrders, subscribeToCustomers, subscribeToOrders } from '../firebase/db';
 
 interface CustomerManagementProps {
   user: UserProfile | null;
@@ -65,6 +65,17 @@ export default function CustomerManagement({
 
   useEffect(() => {
     fetchData();
+    const unsubCust = subscribeToCustomers((customersData) => {
+      setCustomers(customersData || []);
+      setLoading(false);
+    });
+    const unsubOrd = subscribeToOrders((ordersData) => {
+      setOrders(ordersData || []);
+    });
+    return () => {
+      unsubCust();
+      unsubOrd();
+    };
   }, []);
 
   const fetchData = async () => {

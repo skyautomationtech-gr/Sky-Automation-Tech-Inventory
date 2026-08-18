@@ -19,7 +19,7 @@ import {
   ExternalLink
 } from 'lucide-react';
 import { Invoice, UserProfile, Order, CompanySettings, Product } from '../types';
-import { getInvoices, voidInvoiceRecord, getOrders, getCompanySettings, getProducts } from '../firebase/db';
+import { getInvoices, voidInvoiceRecord, getOrders, getCompanySettings, getProducts, subscribeToInvoices, subscribeToOrders, subscribeToProducts } from '../firebase/db';
 import { getBrandLogo, BRAND_NAMES, getSubBrandCompanyInfo } from '../utils/brandLogos';
 import { doc, getDoc } from 'firebase/firestore';
 import { db } from '../firebase/config';
@@ -60,6 +60,23 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
   useEffect(() => {
     fetchData();
     fetchRolePermissions();
+
+    const unsubInv = subscribeToInvoices((invoicesData) => {
+      setInvoices(invoicesData || []);
+      setLoading(false);
+    });
+    const unsubOrd = subscribeToOrders((ordersData) => {
+      setOrders(ordersData || []);
+    });
+    const unsubProd = subscribeToProducts((productsData) => {
+      setProducts(productsData || []);
+    });
+
+    return () => {
+      unsubInv();
+      unsubOrd();
+      unsubProd();
+    };
   }, []);
 
   const fetchData = async () => {

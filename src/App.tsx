@@ -10,6 +10,11 @@ import {
   getBrands,
   getProductColors,
   getProductModels,
+  subscribeToProducts,
+  subscribeToCategories,
+  subscribeToBrands,
+  subscribeToProductColors,
+  subscribeToProductModels,
   saveCompanySettings,
   promoteUserToSuperAdmin,
   clearSampleData,
@@ -422,8 +427,36 @@ export default function App() {
   useEffect(() => {
     if (user && !isOnboarding && !isOfflineDemoMode) {
       refreshApplicationData();
+
+      const unsubProducts = subscribeToProducts((prods) => {
+        if (prods) setProducts(prods);
+      }, true);
+
+      const unsubCategories = subscribeToCategories((cats) => {
+        if (cats) setCategories(cats);
+      });
+
+      const unsubBrands = subscribeToBrands((brs) => {
+        if (brs) setBrands(brs);
+      });
+
+      const unsubColors = subscribeToProductColors((cls) => {
+        if (cls) setProductColors(cls);
+      });
+
+      const unsubModels = subscribeToProductModels((mds) => {
+        if (mds) setProductModels(mds);
+      });
+
+      return () => {
+        unsubProducts();
+        unsubCategories();
+        unsubBrands();
+        unsubColors();
+        unsubModels();
+      };
     }
-  }, [user, isOnboarding]);
+  }, [user, isOnboarding, isOfflineDemoMode]);
 
   // Handle Auth success from Login Screen
   const handleAuthSuccess = async (profile: UserProfile) => {

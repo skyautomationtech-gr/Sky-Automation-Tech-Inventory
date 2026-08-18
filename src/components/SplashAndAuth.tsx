@@ -221,85 +221,119 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
     e.preventDefault();
     setError('');
     setInfoMessage('');
+
+    const cleanEmail = email.toLowerCase().trim();
+    const cleanPassword = password;
+
+    if (!cleanEmail || !cleanPassword) {
+      setError('Please enter both your email address and password.');
+      return;
+    }
+
     setLoading(true);
 
     try {
       let userId = '';
       let profile: UserProfile | null = null;
 
-      try {
-        // Standard Login
-        const userCredential = await signInWithEmailAndPassword(firebaseAuth, email, password);
-        userId = userCredential.user.uid;
-        try {
-          await userCredential.user.getIdToken(true);
-        } catch (tokenErr) {}
-        await new Promise(resolve => setTimeout(resolve, 300));
-        profile = await getUserProfile(userId);
-      } catch (authErr: any) {
-        // Fallback check customPassword in Firestore profile
-        const { findUserProfileByEmail } = await import('../firebase/db');
-        const found = await findUserProfileByEmail(email);
-        if (found && found.customPassword && found.customPassword === password) {
-          userId = found.id;
-          profile = found;
-        } else {
-          throw authErr;
-        }
-      }
-      
-      if (!profile) {
-        try {
-          const { findUserProfileByEmail, createUserProfile, deleteUserProfile } = await import('../firebase/db');
-          const orphanedProfile = await findUserProfileByEmail(email);
-          if (orphanedProfile) {
-            await createUserProfile(userId, { ...orphanedProfile, id: userId });
-            try {
-              await deleteUserProfile(orphanedProfile.id);
-            } catch (delErr) {}
-            profile = await getUserProfile(userId);
-          }
-        } catch (healErr) {}
-      }
+      // 1. Fetch user profile by email from Firestore to verify account exists and check credentials
+      const { findUserProfileByEmail, getUserProfile, createUserProfile, deleteUserProfile } = await import('../firebase/db');
+      const existingProfile = await findUserProfileByEmail(cleanEmail);
 
-      if (!profile) {
-        setError('This account is not registered in the system. Please contact your Super Admin.');
-        await signOut(firebaseAuth);
+      if (!existingProfile) {
+        // Account not found in database
+        setError('Invalid email or password. Please verify your credentials or use the "Forgot Password?" link.');
         setLoading(false);
         return;
       }
 
-      if (profile.status === 'pending_approval') {
-        await signOut(firebaseAuth);
+      // Check account approval and active status
+      if (existingProfile.status === 'pending_approval') {
         setError('Your account is still pending Super Admin approval.');
         setLoading(false);
         return;
       }
 
-      if (profile.status === 'rejected') {
-        await signOut(firebaseAuth);
+      if (existingProfile.status === 'rejected') {
         setError('Your registration request was not approved. Please contact your Super Admin.');
         setLoading(false);
         return;
       }
 
-      if (profile.active === false) {
-        await signOut(firebaseAuth);
+      if (existingProfile.active === false) {
         setError('This account has been suspended or is inactive. Please contact your Super Admin.');
         setLoading(false);
         return;
       }
-      
+
+      let isPasswordValid = false;
+
+      // 2. If user profile has customPassword (e.g. from password reset or admin assignment), strictly check it
+      if (existingProfile.customPassword) {
+        if (existingProfile.customPassword === cleanPassword) {
+          isPasswordValid = true;
+          userId = existingProfile.id;
+          profile = existingProfile;
+          // Attempt Firebase Auth sign-in to keep session token synced if possible
+          try {
+            const userCred = await signInWithEmailAndPassword(firebaseAuth, cleanEmail, cleanPassword);
+            userId = userCred.user.uid;
+          } catch (syncErr) {
+            // Firebase Auth password may differ from updated customPassword, which is fine
+          }
+        } else {
+          // Wrong password entered for customPassword profile
+          setError('Invalid email or password. Please verify your credentials or reset your password.');
+          setLoading(false);
+          return;
+        }
+      } else {
+        // 3. Authenticate with Firebase Authentication
+        try {
+          const userCredential = await signInWithEmailAndPassword(firebaseAuth, cleanEmail, cleanPassword);
+          userId = userCredential.user.uid;
+          isPasswordValid = true;
+          try {
+            await userCredential.user.getIdToken(true);
+          } catch (tokenErr) {}
+          await new Promise(resolve => setTimeout(resolve, 200));
+          profile = await getUserProfile(userId) || existingProfile;
+        } catch (authErr: any) {
+          console.warn('Firebase Auth sign in failed:', authErr.code, authErr.message);
+          setError('Invalid email or password. Please verify your credentials or use "Forgot Password?".');
+          setLoading(false);
+          return;
+        }
+      }
+
+      if (!isPasswordValid || !profile) {
+        setError('Invalid email or password. Please verify your credentials.');
+        setLoading(false);
+        return;
+      }
+
+      // Self-heal orphaned UID if mismatched
+      if (userId && profile.id !== userId) {
+        try {
+          await createUserProfile(userId, { ...profile, id: userId });
+          try {
+            await deleteUserProfile(profile.id);
+          } catch (delErr) {}
+          profile = await getUserProfile(userId) || profile;
+        } catch (healErr) {}
+      }
+
+      // 4. Password verified! Only now generate OTP and proceed to verification step
       const otp = Math.floor(100000 + Math.random() * 900000).toString();
       setGeneratedOtp(otp);
-      setTempUserId(userId);
+      setTempUserId(profile.id);
       
       if (profile.role === 'staff') {
         try {
           const { setDoc, doc } = await import('firebase/firestore');
           const { db } = await import('../firebase/config');
-          await setDoc(doc(db, 'liveLoginCodes', userId), {
-            staffUid: userId,
+          await setDoc(doc(db, 'liveLoginCodes', profile.id), {
+            staffUid: profile.id,
             staffName: profile.name,
             email: profile.email,
             otpCode: otp,
@@ -312,20 +346,20 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
         setOtpSent(true);
         setInfoMessage('Verification code generated. Please contact your Super Admin for your 6-digit login code.');
       } else {
-        const emailRes = await sendOTPEmail(email, otp, profile.name);
+        const emailRes = await sendOTPEmail(cleanEmail, otp, profile.name);
         if (!emailRes.success) {
-          setError(`EmailJS Delivery Failed: ${emailRes.error || 'Unknown error'}`);
+          setError(`Email Delivery Notice: ${emailRes.error || 'Failed to dispatch email'}. Please try again or contact administrator.`);
           return;
         }
         setOtpSent(true);
-        setInfoMessage(`A security verification code was sent to ${email}`);
+        setInfoMessage(`A security verification code was sent to ${cleanEmail}`);
       }
     } catch (err: any) {
       console.warn('Login attempt failed:', err.code, err.message);
       if (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-credential' || err.code === 'auth/wrong-password') {
         setError('Invalid email or password. Please verify your credentials or use the "Forgot Password?" link if you need to reset your password.');
       } else {
-        setError(`Authentication failed (${err.code || 'unknown'}): ${err.message}`);
+        setError(`Authentication failed: ${err.message || 'Please check your credentials.'}`);
       }
     } finally {
       setLoading(false);
@@ -337,7 +371,7 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
     e.preventDefault();
     setError('');
     
-    if (userEnteredOtp === generatedOtp && generatedOtp !== '') {
+    if (userEnteredOtp.trim() === generatedOtp.trim() && generatedOtp.trim() !== '') {
       setLoading(true);
       try {
         const currentUser = firebaseAuth.currentUser;
@@ -447,34 +481,10 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
         <div className="bg-slate-900/80 backdrop-blur-md py-8 px-4 shadow-2xl rounded-3xl border border-slate-800 sm:px-10">
           
           {error && (
-            <div className="mb-4 bg-red-950/40 border border-red-500/30 text-red-300 p-3.5 rounded-2xl text-sm flex flex-col gap-2.5">
+            <div className="mb-4 bg-red-950/40 border border-red-500/30 text-red-300 p-3.5 rounded-2xl text-sm flex flex-col gap-2">
               <div className="flex items-start gap-2">
                 <span className="font-bold shrink-0">Notice:</span>
-                <p>{error}</p>
-              </div>
-              <div className="flex flex-wrap items-center gap-3 pt-2 border-t border-red-500/20">
-                <button
-                  type="button"
-                  onClick={() => {
-                    onAuthSuccess({
-                      id: 'demo-owner-1',
-                      name: 'Super Admin (Owner)',
-                      email: 'skyautomationtech@gmail.com',
-                      phone: '01577351518',
-                      role: 'superadmin',
-                      status: 'approved',
-                      active: true,
-                      subBrandAccess: ['SAT', 'GZ', 'RTX'],
-                      designation: 'Managing Director',
-                      createdAt: Date.now()
-                    });
-                  }}
-                  className="py-1.5 px-3 bg-amber-400 hover:bg-amber-500 text-slate-950 font-bold rounded-xl text-xs flex items-center gap-1.5 shadow"
-                >
-                  <Sparkles size={13} />
-                  Instant Super Admin Access
-                </button>
-                <a href="https://forms.gle/TH5uGex3LobzAyAu7" target="_blank" rel="noopener noreferrer" className="underline text-red-400 hover:text-white text-xs">Report issue</a>
+                <p className="leading-relaxed">{error}</p>
               </div>
             </div>
           )}

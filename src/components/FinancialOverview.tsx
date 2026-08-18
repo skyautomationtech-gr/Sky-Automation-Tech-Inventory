@@ -34,12 +34,14 @@ import {
 } from 'lucide-react';
 import { 
   getExpenses, 
+  subscribeToExpenses,
   addExpense, 
   updateExpense, 
   deleteExpense, 
   clearAllExpenses,
   generateExpenseId,
   getIncomes,
+  subscribeToIncomes,
   addIncome,
   updateIncome,
   deleteIncome,
@@ -47,6 +49,7 @@ import {
   clearDemoFinancials,
   generateIncomeId,
   getOrders, 
+  subscribeToOrders,
   getStockLogs 
 } from '../firebase/db';
 import { storage } from '../firebase/config';
@@ -280,6 +283,21 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
 
   useEffect(() => {
     loadFinancialData();
+    const unsubExp = subscribeToExpenses((allExpenses) => {
+      setExpenses(allExpenses || []);
+      setLoading(false);
+    });
+    const unsubInc = subscribeToIncomes((allIncomes) => {
+      setIncomes(allIncomes || []);
+    });
+    const unsubOrd = subscribeToOrders((allOrders) => {
+      setOrders(allOrders || []);
+    });
+    return () => {
+      unsubExp();
+      unsubInc();
+      unsubOrd();
+    };
   }, []);
 
   // Quick preset ranges

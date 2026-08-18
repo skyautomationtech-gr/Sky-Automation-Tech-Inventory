@@ -17,7 +17,7 @@ import {
   AlertCircle
 } from 'lucide-react';
 import { Order, UserProfile } from '../types';
-import { getOrders, recordOrderPayment, deleteOrderPayment } from '../firebase/db';
+import { getOrders, recordOrderPayment, deleteOrderPayment, subscribeToOrders } from '../firebase/db';
 
 interface DuePaymentsProps {
   user: UserProfile | null;
@@ -57,6 +57,14 @@ export default function DuePayments({ user, requireCheckIn }: DuePaymentsProps) 
 
   useEffect(() => {
     fetchData();
+    const unsub = subscribeToOrders((data) => {
+      const relevantOrders = (data || []).filter(o => 
+        o.amountDue > 0 || (o.amountDue === 0 && o.paymentHistory && o.paymentHistory.length > 0)
+      );
+      setOrders(relevantOrders);
+      setLoading(false);
+    });
+    return () => unsub();
   }, []);
 
   const fetchData = async () => {

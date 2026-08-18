@@ -13,7 +13,9 @@ import {
   deleteDoc,
   runTransaction,
   writeBatch,
-  limit
+  limit,
+  onSnapshot,
+  Unsubscribe
 } from 'firebase/firestore';
 import { db, auth } from './config';
 import { 
@@ -298,6 +300,30 @@ export async function getAllUsers(): Promise<UserProfile[]> {
   }
 }
 
+export function subscribeToUsers(callback: (users: UserProfile[]) => void): () => void {
+  try {
+    const colRef = collection(db, 'users');
+    const unsubscribe = onSnapshot(colRef, (querySnapshot) => {
+      const users: UserProfile[] = [];
+      querySnapshot.forEach((doc) => {
+        const data = doc.data();
+        users.push({ id: doc.id, ...(data as any) } as UserProfile);
+      });
+      dbCache.users = users;
+      localStore.set('all_users', users);
+      callback(users);
+    }, (error) => {
+      console.warn('subscribeToUsers listener error:', error);
+      getAllUsers().then(callback).catch(() => {});
+    });
+    return unsubscribe;
+  } catch (err) {
+    console.warn('Failed to attach subscribeToUsers:', err);
+    getAllUsers().then(callback).catch(() => {});
+    return () => {};
+  }
+}
+
 export async function findUserProfileByEmail(email: string): Promise<UserProfile | null> {
   const normEmail = email.toLowerCase().trim();
   const cachedAll = localStore.get<UserProfile[]>('all_users') || dbCache.users;
@@ -552,7 +578,31 @@ export async function getCategories(): Promise<Category[]> {
   }
 }
 
+export function subscribeToCategories(callback: (categories: Category[]) => void): () => void {
+  try {
+    const colRef = collection(db, 'categories');
+    const unsubscribe = onSnapshot(colRef, (querySnapshot) => {
+      const categories: Category[] = [];
+      querySnapshot.forEach((doc) => {
+        categories.push({ id: doc.id, ...(doc.data() as any) } as Category);
+      });
+      dbCache.categories = categories;
+      localStore.set('categories', categories);
+      callback(categories);
+    }, (error) => {
+      console.warn('subscribeToCategories listener notice:', error);
+      getCategories().then(callback).catch(() => {});
+    });
+    return unsubscribe;
+  } catch (err) {
+    console.warn('Failed to attach subscribeToCategories:', err);
+    getCategories().then(callback).catch(() => {});
+    return () => {};
+  }
+}
+
 export async function addCategory(name: string, level: 'main' | 'sub' | 'child' = 'main', parentId: string | null = null): Promise<Category> {
+  dbCache.categories = null;
   try {
     const colRef = collection(db, 'categories');
     const data = sanitizeData({ name, level, parentId });
@@ -564,6 +614,7 @@ export async function addCategory(name: string, level: 'main' | 'sub' | 'child' 
 }
 
 export async function updateCategory(id: string, name: string, level: 'main' | 'sub' | 'child' = 'main', parentId: string | null = null): Promise<void> {
+  dbCache.categories = null;
   try {
     const docRef = doc(db, 'categories', id);
     const data = sanitizeData({ name, level, parentId });
@@ -574,6 +625,7 @@ export async function updateCategory(id: string, name: string, level: 'main' | '
 }
 
 export async function deleteCategory(id: string): Promise<void> {
+  dbCache.categories = null;
   try {
     const categories = await getCategories();
     const idsToDelete = new Set<string>([id]);
@@ -629,6 +681,29 @@ export async function getBrands(): Promise<Brand[]> {
       { id: 'brand-4', name: 'Xiaomi' },
       { id: 'brand-5', name: 'Anker' }
     ];
+  }
+}
+
+export function subscribeToBrands(callback: (brands: Brand[]) => void): () => void {
+  try {
+    const colRef = collection(db, 'brands');
+    const unsubscribe = onSnapshot(colRef, (querySnapshot) => {
+      const brands: Brand[] = [];
+      querySnapshot.forEach((doc) => {
+        brands.push({ id: doc.id, ...(doc.data() as any) } as Brand);
+      });
+      dbCache.brands = brands;
+      localStore.set('brands', brands);
+      callback(brands);
+    }, (error) => {
+      console.warn('subscribeToBrands listener notice:', error);
+      getBrands().then(callback).catch(() => {});
+    });
+    return unsubscribe;
+  } catch (err) {
+    console.warn('Failed to attach subscribeToBrands:', err);
+    getBrands().then(callback).catch(() => {});
+    return () => {};
   }
 }
 
@@ -695,6 +770,29 @@ export async function getProductColors(): Promise<ProductColor[]> {
   }
 }
 
+export function subscribeToProductColors(callback: (colors: ProductColor[]) => void): () => void {
+  try {
+    const colRef = collection(db, 'productColors');
+    const unsubscribe = onSnapshot(colRef, (querySnapshot) => {
+      const colors: ProductColor[] = [];
+      querySnapshot.forEach((doc) => {
+        colors.push({ id: doc.id, ...(doc.data() as any) } as ProductColor);
+      });
+      dbCache.colors = colors;
+      localStore.set('product_colors', colors);
+      callback(colors);
+    }, (error) => {
+      console.warn('subscribeToProductColors listener notice:', error);
+      getProductColors().then(callback).catch(() => {});
+    });
+    return unsubscribe;
+  } catch (err) {
+    console.warn('Failed to attach subscribeToProductColors:', err);
+    getProductColors().then(callback).catch(() => {});
+    return () => {};
+  }
+}
+
 export async function addProductColor(name: string, hexCode?: string): Promise<ProductColor> {
   dbCache.colors = null;
   dbCache.products = null; dbCache.productsArchived = null;
@@ -758,6 +856,29 @@ export async function getProductModels(): Promise<ProductModel[]> {
       { id: 'mod-2', name: 'iPhone 15 Pro Max' },
       { id: 'mod-3', name: 'Galaxy S24 Ultra' }
     ];
+  }
+}
+
+export function subscribeToProductModels(callback: (models: ProductModel[]) => void): () => void {
+  try {
+    const colRef = collection(db, 'productModels');
+    const unsubscribe = onSnapshot(colRef, (querySnapshot) => {
+      const models: ProductModel[] = [];
+      querySnapshot.forEach((doc) => {
+        models.push({ id: doc.id, ...(doc.data() as any) } as ProductModel);
+      });
+      dbCache.models = models;
+      localStore.set('product_models', models);
+      callback(models);
+    }, (error) => {
+      console.warn('subscribeToProductModels listener notice:', error);
+      getProductModels().then(callback).catch(() => {});
+    });
+    return unsubscribe;
+  } catch (err) {
+    console.warn('Failed to attach subscribeToProductModels:', err);
+    getProductModels().then(callback).catch(() => {});
+    return () => {};
   }
 }
 
@@ -838,6 +959,43 @@ export async function getProducts(includeArchived: boolean = false): Promise<Pro
       return cached;
     }
     return [];
+  }
+}
+
+export function subscribeToProducts(
+  callback: (products: Product[]) => void,
+  includeArchived: boolean = false
+): () => void {
+  try {
+    const colRef = collection(db, 'products');
+    const q = includeArchived ? colRef : query(colRef, where('archived', '==', false));
+    
+    const unsubscribe = onSnapshot(q, (qSnapshot) => {
+      const products: Product[] = [];
+      qSnapshot.forEach((docSnap) => {
+        const data = docSnap.data() as any;
+        const totalStock = data.variants?.reduce((acc: number, v: any) => acc + (v.stock || 0), 0) ?? 0;
+        const stockStatus = data.stockStatus || (totalStock <= 0 ? 'out_of_stock' : 'in_stock');
+        products.push({ id: docSnap.id, ...data, stockStatus } as Product);
+      });
+      
+      if (includeArchived) dbCache.productsArchived = products;
+      else dbCache.products = products;
+
+      const cacheKey = includeArchived ? 'products_archived' : 'products_active';
+      localStore.set(cacheKey, products);
+      
+      callback(products);
+    }, (error) => {
+      console.warn('subscribeToProducts listener notice:', error);
+      getProducts(includeArchived).then(callback).catch(() => {});
+    });
+    
+    return unsubscribe;
+  } catch (err) {
+    console.warn('Failed to initialize subscribeToProducts:', err);
+    getProducts(includeArchived).then(callback).catch(() => {});
+    return () => {};
   }
 }
 
@@ -1906,6 +2064,42 @@ export async function migrateExistingCustomerIds(): Promise<{ totalMigrated: num
   }
 }
 
+export function subscribeToCustomers(callback: (customers: Customer[]) => void): () => void {
+  try {
+    const colRef = collection(db, 'customers');
+    const q = query(colRef, orderBy('createdAt', 'desc'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const list: Customer[] = [];
+      snapshot.forEach(docSnap => {
+        list.push({ id: docSnap.id, ...docSnap.data() } as Customer);
+      });
+      dbCache.customers = list;
+      localStore.set('customers', list);
+      callback(list);
+    }, (error) => {
+      console.warn('subscribeToCustomers listener notice:', error);
+      getCustomers().then(callback).catch(() => {});
+    });
+    return unsubscribe;
+  } catch (err) {
+    console.warn('Failed to attach subscribeToCustomers:', err);
+    getCustomers().then(callback).catch(() => {});
+    return () => {};
+  }
+}
+
+export async function deleteCustomer(id: string): Promise<void> {
+  dbCache.customers = null;
+  try {
+    const docRef = doc(db, 'customers', id);
+    await deleteDoc(docRef);
+    const cached = localStore.get<Customer[]>('customers') || [];
+    localStore.set('customers', cached.filter(c => c.id !== id));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, 'customers/' + id);
+  }
+}
+
 export async function updateCustomer(id: string, customerData: Partial<Customer>): Promise<void> {
   dbCache.customers = null;
   try {
@@ -1943,8 +2137,34 @@ export async function getOrders(): Promise<Order[]> {
   }
 }
 
+export function subscribeToOrders(callback: (orders: Order[]) => void): () => void {
+  try {
+    const colRef = collection(db, 'orders');
+    const q = query(colRef, orderBy('createdAt', 'desc'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const list: Order[] = [];
+      snapshot.forEach(docSnap => {
+        list.push({ id: docSnap.id, ...docSnap.data() } as Order);
+      });
+      dbCache.orders = list;
+      dbCache.invoices = list;
+      localStore.set('orders', list);
+      callback(list);
+    }, (error) => {
+      console.warn('subscribeToOrders listener notice:', error);
+      getOrders().then(callback).catch(() => {});
+    });
+    return unsubscribe;
+  } catch (err) {
+    console.warn('Failed to attach subscribeToOrders:', err);
+    getOrders().then(callback).catch(() => {});
+    return () => {};
+  }
+}
+
 export async function addOrder(orderData: Omit<Order, 'id'>): Promise<string> {
   dbCache.orders = null;
+  dbCache.invoices = null;
   const sanitized = sanitizeData({
     ...orderData,
     createdAt: orderData.createdAt || Date.now()
@@ -1966,9 +2186,13 @@ export async function addOrder(orderData: Omit<Order, 'id'>): Promise<string> {
 }
 
 export async function deleteOrder(id: string): Promise<void> {
+  dbCache.orders = null;
+  dbCache.invoices = null;
   try {
     const docRef = doc(db, 'orders', id);
     await deleteDoc(docRef);
+    const cached = localStore.get<Order[]>('orders') || [];
+    localStore.set('orders', cached.filter(o => o.id !== id));
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, 'orders/' + id);
   }
@@ -2422,6 +2646,46 @@ export async function getInvoices(): Promise<Invoice[]> {
   }
 }
 
+export function subscribeToInvoices(callback: (invoices: Invoice[]) => void): () => void {
+  try {
+    const colRef = collection(db, 'invoices');
+    const unsubscribe = onSnapshot(colRef, (snapshot) => {
+      const list: Invoice[] = [];
+      snapshot.forEach(docSnap => {
+        const data = docSnap.data();
+        list.push({ 
+          id: docSnap.id, 
+          invoiceNumber: data.invoiceNumber || `INV-${docSnap.id.substring(0, 8)}`,
+          generatedAt: data.generatedAt || data.createdAt || Date.now(),
+          voided: data.voided ?? false,
+          discountAmount: data.discountAmount || 0,
+          shippingCharge: data.shippingCharge || 0,
+          totalAmount: data.totalAmount || 0,
+          amountPaid: data.amountPaid || 0,
+          amountDue: data.amountDue || 0,
+          paymentStatus: data.paymentStatus || 'Paid',
+          orderId: data.orderId || '',
+          customerName: data.customerName || 'Walk-in Customer',
+          customerPhone: data.customerPhone || '',
+          items: data.items || [],
+          ...data 
+        } as Invoice);
+      });
+      list.sort((a, b) => (b.generatedAt || 0) - (a.generatedAt || 0));
+      dbCache.invoices = list;
+      callback(list);
+    }, (error) => {
+      console.warn('subscribeToInvoices listener notice:', error);
+      getInvoices().then(callback).catch(() => {});
+    });
+    return unsubscribe;
+  } catch (err) {
+    console.warn('Failed to attach subscribeToInvoices:', err);
+    getInvoices().then(callback).catch(() => {});
+    return () => {};
+  }
+}
+
 export async function migrateExistingInvoices(): Promise<{ totalMigrated: number }> {
   try {
     const colRef = collection(db, 'invoices');
@@ -2789,6 +3053,30 @@ export async function getExpenses(): Promise<Expense[]> {
   }
 }
 
+export function subscribeToExpenses(callback: (expenses: Expense[]) => void): () => void {
+  try {
+    const colRef = collection(db, 'expenses');
+    const q = query(colRef, orderBy('date', 'desc'), orderBy('createdAt', 'desc'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const expenses: Expense[] = [];
+      snapshot.forEach(docSnap => {
+        expenses.push({ id: docSnap.id, ...docSnap.data() } as Expense);
+      });
+      dbCache.expenses = expenses;
+      localStore.set('expenses', expenses);
+      callback(expenses);
+    }, (error) => {
+      console.warn('subscribeToExpenses listener notice:', error);
+      getExpenses().then(callback).catch(() => {});
+    });
+    return unsubscribe;
+  } catch (err) {
+    console.warn('Failed to attach subscribeToExpenses:', err);
+    getExpenses().then(callback).catch(() => {});
+    return () => {};
+  }
+}
+
 export function generateExpenseId(): string {
   const d = new Date();
   const dateStr = d.getFullYear().toString() +
@@ -2886,6 +3174,30 @@ export async function getIncomes(): Promise<Income[]> {
       return cached;
     }
     return [];
+  }
+}
+
+export function subscribeToIncomes(callback: (incomes: Income[]) => void): () => void {
+  try {
+    const colRef = collection(db, 'incomes');
+    const q = query(colRef, orderBy('date', 'desc'), orderBy('createdAt', 'desc'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const incomes: Income[] = [];
+      snapshot.forEach(docSnap => {
+        incomes.push({ id: docSnap.id, ...docSnap.data() } as Income);
+      });
+      dbCache.incomes = incomes;
+      localStore.set('incomes', incomes);
+      callback(incomes);
+    }, (error) => {
+      console.warn('subscribeToIncomes listener notice:', error);
+      getIncomes().then(callback).catch(() => {});
+    });
+    return unsubscribe;
+  } catch (err) {
+    console.warn('Failed to attach subscribeToIncomes:', err);
+    getIncomes().then(callback).catch(() => {});
+    return () => {};
   }
 }
 
@@ -3092,6 +3404,62 @@ export async function getSuppliers(): Promise<Supplier[]> {
       return cached;
     }
     return [];
+  }
+}
+
+export function subscribeToSuppliers(callback: (suppliers: Supplier[]) => void): () => void {
+  try {
+    const colRef = collection(db, 'suppliers');
+    const q = query(colRef, orderBy('createdAt', 'desc'));
+    const unsubscribe = onSnapshot(q, (snapshot) => {
+      const list: Supplier[] = [];
+      snapshot.forEach(docSnap => {
+        const data = docSnap.data();
+        const openingBal = data.openingBalance ?? 0;
+        const totalPurch = data.totalPurchases || 0;
+        const totalPd = data.totalPaid || 0;
+        const currentBal = openingBal + totalPurch - totalPd;
+        list.push({ 
+          id: docSnap.id, 
+          supplierCode: data.supplierCode || `SUP-${docSnap.id.substring(0, 4)}`,
+          name: data.name || '',
+          companyName: data.companyName || '',
+          contactPerson: data.contactPerson || '',
+          phone: data.phone || '',
+          email: data.email || '',
+          address: data.address || '',
+          supplierType: data.supplierType || 'Distributor',
+          productCategory: data.productCategory || '',
+          paymentMethod: data.paymentMethod || 'Cash',
+          openingBalance: openingBal,
+          currentBalance: currentBal,
+          creditLimit: data.creditLimit || 0,
+          creditDays: data.creditDays || 30,
+          bankInfo: data.bankInfo || {},
+          status: data.status || 'active',
+          notes: data.notes || '',
+          logoUrl: data.logoUrl || '',
+          documentUrls: data.documentUrls || [],
+          subBrand: data.subBrand || '',
+          totalPurchases: totalPurch,
+          totalPaid: totalPd,
+          outstandingDue: currentBal,
+          createdAt: data.createdAt || Date.now(),
+          createdBy: data.createdBy || ''
+        } as Supplier);
+      });
+      dbCache.suppliers = list;
+      localStore.set('suppliers', list);
+      callback(list);
+    }, (error) => {
+      console.warn('subscribeToSuppliers listener notice:', error);
+      getSuppliers().then(callback).catch(() => {});
+    });
+    return unsubscribe;
+  } catch (err) {
+    console.warn('Failed to attach subscribeToSuppliers:', err);
+    getSuppliers().then(callback).catch(() => {});
+    return () => {};
   }
 }
 

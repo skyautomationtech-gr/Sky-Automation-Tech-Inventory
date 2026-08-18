@@ -20,6 +20,7 @@ import {
 import { Supplier, SupplierPayment, StockLog, UserProfile } from '../types';
 import { 
   getSuppliers, 
+  subscribeToSuppliers,
   addSupplier, 
   updateSupplier, 
   deleteSupplier, 
@@ -98,6 +99,11 @@ export default function SupplierManagement({ user, rolePermissions }: SupplierMa
 
   useEffect(() => {
     fetchSuppliers();
+    const unsub = subscribeToSuppliers((list) => {
+      setSuppliers(list || []);
+      setLoading(false);
+    });
+    return () => unsub();
   }, []);
 
   const fetchSuppliers = async () => {
