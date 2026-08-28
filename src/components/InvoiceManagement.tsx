@@ -734,6 +734,10 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                               src={subBrandInfo.logoUrl} 
                               alt={subBrandInfo.companyName} 
                               className="w-full h-full object-contain"
+                              onError={(e) => {
+                                e.currentTarget.onerror = null;
+                                e.currentTarget.src = getBrandLogo(selectedInvoice.subBrand);
+                              }}
                             />
                           </div>
                           <div>

@@ -88,7 +88,15 @@ export default function Sidebar({
         {/* Brand Header */}
         <div className="p-4 lg:p-6 border-b border-slate-800 flex items-center justify-center lg:justify-start">
           <div className="flex items-center gap-3">
-            <img src={logoUrl || "/Sky Automation Tech Logo.jpeg"} alt="Sky Automation Tech Logo" className="w-10 h-10 lg:w-8 lg:h-8 rounded object-contain" />
+            <img 
+              src={logoUrl || "/sat_logo.jpg"} 
+              alt="Sky Automation Tech Logo" 
+              className="w-10 h-10 lg:w-8 lg:h-8 rounded object-contain bg-white p-0.5" 
+              onError={(e) => {
+                e.currentTarget.onerror = null;
+                e.currentTarget.src = "/sat_logo.jpg";
+              }}
+            />
             <div className="hidden lg:block">
               <h1 className="text-white font-black tracking-tight text-sm leading-tight uppercase">
                 {companyName || 'Sky Automation Tech'}

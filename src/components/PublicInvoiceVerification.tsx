@@ -114,10 +114,11 @@ export const PublicInvoiceVerification: React.FC<PublicInvoiceVerificationProps>
   }, []);
 
   const getSubBrandMeta = (code: string) => {
-    const brand = code.toUpperCase();
+    const brand = (code || 'SAT').toUpperCase();
     if (brand === 'RTX' || brand === 'RTX GADGET') {
       return {
         name: 'RTX GADGET',
+        logoUrl: '/rtx_logo.jpg',
         tagline: 'Premium Consumer Electronics & Audio Accessories',
         phone: '01577351518',
         whatsapp: '8801577351518',
@@ -129,6 +130,7 @@ export const PublicInvoiceVerification: React.FC<PublicInvoiceVerificationProps>
     if (brand === 'GZ' || brand === 'GADGETZU') {
       return {
         name: 'GadgetZu',
+        logoUrl: '/gz_logo.jpg',
         tagline: 'Everyday Lifestyle & Smart Wearables',
         phone: '01577351518',
         whatsapp: '8801577351518',
@@ -139,6 +141,7 @@ export const PublicInvoiceVerification: React.FC<PublicInvoiceVerificationProps>
     }
     return {
       name: 'Sky Automation Tech',
+      logoUrl: '/sat_logo.jpg',
       tagline: 'IoT Smart Automation & Precision Electronics',
       phone: '01577351518',
       whatsapp: '8801577351518',
@@ -171,8 +174,21 @@ export const PublicInvoiceVerification: React.FC<PublicInvoiceVerificationProps>
           <div className="absolute -top-16 -right-16 w-36 h-36 bg-emerald-500/10 rounded-full blur-2xl" />
           <div className="absolute -bottom-16 -left-16 w-36 h-36 bg-blue-500/10 rounded-full blur-2xl" />
           
-          <div className="inline-flex p-3 bg-emerald-500/10 border border-emerald-500/30 rounded-2xl text-emerald-400 mb-3 animate-bounce">
-            <ShieldCheck size={36} strokeWidth={2.5} />
+          <div className="flex items-center justify-center gap-3 mb-3">
+            <div className="w-12 h-12 rounded-xl bg-white p-1 border border-emerald-500/40 shadow-md flex items-center justify-center overflow-hidden">
+              <img 
+                src={brandMeta.logoUrl} 
+                alt={brandMeta.name} 
+                className="w-full h-full object-contain"
+                onError={(e) => {
+                  e.currentTarget.onerror = null;
+                  e.currentTarget.src = '/sat_logo.jpg';
+                }}
+              />
+            </div>
+            <div className="p-2 bg-emerald-500/10 border border-emerald-500/30 rounded-xl text-emerald-400 animate-bounce">
+              <ShieldCheck size={28} strokeWidth={2.5} />
+            </div>
           </div>
 
           <div className="inline-block bg-emerald-500/15 border border-emerald-500/40 text-emerald-400 font-black text-[10px] tracking-widest uppercase px-3 py-1 rounded-full mb-1">

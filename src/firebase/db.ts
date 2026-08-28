@@ -17,6 +17,7 @@ import {
   onSnapshot,
   Unsubscribe
 } from 'firebase/firestore';
+import { pushProductToReseller } from '../services/resellerSync';
 import { db, auth } from './config';
 import { 
   UserProfile, 
@@ -1046,6 +1047,10 @@ export async function addProduct(product: Omit<Product, 'id'>, userId: string, u
       });
     }
 
+    // Auto Push Product-Only to Sky Reseller App if Enabled
+    const newProductObj = { id: docRef.id, ...sanitizedProduct } as Product;
+    pushProductToReseller(newProductObj, 'add').catch(e => console.warn('Auto reseller sync failed:', e));
+
     return docRef.id;
   } catch (error) {
     handleFirestoreError(error, OperationType.CREATE, 'products');
@@ -1063,6 +1068,10 @@ export async function updateProduct(id: string, updatedFields: Partial<Product>)
     const docRef = doc(db, 'products', id);
     const sanitizedData = sanitizeData(payload);
     await updateDoc(docRef, sanitizedData);
+
+    // Auto Push Product-Only update to Sky Reseller App if Enabled
+    const updatedObj = { id, ...payload } as Product;
+    pushProductToReseller(updatedObj, 'update').catch(e => console.warn('Auto reseller sync failed:', e));
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, 'products/' + id);
   }

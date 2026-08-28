@@ -807,7 +807,7 @@ export default function App() {
         isOpen={isSidebarOpen}
         setIsOpen={setIsSidebarOpen}
         companyName={companySettings?.companyName || 'Sky Automation Tech'}
-        logoUrl={companySettings?.logoUrl || '/Sky Automation Tech Logo.jpeg'}
+        logoUrl={companySettings?.logoUrl || '/sat_logo.jpg'}
       />
 
       {/* Main Content Workspace */}
@@ -823,7 +823,15 @@ export default function App() {
               <Menu size={20} />
             </button>
             <div className="flex items-center gap-2">
-              <img src={companySettings?.logoUrl || "/Sky Automation Tech Logo.jpeg"} alt="Sky Automation Tech Logo" className="w-6 h-6 rounded object-contain" />
+              <img 
+                src={companySettings?.logoUrl || "/sat_logo.jpg"} 
+                alt="Sky Automation Tech Logo" 
+                className="w-6 h-6 rounded object-contain bg-white p-0.5" 
+                onError={(e) => {
+                  e.currentTarget.onerror = null;
+                  e.currentTarget.src = "/sat_logo.jpg";
+                }}
+              />
               <h1 className="text-white font-bold tracking-tight text-sm uppercase">
                 {companySettings?.companyName || 'Sky Automation Tech'}
               </h1>
@@ -1130,7 +1138,7 @@ export default function App() {
                       address: satAddress,
                       phone: satPhone,
                       email: satEmail,
-                      logoUrl: companySettings?.subBrandDetails?.SAT?.logoUrl || '/Sky Automation Tech Logo.jpeg',
+                      logoUrl: companySettings?.subBrandDetails?.SAT?.logoUrl || '/sat_logo.jpg',
                       invoiceTerms: satTerms || terms,
                       tagline: satTagline || taglineVal
                     },
@@ -1240,9 +1248,13 @@ export default function App() {
                   <div className="flex flex-col sm:flex-row items-center gap-4 bg-white p-3 rounded-xl border border-slate-200">
                     <div className="w-16 h-16 bg-slate-950 rounded-xl p-2 flex items-center justify-center shrink-0 border border-slate-800">
                       <img 
-                        src={settingsLogoUrl || companySettings?.logoUrl || "/Sky Automation Tech Logo.jpeg"} 
+                        src={settingsLogoUrl || companySettings?.logoUrl || "/sat_logo.jpg"} 
                         alt="Logo Preview" 
                         className="w-full h-full object-contain"
+                        onError={(e) => {
+                          e.currentTarget.onerror = null;
+                          e.currentTarget.src = "/sat_logo.jpg";
+                        }}
                       />
                     </div>
                     <div className="flex-1 w-full space-y-2">
@@ -1403,7 +1415,15 @@ export default function App() {
                 {/* Sky Automation Tech */}
                 <div className="bg-white p-4 rounded-xl border border-slate-200 space-y-3">
                   <div className="flex items-center gap-2 pb-2 border-b border-slate-100">
-                    <img src="/sat_logo.jpg" alt="SAT" className="w-5 h-5 object-contain" />
+                    <img 
+                      src="/sat_logo.jpg" 
+                      alt="SAT" 
+                      className="w-5 h-5 object-contain rounded-xs" 
+                      onError={(e) => {
+                        e.currentTarget.onerror = null;
+                        e.currentTarget.src = "/sat_logo.jpg";
+                      }}
+                    />
                     <span className="font-bold text-xs text-slate-800 uppercase">Sky Automation Tech (SAT) Profile</span>
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -1463,7 +1483,15 @@ export default function App() {
                 {/* GadgetZu */}
                 <div className="bg-white p-4 rounded-xl border border-slate-200 space-y-3">
                   <div className="flex items-center gap-2 pb-2 border-b border-slate-100">
-                    <img src="/gz_logo.jpg" alt="GZ" className="w-5 h-5 object-contain" />
+                    <img 
+                      src="/gz_logo.jpg" 
+                      alt="GZ" 
+                      className="w-5 h-5 object-contain rounded-xs" 
+                      onError={(e) => {
+                        e.currentTarget.onerror = null;
+                        e.currentTarget.src = "/gz_logo.jpg";
+                      }}
+                    />
                     <span className="font-bold text-xs text-slate-800 uppercase">GadgetZu (GZ) Profile</span>
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
@@ -1523,7 +1551,15 @@ export default function App() {
                 {/* RTX Gadget */}
                 <div className="bg-white p-4 rounded-xl border border-slate-200 space-y-3">
                   <div className="flex items-center gap-2 pb-2 border-b border-slate-100">
-                    <img src="/rtx_logo.jpg" alt="RTX" className="w-5 h-5 object-contain" />
+                    <img 
+                      src="/rtx_logo.jpg" 
+                      alt="RTX" 
+                      className="w-5 h-5 object-contain rounded-xs" 
+                      onError={(e) => {
+                        e.currentTarget.onerror = null;
+                        e.currentTarget.src = "/rtx_logo.jpg";
+                      }}
+                    />
                     <span className="font-bold text-xs text-slate-800 uppercase">RTX Gadget (RTX) Profile</span>
                   </div>
                   <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">

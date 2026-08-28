@@ -1,9 +1,9 @@
 import { CompanySettings, SubBrandDetails } from '../types';
 
 export const BRAND_LOGOS: Record<string, string> = {
-  SAT: '/Sky Automation Tech Logo.jpeg',
-  GZ: '/gadgetzu-logo-1768544471034.jpeg',
-  RTX: '/RTX Gadget logo.jpeg'
+  SAT: '/sat_logo.jpg',
+  GZ: '/gz_logo.jpg',
+  RTX: '/rtx_logo.jpg'
 };
 
 export const BRAND_NAMES: Record<string, string> = {
@@ -13,10 +13,14 @@ export const BRAND_NAMES: Record<string, string> = {
 };
 
 export function getBrandLogo(subBrand?: string, defaultLogoUrl?: string): string {
-  if (!subBrand || subBrand === 'SAT') {
-    return defaultLogoUrl || BRAND_LOGOS.SAT || '/Sky Automation Tech Logo.jpeg';
+  const key = (subBrand || 'SAT').toUpperCase();
+  if (key === 'GZ' || key === 'GADGETZU') {
+    return defaultLogoUrl || BRAND_LOGOS.GZ;
   }
-  return BRAND_LOGOS[subBrand] || defaultLogoUrl || BRAND_LOGOS.SAT || '/Sky Automation Tech Logo.jpeg';
+  if (key === 'RTX' || key === 'RTX GADGET') {
+    return defaultLogoUrl || BRAND_LOGOS.RTX;
+  }
+  return defaultLogoUrl || BRAND_LOGOS.SAT;
 }
 
 export function getSubBrandCompanyInfo(
@@ -34,25 +38,44 @@ export function getSubBrandCompanyInfo(
   bankDetails: string;
   whatsappContact: string;
 } {
-  const brandKey = (subBrand || 'SAT').toUpperCase() as 'SAT' | 'GZ' | 'RTX';
+  const key = (subBrand || 'SAT').toUpperCase();
+  const brandKey = (key === 'GZ' || key === 'GADGETZU') ? 'GZ' : (key === 'RTX' || key === 'RTX GADGET') ? 'RTX' : 'SAT';
   const custom = companySettings?.subBrandDetails?.[brandKey];
 
   const defaultName = BRAND_NAMES[brandKey] || companySettings?.companyName || 'Sky Automation Tech';
-  const defaultLogo = BRAND_LOGOS[brandKey] || companySettings?.logoUrl || '/Sky Automation Tech Logo.jpeg';
+  const defaultLogo = BRAND_LOGOS[brandKey] || '/sat_logo.jpg';
   const defaultPhone = custom?.phone || companySettings?.phone || '01577351518';
 
   const defaultEmails: Record<string, string> = {
     SAT: 'skyautomationtech@gmail.com',
-    GZ: 'support@gadgetzu.com',
-    RTX: 'support@rtxgadget.com'
+    GZ: 'gadgetzubd@gmail.com',
+    RTX: 'rtxgadget@gmail.com'
   };
+
+  let rawCandidate = custom?.logoUrl && custom.logoUrl.trim() !== '' 
+    ? custom.logoUrl.trim() 
+    : (brandKey === 'SAT' && companySettings?.logoUrl && companySettings.logoUrl.trim() !== '' ? companySettings.logoUrl.trim() : defaultLogo);
+
+  // Normalize backslashes and local path strings
+  rawCandidate = rawCandidate.replace(/\\/g, '/');
+  if (rawCandidate.startsWith('file://') || rawCandidate.includes('C:') || rawCandidate.includes('assets/')) {
+    if (rawCandidate.toLowerCase().includes('gadgetzu') || rawCandidate.toLowerCase().includes('gz')) {
+      rawCandidate = BRAND_LOGOS.GZ;
+    } else if (rawCandidate.toLowerCase().includes('rtx')) {
+      rawCandidate = BRAND_LOGOS.RTX;
+    } else {
+      rawCandidate = BRAND_LOGOS.SAT;
+    }
+  }
+
+  const logoCandidate = rawCandidate;
 
   return {
     companyName: custom?.companyName || (brandKey === 'SAT' && companySettings?.companyName ? companySettings.companyName : defaultName),
     address: custom?.address || companySettings?.address || 'House #12, Road #3, Block-A, Banasree, Dhaka',
     phone: defaultPhone,
     email: custom?.email || defaultEmails[brandKey] || companySettings?.email || 'skyautomationtech@gmail.com',
-    logoUrl: custom?.logoUrl || defaultLogo,
+    logoUrl: logoCandidate,
     invoiceTerms: custom?.invoiceTerms || companySettings?.invoiceTerms || 'Goods once sold are non-refundable. Please verify items upon delivery.',
     tagline: custom?.tagline || companySettings?.footerTagline || 'Smart solutions, better future',
     bkashNagadPhone: companySettings?.paymentMethodsInfo?.bkashNagad || defaultPhone,

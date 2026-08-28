@@ -21,8 +21,10 @@ import {
   Coins,
   ArrowLeft,
   ArrowRight,
-  PackagePlus
+  PackagePlus,
+  RefreshCw
 } from 'lucide-react';
+import { ResellerSyncModal } from './ResellerSyncModal';
 import { motion } from 'motion/react';
 import { QRCodeSVG } from 'qrcode.react';
 import Barcode from './Barcode';
@@ -146,6 +148,7 @@ export default function ProductManagement({
 
   // Bulk CSV Upload State
   const [isCsvModalOpen, setIsCsvModalOpen] = useState(false);
+  const [isResellerSyncModalOpen, setIsResellerSyncModalOpen] = useState(false);
   const [csvError, setCsvError] = useState('');
   const [csvSuccess, setCsvSuccess] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -1578,6 +1581,13 @@ export default function ProductManagement({
 
       {activeSubTab === 'catalog' && (
         <div className="flex flex-wrap gap-2 md:justify-end">
+          <button
+            onClick={() => setIsResellerSyncModalOpen(true)}
+            className="flex items-center gap-1.5 py-1.5 px-3 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-sm font-bold text-indigo-700 rounded-xl cursor-pointer transition-colors"
+          >
+            <RefreshCw size={14} className="text-indigo-600" />
+            Sky Reseller Sync
+          </button>
           <button
             onClick={() => setIsCsvModalOpen(true)}
             className="flex items-center gap-1.5 py-1.5 px-3 bg-white hover:bg-slate-50 border border-slate-200 text-sm sm:text-sm font-semibold text-slate-700 rounded-xl cursor-pointer"
@@ -4417,6 +4427,13 @@ export default function ProductManagement({
           </div>
         </div>
       )}
+
+      {/* Sky Reseller Product-Only Sync Integration Modal */}
+      <ResellerSyncModal
+        isOpen={isResellerSyncModalOpen}
+        onClose={() => setIsResellerSyncModalOpen(false)}
+        products={products}
+      />
 
     </div>
   );
