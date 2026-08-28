@@ -605,7 +605,7 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                 )}
 
                 <a
-                  href={`https://sky-automation-tech-inventory.vercel.app/?inv=${encodeURIComponent(selectedInvoice.invoiceNumber || selectedInvoice.id)}`}
+                  href={`https://sky-automation-tech-inventory.vercel.app/?inv=${encodeURIComponent(selectedInvoice.invoiceNumber || selectedInvoice.id)}&due=${selectedInvoice.amountDue ?? (selectedInvoice.totalAmount - (selectedInvoice.amountPaid || 0))}&paid=${selectedInvoice.amountPaid || 0}&total=${selectedInvoice.totalAmount}&brand=${selectedInvoice.subBrand}&name=${encodeURIComponent(selectedInvoice.customerName)}&phone=${encodeURIComponent(selectedInvoice.customerPhone)}`}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="flex items-center gap-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-sm font-bold px-3.5 py-2 rounded-xl border border-emerald-200 shadow-xs transition-all cursor-pointer"
@@ -708,12 +708,12 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                 const grandTotal = Math.max(0, itemSubtotal - discountAmt + shippingAmt);
 
                 // Financial settlement calculation:
-                // If paymentStatus is Paid, paidAmt is grandTotal. Otherwise take recorded amountPaid.
                 const rawPaidAmt = selectedInvoice.amountPaid ?? relatedOrder?.amountPaid ?? 0;
-                const isPaidStatus = selectedInvoice.paymentStatus === 'Paid';
+                const calculatedDue = Math.max(0, grandTotal - rawPaidAmt);
+                const isPaidStatus = selectedInvoice.paymentStatus === 'Paid' && calculatedDue === 0;
                 const paidAmt = isPaidStatus ? grandTotal : rawPaidAmt;
-                const dueAmt = isPaidStatus ? 0 : Math.max(0, grandTotal - paidAmt);
-                const isCOD = relatedOrder?.paymentMethod === 'Cash' || selectedInvoice.paymentStatus === 'Due' || dueAmt > 0;
+                const dueAmt = isPaidStatus ? 0 : (selectedInvoice.amountDue ?? calculatedDue);
+                const isCOD = dueAmt > 0;
 
                 // Helper for clean SKU lookup
                 const getCleanSku = (item: any) => {
@@ -1082,7 +1082,9 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                           {/* DYNAMIC QR CODE WITH CLEAR SCAN CAPTION (LINKED TO OFFICIAL VERCEL APP) */}
                           {(() => {
                             const invCode = selectedInvoice.invoiceNumber || selectedInvoice.id;
-                            const qrUrl = `https://sky-automation-tech-inventory.vercel.app/?inv=${encodeURIComponent(invCode)}`;
+                            const dueVal = selectedInvoice.amountDue ?? (selectedInvoice.totalAmount - (selectedInvoice.amountPaid || 0));
+                            const paidVal = selectedInvoice.amountPaid || 0;
+                            const qrUrl = `https://sky-automation-tech-inventory.vercel.app/?inv=${encodeURIComponent(invCode)}&due=${dueVal}&paid=${paidVal}&total=${selectedInvoice.totalAmount}&brand=${selectedInvoice.subBrand}&name=${encodeURIComponent(selectedInvoice.customerName)}&phone=${encodeURIComponent(selectedInvoice.customerPhone)}`;
 
                             return (
                               <div 

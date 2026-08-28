@@ -99,6 +99,14 @@ export const PublicInvoiceVerification: React.FC<PublicInvoiceVerificationProps>
                 if (o) setLiveOrder(o);
               }).catch(() => {});
             }
+          } else {
+            getOrders().then(orders => {
+              const matchedOrder = orders.find(o => 
+                (o.invoiceId && o.invoiceId.toLowerCase() === inv.toLowerCase()) ||
+                (o.id && o.id.toLowerCase() === inv.toLowerCase())
+              );
+              if (matchedOrder) setLiveOrder(matchedOrder);
+            }).catch(() => {});
           }
         }).catch(err => {
           console.warn('Public verification fallback to URL params:', err);
@@ -151,14 +159,19 @@ export const PublicInvoiceVerification: React.FC<PublicInvoiceVerificationProps>
     };
   };
 
-  const brandMeta = getSubBrandMeta(liveInvoice?.subBrand || params.brand);
+  const brandMeta = getSubBrandMeta(liveInvoice?.subBrand || liveOrder?.subBrand || params.brand);
   const invNumber = liveInvoice?.invoiceNumber || params.inv || 'INV-VERIFIED';
-  const customerName = liveInvoice?.customerName || params.name || 'Valued Customer';
-  const customerPhone = liveInvoice?.customerPhone || params.phone || '';
+  const customerName = liveInvoice?.customerName || liveOrder?.customerName || params.name || 'Valued Customer';
+  const customerPhone = liveInvoice?.customerPhone || liveOrder?.customerPhone || params.phone || '';
   
-  const grandTotal = liveInvoice?.totalAmount ?? (params.total || 0);
-  const paidAmt = liveInvoice?.paidAmount ?? (params.paid || 0);
-  const dueAmt = liveInvoice?.dueAmount ?? (params.due || 0);
+  const grandTotal = liveInvoice?.totalAmount ?? liveOrder?.totalAmount ?? (params.total || 0);
+  const paidAmt = liveInvoice?.amountPaid ?? (liveInvoice as any)?.paidAmount ?? liveOrder?.amountPaid ?? (params.paid || 0);
+  
+  const rawDueAmt = liveInvoice?.amountDue ?? (liveInvoice as any)?.dueAmount ?? liveOrder?.amountDue;
+  const dueAmt = rawDueAmt !== undefined 
+    ? rawDueAmt 
+    : (liveInvoice || liveOrder ? Math.max(0, grandTotal - paidAmt) : (params.due || 0));
+
   const isCOD = dueAmt > 0;
 
   const maskedPhone = customerPhone.length > 6 
