@@ -288,6 +288,49 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
         backgroundColor: '#ffffff',
         logging: false,
         windowWidth: 794, // Standard A4 pixel width at 96 DPI
+        onclone: (clonedDoc) => {
+          // 1. Copy computed RGB colors from original element tree to cloned DOM
+          const origPrintArea = document.getElementById('invoice-print-area');
+          const clonedPrintArea = clonedDoc.getElementById('invoice-print-area');
+
+          if (origPrintArea && clonedPrintArea) {
+            const origElements = [origPrintArea, ...Array.from(origPrintArea.querySelectorAll('*'))];
+            const clonedElements = [clonedPrintArea, ...Array.from(clonedPrintArea.querySelectorAll('*'))];
+
+            origElements.forEach((origEl, idx) => {
+              const clonedEl = clonedElements[idx] as HTMLElement;
+              if (origEl instanceof HTMLElement && clonedEl) {
+                const computed = window.getComputedStyle(origEl);
+                if (computed.color) clonedEl.style.color = computed.color;
+                if (computed.backgroundColor && computed.backgroundColor !== 'rgba(0, 0, 0, 0)' && computed.backgroundColor !== 'transparent') {
+                  clonedEl.style.backgroundColor = computed.backgroundColor;
+                }
+                if (computed.borderColor) clonedEl.style.borderColor = computed.borderColor;
+                if (computed.borderTopColor) clonedEl.style.borderTopColor = computed.borderTopColor;
+                if (computed.borderBottomColor) clonedEl.style.borderBottomColor = computed.borderBottomColor;
+                if (computed.borderLeftColor) clonedEl.style.borderLeftColor = computed.borderLeftColor;
+                if (computed.borderRightColor) clonedEl.style.borderRightColor = computed.borderRightColor;
+              }
+            });
+          }
+
+          // 2. Remove any unsupported oklch() color declarations from cloned document style tags
+          const styleElements = clonedDoc.querySelectorAll('style');
+          styleElements.forEach((style) => {
+            if (style.innerHTML && style.innerHTML.includes('oklch')) {
+              style.innerHTML = style.innerHTML.replace(/oklch\([^)]+\)/gi, 'rgba(0, 0, 0, 0)');
+            }
+          });
+
+          // 3. Remove any oklch() references in inline styles
+          const allCloned = clonedDoc.querySelectorAll('[style*="oklch"]');
+          allCloned.forEach((el) => {
+            const s = el.getAttribute('style');
+            if (s) {
+              el.setAttribute('style', s.replace(/oklch\([^)]+\)/gi, 'rgba(0, 0, 0, 0)'));
+            }
+          });
+        }
       });
       
       const imgData = canvas.toDataURL('image/jpeg', 0.98);
