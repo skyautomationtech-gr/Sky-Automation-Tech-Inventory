@@ -73,12 +73,12 @@ export const PublicInvoiceVerification: React.FC<PublicInvoiceVerificationProps>
       };
 
       const inv = extractParam('verify_inv') || extractParam('inv') || '';
-      const brand = extractParam('brand') || 'SAT';
-      const name = extractParam('name') || '';
-      const phone = extractParam('phone') || '';
-      const total = parseFloat(extractParam('total') || '0');
-      const due = parseFloat(extractParam('due') || '0');
-      const paid = parseFloat(extractParam('paid') || '0');
+      const brand = extractParam('brand') || extractParam('b') || 'SAT';
+      const name = extractParam('name') || extractParam('n') || '';
+      const phone = extractParam('phone') || extractParam('ph') || '';
+      const total = parseFloat(extractParam('total') || extractParam('t') || '0');
+      const due = parseFloat(extractParam('due') || extractParam('d') || '0');
+      const paid = parseFloat(extractParam('paid') || extractParam('p') || '0');
       const date = extractParam('date') || new Date().toLocaleDateString('en-GB');
       const order = extractParam('order') || '';
 

@@ -1079,12 +1079,15 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                             </div>
                           </div>
                           
-                          {/* DYNAMIC QR CODE WITH CLEAR SCAN CAPTION (LINKED TO OFFICIAL VERCEL APP) */}
+                          {/* DYNAMIC QR CODE WITH CLEAR SCAN CAPTION */}
                           {(() => {
                             const invCode = selectedInvoice.invoiceNumber || selectedInvoice.id;
                             const dueVal = selectedInvoice.amountDue ?? (selectedInvoice.totalAmount - (selectedInvoice.amountPaid || 0));
                             const paidVal = selectedInvoice.amountPaid || 0;
-                            const qrUrl = `https://sky-automation-tech-inventory.vercel.app/?inv=${encodeURIComponent(invCode)}&due=${dueVal}&paid=${paidVal}&total=${selectedInvoice.totalAmount}&brand=${selectedInvoice.subBrand}&name=${encodeURIComponent(selectedInvoice.customerName)}&phone=${encodeURIComponent(selectedInvoice.customerPhone)}`;
+                            
+                            // Domain target: Use live production Vercel URL as primary verification endpoint
+                            const vercelDomain = 'https://sky-automation-tech-inventory.vercel.app';
+                            const qrUrl = `${vercelDomain}/?inv=${encodeURIComponent(invCode)}&d=${dueVal}&p=${paidVal}&t=${selectedInvoice.totalAmount}&b=${selectedInvoice.subBrand}`;
 
                             return (
                               <div 
@@ -1092,13 +1095,13 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                                 onClick={() => window.open(qrUrl, '_blank')}
                                 title="Click to test live verification page on Vercel"
                               >
-                                <div className="bg-[#ffffff] p-0.5 rounded-lg flex items-center justify-center">
+                                <div className="bg-[#ffffff] p-1 rounded-lg flex items-center justify-center">
                                   <QRCodeSVG 
                                     value={qrUrl} 
-                                    size={84} 
+                                    size={96} 
                                     level="M" 
                                     includeMargin={true}
-                                    fgColor="#0f172a"
+                                    fgColor="#000000"
                                     bgColor="#ffffff"
                                   />
                                 </div>
