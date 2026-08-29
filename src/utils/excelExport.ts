@@ -1,4 +1,5 @@
 import * as XLSX from 'xlsx';
+import type { Product, Brand, Category } from '../types';
 import { 
   getProducts, 
   getOrders, 
@@ -30,8 +31,171 @@ function downloadWorkbook(workbook: XLSX.WorkBook, filename: string) {
   XLSX.writeFile(workbook, filename);
 }
 
-export async function exportProductsToExcel() {
-  const products = await getProducts(true);
+export function downloadCSV(csvContent: string, filename: string) {
+  const blob = new Blob(['\uFEFF' + csvContent], { type: 'text/csv;charset=utf-8;' });
+  const url = URL.createObjectURL(blob);
+  const link = document.createElement('a');
+  link.setAttribute('href', url);
+  link.setAttribute('download', filename);
+  document.body.appendChild(link);
+  link.click();
+  document.body.removeChild(link);
+  URL.revokeObjectURL(url);
+}
+
+function escapeCsv(val: any): string {
+  if (val === null || val === undefined) return '""';
+  const str = String(val);
+  return `"${str.replace(/"/g, '""')}"`;
+}
+
+export async function exportProductsToCSV(productsList?: Product[], customFilename?: string) {
+  const products = productsList || await getProducts(true);
+  const headers = [
+    'Product ID',
+    'SKU',
+    'Product Name',
+    'Category',
+    'Main Category',
+    'Sub Category',
+    'Child Category',
+    'Brand',
+    'Sub-Brand',
+    'Cost Price (৳)',
+    'Selling Price (৳)',
+    'Total Stock',
+    'Low Stock Threshold',
+    'Stock Status',
+    'Variants Breakdown',
+    'Barcode Value',
+    'Status',
+    'Archived',
+    'Created At'
+  ];
+
+  const rows = products.map(p => {
+    const totalStock = p.variants?.reduce((sum, v) => sum + (v.stock || 0), 0) ?? 0;
+    const variantsStr = p.variants?.map(v => 
+      `${v.color || 'Standard'} / ${v.model || 'Standard'} (Stock: ${v.stock || 0}${v.barcodeValue ? `, Barcode: ${v.barcodeValue}` : ''})`
+    ).join(' | ') || '';
+
+    return [
+      escapeCsv(p.id),
+      escapeCsv(p.sku || ''),
+      escapeCsv(p.name || ''),
+      escapeCsv(p.category || ''),
+      escapeCsv(p.mainCategory || ''),
+      escapeCsv(p.subCategory || ''),
+      escapeCsv(p.childCategory || ''),
+      escapeCsv(p.brand || ''),
+      escapeCsv(p.subBrand || ''),
+      p.costPrice || 0,
+      p.sellingPrice || 0,
+      totalStock,
+      p.reorderThreshold ?? 5,
+      escapeCsv(p.stockStatus || (totalStock > 0 ? 'in_stock' : 'out_of_stock')),
+      escapeCsv(variantsStr),
+      escapeCsv(p.barcodeValue || ''),
+      escapeCsv(p.status || 'approved'),
+      escapeCsv(p.archived ? 'Yes' : 'No'),
+      escapeCsv(formatDate(p.createdAt))
+    ].join(',');
+  });
+
+  const csvContent = [headers.join(','), ...rows].join('\r\n');
+  const dateStr = new Date().toISOString().split('T')[0];
+  downloadCSV(csvContent, customFilename || `products-bulk-export-${dateStr}.csv`);
+}
+
+export async function exportBrandsToCSV(brandsList?: Brand[], productsList?: Product[], customFilename?: string) {
+  const brands = brandsList || await getBrands();
+  const products = productsList || await getProducts(true);
+
+  const headers = [
+    'Brand ID',
+    'Brand Name',
+    'Total Products',
+    'In Stock Products',
+    'Out of Stock Products',
+    'Total Inventory Units',
+    'Associated Sub-Brands',
+    'Associated Categories'
+  ];
+
+  const rows = brands.map(b => {
+    const bProducts = products.filter(p => p.brand?.trim().toLowerCase() === b.name?.trim().toLowerCase() && !p.archived);
+    const totalProducts = bProducts.length;
+    let inStockCount = 0;
+    let outOfStockCount = 0;
+    let totalStockUnits = 0;
+    const subBrandsSet = new Set<string>();
+    const categoriesSet = new Set<string>();
+
+    bProducts.forEach(p => {
+      const stock = p.variants?.reduce((sum, v) => sum + (v.stock || 0), 0) ?? 0;
+      totalStockUnits += stock;
+      if (stock > 0 && p.stockStatus !== 'out_of_stock') {
+        inStockCount++;
+      } else {
+        outOfStockCount++;
+      }
+      if (p.subBrand) subBrandsSet.add(p.subBrand);
+      if (p.category) categoriesSet.add(p.category);
+    });
+
+    return [
+      escapeCsv(b.id),
+      escapeCsv(b.name || ''),
+      totalProducts,
+      inStockCount,
+      outOfStockCount,
+      totalStockUnits,
+      escapeCsv(Array.from(subBrandsSet).join(', ') || 'N/A'),
+      escapeCsv(Array.from(categoriesSet).join(', ') || 'N/A')
+    ].join(',');
+  });
+
+  const csvContent = [headers.join(','), ...rows].join('\r\n');
+  const dateStr = new Date().toISOString().split('T')[0];
+  downloadCSV(csvContent, customFilename || `brands-bulk-export-${dateStr}.csv`);
+}
+
+export async function exportCategoriesToCSV(categoriesList?: Category[], productsList?: Product[], customFilename?: string) {
+  const categories = categoriesList || await getCategories();
+  const products = productsList || await getProducts(true);
+
+  const headers = [
+    'Category ID',
+    'Category Name',
+    'Level',
+    'Parent ID',
+    'Total Products',
+    'Total Inventory Units'
+  ];
+
+  const rows = categories.map(c => {
+    const cProducts = products.filter(p => 
+      (p.category === c.name || p.mainCategory === c.name || p.subCategory === c.name || p.childCategory === c.name) && !p.archived
+    );
+    const totalUnits = cProducts.reduce((sum, p) => sum + (p.variants?.reduce((s, v) => s + (v.stock || 0), 0) ?? 0), 0);
+
+    return [
+      escapeCsv(c.id),
+      escapeCsv(c.name || ''),
+      escapeCsv(c.level || 'main'),
+      escapeCsv(c.parentId || ''),
+      cProducts.length,
+      totalUnits
+    ].join(',');
+  });
+
+  const csvContent = [headers.join(','), ...rows].join('\r\n');
+  const dateStr = new Date().toISOString().split('T')[0];
+  downloadCSV(csvContent, customFilename || `categories-bulk-export-${dateStr}.csv`);
+}
+
+export async function exportProductsToExcel(productsList?: Product[]) {
+  const products = productsList || await getProducts(true);
   const data = products.map(p => ({
     'Product ID': p.id,
     'SKU': p.sku || '',

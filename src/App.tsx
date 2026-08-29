@@ -26,6 +26,8 @@ import {
   exportAllData
 } from './firebase/db';
 import {
+  exportProductsToCSV,
+  exportBrandsToCSV,
   exportProductsToExcel,
   exportOrdersToExcel,
   exportInvoicesToExcel,
@@ -1824,6 +1826,26 @@ export default function App() {
                   </div>
 
                   <div className="pt-4 border-t border-slate-200/60 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => handleRunExcelExport('Products (CSV)', () => exportProductsToCSV())}
+                      disabled={exportingType !== null}
+                      className="py-2.5 px-4 bg-emerald-50 hover:bg-emerald-100/80 border border-emerald-200 text-emerald-900 font-bold text-xs rounded-xl cursor-pointer disabled:opacity-50 text-left transition-colors flex items-center justify-between shadow-2xs"
+                    >
+                      <span>Export Products (.csv)</span>
+                      {exportingType === 'Products (CSV)' ? <span className="animate-spin text-emerald-600">⏳</span> : <span className="text-[10px] font-mono bg-emerald-200/60 px-1.5 py-0.5 rounded text-emerald-800">CSV</span>}
+                    </button>
+
+                    <button
+                      type="button"
+                      onClick={() => handleRunExcelExport('Brands (CSV)', () => exportBrandsToCSV())}
+                      disabled={exportingType !== null}
+                      className="py-2.5 px-4 bg-emerald-50 hover:bg-emerald-100/80 border border-emerald-200 text-emerald-900 font-bold text-xs rounded-xl cursor-pointer disabled:opacity-50 text-left transition-colors flex items-center justify-between shadow-2xs"
+                    >
+                      <span>Export Brands (.csv)</span>
+                      {exportingType === 'Brands (CSV)' ? <span className="animate-spin text-emerald-600">⏳</span> : <span className="text-[10px] font-mono bg-emerald-200/60 px-1.5 py-0.5 rounded text-emerald-800">CSV</span>}
+                    </button>
+
                     <button
                       type="button"
                       onClick={() => handleRunExcelExport('Products', exportProductsToExcel)}

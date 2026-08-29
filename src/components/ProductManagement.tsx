@@ -6,6 +6,8 @@ import {
   Trash2, 
   Edit3, 
   Upload, 
+  Download,
+  ChevronDown,
   Tag, 
   Archive, 
   Grid, 
@@ -24,6 +26,7 @@ import {
   PackagePlus,
   RefreshCw
 } from 'lucide-react';
+import { exportProductsToCSV, exportBrandsToCSV, exportCategoriesToCSV, exportProductsToExcel } from '../utils/excelExport';
 import { ResellerSyncModal } from './ResellerSyncModal';
 import { motion } from 'motion/react';
 import { QRCodeSVG } from 'qrcode.react';
@@ -152,6 +155,20 @@ export default function ProductManagement({
   const [csvError, setCsvError] = useState('');
   const [csvSuccess, setCsvSuccess] = useState('');
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Bulk Export State & Dropdown
+  const [isExportDropdownOpen, setIsExportDropdownOpen] = useState(false);
+  const exportDropdownRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    const handleClickOutside = (event: MouseEvent) => {
+      if (exportDropdownRef.current && !exportDropdownRef.current.contains(event.target as Node)) {
+        setIsExportDropdownOpen(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
 
   // Quick Inline Pricing & Stock Edit State
   const [inlineEditProductId, setInlineEditProductId] = useState<string | null>(null);
@@ -1580,7 +1597,75 @@ export default function ProductManagement({
       </div>
 
       {activeSubTab === 'catalog' && (
-        <div className="flex flex-wrap gap-2 md:justify-end">
+        <div className="flex flex-wrap gap-2 md:justify-end items-center">
+          {/* Bulk CSV / Excel Export Dropdown */}
+          <div className="relative" ref={exportDropdownRef}>
+            <button
+              type="button"
+              onClick={() => setIsExportDropdownOpen(!isExportDropdownOpen)}
+              className="flex items-center gap-1.5 py-1.5 px-3 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-sm font-bold text-emerald-800 rounded-xl cursor-pointer transition-colors shadow-2xs"
+              title="Bulk Export Products to CSV or Excel"
+            >
+              <Download size={14} className="text-emerald-600" />
+              Bulk CSV Export
+              <ChevronDown size={13} className={`text-emerald-600 transition-transform ${isExportDropdownOpen ? 'rotate-180' : ''}`} />
+            </button>
+
+            {isExportDropdownOpen && (
+              <div className="absolute right-0 mt-1.5 w-64 bg-white rounded-2xl shadow-xl border border-slate-200 py-1.5 z-30 animate-in fade-in zoom-in-95 duration-150">
+                <div className="px-3.5 py-1.5 border-b border-slate-100 text-[10px] font-black uppercase tracking-wider text-slate-400">
+                  Export Catalog Options
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsExportDropdownOpen(false);
+                    exportProductsToCSV(filteredProducts, `products-filtered-${filteredProducts.length}-${new Date().toISOString().split('T')[0]}.csv`);
+                  }}
+                  className="w-full px-3.5 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-emerald-50 hover:text-emerald-900 flex items-center justify-between cursor-pointer transition-colors"
+                >
+                  <div className="flex items-center gap-2">
+                    <Download size={13} className="text-emerald-600" />
+                    <span>Export Filtered ({filteredProducts.length})</span>
+                  </div>
+                  <span className="text-[10px] font-mono text-emerald-700 font-bold bg-emerald-100/70 px-1.5 py-0.5 rounded">.CSV</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsExportDropdownOpen(false);
+                    const activeProds = products.filter(p => !p.archived);
+                    exportProductsToCSV(activeProds, `products-all-${activeProds.length}-${new Date().toISOString().split('T')[0]}.csv`);
+                  }}
+                  className="w-full px-3.5 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-emerald-50 hover:text-emerald-900 flex items-center justify-between cursor-pointer transition-colors"
+                >
+                  <div className="flex items-center gap-2">
+                    <Download size={13} className="text-emerald-600" />
+                    <span>Export All Catalog ({products.filter(p => !p.archived).length})</span>
+                  </div>
+                  <span className="text-[10px] font-mono text-emerald-700 font-bold bg-emerald-100/70 px-1.5 py-0.5 rounded">.CSV</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    setIsExportDropdownOpen(false);
+                    exportProductsToExcel(filteredProducts);
+                  }}
+                  className="w-full px-3.5 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-50 hover:text-slate-900 flex items-center justify-between cursor-pointer transition-colors border-t border-slate-100"
+                >
+                  <div className="flex items-center gap-2">
+                    <FileSpreadsheet size={13} className="text-teal-600" />
+                    <span>Export to Excel Workbook</span>
+                  </div>
+                  <span className="text-[10px] font-mono text-teal-700 font-bold bg-teal-100/70 px-1.5 py-0.5 rounded">.XLSX</span>
+                </button>
+              </div>
+            )}
+          </div>
+
           <button
             onClick={() => setIsResellerSyncModalOpen(true)}
             className="flex items-center gap-1.5 py-1.5 px-3 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-sm font-bold text-indigo-700 rounded-xl cursor-pointer transition-colors"
@@ -2080,31 +2165,43 @@ export default function ProductManagement({
               </div>
             </div>
 
-            {/* Bulk Barcode Printing Floating Action Bar */}
+            {/* Bulk Barcode Printing & CSV Export Floating Action Bar */}
             {selectedProductIds.length > 0 && (
-              <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 bg-slate-900 text-white py-3.5 px-5 rounded-2xl shadow-xl flex items-center gap-4 border border-slate-800 animate-in fade-in slide-in-from-bottom-4 duration-300 w-[90%] max-w-md">
+              <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 bg-slate-900 text-white py-3.5 px-5 rounded-2xl shadow-xl flex items-center gap-3 border border-slate-800 animate-in fade-in slide-in-from-bottom-4 duration-300 w-[90%] max-w-lg">
                 <div className="flex-1 min-w-0">
                   <span className="text-sm font-bold font-mono text-amber-400 block">
                     {selectedProductIds.length} {selectedProductIds.length === 1 ? 'Product' : 'Products'} Selected
                   </span>
                   <span className="text-[9px] text-slate-400 block mt-0.5 truncate">
-                    Includes all physical product variants
+                    Export to CSV or generate barcode labels
                   </span>
                 </div>
                 <div className="h-6 w-px bg-slate-700" />
                 <div className="flex items-center gap-2">
                   <button
                     type="button"
+                    onClick={() => {
+                      const selectedItems = products.filter(p => selectedProductIds.includes(p.id));
+                      exportProductsToCSV(selectedItems, `selected-products-${selectedItems.length}-${new Date().toISOString().split('T')[0]}.csv`);
+                    }}
+                    className="px-3 py-1.5 bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-xs rounded-xl flex items-center gap-1.5 transition-all shadow-xs cursor-pointer"
+                    title="Export selected products to CSV"
+                  >
+                    <Download size={12} />
+                    Export CSV
+                  </button>
+                  <button
+                    type="button"
                     onClick={handleBulkBarcodeDownload}
-                    className="px-3 py-1.5 bg-amber-400 hover:bg-amber-500 text-slate-950 font-bold text-sm rounded-xl flex items-center gap-1.5 transition-all shadow-md cursor-pointer"
+                    className="px-3 py-1.5 bg-amber-400 hover:bg-amber-500 text-slate-950 font-bold text-xs rounded-xl flex items-center gap-1.5 transition-all shadow-md cursor-pointer"
                   >
                     <Tag size={12} />
-                    Download PDF
+                    Barcodes
                   </button>
                   <button
                     type="button"
                     onClick={() => setSelectedProductIds([])}
-                    className="text-slate-400 hover:text-white text-sm font-bold px-2 py-1 cursor-pointer"
+                    className="text-slate-400 hover:text-white text-xs font-bold px-2 py-1 cursor-pointer"
                   >
                     Clear
                   </button>
@@ -2525,7 +2622,21 @@ export default function ProductManagement({
 
           {/* List categories tree */}
           <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-4">
-            <h3 className="text-sm font-bold text-slate-950 font-sans">Active Product Categories Tree</h3>
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-bold text-slate-950 font-sans">Active Product Categories Tree</h3>
+                <p className="text-[11px] text-slate-500 font-medium">{categories.length} Categories in hierarchical tree</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => exportCategoriesToCSV(categories, products)}
+                className="flex items-center gap-1.5 py-1.5 px-3 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-xs font-bold text-emerald-800 rounded-xl cursor-pointer transition-colors shadow-2xs"
+                title="Bulk Export all Categories to CSV"
+              >
+                <Download size={13} className="text-emerald-600" />
+                Bulk CSV Export
+              </button>
+            </div>
             <div className="space-y-3 max-h-[450px] overflow-y-auto pr-1">
               {categories.filter(c => c.level === 'main' || !c.level).length === 0 ? (
                 <p className="text-sm text-slate-400 italic text-center py-8">No categories seeded or created yet.</p>
@@ -2751,7 +2862,21 @@ export default function ProductManagement({
 
           {/* List brands */}
           <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-4">
-            <h3 className="text-sm font-bold text-slate-950 font-sans">Active Brand Catalog</h3>
+            <div className="flex items-center justify-between">
+              <div>
+                <h3 className="text-sm font-bold text-slate-950 font-sans">Active Brand Catalog</h3>
+                <p className="text-[11px] text-slate-500 font-medium">{brands.length} Brands registered</p>
+              </div>
+              <button
+                type="button"
+                onClick={() => exportBrandsToCSV(brands, products)}
+                className="flex items-center gap-1.5 py-1.5 px-3 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 text-xs font-bold text-emerald-800 rounded-xl cursor-pointer transition-colors shadow-2xs"
+                title="Bulk Export all Brands to CSV with stock metrics"
+              >
+                <Download size={13} className="text-emerald-600" />
+                Bulk CSV Export
+              </button>
+            </div>
             <div className="space-y-2 max-h-[350px] overflow-y-auto">
               {brands.map((brand) => (
                 <div key={brand.id} className="p-3 bg-slate-50 rounded-xl border border-slate-100 flex justify-between items-center group">
