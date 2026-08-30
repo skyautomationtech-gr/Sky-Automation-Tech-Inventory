@@ -24,7 +24,8 @@ import {
   ArrowLeft,
   ArrowRight,
   PackagePlus,
-  RefreshCw
+  RefreshCw,
+  Clock
 } from 'lucide-react';
 import { exportProductsToCSV, exportBrandsToCSV, exportCategoriesToCSV, exportProductsToExcel } from '../utils/excelExport';
 import { ResellerSyncModal } from './ResellerSyncModal';
@@ -93,6 +94,7 @@ export default function ProductManagement({
   onNavigateToStock
 }: ProductManagementProps) {
   const isStaff = user?.role === 'staff';
+  const isSuperAdmin = user?.role === 'superadmin' || (user?.role as string) === 'super_admin';
 
   // Sub tabs
   const [activeSubTab, setActiveSubTab] = useState<'catalog' | 'categories' | 'brands' | 'attributes' | 'out_of_stock' | 'pending' | 'archive' | 'deletion_requests'>('catalog');
@@ -854,13 +856,12 @@ export default function ProductManagement({
 
     setSubmitting(true);
 
-    // Determine status for workflow - auto-approve all products created/edited by Admin or Staff
+    // Determine status for workflow:
+    // Only Super Admin additions/edits are auto-approved. Staff & Admin additions/edits go to pending_review for Super Admin approval.
     let finalStatus: 'pending_review' | 'approved' | 'rejected' = 'approved';
-    if (editModeProduct) {
-      // If editing a previously rejected product, approve it upon update
-      finalStatus = editModeProduct.status === 'rejected' ? 'approved' : (editModeProduct.status || 'approved');
+    if (!isSuperAdmin) {
+      finalStatus = 'pending_review';
     } else {
-      // New products are published directly to active catalog
       finalStatus = 'approved';
     }
 
@@ -1407,7 +1408,7 @@ export default function ProductManagement({
             variants: [{ id: Date.now().toString() + i, color: 'Default', model: 'Standard', stock: 10 }],
             archived: false,
             createdAt: Date.now(),
-            status: 'approved'
+            status: isSuperAdmin ? 'approved' : 'pending_review'
           };
 
           await addProduct(productPayload, user?.id || 'csv-import', user?.name || 'CSV Bulk Agent');
@@ -3050,15 +3051,17 @@ export default function ProductManagement({
           </div>
         </div>
       )}
-      {activeSubTab === 'pending' && !isStaff && (
+      {activeSubTab === 'pending' && (
         <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-4">
           <div className="border-b border-slate-100 pb-3 flex justify-between items-center flex-wrap gap-2">
             <div>
               <h3 className="text-sm font-bold text-slate-950 font-sans">Pending Products Approval Queue</h3>
-              <p className="text-sm text-slate-400 mt-0.5">Approve products submitted previously.</p>
+              <p className="text-sm text-slate-400 mt-0.5">
+                {isSuperAdmin ? 'Review, approve, or reject products submitted by Admin & Staff operators.' : 'Products waiting for Super Admin review and approval.'}
+              </p>
             </div>
             <div className="flex items-center gap-2">
-              {products.filter(p => p.status === 'pending_review' && !p.archived).length > 0 && (
+              {isSuperAdmin && products.filter(p => p.status === 'pending_review' && !p.archived).length > 0 && (
                 <button
                   type="button"
                   onClick={async () => {
@@ -3150,7 +3153,12 @@ export default function ProductManagement({
 
                       {/* Approval Controls */}
                       <div className="border-t border-slate-150 pt-3 space-y-2">
-                        {rejectingProductId === product.id ? (
+                        {!isSuperAdmin ? (
+                          <div className="p-2.5 bg-amber-50 border border-amber-200/80 rounded-xl text-center text-xs text-amber-800 font-bold flex items-center justify-center gap-1.5">
+                            <Clock size={13} className="text-amber-600" />
+                            Awaiting Super Admin Approval
+                          </div>
+                        ) : rejectingProductId === product.id ? (
                           <div className="space-y-2 p-2.5 bg-rose-50 border border-rose-100 rounded-xl">
                             <label className="block text-[9px] font-bold text-rose-700 uppercase tracking-wider">Reason for Rejection</label>
                             <input
@@ -3481,47 +3489,54 @@ export default function ProductManagement({
                       </div>
                     </div>
                     
-                    <div className="border-t border-slate-200 pt-3 flex gap-2">
-                      <button
-                        onClick={() => {
-                          showConfirm(
-                            "Approve Deletion?",
-                            `Are you sure you want to permanently delete "${product.name}"? This action cannot be undone.`,
-                            async () => {
-                              await executePermanentDelete(product, async () => {
-                                await onRefreshData();
-                                setFormSuccess(`Permanently deleted "${product.name}".`);
-                                setTimeout(() => setFormSuccess(''), 3000);
-                              });
-                            }
-                          );
-                        }}
-                        className="flex-grow py-1.5 bg-rose-500 hover:bg-rose-600 text-white font-bold text-sm rounded-lg shadow-3xs cursor-pointer flex items-center justify-center gap-1 transition-all"
-                      >
-                        <Check size={12} /> Approve (Delete)
-                      </button>
-                      <button
-                        onClick={async () => {
-                          showConfirm(
-                            "Reject Deletion?",
-                            `Are you sure you want to reject the deletion request for "${product.name}"? The product will remain in the catalog.`,
-                            async () => {
-                              try {
-                                await updateProduct(product.id, { deletionStatus: null });
-                                await onRefreshData();
-                                setFormSuccess(`Rejected deletion request for "${product.name}".`);
-                                setTimeout(() => setFormSuccess(''), 3000);
-                              } catch (err: any) {
-                                setFormError(`Failed to reject deletion request: ${err.message || err}`);
+                    {!isSuperAdmin ? (
+                      <div className="border-t border-slate-200 pt-3 p-2.5 bg-amber-50 border border-amber-200/80 rounded-xl text-center text-xs text-amber-800 font-bold flex items-center justify-center gap-1.5">
+                        <Clock size={13} className="text-amber-600" />
+                        Awaiting Super Admin Approval
+                      </div>
+                    ) : (
+                      <div className="border-t border-slate-200 pt-3 flex gap-2">
+                        <button
+                          onClick={() => {
+                            showConfirm(
+                              "Approve Deletion?",
+                              `Are you sure you want to permanently delete "${product.name}"? This action cannot be undone.`,
+                              async () => {
+                                await executePermanentDelete(product, async () => {
+                                  await onRefreshData();
+                                  setFormSuccess(`Permanently deleted "${product.name}".`);
+                                  setTimeout(() => setFormSuccess(''), 3000);
+                                });
                               }
-                            }
-                          );
-                        }}
-                        className="flex-grow py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold text-sm rounded-lg cursor-pointer flex items-center justify-center gap-1 transition-all"
-                      >
-                        <X size={12} /> Reject
-                      </button>
-                    </div>
+                            );
+                          }}
+                          className="flex-grow py-1.5 bg-rose-500 hover:bg-rose-600 text-white font-bold text-sm rounded-lg shadow-3xs cursor-pointer flex items-center justify-center gap-1 transition-all"
+                        >
+                          <Check size={12} /> Approve (Delete)
+                        </button>
+                        <button
+                          onClick={async () => {
+                            showConfirm(
+                              "Reject Deletion?",
+                              `Are you sure you want to reject the deletion request for "${product.name}"? The product will remain in the catalog.`,
+                              async () => {
+                                try {
+                                  await updateProduct(product.id, { deletionStatus: null });
+                                  await onRefreshData();
+                                  setFormSuccess(`Rejected deletion request for "${product.name}".`);
+                                  setTimeout(() => setFormSuccess(''), 3000);
+                                } catch (err: any) {
+                                  setFormError(`Failed to reject deletion request: ${err.message || err}`);
+                                }
+                              }
+                            );
+                          }}
+                          className="flex-grow py-1.5 bg-slate-200 hover:bg-slate-300 text-slate-700 font-bold text-sm rounded-lg cursor-pointer flex items-center justify-center gap-1 transition-all"
+                        >
+                          <X size={12} /> Reject
+                        </button>
+                      </div>
+                    )}
                   </div>
                 );
               })
