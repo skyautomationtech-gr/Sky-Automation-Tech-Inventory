@@ -854,21 +854,14 @@ export default function ProductManagement({
 
     setSubmitting(true);
 
-    // Determine status for workflow
+    // Determine status for workflow - auto-approve all products created/edited by Admin or Staff
     let finalStatus: 'pending_review' | 'approved' | 'rejected' = 'approved';
-    if (!editModeProduct) {
-      // New product
-      finalStatus = 'pending_review';
+    if (editModeProduct) {
+      // If editing a previously rejected product, approve it upon update
+      finalStatus = editModeProduct.status === 'rejected' ? 'approved' : (editModeProduct.status || 'approved');
     } else {
-      // Edit mode
-      const currentStatus = editModeProduct.status || 'approved';
-      if (currentStatus === 'rejected') {
-        // Rejected products are resubmitted for review
-        finalStatus = 'pending_review';
-      } else {
-        // Keep existing status
-        finalStatus = currentStatus;
-      }
+      // New products are published directly to active catalog
+      finalStatus = 'approved';
     }
 
     // Generate short unique codes for barcode values if they don't exist or are legacy long formats
@@ -1414,7 +1407,7 @@ export default function ProductManagement({
             variants: [{ id: Date.now().toString() + i, color: 'Default', model: 'Standard', stock: 10 }],
             archived: false,
             createdAt: Date.now(),
-            status: 'pending_review'
+            status: 'approved'
           };
 
           await addProduct(productPayload, user?.id || 'csv-import', user?.name || 'CSV Bulk Agent');
@@ -3059,14 +3052,39 @@ export default function ProductManagement({
       )}
       {activeSubTab === 'pending' && !isStaff && (
         <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-4">
-          <div className="border-b border-slate-100 pb-3 flex justify-between items-center">
+          <div className="border-b border-slate-100 pb-3 flex justify-between items-center flex-wrap gap-2">
             <div>
               <h3 className="text-sm font-bold text-slate-950 font-sans">Pending Products Approval Queue</h3>
-              <p className="text-sm text-slate-400 mt-0.5">Approve or reject products submitted by staff operators.</p>
+              <p className="text-sm text-slate-400 mt-0.5">Approve products submitted previously.</p>
             </div>
-            <span className="px-2.5 py-1 bg-amber-50 text-amber-700 font-extrabold text-sm uppercase rounded-full border border-amber-100 font-mono">
-              {products.filter(p => p.status === 'pending_review' && !p.archived).length} Pending
-            </span>
+            <div className="flex items-center gap-2">
+              {products.filter(p => p.status === 'pending_review' && !p.archived).length > 0 && (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    const pendingList = products.filter(p => p.status === 'pending_review' && !p.archived);
+                    try {
+                      for (const p of pendingList) {
+                        await updateProduct(p.id, { status: 'approved' });
+                      }
+                      await onRefreshData();
+                      setFormSuccess(`Successfully approved all ${pendingList.length} pending products!`);
+                      setTimeout(() => setFormSuccess(''), 3000);
+                    } catch (err) {
+                      setFormError('Failed to approve all products');
+                      setTimeout(() => setFormError(''), 3000);
+                    }
+                  }}
+                  className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl flex items-center gap-1 shadow-2xs cursor-pointer transition-colors"
+                >
+                  <Check size={12} />
+                  Approve All ({products.filter(p => p.status === 'pending_review' && !p.archived).length})
+                </button>
+              )}
+              <span className="px-2.5 py-1 bg-amber-50 text-amber-700 font-extrabold text-sm uppercase rounded-full border border-amber-100 font-mono">
+                {products.filter(p => p.status === 'pending_review' && !p.archived).length} Pending
+              </span>
+            </div>
           </div>
 
           <div className="space-y-4">
