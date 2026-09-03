@@ -118,6 +118,13 @@ export default function ProductManagement({
   const [newCatName, setNewCatName] = useState('');
   const [newCatSub, setNewCatSub] = useState('');
   const [newBrandName, setNewBrandName] = useState('');
+  const [newBrandLogoUrl, setNewBrandLogoUrl] = useState('');
+  const [newBrandSubBrands, setNewBrandSubBrands] = useState<string[]>(['SAT']);
+  const [newBrandCategories, setNewBrandCategories] = useState<string[]>([]);
+
+  const [editingBrandLogoUrl, setEditingBrandLogoUrl] = useState('');
+  const [editingBrandSubBrands, setEditingBrandSubBrands] = useState<string[]>([]);
+  const [editingBrandCategories, setEditingBrandCategories] = useState<string[]>([]);
   
   const [deletingCatId, setDeletingCatId] = useState<string | null>(null);
   const [deletingBrandId, setDeletingBrandId] = useState<string | null>(null);
@@ -274,15 +281,21 @@ export default function ProductManagement({
     }
   };
 
-  const handleUpdateBrand = async (id: string, name: string) => {
+  const handleUpdateBrand = async (
+    id: string, 
+    name: string, 
+    logoUrl?: string, 
+    subBrands?: string[], 
+    categories?: string[]
+  ) => {
     if (!name.trim()) return;
     setFormError('');
     setFormSuccess('');
     try {
-      await updateBrand(id, name.trim());
+      await updateBrand(id, name.trim(), logoUrl, subBrands, categories);
       setEditingBrandId(null);
       await onRefreshData();
-      setFormSuccess('Brand renamed successfully!');
+      setFormSuccess('Brand updated successfully!');
       setTimeout(() => setFormSuccess(''), 3500);
     } catch (err: any) {
       setFormError(err.message || 'Failed to update brand.');
@@ -1189,9 +1202,17 @@ export default function ProductManagement({
     if (!newBrandName.trim()) return;
     
     try {
-      await addBrand(newBrandName.trim());
-      setFormSuccess(`Brand "${newBrandName}" created!`);
+      await addBrand(
+        newBrandName.trim(),
+        newBrandLogoUrl.trim() || undefined,
+        newBrandSubBrands,
+        newBrandCategories
+      );
+      setFormSuccess(`Brand "${newBrandName}" created successfully!`);
       setNewBrandName('');
+      setNewBrandLogoUrl('');
+      setNewBrandSubBrands(['SAT']);
+      setNewBrandCategories([]);
       await onRefreshData();
     } catch (err: any) {
       setFormError(err.message || 'Failed to create brand.');
@@ -1665,7 +1686,7 @@ export default function ProductManagement({
             className="flex items-center gap-1.5 py-1.5 px-3 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-sm font-bold text-indigo-700 rounded-xl cursor-pointer transition-colors"
           >
             <RefreshCw size={14} className="text-indigo-600" />
-            Sky Reseller Sync
+            Sky Inventory Sync
           </button>
           <button
             onClick={() => setIsCsvModalOpen(true)}
@@ -2823,43 +2844,131 @@ export default function ProductManagement({
         </div>
       )}
 
-      {/* SUB TAB 3: BRAND CRUD */}
+      {/* SUB TAB 3: BRAND & DIVISION MODULE */}
       {activeSubTab === 'brands' && (
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
+        <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 items-start">
           
-          {/* Add form */}
-          <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-4">
-            <h3 className="text-sm font-bold text-slate-950 font-sans">Add Brand Record</h3>
+          {/* Add Brand Form */}
+          <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs space-y-4 lg:col-span-1">
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div>
+                <h3 className="text-sm font-extrabold text-slate-900">Add Brand Record</h3>
+                <p className="text-[11px] text-slate-500 font-medium">Create a new brand or sub-brand division</p>
+              </div>
+              <span className="p-2 bg-amber-50 text-amber-600 rounded-xl">
+                <Tag size={16} />
+              </span>
+            </div>
+
             <form onSubmit={handleAddBrand} className="space-y-4">
               <div>
-                <label className="block text-sm font-semibold uppercase tracking-wider text-slate-400">
-                  Brand Name
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1">
+                  Brand Name <span className="text-red-500">*</span>
                 </label>
                 <input
                   type="text"
-                  placeholder="e.g. Realme"
+                  placeholder="e.g. Sky Automation Tech"
                   value={newBrandName}
                   onChange={(e) => setNewBrandName(e.target.value)}
-                  className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-sm text-slate-800 focus:outline-hidden"
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-sm text-slate-800 focus:bg-white focus:border-amber-400 focus:outline-hidden font-medium"
                   required
                 />
               </div>
 
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1">
+                  Logo Image URL (Optional)
+                </label>
+                <input
+                  type="url"
+                  placeholder="https://example.com/logo.png"
+                  value={newBrandLogoUrl}
+                  onChange={(e) => setNewBrandLogoUrl(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-sm text-slate-800 focus:bg-white focus:border-amber-400 focus:outline-hidden text-xs font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1.5">
+                  Associated Sub-Brands
+                </label>
+                <div className="flex flex-wrap gap-2 bg-slate-50 p-2.5 rounded-xl border border-slate-200">
+                  {['SAT', 'GZ', 'RTX'].map((sb) => {
+                    const isChecked = newBrandSubBrands.includes(sb);
+                    return (
+                      <label 
+                        key={sb} 
+                        className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-lg text-xs font-bold cursor-pointer transition-all border ${
+                          isChecked ? 'bg-amber-100 border-amber-300 text-amber-900' : 'bg-white border-slate-200 text-slate-600 hover:bg-slate-100'
+                        }`}
+                      >
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setNewBrandSubBrands([...newBrandSubBrands, sb]);
+                            } else {
+                              setNewBrandSubBrands(newBrandSubBrands.filter(s => s !== sb));
+                            }
+                          }}
+                          className="sr-only"
+                        />
+                        <span>{sb}</span>
+                        {isChecked && <Check size={12} className="text-amber-700" />}
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1.5">
+                  Associated Categories
+                </label>
+                <div className="max-h-36 overflow-y-auto space-y-1 bg-slate-50 p-2.5 rounded-xl border border-slate-200">
+                  {categories.filter(c => c.level === 'main' || !c.level).map((cat) => {
+                    const isChecked = newBrandCategories.includes(cat.name);
+                    return (
+                      <label 
+                        key={cat.id} 
+                        className="flex items-center justify-between p-1.5 rounded-lg hover:bg-white text-xs font-medium text-slate-700 cursor-pointer"
+                      >
+                        <span>{cat.name}</span>
+                        <input
+                          type="checkbox"
+                          checked={isChecked}
+                          onChange={(e) => {
+                            if (e.target.checked) {
+                              setNewBrandCategories([...newBrandCategories, cat.name]);
+                            } else {
+                              setNewBrandCategories(newBrandCategories.filter(c => c !== cat.name));
+                            }
+                          }}
+                          className="rounded text-amber-500 focus:ring-amber-400"
+                        />
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+
               <button
                 type="submit"
-                className="w-full bg-amber-400 hover:bg-amber-500 text-slate-950 font-bold py-2.5 rounded-xl text-sm transition-all shadow-md"
+                className="w-full bg-amber-400 hover:bg-amber-500 text-slate-950 font-bold py-2.5 rounded-xl text-sm transition-all shadow-md cursor-pointer flex items-center justify-center gap-2"
               >
+                <Plus size={16} />
                 Create Brand
               </button>
             </form>
           </div>
 
-          {/* List brands */}
-          <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-4">
-            <div className="flex items-center justify-between">
+          {/* List Brands & Computed Metrics */}
+          <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs space-y-4 lg:col-span-2">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3">
               <div>
-                <h3 className="text-sm font-bold text-slate-950 font-sans">Active Brand Catalog</h3>
-                <p className="text-[11px] text-slate-500 font-medium">{brands.length} Brands registered</p>
+                <h3 className="text-sm font-extrabold text-slate-900">Brand Management & Metrics</h3>
+                <p className="text-[11px] text-slate-500 font-medium">{brands.length} Brands registered in SkyMart catalog</p>
               </div>
               <button
                 type="button"
@@ -2871,58 +2980,165 @@ export default function ProductManagement({
                 Bulk CSV Export
               </button>
             </div>
-            <div className="space-y-2 max-h-[350px] overflow-y-auto">
-              {brands.map((brand) => (
-                <div key={brand.id} className="p-3 bg-slate-50 rounded-xl border border-slate-100 flex justify-between items-center group">
-                  {editingBrandId === brand.id ? (
-                    <div className="flex items-center gap-1.5 flex-grow">
-                      <input
-                        type="text"
-                        value={editingBrandName}
-                        onChange={(e) => setEditingBrandName(e.target.value)}
-                        className="bg-white border border-slate-300 rounded-md px-1.5 py-0.5 text-sm font-semibold text-slate-800 focus:outline-hidden"
-                      />
-                      <button
-                        onClick={() => handleUpdateBrand(brand.id, editingBrandName)}
-                        className="p-1 text-emerald-600 hover:bg-emerald-50 rounded-md cursor-pointer"
-                      >
-                        <Check size={12} />
-                      </button>
-                      <button
-                        onClick={() => setEditingBrandId(null)}
-                        className="p-1 text-slate-400 hover:bg-slate-50 rounded-md cursor-pointer"
-                      >
-                        <X size={12} />
-                      </button>
-                    </div>
-                  ) : (
-                    <>
-                      <h4 className="text-sm font-bold text-slate-900">{brand.name}</h4>
-                      {!isStaff && (
-                        <div className="flex items-center gap-1">
-                          <button
-                            onClick={() => {
-                              setEditingBrandId(brand.id);
-                              setEditingBrandName(brand.name);
-                            }}
-                            className="p-1 rounded-md text-slate-400 hover:text-slate-600 hover:bg-slate-200/50 transition-all cursor-pointer opacity-0 group-hover:opacity-100"
-                            title="Rename Brand"
-                          >
-                            <Edit3 size={12} />
-                          </button>
-                          <button
-                            onClick={() => handleDeleteBrand(brand.id, brand.name)}
-                            disabled={deletingBrandId === brand.id}
-                            className={`p-1 rounded-lg ${deletingBrandId === brand.id ? 'text-slate-300 cursor-not-allowed' : 'text-slate-400 hover:text-red-500 hover:bg-red-50'}`}
-                          >
-                            {deletingBrandId === brand.id ? <div className="w-3.5 h-3.5 border-2 border-red-400 border-t-transparent rounded-full animate-spin" /> : <Trash2 size={14} />}
-                          </button>
-                        </div>
-                      )}
-                    </>
-                  )}
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 max-h-[600px] overflow-y-auto pr-1">
+              {brands.length === 0 ? (
+                <div className="col-span-2 py-12 text-center text-slate-400 text-xs font-medium">
+                  No brands registered yet. Create your first brand on the left.
                 </div>
-              ))}
+              ) : (
+                brands.map((brand) => {
+                  // Compute Metrics
+                  const brandProds = products.filter(p => p.brand === brand.name && !p.archived);
+                  const totalProds = brandProds.length;
+                  let inStockCount = 0;
+                  let outOfStockCount = 0;
+                  let totalUnits = 0;
+
+                  brandProds.forEach(p => {
+                    const stock = p.variants?.reduce((sum, v) => sum + (v.stock || 0), 0) ?? (p.totalStock || 0);
+                    totalUnits += stock;
+                    if (stock > 0) inStockCount++;
+                    else outOfStockCount++;
+                  });
+
+                  const isEditing = editingBrandId === brand.id;
+
+                  return (
+                    <div key={brand.id} className="p-4 bg-slate-50/70 hover:bg-slate-50 rounded-2xl border border-slate-200/80 shadow-2xs space-y-3 transition-all group">
+                      
+                      {isEditing ? (
+                        <div className="space-y-3">
+                          <div>
+                            <label className="block text-[10px] font-bold uppercase text-slate-500">Name</label>
+                            <input
+                              type="text"
+                              value={editingBrandName}
+                              onChange={(e) => setEditingBrandName(e.target.value)}
+                              className="w-full bg-white border border-slate-300 rounded-xl px-2.5 py-1 text-xs font-bold text-slate-800"
+                            />
+                          </div>
+                          <div>
+                            <label className="block text-[10px] font-bold uppercase text-slate-500">Logo URL</label>
+                            <input
+                              type="text"
+                              value={editingBrandLogoUrl}
+                              onChange={(e) => setEditingBrandLogoUrl(e.target.value)}
+                              placeholder="https://..."
+                              className="w-full bg-white border border-slate-300 rounded-xl px-2.5 py-1 text-xs font-mono text-slate-800"
+                            />
+                          </div>
+                          <div className="flex items-center gap-2 pt-1">
+                            <button
+                              onClick={() => handleUpdateBrand(
+                                brand.id, 
+                                editingBrandName, 
+                                editingBrandLogoUrl, 
+                                editingBrandSubBrands, 
+                                editingBrandCategories
+                              )}
+                              className="px-3 py-1 bg-emerald-600 text-white rounded-lg text-xs font-bold hover:bg-emerald-700 cursor-pointer flex items-center gap-1"
+                            >
+                              <Check size={12} /> Save
+                            </button>
+                            <button
+                              onClick={() => setEditingBrandId(null)}
+                              className="px-3 py-1 bg-slate-200 text-slate-700 rounded-lg text-xs font-bold hover:bg-slate-300 cursor-pointer flex items-center gap-1"
+                            >
+                              <X size={12} /> Cancel
+                            </button>
+                          </div>
+                        </div>
+                      ) : (
+                        <>
+                          {/* Brand Header */}
+                          <div className="flex items-start justify-between gap-2">
+                            <div className="flex items-center gap-2.5">
+                              {brand.logoUrl ? (
+                                <img src={brand.logoUrl} alt={brand.name} className="w-8 h-8 rounded-lg object-contain bg-white border border-slate-200 p-0.5" />
+                              ) : (
+                                <div className="w-8 h-8 rounded-lg bg-amber-100 text-amber-800 border border-amber-200 font-extrabold text-xs flex items-center justify-center shrink-0">
+                                  {brand.name.substring(0, 2).toUpperCase()}
+                                </div>
+                              )}
+                              <div>
+                                <h4 className="text-sm font-extrabold text-slate-900 leading-tight">{brand.name}</h4>
+                                {brand.associatedSubBrands && brand.associatedSubBrands.length > 0 && (
+                                  <div className="flex items-center gap-1 mt-0.5">
+                                    {brand.associatedSubBrands.map(sb => (
+                                      <span key={sb} className="text-[9px] font-bold uppercase tracking-wider bg-slate-200/80 text-slate-700 px-1.5 py-0.2 rounded">
+                                        {sb}
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+
+                            {!isStaff && (
+                              <div className="flex items-center gap-1">
+                                <button
+                                  onClick={() => {
+                                    setEditingBrandId(brand.id);
+                                    setEditingBrandName(brand.name);
+                                    setEditingBrandLogoUrl(brand.logoUrl || '');
+                                    setEditingBrandSubBrands(brand.associatedSubBrands || []);
+                                    setEditingBrandCategories(brand.associatedCategories || []);
+                                  }}
+                                  className="p-1 rounded-md text-slate-400 hover:text-slate-600 hover:bg-slate-200/50 transition-all cursor-pointer opacity-80 group-hover:opacity-100"
+                                  title="Edit Brand"
+                                >
+                                  <Edit3 size={13} />
+                                </button>
+                                <button
+                                  onClick={() => handleDeleteBrand(brand.id, brand.name)}
+                                  disabled={deletingBrandId === brand.id}
+                                  className={`p-1 rounded-lg ${deletingBrandId === brand.id ? 'text-slate-300 cursor-not-allowed' : 'text-slate-400 hover:text-red-500 hover:bg-red-50'}`}
+                                  title="Delete Brand"
+                                >
+                                  {deletingBrandId === brand.id ? <div className="w-3.5 h-3.5 border-2 border-red-400 border-t-transparent rounded-full animate-spin" /> : <Trash2 size={13} />}
+                                </button>
+                              </div>
+                            )}
+                          </div>
+
+                          {/* Categories Badges */}
+                          {brand.associatedCategories && brand.associatedCategories.length > 0 && (
+                            <div className="flex flex-wrap gap-1">
+                              {brand.associatedCategories.map(cat => (
+                                <span key={cat} className="text-[10px] font-medium bg-amber-50 text-amber-800 border border-amber-200/60 px-1.5 py-0.2 rounded-md">
+                                  {cat}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+
+                          {/* Auto-computed Metrics Grid */}
+                          <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-200/60 text-xs">
+                            <div className="bg-white p-2 rounded-xl border border-slate-100 flex flex-col">
+                              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total Products</span>
+                              <span className="text-sm font-black text-slate-900 mt-0.5">{totalProds} items</span>
+                            </div>
+                            <div className="bg-white p-2 rounded-xl border border-slate-100 flex flex-col">
+                              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider">Total Inventory</span>
+                              <span className="text-sm font-black text-indigo-700 mt-0.5">{totalUnits} units</span>
+                            </div>
+                            <div className="bg-emerald-50/60 p-2 rounded-xl border border-emerald-100 flex flex-col">
+                              <span className="text-[10px] font-bold text-emerald-600 uppercase tracking-wider">In Stock</span>
+                              <span className="text-sm font-black text-emerald-800 mt-0.5">{inStockCount} items</span>
+                            </div>
+                            <div className="bg-rose-50/60 p-2 rounded-xl border border-rose-100 flex flex-col">
+                              <span className="text-[10px] font-bold text-rose-500 uppercase tracking-wider">Out of Stock</span>
+                              <span className="text-sm font-black text-rose-800 mt-0.5">{outOfStockCount} items</span>
+                            </div>
+                          </div>
+                        </>
+                      )}
+
+                    </div>
+                  );
+                })
+              )}
             </div>
           </div>
 
@@ -4586,7 +4802,7 @@ export default function ProductManagement({
         </div>
       )}
 
-      {/* Sky Reseller Product-Only Sync Integration Modal */}
+      {/* Sky Inventory Product-Only Sync Integration Modal */}
       <ResellerSyncModal
         isOpen={isResellerSyncModalOpen}
         onClose={() => setIsResellerSyncModalOpen(false)}

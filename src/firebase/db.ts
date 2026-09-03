@@ -708,22 +708,42 @@ export function subscribeToBrands(callback: (brands: Brand[]) => void): () => vo
   }
 }
 
-export async function addBrand(name: string): Promise<Brand> {
+export async function addBrand(
+  name: string,
+  logoUrl?: string,
+  associatedSubBrands?: string[],
+  associatedCategories?: string[]
+): Promise<Brand> {
   dbCache.brands = null;
   try {
     const colRef = collection(db, 'brands');
-    const docRef = await addDoc(colRef, { name });
-    return { id: docRef.id, name };
+    const brandData: any = { name: name.trim() };
+    if (logoUrl !== undefined) brandData.logoUrl = logoUrl;
+    if (associatedSubBrands !== undefined) brandData.associatedSubBrands = associatedSubBrands;
+    if (associatedCategories !== undefined) brandData.associatedCategories = associatedCategories;
+    brandData.createdAt = Date.now();
+    const docRef = await addDoc(colRef, brandData);
+    return { id: docRef.id, ...brandData };
   } catch (error) {
     handleFirestoreError(error, OperationType.CREATE, 'brands');
   }
 }
 
-export async function updateBrand(id: string, name: string): Promise<void> {
+export async function updateBrand(
+  id: string,
+  name: string,
+  logoUrl?: string,
+  associatedSubBrands?: string[],
+  associatedCategories?: string[]
+): Promise<void> {
   dbCache.brands = null;
   try {
     const docRef = doc(db, 'brands', id);
-    await updateDoc(docRef, { name });
+    const updatePayload: any = { name: name.trim() };
+    if (logoUrl !== undefined) updatePayload.logoUrl = logoUrl;
+    if (associatedSubBrands !== undefined) updatePayload.associatedSubBrands = associatedSubBrands;
+    if (associatedCategories !== undefined) updatePayload.associatedCategories = associatedCategories;
+    await updateDoc(docRef, updatePayload);
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, 'brands/' + id);
   }
@@ -922,6 +942,89 @@ export async function deleteProductModel(id: string): Promise<void> {
 // PRODUCT OPERATIONS
 // ==========================================
 
+export function normalizeProduct(id: string, data: any): Product {
+  const sellingPrice = Number(data.sellingPrice ?? data.price ?? data.costPrice ?? 0);
+  const costPrice = Number(data.costPrice ?? data.price ?? 0);
+  const discountPrice = data.discountPrice !== undefined && data.discountPrice !== null ? Number(data.discountPrice) : undefined;
+  
+  const mainCategory = data.mainCategory || data.category || 'General';
+  const subCategory = data.subCategory || '';
+  const childCategory = data.childCategory || '';
+  const category = data.category || mainCategory;
+
+  const images = Array.isArray(data.images) && data.images.length > 0
+    ? data.images 
+    : (Array.isArray(data.imageUrls) ? data.imageUrls : []);
+  const imageUrls = Array.isArray(data.imageUrls) && data.imageUrls.length > 0 
+    ? data.imageUrls 
+    : images;
+
+  const variants: Variant[] = Array.isArray(data.variants) && data.variants.length > 0
+    ? data.variants.map((v: any, idx: number) => ({
+        id: v.id || `v-${idx + 1}`,
+        color: v.color || 'Standard',
+        model: v.model || 'Standard',
+        stock: Number(v.stock) || 0,
+        barcodeValue: v.barcodeValue || ''
+      }))
+    : [{
+        id: 'v-1',
+        color: 'Standard',
+        model: 'Standard',
+        stock: Number(data.stock ?? data.totalStock ?? 0),
+        barcodeValue: data.barcodeValue || ''
+      }];
+
+  const totalStock = data.totalStock !== undefined 
+    ? Number(data.totalStock) 
+    : variants.reduce((acc, v) => acc + (v.stock || 0), 0);
+
+  const reorderThreshold = Number(data.reorderThreshold ?? 5);
+
+  let stockStatus: 'in_stock' | 'low_stock' | 'out_of_stock' = data.stockStatus;
+  if (!stockStatus) {
+    if (totalStock <= 0) {
+      stockStatus = 'out_of_stock';
+    } else if (totalStock <= reorderThreshold) {
+      stockStatus = 'low_stock';
+    } else {
+      stockStatus = 'in_stock';
+    }
+  }
+
+  return {
+    id,
+    name: data.name || 'Unnamed Product',
+    sku: data.sku || `SKU-${id.substring(0, 6)}`,
+    description: data.description || '',
+    category,
+    mainCategory,
+    subCategory,
+    childCategory,
+    brand: data.brand || 'Generic',
+    subBrand: data.subBrand || 'SAT',
+    costPrice,
+    sellingPrice,
+    discountPrice,
+    reorderThreshold,
+    images,
+    imageUrls,
+    variants,
+    totalStock,
+    archived: Boolean(data.archived),
+    createdAt: data.createdAt || Date.now(),
+    barcodeValue: data.barcodeValue || '',
+    status: data.status || 'approved',
+    stockStatus,
+    rejectionReason: data.rejectionReason || '',
+    deletionStatus: data.deletionStatus || null,
+    deletionRequestedBy: data.deletionRequestedBy || '',
+    deletionRequestedAt: data.deletionRequestedAt || undefined,
+    createdById: data.createdById || '',
+    createdBy: data.createdBy || ''
+  };
+}
+
 export async function getProducts(includeArchived: boolean = false): Promise<Product[]> {
   if (includeArchived && dbCache.productsArchived) return dbCache.productsArchived;
   if (!includeArchived && dbCache.products) return dbCache.products;
@@ -939,11 +1042,8 @@ export async function getProducts(includeArchived: boolean = false): Promise<Pro
       qSnapshot = await getDocs(q);
     }
     const products: Product[] = [];
-    qSnapshot.forEach((doc) => {
-      const data = doc.data() as any;
-      const totalStock = data.variants?.reduce((acc: number, v: any) => acc + (v.stock || 0), 0) ?? 0;
-      const stockStatus = data.stockStatus || (totalStock <= 0 ? 'out_of_stock' : 'in_stock');
-      products.push({ id: doc.id, ...data, stockStatus } as Product);
+    qSnapshot.forEach((docSnap) => {
+      products.push(normalizeProduct(docSnap.id, docSnap.data()));
     });
     
     if (includeArchived) dbCache.productsArchived = products;
@@ -974,10 +1074,7 @@ export function subscribeToProducts(
     const unsubscribe = onSnapshot(q, (qSnapshot) => {
       const products: Product[] = [];
       qSnapshot.forEach((docSnap) => {
-        const data = docSnap.data() as any;
-        const totalStock = data.variants?.reduce((acc: number, v: any) => acc + (v.stock || 0), 0) ?? 0;
-        const stockStatus = data.stockStatus || (totalStock <= 0 ? 'out_of_stock' : 'in_stock');
-        products.push({ id: docSnap.id, ...data, stockStatus } as Product);
+        products.push(normalizeProduct(docSnap.id, docSnap.data()));
       });
       
       if (includeArchived) dbCache.productsArchived = products;

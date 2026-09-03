@@ -418,7 +418,7 @@ export default function ReportsAnalytics({ user }: ReportsAnalyticsProps) {
         >
           <div className="flex items-center gap-2">
             <Award size={16} />
-            <span>Best Sellers & Slow Moving</span>
+            <span>Top Products & Movement</span>
           </div>
         </button>
 

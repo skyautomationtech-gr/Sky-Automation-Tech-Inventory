@@ -96,26 +96,32 @@ export interface Product {
   id: string;
   name: string;
   sku: string;
+  description?: string;
   category: string; // for backward compatibility/displays
   mainCategory?: string; // name/id of 3-level main category
   subCategory?: string; // name/id of 3-level sub category
   childCategory?: string; // name/id of 3-level child category
   brand: string;
-  subBrand: 'SAT' | 'GZ' | 'RTX'; // Sky Automation Tech, GadgetZu, RTX Gadget
+  subBrand: 'SAT' | 'GZ' | 'RTX' | string; // Sky Automation Tech, GadgetZu, RTX Gadget
   costPrice: number;
   sellingPrice: number;
+  discountPrice?: number;
   reorderThreshold: number;
   images: string[]; // Base64 or Object URL or Storage paths
+  imageUrls?: string[];
   variants: Variant[];
+  totalStock?: number;
   archived: boolean;
   createdAt: number;
   barcodeValue?: string;
   status?: 'pending_review' | 'approved' | 'rejected';
-  stockStatus?: 'in_stock' | 'out_of_stock';
+  stockStatus?: 'in_stock' | 'low_stock' | 'out_of_stock';
   rejectionReason?: string;
   deletionStatus?: 'pending_approval' | null;
   deletionRequestedBy?: string;
   deletionRequestedAt?: number;
+  createdById?: string;
+  createdBy?: string;
 }
 
 export type StockLogType = 'in' | 'out' | 'adjustment' | 'sale' | 'cancellation_restock' | 'return_restock';
@@ -148,6 +154,10 @@ export interface Category {
 export interface Brand {
   id: string;
   name: string;
+  logoUrl?: string;
+  associatedSubBrands?: string[];
+  associatedCategories?: string[];
+  createdAt?: number;
 }
 
 export interface ProductColor {

@@ -67,7 +67,7 @@ export const ResellerSyncModal: React.FC<ResellerSyncModalProps> = ({
     if (!config.secondaryProjectId && !config.webhookUrl) {
       setTestStatus({
         type: 'error',
-        message: 'অনুগ্রহ করে Sky Reseller অ্যাপের Firebase Project ID অথবা Webhook URL ইনপুট দিন।'
+        message: 'অনুগ্রহ করে Sky App-এর Firebase Project ID অথবা Webhook URL ইনপুট দিন।'
       });
       return;
     }
@@ -77,7 +77,7 @@ export const ResellerSyncModal: React.FC<ResellerSyncModalProps> = ({
     // Pick a test product or dummy payload
     const testProd: Product = products[0] || {
       id: 'test-sync-probe',
-      name: 'Sky Reseller Test Sync Product',
+      name: 'Sky App Test Sync Product',
       sku: 'TEST-SKU-001',
       category: 'Test Category',
       brand: 'SAT',
@@ -108,7 +108,7 @@ export const ResellerSyncModal: React.FC<ResellerSyncModalProps> = ({
 
   const handleBulkSyncNow = async () => {
     if (!config.enabled) {
-      alert('অনুগ্রহ করে প্রথমে "Sky Reseller-এ প্রোডাক্ট অটো-সিঙ্ক চালু করুন" অপশনটি অন (Enable) করুন এবং সেভ করুন।');
+      alert('অনুগ্রহ করে প্রথমে "Sky App-এ প্রোডাক্ট অটো-সিঙ্ক চালু করুন" অপশনটি অন (Enable) করুন এবং সেভ করুন।');
       return;
     }
 
@@ -124,7 +124,7 @@ export const ResellerSyncModal: React.FC<ResellerSyncModalProps> = ({
     setIsSyncing(false);
     setTestStatus({
       type: 'success',
-      message: `সম্পূর্ণ সিঙ্ক সম্পন্ন! মোট ${res.syncedCount} টি প্রোডাক্ট Sky Reseller Firebase প্রজেক্টে সফলভাবে সিঙ্ক হয়েছে। (ব্যর্থ: ${res.errorsCount})`
+      message: `সম্পূর্ণ সিঙ্ক সম্পন্ন! মোট ${res.syncedCount} টি প্রোডাক্ট Sky App Firebase প্রজেক্টে সফলভাবে সিঙ্ক হয়েছে। (ব্যর্থ: ${res.errorsCount})`
     });
   };
 
@@ -149,7 +149,7 @@ export const ResellerSyncModal: React.FC<ResellerSyncModalProps> = ({
             </div>
             <div>
               <div className="flex items-center gap-2">
-                <h2 className="text-xl font-black tracking-tight">Sky Reseller Sync Integration</h2>
+                <h2 className="text-xl font-black tracking-tight">Sky Inventory App Sync Integration</h2>
                 <span className="bg-emerald-500/20 text-emerald-300 text-[10px] font-bold px-2 py-0.5 rounded-full border border-emerald-400/30">
                   Product-Only Channel
                 </span>
@@ -167,7 +167,7 @@ export const ResellerSyncModal: React.FC<ResellerSyncModalProps> = ({
           <div className="text-xs text-amber-900 space-y-1">
             <p className="font-bold">🔒 শুধুমাত্র প্রোডাক্ট ডাটা সিঙ্ক গ্যারান্টি (Strict Product-Only Privacy):</p>
             <p className="text-amber-800 leading-relaxed">
-              এই ফিচারটি সক্রিয় করা হলে <strong>শুধুমাত্র প্রোডাক্টের তথ্য</strong> (নাম, ছবি, বিক্রয় মূল্য, পাইকারি মূল্য, কালার/সাইজ ভ্যারিয়েন্ট ও স্টক সংখ্যা) আপনার রিসেলার অ্যাপের ডাটাবেজে যাবে। 
+              এই ফিচারটি সক্রিয় করা হলে <strong>শুধুমাত্র প্রোডাক্টের তথ্য</strong> (নাম, ছবি, বিক্রয় মূল্য, পাইকারি মূল্য, কালার/সাইজ ভ্যারিয়েন্ট ও স্টক সংখ্যা) আপনার এক্সটার্নাল অ্যাপের ডাটাবেজে যাবে। 
               <span className="font-bold text-amber-950 underline ml-1">আপনার কোনো ক্যাশ বিক্রয়, কাস্টমার লিস্ট, অর্ডার ভলিউম, ইনভয়েস বা ইনকাম-এক্সপেন্সের ডাটা পাঠানো হবে না।</span>
             </p>
           </div>
@@ -179,9 +179,9 @@ export const ResellerSyncModal: React.FC<ResellerSyncModalProps> = ({
           {/* Master Enable Toggle */}
           <div className="flex items-center justify-between bg-slate-50 p-4 rounded-2xl border border-slate-200/80">
             <div>
-              <h3 className="text-sm font-bold text-slate-800">Sky Reseller-এ প্রোডাক্ট অটো-সিঙ্ক চালুকরণ</h3>
+              <h3 className="text-sm font-bold text-slate-800">Sky App-এ প্রোডাক্ট অটো-সিঙ্ক চালুকরণ</h3>
               <p className="text-xs text-slate-500 mt-0.5">
-                ইনভেন্টরিতে নতুন প্রোডাক্ট এড বা আপডেট করলে সাথে সাথে রিসেলার অ্যাপে আপডেট হয়ে যাবে
+                ইনভেন্টরিতে নতুন প্রোডাক্ট এড বা আপডেট করলে সাথে সাথে এক্সটার্নাল অ্যাপে আপডেট হয়ে যাবে
               </p>
             </div>
             <label className="relative inline-flex items-center cursor-pointer">
@@ -199,7 +199,7 @@ export const ResellerSyncModal: React.FC<ResellerSyncModalProps> = ({
           <div className="space-y-4">
             <div className="flex items-center gap-2 border-b border-slate-100 pb-2">
               <Database size={16} className="text-indigo-600" />
-              <h4 className="text-xs font-black uppercase tracking-wider text-slate-700">Sky Reseller Firebase Project Config</h4>
+              <h4 className="text-xs font-black uppercase tracking-wider text-slate-700">Sky App Firebase Project Config</h4>
             </div>
 
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
@@ -209,19 +209,19 @@ export const ResellerSyncModal: React.FC<ResellerSyncModalProps> = ({
                 </label>
                 <input
                   type="text"
-                  placeholder="e.g. sky-reseller-app-123"
+                  placeholder="e.g. sky-inventory-app-123"
                   value={config.secondaryProjectId}
                   onChange={(e) => setConfig({ ...config, secondaryProjectId: e.target.value })}
                   className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-800 font-mono focus:bg-white focus:border-indigo-500 focus:outline-hidden"
                 />
                 <p className="text-[10px] text-slate-400 mt-1">
-                  আপনার Sky Reseller অ্যাপের Firebase Project ID
+                  আপনার Sky App-এর Firebase Project ID
                 </p>
               </div>
 
               <div>
                 <label className="block text-xs font-bold text-slate-700 mb-1">
-                  Reseller App Firestore Collection Name
+                  External App Firestore Collection Name
                 </label>
                 <input
                   type="text"
