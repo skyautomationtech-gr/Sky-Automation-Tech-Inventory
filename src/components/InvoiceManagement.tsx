@@ -605,7 +605,7 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                 )}
 
                 <a
-                  href={`https://sky-automation-tech-inventory.vercel.app/?inv=${encodeURIComponent(selectedInvoice.invoiceNumber || selectedInvoice.id)}&due=${selectedInvoice.amountDue ?? (selectedInvoice.totalAmount - (selectedInvoice.amountPaid || 0))}&paid=${selectedInvoice.amountPaid || 0}&total=${selectedInvoice.totalAmount}&brand=${selectedInvoice.subBrand}&name=${encodeURIComponent(selectedInvoice.customerName)}&phone=${encodeURIComponent(selectedInvoice.customerPhone)}`}
+                  href={`https://sky-automation-tech-inventory.vercel.app/?inv=${encodeURIComponent(selectedInvoice.invoiceNumber || selectedInvoice.id || '')}&due=${selectedInvoice.amountDue ?? (selectedInvoice.totalAmount - (selectedInvoice.amountPaid || 0))}&paid=${selectedInvoice.amountPaid || 0}&total=${selectedInvoice.totalAmount || 0}&brand=${encodeURIComponent(selectedInvoice.subBrand || '')}&name=${encodeURIComponent(selectedInvoice.customerName || '')}&phone=${encodeURIComponent(selectedInvoice.customerPhone || '')}`}
                   target="_blank"
                   rel="noopener noreferrer"
                   className="flex items-center gap-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 text-sm font-bold px-3.5 py-2 rounded-xl border border-emerald-200 shadow-xs transition-all cursor-pointer"
@@ -701,18 +701,18 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
               {/* A4 PRINT CONTAINER (STRICT HIGH-CONTRAST MONOCHROME / DARK ACCENT FOR PERFECT A4 PRINTING) */}
               {(() => {
                 const subBrandInfo = getSubBrandCompanyInfo(selectedInvoice.subBrand, companySettings);
-                const relatedOrder = orders.find(o => o.id === selectedInvoice.orderId);
-                const itemSubtotal = selectedInvoice.items.reduce((acc, item) => acc + (item.qty * item.unitPrice), 0);
-                const discountAmt = selectedInvoice.discountAmount ?? relatedOrder?.discountAmount ?? 0;
-                const shippingAmt = selectedInvoice.shippingCharge ?? relatedOrder?.shippingCharge ?? 0;
+                const relatedOrder = selectedInvoice.orderId ? orders.find(o => o.id === selectedInvoice.orderId) : null;
+                const itemSubtotal = (selectedInvoice.items || []).reduce((acc, item) => acc + ((item.qty || 0) * (item.unitPrice || 0)), 0);
+                const discountAmt = (selectedInvoice.discountAmount ?? relatedOrder?.discountAmount ?? 0) || 0;
+                const shippingAmt = (selectedInvoice.shippingCharge ?? relatedOrder?.shippingCharge ?? 0) || 0;
                 const grandTotal = Math.max(0, itemSubtotal - discountAmt + shippingAmt);
 
                 // Financial settlement calculation:
-                const rawPaidAmt = selectedInvoice.amountPaid ?? relatedOrder?.amountPaid ?? 0;
+                const rawPaidAmt = (selectedInvoice.amountPaid ?? relatedOrder?.amountPaid ?? 0) || 0;
                 const calculatedDue = Math.max(0, grandTotal - rawPaidAmt);
                 const isPaidStatus = selectedInvoice.paymentStatus === 'Paid' && calculatedDue === 0;
                 const paidAmt = isPaidStatus ? grandTotal : rawPaidAmt;
-                const dueAmt = isPaidStatus ? 0 : (selectedInvoice.amountDue ?? calculatedDue);
+                const dueAmt = isPaidStatus ? 0 : ((selectedInvoice.amountDue ?? calculatedDue) || 0);
                 const isCOD = dueAmt > 0;
 
                 // Helper for clean SKU lookup
@@ -827,13 +827,15 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                       {/* 2. INVOICE META STRIP */}
                       <div className="bg-[#f8fafc] border-2 border-[#94a3b8] rounded-xl overflow-hidden shadow-xs">
                         <div className="bg-[#0f172a] text-[#ffffff] px-4 py-2 flex justify-between items-center text-xs font-black">
-                          <span className="tracking-wide">INVOICE #{selectedInvoice.invoiceNumber}</span>
-                          <span className="text-[#e2e8f0] font-bold">Order Ref: {selectedInvoice.orderId.substring(0, 10)}</span>
+                          <span className="tracking-wide">INVOICE #{selectedInvoice.invoiceNumber || 'N/A'}</span>
+                          <span className="text-[#e2e8f0] font-bold">Order Ref: {selectedInvoice.orderId ? selectedInvoice.orderId.substring(0, 10) : 'N/A'}</span>
                         </div>
                         <div className="p-3 grid grid-cols-4 gap-3 text-xs divide-x-2 divide-[#cbd5e1]">
                           <div className="pr-2">
                             <div className="text-[10px] text-[#475569] font-black uppercase tracking-wider mb-0.5">Invoice Date</div>
-                            <div className="font-black text-[#0f172a]">{new Date(selectedInvoice.generatedAt).toLocaleDateString('en-GB')}</div>
+                            <div className="font-black text-[#0f172a]">
+                              {selectedInvoice.generatedAt ? new Date(selectedInvoice.generatedAt).toLocaleDateString('en-GB') : new Date().toLocaleDateString('en-GB')}
+                            </div>
                           </div>
                           <div className="px-3">
                             <div className="text-[10px] text-[#475569] font-black uppercase tracking-wider mb-0.5">Customer ID</div>
