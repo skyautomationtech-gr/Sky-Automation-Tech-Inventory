@@ -23,17 +23,18 @@ import {
 
 interface NotificationCenterProps {
   user: UserProfile | null;
+  products?: Product[];
   onNavigate?: (tab: string) => void;
 }
 
-export default function NotificationCenter({ user, onNavigate }: NotificationCenterProps) {
+export default function NotificationCenter({ user, products: propProducts, onNavigate }: NotificationCenterProps) {
   const [isOpen, setIsOpen] = useState(false);
   const [notifications, setNotifications] = useState<AppNotification[]>([]);
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
     fetchAndCompileNotifications();
-  }, [user]);
+  }, [user, propProducts]);
 
   const fetchAndCompileNotifications = async () => {
     setLoading(true);
@@ -44,8 +45,8 @@ export default function NotificationCenter({ user, onNavigate }: NotificationCen
       // Dynamically compile active system alerts (Low Stock, Pending Users, Overdue Payments)
       const dynamicAlerts: AppNotification[] = [];
 
-      // 1. Low Stock Check
-      const products = await getProducts();
+      // 1. Low Stock Check (use passed products prop if available to avoid extra reads)
+      const products = propProducts && propProducts.length > 0 ? propProducts : await getProducts();
       products.forEach(p => {
         const totalStock = p.variants?.reduce((sum, v) => sum + v.stock, 0) || 0;
         const minThreshold = p.reorderThreshold || 5;

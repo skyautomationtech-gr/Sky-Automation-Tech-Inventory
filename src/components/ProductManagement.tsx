@@ -189,7 +189,7 @@ export default function ProductManagement({
     if (requireCheckIn && !requireCheckIn()) return;
     setInlineEditProductId(product.id);
     setInlinePrice(product.sellingPrice || 0);
-    const totalStock = product.variants.reduce((sum, v) => sum + (v.stock || 0), 0);
+    const totalStock = (product.variants || []).reduce((sum, v) => sum + (v.stock || 0), 0);
     setInlineStock(totalStock);
   };
 
@@ -198,7 +198,7 @@ export default function ProductManagement({
     setFormError('');
     setFormSuccess('');
     try {
-      const newVariants = [...product.variants];
+      const newVariants = [...(product.variants || [])];
       if (newVariants.length > 0) {
         newVariants[0] = { ...newVariants[0], stock: Number(inlineStock) || 0 };
       } else {
@@ -538,8 +538,9 @@ export default function ProductManagement({
       }
     } else {
       // Print copies for all variants. Fill the 36-slot sheet as much as possible
-      const repeatCount = Math.max(1, Math.floor(36 / (product.variants.length || 1)));
-      product.variants.forEach(v => {
+      const variantsList = product.variants || [];
+      const repeatCount = Math.max(1, Math.floor(36 / (variantsList.length || 1)));
+      variantsList.forEach(v => {
         const cleanColor = v.color.trim();
         const cleanModel = v.model.trim();
         const vColorCode = cleanColor.toUpperCase().replace(/[^A-Z0-9]/g, '-').replace(/-+/g, '-');
@@ -755,7 +756,7 @@ export default function ProductManagement({
     setFormSellingPrice(product.sellingPrice);
     setFormReorderThreshold(product.reorderThreshold);
     setFormImages(product.images || []);
-    setFormVariants(product.variants.map(v => ({ ...v })));
+    setFormVariants((product.variants || []).map(v => ({ ...v })));
     
     // Clear custom mode maps
     setCustomColorValue({});
@@ -1281,7 +1282,7 @@ export default function ProductManagement({
     setFormSuccess('');
     
     // Check if color is in use
-    const inUse = products.some(p => p.variants.some(v => v.color === name) && !p.archived);
+    const inUse = products.some(p => (p.variants || []).some(v => v.color === name) && !p.archived);
     if (inUse) {
       setFormError(`Cannot delete color "${name}" because it is currently in use by one or more products.`);
       return;
@@ -1333,7 +1334,7 @@ export default function ProductManagement({
     setFormSuccess('');
     
     // Check if model is in use
-    const inUse = products.some(p => p.variants.some(v => v.model === name) && !p.archived);
+    const inUse = products.some(p => (p.variants || []).some(v => v.model === name) && !p.archived);
     if (inUse) {
       setFormError(`Cannot delete model/size "${name}" because it is currently in use by one or more products.`);
       return;
@@ -1447,20 +1448,34 @@ export default function ProductManagement({
 
   // Filtering & Sorting Logic
   const filteredProducts = products.filter((product) => {
-    const matchesSearch = product.name.toLowerCase().includes(search.toLowerCase()) ||
-                          product.sku.toLowerCase().includes(search.toLowerCase()) ||
-                          product.brand.toLowerCase().includes(search.toLowerCase());
+    if (!product) return false;
+    const query = (search || '').toLowerCase().trim();
+    const pName = (product.name || '').toLowerCase();
+    const pSku = (product.sku || '').toLowerCase();
+    const pBrand = (product.brand || '').toLowerCase();
+    const pBarcode = (product.barcodeValue || '').toLowerCase();
     
-    const matchesCategory = !filterCategory || product.category === filterCategory;
+    const matchesSearch = !query || 
+                          pName.includes(query) ||
+                          pSku.includes(query) ||
+                          pBrand.includes(query) ||
+                          pBarcode.includes(query);
+    
+    const matchesCategory = !filterCategory || product.category === filterCategory || product.mainCategory === filterCategory;
     const matchesBrand = !filterBrand || product.brand === filterBrand;
     const matchesSubBrand = !filterSubBrand || product.subBrand === filterSubBrand;
     
-    const totalQty = product.variants.reduce((sum, v) => sum + (v.stock || 0), 0);
+    const variantsList = Array.isArray(product.variants) ? product.variants : [];
+    const totalQty = variantsList.length > 0 
+      ? variantsList.reduce((sum, v) => sum + (v.stock || 0), 0)
+      : (product.totalStock ?? 0);
+    const threshold = product.reorderThreshold ?? 5;
+
     let matchesStock = true;
     if (filterStockStatus === 'instock') {
-      matchesStock = totalQty > product.reorderThreshold;
+      matchesStock = totalQty > threshold;
     } else if (filterStockStatus === 'lowstock') {
-      matchesStock = totalQty > 0 && totalQty <= product.reorderThreshold;
+      matchesStock = totalQty > 0 && totalQty <= threshold;
     } else if (filterStockStatus === 'out') {
       matchesStock = totalQty === 0;
     }
@@ -1480,8 +1495,8 @@ export default function ProductManagement({
     } else if (sortBy === 'price') {
       return (a.sellingPrice - b.sellingPrice) * factor;
     } else if (sortBy === 'stock') {
-      const stockA = a.variants.reduce((sum, v) => sum + (v.stock || 0), 0);
-      const stockB = b.variants.reduce((sum, v) => sum + (v.stock || 0), 0);
+      const stockA = (a.variants || []).reduce((sum, v) => sum + (v.stock || 0), 0);
+      const stockB = (b.variants || []).reduce((sum, v) => sum + (v.stock || 0), 0);
       return (stockA - stockB) * factor;
     }
     return 0;
@@ -1899,8 +1914,8 @@ export default function ProductManagement({
                       </tr>
                     ) : (
                       sortedProducts.map((product) => {
-                        const totalQty = product.variants.reduce((s, v) => s + (v.stock || 0), 0);
-                        const isLow = totalQty <= product.reorderThreshold;
+                        const totalQty = (product.variants || []).reduce((s, v) => s + (v.stock || 0), 0);
+                        const isLow = totalQty <= (product.reorderThreshold ?? 5);
                         const defaultImg = product.images?.[0] || 'https://images.unsplash.com/photo-1546868871-7041f2a55e12?auto=format&fit=crop&q=80&w=150';
 
                         return (
@@ -2083,8 +2098,8 @@ export default function ProductManagement({
                   </div>
                 ) : (
                   sortedProducts.map((product) => {
-                    const totalQty = product.variants.reduce((s, v) => s + (v.stock || 0), 0);
-                    const isLow = totalQty <= product.reorderThreshold;
+                    const totalQty = (product.variants || []).reduce((s, v) => s + (v.stock || 0), 0);
+                    const isLow = totalQty <= (product.reorderThreshold ?? 5);
                     const defaultImg = product.images?.[0] || 'https://images.unsplash.com/photo-1546868871-7041f2a55e12?auto=format&fit=crop&q=80&w=150';
 
                     return (
@@ -2432,7 +2447,7 @@ export default function ProductManagement({
                           </span>
                         </div>
                         <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                          {selectedProduct.variants.map((v) => (
+                          {(selectedProduct.variants || []).map((v) => (
                             <div key={v.id} className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-center font-mono relative shadow-3xs">
                               {v.stock === 0 && (
                                  <span className="absolute -top-1.5 -right-1.5 bg-rose-600 text-white text-[9px] font-black uppercase px-2 py-0.5 rounded-full shadow-xs z-10">Out</span>

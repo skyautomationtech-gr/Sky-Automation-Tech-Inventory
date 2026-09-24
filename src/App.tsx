@@ -63,6 +63,7 @@ import ReportsAnalytics from './components/ReportsAnalytics';
 import { AuditLogView } from './components/AuditLogView';
 import NotificationCenter from './components/NotificationCenter';
 import { PublicInvoiceVerification } from './components/PublicInvoiceVerification';
+import ErrorBoundary from './components/ErrorBoundary';
 
 // Mock/Fallback Data in case of Firestore permission/network errors
 const MOCK_PRODUCTS: Product[] = [
@@ -428,8 +429,8 @@ export default function App() {
 
   useEffect(() => {
     if (user && !isOnboarding && !isOfflineDemoMode) {
-      refreshApplicationData();
-
+      // Note: Subscriptions immediately return the cached or latest snapshot,
+      // so we avoid an extra redundant batch of getDocs calls on mount.
       const unsubProducts = subscribeToProducts((prods) => {
         if (prods) setProducts(prods);
       }, true);
@@ -844,7 +845,7 @@ export default function App() {
             {dataLoading && (
               <div className="w-2 h-2 bg-amber-400 rounded-full animate-ping" />
             )}
-            <NotificationCenter user={user} onNavigate={navigateToTab} />
+            <NotificationCenter user={user} products={products} onNavigate={navigateToTab} />
             <div className="w-8 h-8 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-amber-500 font-bold text-sm">
               {user?.name?.charAt(0) || 'U'}
             </div>
@@ -865,7 +866,7 @@ export default function App() {
             </div>
 
             <div className="flex items-center gap-4">
-              <NotificationCenter user={user} onNavigate={navigateToTab} />
+              <NotificationCenter user={user} products={products} onNavigate={navigateToTab} />
               <div className="flex items-center gap-3 pl-4 border-l border-slate-200">
                 <div className="w-9 h-9 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-center text-amber-400 font-bold text-sm shadow-xs">
                   {user?.name?.charAt(0) || 'U'}
@@ -922,71 +923,85 @@ export default function App() {
 
         {/* Tab 2: Product Management View */}
         {currentTab === 'products' && (
-          <ProductManagement 
-            products={products} 
-            categories={categories} 
-            brands={brands} 
-            productColors={productColors}
-            productModels={productModels}
-            user={user} 
-            onRefreshData={refreshApplicationData}
-            initialAddMode={initialProductAddMode}
-            requireCheckIn={requireCheckIn}
-            initialProductId={initialProductId}
-            clearInitialProductId={() => setInitialProductId(null)}
-            onNavigateToStock={(productId) => {
-              setInitialStockAction('in');
-              setInitialStockProductId(productId);
-              setCurrentTab('stock');
-            }}
-          />
+          <ErrorBoundary fallbackTitle="Product Management encountered an issue">
+            <ProductManagement 
+              products={products} 
+              categories={categories} 
+              brands={brands} 
+              productColors={productColors}
+              productModels={productModels}
+              user={user} 
+              onRefreshData={refreshApplicationData}
+              initialAddMode={initialProductAddMode}
+              requireCheckIn={requireCheckIn}
+              initialProductId={initialProductId}
+              clearInitialProductId={() => setInitialProductId(null)}
+              onNavigateToStock={(productId) => {
+                setInitialStockAction('in');
+                setInitialStockProductId(productId);
+                setCurrentTab('stock');
+              }}
+            />
+          </ErrorBoundary>
         )}
 
         {/* Tab 3: Stock Operations View */}
         {currentTab === 'stock' && (
-          <StockOperations 
-            products={products.filter(p => !p.archived)} 
-            user={user} 
-            onRefreshData={refreshApplicationData}
-            initialAction={initialStockAction}
-            requireCheckIn={requireCheckIn}
-            initialProductId={initialStockProductId}
-          />
+          <ErrorBoundary fallbackTitle="Stock Operations encountered an issue">
+            <StockOperations 
+              products={products.filter(p => !p.archived)} 
+              user={user} 
+              onRefreshData={refreshApplicationData}
+              initialAction={initialStockAction}
+              requireCheckIn={requireCheckIn}
+              initialProductId={initialStockProductId}
+            />
+          </ErrorBoundary>
         )}
 
         {/* Tab 4: User Management View */}
         {currentTab === 'users' && (
-          <UserManagement user={user} />
+          <ErrorBoundary fallbackTitle="User Management encountered an issue">
+            <UserManagement user={user} />
+          </ErrorBoundary>
         )}
 
         {/* Tab Customers: Customer Directory View */}
         {currentTab === 'customers' && (
-          <CustomerManagement 
-            user={user} 
-            requireCheckIn={requireCheckIn} 
-            initialCustomerId={initialCustomerId}
-            clearInitialCustomerId={() => setInitialCustomerId(null)}
-          />
+          <ErrorBoundary fallbackTitle="Customer Directory encountered an issue">
+            <CustomerManagement 
+              user={user} 
+              requireCheckIn={requireCheckIn} 
+              initialCustomerId={initialCustomerId}
+              clearInitialCustomerId={() => setInitialCustomerId(null)}
+            />
+          </ErrorBoundary>
         )}
 
         {/* Tab Orders: Order Desk View */}
         {currentTab === 'orders' && (
-          <OrderManagement 
-            user={user} 
-            requireCheckIn={requireCheckIn} 
-            initialOrderId={initialOrderId}
-            clearInitialOrderId={() => setInitialOrderId(null)}
-          />
+          <ErrorBoundary fallbackTitle="Order Desk encountered an issue">
+            <OrderManagement 
+              user={user} 
+              requireCheckIn={requireCheckIn} 
+              initialOrderId={initialOrderId}
+              clearInitialOrderId={() => setInitialOrderId(null)}
+            />
+          </ErrorBoundary>
         )}
 
         {/* Tab Invoices: Invoice Desk View */}
         {currentTab === 'invoices' && (
-          <InvoiceManagement user={user} requireCheckIn={requireCheckIn} />
+          <ErrorBoundary fallbackTitle="Invoice Desk encountered an issue">
+            <InvoiceManagement user={user} requireCheckIn={requireCheckIn} />
+          </ErrorBoundary>
         )}
 
         {/* Tab Receivables: Due Payments View */}
         {currentTab === 'receivables' && (
-          <DuePayments user={user} requireCheckIn={requireCheckIn} />
+          <ErrorBoundary fallbackTitle="Due Payments encountered an issue">
+            <DuePayments user={user} requireCheckIn={requireCheckIn} />
+          </ErrorBoundary>
         )}
 
         {/* Tab Financials: Income & Expense Financial Overview View */}

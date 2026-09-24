@@ -1299,9 +1299,9 @@ export async function getStockLogs(productId?: string): Promise<StockLog[]> {
     const colRef = collection(db, 'stockLogs');
     let q;
     if (productId) {
-      q = query(colRef, where('productId', '==', productId), orderBy('timestamp', 'desc'));
+      q = query(colRef, where('productId', '==', productId), orderBy('timestamp', 'desc'), limit(150));
     } else {
-      q = query(colRef, orderBy('timestamp', 'desc'));
+      q = query(colRef, orderBy('timestamp', 'desc'), limit(150));
     }
     const querySnapshot = await getDocs(q);
     const logs: StockLog[] = [];
@@ -1311,10 +1311,11 @@ export async function getStockLogs(productId?: string): Promise<StockLog[]> {
     return logs;
   } catch (error) {
     console.error('Error fetching stock logs:', error);
-    // Fallback: If index is not yet built, query all and sort in memory
+    // Fallback: If index is not yet built, query limited and sort in memory
     try {
       const colRef = collection(db, 'stockLogs');
-      const querySnapshot = await getDocs(colRef);
+      const qFallback = query(colRef, limit(150));
+      const querySnapshot = await getDocs(qFallback);
       const logs: StockLog[] = [];
       querySnapshot.forEach((doc) => {
         logs.push({ id: doc.id, ...(doc.data() as any) } as StockLog);
@@ -1997,20 +1998,34 @@ export async function getAllAttendanceRecords(dateFilter?: string, userIdFilter?
 }
 
 export async function deleteSokolDemoData(): Promise<void> {
-  console.log('Attempting to delete Sokol demo data...');
-  const collections = ['categories', 'brands', 'products'];
-  for (const colName of collections) {
-    const colRef = collection(db, colName);
-    const snapshot = await getDocs(colRef);
-    for (const docSnap of snapshot.docs) {
-      const data = docSnap.data();
-      if (JSON.stringify(data).includes('Sokol')) {
-        console.log('Deleting Sokol data from', colName, ':', docSnap.id);
-        await deleteDoc(doc(db, colName, docSnap.id));
+  // Guard: Only run once per session to avoid reading all categories, brands, and products on every navigation
+  try {
+    if (sessionStorage.getItem('sat_sokol_cleaned') === 'true') {
+      return;
+    }
+  } catch (e) {}
+
+  console.log('Attempting to delete Sokol demo data (one-time check)...');
+  try {
+    const collections = ['categories', 'brands', 'products'];
+    for (const colName of collections) {
+      const colRef = collection(db, colName);
+      const snapshot = await getDocs(colRef);
+      for (const docSnap of snapshot.docs) {
+        const data = docSnap.data();
+        if (JSON.stringify(data).includes('Sokol')) {
+          console.log('Deleting Sokol data from', colName, ':', docSnap.id);
+          await deleteDoc(doc(db, colName, docSnap.id));
+        }
       }
     }
+    try {
+      sessionStorage.setItem('sat_sokol_cleaned', 'true');
+    } catch (e) {}
+    console.log('Finished deleting Sokol demo data.');
+  } catch (err) {
+    console.warn('deleteSokolDemoData notice:', err);
   }
-  console.log('Finished deleting Sokol demo data.');
 }
 
 export interface ProductAttributes {
@@ -2718,6 +2733,7 @@ export async function updateOrderFullDetails(
 
 export async function getInvoices(): Promise<Invoice[]> {
   if (dbCache.invoices) return dbCache.invoices;
+  const cached = localStore.get<Invoice[]>('invoices');
   try {
     const colRef = collection(db, 'invoices');
     // Fetch all docs without orderBy to avoid excluding documents missing generatedAt field
@@ -2746,8 +2762,13 @@ export async function getInvoices(): Promise<Invoice[]> {
     // Sort in memory by generatedAt desc
     list.sort((a, b) => (b.generatedAt || 0) - (a.generatedAt || 0));
     dbCache.invoices = list;
+    localStore.set('invoices', list);
     return list;
   } catch (error) {
+    if (cached) {
+      dbCache.invoices = cached;
+      return cached;
+    }
     handleFirestoreError(error, OperationType.LIST, 'invoices');
   }
 }
@@ -2779,6 +2800,7 @@ export function subscribeToInvoices(callback: (invoices: Invoice[]) => void): ()
       });
       list.sort((a, b) => (b.generatedAt || 0) - (a.generatedAt || 0));
       dbCache.invoices = list;
+      localStore.set('invoices', list);
       callback(list);
     }, (error) => {
       console.warn('subscribeToInvoices listener notice:', error);

@@ -56,7 +56,7 @@ export default function DuePayments({ user, requireCheckIn }: DuePaymentsProps) 
   const [paymentMethod, setPaymentMethod] = useState<'Cash' | 'bKash' | 'Nagad' | 'Bank'>('Cash');
 
   useEffect(() => {
-    fetchData();
+    setLoading(true);
     const unsub = subscribeToOrders((data) => {
       const relevantOrders = (data || []).filter(o => 
         o.amountDue > 0 || (o.amountDue === 0 && o.paymentHistory && o.paymentHistory.length > 0)
@@ -168,12 +168,18 @@ export default function DuePayments({ user, requireCheckIn }: DuePaymentsProps) 
 
   // Search and filter logic
   const filteredOrders = orders.filter(o => {
-    const queryLower = searchQuery.toLowerCase();
-    const matchesSearch = 
-      o.customerName.toLowerCase().includes(queryLower) ||
-      o.customerPhone.includes(queryLower) ||
-      o.id.toLowerCase().includes(queryLower) ||
-      (o.invoiceId && o.invoiceId.toLowerCase().includes(queryLower));
+    if (!o) return false;
+    const queryLower = (searchQuery || '').toLowerCase().trim();
+    const custName = (o.customerName || '').toLowerCase();
+    const custPhone = o.customerPhone || '';
+    const ordId = (o.id || '').toLowerCase();
+    const invId = (o.invoiceId || '').toLowerCase();
+
+    const matchesSearch = !queryLower || 
+      custName.includes(queryLower) ||
+      custPhone.includes(queryLower) ||
+      ordId.includes(queryLower) ||
+      invId.includes(queryLower);
 
     const matchesBrand = subBrandFilter === '' || o.subBrand === subBrandFilter;
     const matchesStatus = paymentStatusFilter === '' || o.paymentStatus === paymentStatusFilter;

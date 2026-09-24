@@ -176,7 +176,7 @@ export default function OrderManagement({
     (user?.permissionOverrides?.manageOrders !== false && user?.role === 'admin');
 
   useEffect(() => {
-    fetchData();
+    setLoading(true);
     const unsubOrders = subscribeToOrders((ordersData) => {
       setOrders(ordersData || []);
       setLoading(false);
@@ -238,9 +238,9 @@ export default function OrderManagement({
   // Autocomplete search for customer
   const filteredCustomersSearch = customerSearch.trim() === '' ? [] :
     customers.filter(c => 
-      c.name.toLowerCase().includes(customerSearch.toLowerCase()) || 
-      c.phone.includes(customerSearch) ||
-      (c.customerId && c.customerId.toLowerCase().includes(customerSearch.toLowerCase()))
+      (c.name || '').toLowerCase().includes(customerSearch.toLowerCase()) || 
+      (c.phone || '').includes(customerSearch) ||
+      (c.customerId ? c.customerId.toLowerCase().includes(customerSearch.toLowerCase()) : false)
     ).slice(0, 5);
 
   const handleSelectCustomer = (c: Customer) => {
@@ -924,8 +924,8 @@ export default function OrderManagement({
     // 3. Search query
     if (searchQuery.trim() !== '') {
       const q = searchQuery.toLowerCase();
-      const matchCust = order.customerName.toLowerCase().includes(q) || order.customerPhone.includes(q);
-      const matchId = order.id.toLowerCase().includes(q);
+      const matchCust = (order.customerName || '').toLowerCase().includes(q) || (order.customerPhone || '').includes(q);
+      const matchId = (order.id || '').toLowerCase().includes(q);
       if (!matchCust && !matchId) return false;
     }
 

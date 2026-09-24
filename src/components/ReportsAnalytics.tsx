@@ -63,7 +63,7 @@ export default function ReportsAnalytics({ user }: ReportsAnalyticsProps) {
       setProducts(pList);
     } catch (err) {
       console.error('Failed to load reports data:', err);
-    } fontally: {
+    } finally {
       setLoading(false);
     }
   };

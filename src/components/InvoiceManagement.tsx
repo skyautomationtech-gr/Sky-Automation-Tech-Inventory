@@ -58,7 +58,8 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   useEffect(() => {
-    fetchData();
+    setLoading(true);
+    getCompanySettings().then(setCompanySettings).catch(() => {});
     fetchRolePermissions();
 
     const unsubInv = subscribeToInvoices((invoicesData) => {
@@ -130,27 +131,36 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
 
   // Filter & Search Invoices
   const filteredInvoices = invoices.filter(inv => {
-    const queryLower = searchQuery.toLowerCase();
-    const matchesSearch = 
-      inv.invoiceNumber.toLowerCase().includes(queryLower) ||
-      inv.customerName.toLowerCase().includes(queryLower) ||
-      inv.customerPhone.includes(queryLower) ||
-      inv.orderId.toLowerCase().includes(queryLower) ||
-      (inv.customerId && inv.customerId.toLowerCase().includes(queryLower));
+    if (!inv) return false;
+    const queryLower = (searchQuery || '').toLowerCase().trim();
+    const invNumber = (inv.invoiceNumber || '').toLowerCase();
+    const custName = (inv.customerName || '').toLowerCase();
+    const custPhone = inv.customerPhone || '';
+    const ordId = (inv.orderId || '').toLowerCase();
+    const custId = (inv.customerId || '').toLowerCase();
+
+    const matchesSearch = !queryLower || 
+      invNumber.includes(queryLower) ||
+      custName.includes(queryLower) ||
+      custPhone.includes(queryLower) ||
+      ordId.includes(queryLower) ||
+      custId.includes(queryLower);
 
     const matchesSubBrand = subBrandFilter === '' || inv.subBrand === subBrandFilter;
     const matchesPayment = paymentStatusFilter === '' || inv.paymentStatus === paymentStatusFilter;
     
     let matchesVoid = true;
     if (voidFilter === 'active') matchesVoid = !inv.voided;
-    if (voidFilter === 'voided') matchesVoid = inv.voided;
+    if (voidFilter === 'voided') matchesVoid = !!inv.voided;
 
     return matchesSearch && matchesSubBrand && matchesPayment && matchesVoid;
   }).sort((a, b) => {
+    const timeA = a.generatedAt || 0;
+    const timeB = b.generatedAt || 0;
     if (sortOrder === 'desc') {
-      return b.generatedAt - a.generatedAt;
+      return timeB - timeA;
     } else {
-      return a.generatedAt - b.generatedAt;
+      return timeA - timeB;
     }
   });
 
@@ -505,7 +515,7 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                     className={`hover:bg-slate-50/50 transition-colors ${inv.voided ? 'bg-slate-50/30' : ''}`}
                   >
                     <td className="py-3.5 px-6 font-mono font-bold text-slate-800">
-                      {inv.invoiceNumber}
+                      {inv.invoiceNumber || 'N/A'}
                       {inv.voided && (
                         <span className="ml-2 inline-block bg-red-100 text-red-700 text-[8px] font-bold px-1.5 py-0.5 rounded-sm uppercase tracking-wide">
                           Void
@@ -513,8 +523,8 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                       )}
                     </td>
                     <td className="py-3.5 px-6 font-semibold text-slate-700">
-                      <div>{inv.customerName}</div>
-                      <div className="text-sm text-slate-400 font-mono">{inv.customerPhone}</div>
+                      <div>{inv.customerName || 'N/A'}</div>
+                      <div className="text-sm text-slate-400 font-mono">{inv.customerPhone || 'N/A'}</div>
                     </td>
                     <td className="py-3.5 px-6">
                       <span className={`inline-block text-[9px] font-mono uppercase px-2 py-0.5 rounded-full font-bold ${
@@ -524,17 +534,17 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                             ? 'bg-teal-100 text-teal-800' 
                             : 'bg-orange-100 text-orange-800'
                       }`}>
-                        {inv.subBrand}
+                        {inv.subBrand || 'SAT'}
                       </span>
                     </td>
                     <td className="py-3.5 px-6 text-slate-400 font-mono">
-                      {new Date(inv.generatedAt).toLocaleDateString('en-GB')}
+                      {inv.generatedAt ? new Date(inv.generatedAt).toLocaleDateString('en-GB') : 'N/A'}
                     </td>
                     <td className="py-3.5 px-6 font-mono font-bold text-slate-700">
-                      ৳{inv.amountDue.toLocaleString()}
+                      ৳{(inv.amountDue || 0).toLocaleString()}
                     </td>
                     <td className="py-3.5 px-6 font-mono font-black text-slate-900">
-                      ৳{inv.totalAmount.toLocaleString()}
+                      ৳{(inv.totalAmount || 0).toLocaleString()}
                     </td>
                     <td className="py-3.5 px-6">
                       <span className={`inline-block text-[9px] font-bold uppercase px-2 py-0.5 rounded-full ${
@@ -592,7 +602,7 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                   <button
                     onClick={() => {
                       if (!hasVoidPermission()) {
-                        alert('You do not have administrative privilege to void invoices.');
+                        setError('You do not have administrative privilege to void invoices.');
                         return;
                       }
                       setShowVoidModal(true);
@@ -908,29 +918,34 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                             </tr>
                           </thead>
                           <tbody className="divide-y-2 divide-[#cbd5e1]">
-                            {selectedInvoice.items.map((item, idx) => (
-                              <tr key={idx} style={{ backgroundColor: idx % 2 === 0 ? '#ffffff' : '#f8fafc' }}>
-                                <td className="py-2.5 px-3 text-center text-xs font-black text-[#0f172a]">{idx + 1}</td>
-                                <td className="py-2.5 px-3">
-                                  <div>
-                                    <div className="font-black text-[#0f172a] text-xs leading-tight">{item.productName}</div>
-                                    {item.variantLabel && (
-                                      <div className="text-[10px] text-[#334155] font-bold mt-0.5">
-                                        Variant: {item.variantLabel}
-                                      </div>
-                                    )}
-                                  </div>
-                                </td>
-                                <td className="py-2.5 px-3">
-                                  <span className="font-mono font-black text-[11px] text-[#0f172a] bg-[#e2e8f0] px-1.5 py-0.5 rounded border border-[#cbd5e1]">
-                                    {getCleanSku(item)}
-                                  </span>
-                                </td>
-                                <td className="py-2.5 px-3 text-center font-black text-[#0f172a] text-xs">{item.qty}</td>
-                                <td className="py-2.5 px-3 text-right text-xs font-bold text-[#0f172a]">৳{item.unitPrice.toLocaleString()}</td>
-                                <td className="py-2.5 px-3 text-right font-black text-[#0f172a] text-xs">৳{(item.qty * item.unitPrice).toLocaleString()}</td>
-                              </tr>
-                            ))}
+                            {(selectedInvoice.items || []).map((item, idx) => {
+                              const qty = item?.qty || 0;
+                              const unitPrice = item?.unitPrice || 0;
+                              const total = qty * unitPrice;
+                              return (
+                                <tr key={idx} style={{ backgroundColor: idx % 2 === 0 ? '#ffffff' : '#f8fafc' }}>
+                                  <td className="py-2.5 px-3 text-center text-xs font-black text-[#0f172a]">{idx + 1}</td>
+                                  <td className="py-2.5 px-3">
+                                    <div>
+                                      <div className="font-black text-[#0f172a] text-xs leading-tight">{item?.productName || 'Product Item'}</div>
+                                      {item?.variantLabel && (
+                                        <div className="text-[10px] text-[#334155] font-bold mt-0.5">
+                                          Variant: {item.variantLabel}
+                                        </div>
+                                      )}
+                                    </div>
+                                  </td>
+                                  <td className="py-2.5 px-3">
+                                    <span className="font-mono font-black text-[11px] text-[#0f172a] bg-[#e2e8f0] px-1.5 py-0.5 rounded border border-[#cbd5e1]">
+                                      {getCleanSku(item)}
+                                    </span>
+                                  </td>
+                                  <td className="py-2.5 px-3 text-center font-black text-[#0f172a] text-xs">{qty}</td>
+                                  <td className="py-2.5 px-3 text-right text-xs font-bold text-[#0f172a]">৳{unitPrice.toLocaleString()}</td>
+                                  <td className="py-2.5 px-3 text-right font-black text-[#0f172a] text-xs">৳{total.toLocaleString()}</td>
+                                </tr>
+                              );
+                            })}
                           </tbody>
                         </table>
                       </div>
@@ -1083,18 +1098,23 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                           
                           {/* DYNAMIC QR CODE WITH CLEAR SCAN CAPTION */}
                           {(() => {
-                            const invCode = selectedInvoice.invoiceNumber || selectedInvoice.id;
-                            const dueVal = selectedInvoice.amountDue ?? (selectedInvoice.totalAmount - (selectedInvoice.amountPaid || 0));
-                            const paidVal = selectedInvoice.amountPaid || 0;
+                            const invCode = selectedInvoice.invoiceNumber || selectedInvoice.id || '';
+                            const totalAmount = selectedInvoice.totalAmount || 0;
+                            const amountPaid = selectedInvoice.amountPaid || 0;
+                            const dueVal = (selectedInvoice.amountDue ?? (totalAmount - amountPaid)) || 0;
+                            const paidVal = amountPaid;
+                            const brandCode = selectedInvoice.subBrand || 'SAT';
                             
                             // Domain target: Use live production Vercel URL as primary verification endpoint
                             const vercelDomain = 'https://sky-automation-tech-inventory.vercel.app';
-                            const qrUrl = `${vercelDomain}/?inv=${encodeURIComponent(invCode)}&d=${dueVal}&p=${paidVal}&t=${selectedInvoice.totalAmount}&b=${selectedInvoice.subBrand}`;
+                            const qrUrl = `${vercelDomain}/?inv=${encodeURIComponent(invCode)}&d=${dueVal}&p=${paidVal}&t=${totalAmount}&b=${encodeURIComponent(brandCode)}`;
 
                             return (
-                              <div 
-                                className="bg-[#ffffff] p-2 rounded-xl flex flex-col items-center gap-1 shrink-0 ml-3 shadow-md border border-slate-200 cursor-pointer hover:ring-2 hover:ring-emerald-500 transition-all"
-                                onClick={() => window.open(qrUrl, '_blank')}
+                              <a 
+                                href={qrUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="bg-[#ffffff] p-2 rounded-xl flex flex-col items-center gap-1 shrink-0 ml-3 shadow-md border border-slate-200 cursor-pointer hover:ring-2 hover:ring-emerald-500 transition-all no-underline"
                                 title="Click to test live verification page on Vercel"
                               >
                                 <div className="bg-[#ffffff] p-1 rounded-lg flex items-center justify-center">
@@ -1110,7 +1130,7 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                                 <div className="text-[8px] font-black text-[#0f172a] uppercase tracking-wider text-center leading-none">
                                   Scan to Verify
                                 </div>
-                              </div>
+                              </a>
                             );
                           })()}
                         </div>

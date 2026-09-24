@@ -154,26 +154,42 @@ export default function DashboardView({
 
   const performSearch = (query: string) => {
     setIsSearching(true);
-    const q = query.toLowerCase();
+    const q = (query || '').toLowerCase().trim();
+    if (!q) {
+      setSearchResults([]);
+      setIsSearching(false);
+      return;
+    }
     const results: any[] = [];
     
     // Search Products
     products.forEach(p => {
-      if (!p.archived && (p.name.toLowerCase().includes(q) || p.sku.toLowerCase().includes(q))) {
+      if (!p) return;
+      const pName = (p.name || '').toLowerCase();
+      const pSku = (p.sku || '').toLowerCase();
+      if (!p.archived && (pName.includes(q) || pSku.includes(q))) {
         results.push({ type: 'product', item: p });
       }
     });
 
     // Search Orders
     allOrders.forEach(o => {
-      if (o.id.toLowerCase().includes(q) || o.invoiceId?.toLowerCase().includes(q) || o.customerName.toLowerCase().includes(q) || o.customerPhone.toLowerCase().includes(q)) {
+      if (!o) return;
+      const oId = (o.id || '').toLowerCase();
+      const invId = (o.invoiceId || '').toLowerCase();
+      const cName = (o.customerName || '').toLowerCase();
+      const cPhone = o.customerPhone || '';
+      if (oId.includes(q) || invId.includes(q) || cName.includes(q) || cPhone.includes(q)) {
         results.push({ type: 'order', item: o });
       }
     });
 
     // Search Customers
     allCustomers.forEach(c => {
-      if (c.name.toLowerCase().includes(q) || c.phone.toLowerCase().includes(q)) {
+      if (!c) return;
+      const cName = (c.name || '').toLowerCase();
+      const cPhone = c.phone || '';
+      if (cName.includes(q) || cPhone.includes(q)) {
         results.push({ type: 'customer', item: c });
       }
     });

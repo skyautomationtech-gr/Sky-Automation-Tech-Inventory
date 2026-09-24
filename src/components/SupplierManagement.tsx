@@ -98,7 +98,7 @@ export default function SupplierManagement({ user, rolePermissions }: SupplierMa
       : rolePermissions?.[user?.role || 'staff']?.manageCategories);
 
   useEffect(() => {
-    fetchSuppliers();
+    setLoading(true);
     const unsub = subscribeToSuppliers((list) => {
       setSuppliers(list || []);
       setLoading(false);

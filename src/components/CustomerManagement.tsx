@@ -64,7 +64,7 @@ export default function CustomerManagement({
     (user?.permissionOverrides?.manageOrders !== false && user?.role === 'admin');
 
   useEffect(() => {
-    fetchData();
+    setLoading(true);
     const unsubCust = subscribeToCustomers((customersData) => {
       setCustomers(customersData || []);
       setLoading(false);
@@ -257,9 +257,9 @@ export default function CustomerManagement({
 
     // 3. Search query
     const matchSearch = 
-      customer.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      customer.phone.includes(searchQuery) ||
-      (customer.customerId && customer.customerId.toLowerCase().includes(searchQuery.toLowerCase()));
+      (customer.name || '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (customer.phone || '').includes(searchQuery) ||
+      (customer.customerId ? customer.customerId.toLowerCase().includes(searchQuery.toLowerCase()) : false);
     
     return matchSearch;
   });

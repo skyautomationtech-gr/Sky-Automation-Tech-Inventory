@@ -1,6 +1,11 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
 import { getAuth } from 'firebase/auth';
-import { getFirestore } from 'firebase/firestore';
+import { 
+  initializeFirestore, 
+  persistentLocalCache, 
+  persistentMultipleTabManager,
+  getFirestore 
+} from 'firebase/firestore';
 import { getStorage } from 'firebase/storage';
 
 // Configuration keys for Firebase
@@ -17,7 +22,28 @@ const firebaseConfig = {
 // Initialize Firebase
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 export const auth = getAuth(app);
-export const db = getFirestore(app, "ai-studio-6630a5d3-18da-424e-ba5b-db65e1dcfa41");
+
+const DB_NAME = "ai-studio-6630a5d3-18da-424e-ba5b-db65e1dcfa41";
+
+// Initialize Firestore with Persistent IndexedDB multi-tab cache
+// This dramatically reduces billable read costs by serving cached data locally and only fetching changed documents.
+let firestoreDb: any;
+try {
+  firestoreDb = initializeFirestore(app, {
+    localCache: persistentLocalCache({
+      tabManager: persistentMultipleTabManager()
+    })
+  }, DB_NAME);
+} catch (e) {
+  try {
+    firestoreDb = getFirestore(app, DB_NAME);
+  } catch (err2) {
+    console.warn("Firestore initialization fallback:", err2);
+    firestoreDb = getFirestore(app);
+  }
+}
+
+export const db = firestoreDb;
 
 // Safe Storage initialization
 let storageInstance: any = null;
@@ -32,3 +58,4 @@ export const storage = storageInstance;
 // Note: If Firebase Storage is unavailable or lacks permission, 
 // we will fallback gracefully to base64 images to avoid runtime blocking.
 export default app;
+

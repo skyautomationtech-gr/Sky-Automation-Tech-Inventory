@@ -143,7 +143,7 @@ export default function UserManagement({ user }: UserManagementProps) {
   const [statusFilter, setStatusFilter] = useState<string>('all');
 
   useEffect(() => {
-    deleteSokolDemoData().then(() => fetchUsersList());
+    setLoading(true);
     const unsub = subscribeToUsers((list) => {
       setUsers(list || []);
       setLoading(false);

@@ -282,7 +282,8 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
   };
 
   useEffect(() => {
-    loadFinancialData();
+    setLoading(true);
+    getStockLogs().then(logs => setStockLogs(logs || [])).catch(() => {});
     const unsubExp = subscribeToExpenses((allExpenses) => {
       setExpenses(allExpenses || []);
       setLoading(false);
