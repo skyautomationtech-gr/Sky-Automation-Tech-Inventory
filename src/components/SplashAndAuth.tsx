@@ -17,6 +17,7 @@ import { auth as firebaseAuth } from '../firebase/config';
 import { sendOTPEmail } from '../lib/emailjs';
 import { UserProfile, UserRole } from '../types';
 import { ShieldCheck, Mail, Lock, User, KeyRound, Sparkles, Send, CheckCircle2, Phone, Camera, Briefcase, Calendar, MapPin, CreditCard, Building2 } from 'lucide-react';
+import { PWAInstallButton } from './PWAInstallButton';
 
 interface SplashAndAuthProps {
   onAuthSuccess: (user: UserProfile) => void;
@@ -507,6 +508,11 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
   return (
     <div className="min-h-screen bg-slate-950 flex flex-col justify-center py-12 px-4 sm:px-6 lg:px-8 relative overflow-hidden">
       <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-[500px] h-[500px] bg-amber-400/5 rounded-full blur-3xl pointer-events-none" />
+
+      {/* Top right PWA install button */}
+      <div className="absolute top-4 right-4 z-20">
+        <PWAInstallButton variant="compact" />
+      </div>
 
       <div className={`sm:mx-auto sm:w-full transition-all duration-300 relative z-10 ${!isLogin && !isForgotPassword && !signupSuccess ? 'sm:max-w-xl' : 'sm:max-w-md'}`}>
         <div className="flex justify-center mb-4">

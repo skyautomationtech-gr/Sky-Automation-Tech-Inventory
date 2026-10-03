@@ -1,0 +1,76 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="100%" height="100%">
+  <defs>
+    <linearGradient id="bg-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#0f172a" />
+      <stop offset="50%" stop-color="#1e293b" />
+      <stop offset="100%" stop-color="#090d16" />
+    </linearGradient>
+    <linearGradient id="blue-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#38bdf8" />
+      <stop offset="50%" stop-color="#2563eb" />
+      <stop offset="100%" stop-color="#1d4ed8" />
+    </linearGradient>
+    <linearGradient id="cyan-glow" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#67e8f9" />
+      <stop offset="100%" stop-color="#0284c7" />
+    </linearGradient>
+    <filter id="glow" x="-20%" y="-20%" width="140%" height="140%">
+      <feGaussianBlur stdDeviation="12" result="blur" />
+      <feComposite in="SourceGraphic" in2="blur" operator="over" />
+    </filter>
+  </defs>
+
+  <!-- Background Base -->
+  <rect width="512" height="512" rx="112" fill="url(#bg-grad)" />
+  
+  <!-- Outer subtle tech ring -->
+  <circle cx="256" cy="256" r="210" fill="none" stroke="#38bdf8" stroke-width="3" stroke-opacity="0.25" stroke-dasharray="8 6" />
+  <circle cx="256" cy="256" r="185" fill="none" stroke="#2563eb" stroke-width="2" stroke-opacity="0.3" />
+
+  <!-- Shield / Hexagon Shape -->
+  <path d="M 256 90 L 380 155 L 380 290 Q 380 380 256 425 Q 132 380 132 290 L 132 155 Z" 
+        fill="url(#blue-grad)" 
+        filter="url(#glow)" 
+        opacity="0.95" />
+
+  <!-- Inner Contrast Shield -->
+  <path d="M 256 115 L 358 170 L 358 285 Q 358 358 256 398 Q 154 358 154 285 L 154 170 Z" 
+        fill="#0f172a" 
+        opacity="0.85" />
+
+  <!-- Circuit nodes -->
+  <circle cx="256" cy="150" r="7" fill="#38bdf8" />
+  <line x1="256" y1="150" x2="256" y2="195" stroke="#38bdf8" stroke-width="4" />
+
+  <!-- Monogram SAT / Automation Tech Symbol -->
+  <g transform="translate(160, 195)">
+    <!-- Letter S -->
+    <path d="M 50 15 C 30 15, 15 28, 15 45 C 15 65, 45 70, 55 80 C 65 90, 60 105, 45 105 C 28 105, 18 92, 16 82" 
+          fill="none" stroke="#38bdf8" stroke-width="12" stroke-linecap="round" stroke-linejoin="round" />
+
+    <!-- Letter A / Automation Pyramid -->
+    <path d="M 96 105 L 115 15 L 134 105" 
+          fill="none" stroke="#ffffff" stroke-width="12" stroke-linecap="round" stroke-linejoin="round" />
+    <line x1="102" y1="75" x2="128" y2="75" stroke="#38bdf8" stroke-width="10" stroke-linecap="round" />
+
+    <!-- Letter T -->
+    <line x1="155" y1="15" x2="195" y2="15" stroke="#38bdf8" stroke-width="12" stroke-linecap="round" />
+    <line x1="175" y1="15" x2="175" y2="105" stroke="#38bdf8" stroke-width="12" stroke-linecap="round" />
+  </g>
+
+  <!-- Sky Automation Tech Text Badge -->
+  <text x="256" y="352" 
+        text-anchor="middle" 
+        fill="#38bdf8" 
+        font-family="system-ui, -apple-system, sans-serif" 
+        font-size="22" 
+        font-weight="800" 
+        letter-spacing="4">SKY AUTOMATION</text>
+  <text x="256" y="375" 
+        text-anchor="middle" 
+        fill="#94a3b8" 
+        font-family="system-ui, -apple-system, sans-serif" 
+        font-size="14" 
+        font-weight="600" 
+        letter-spacing="6">INVENTORY</text>
+</svg>

@@ -21,6 +21,7 @@ import {
   Activity
 } from 'lucide-react';
 import { UserProfile } from '../types';
+import { PWAInstallButton } from './PWAInstallButton';
 
 interface SidebarProps {
   currentTab: string;
@@ -191,6 +192,10 @@ export default function Sidebar({
                 {user?.role === 'superadmin' ? 'Super Admin' : user?.role === 'admin' ? 'Administrator' : 'Staff Access'}
               </span>
             </div>
+          </div>
+
+          <div className="mb-3">
+            <PWAInstallButton variant="sidebar" />
           </div>
 
           <button
