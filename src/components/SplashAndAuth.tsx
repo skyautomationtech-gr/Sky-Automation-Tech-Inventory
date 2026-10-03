@@ -23,7 +23,13 @@ interface SplashAndAuthProps {
 }
 
 export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
-  const [showSplash, setShowSplash] = useState(true);
+  const [showSplash, setShowSplash] = useState(() => {
+    try {
+      return !sessionStorage.getItem('sat_splash_seen');
+    } catch {
+      return true;
+    }
+  });
   const [isLogin, setIsLogin] = useState(true);
   const [isForgotPassword, setIsForgotPassword] = useState(false);
   
@@ -87,6 +93,9 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
   useEffect(() => {
     const timer = setTimeout(() => {
       setShowSplash(false);
+      try {
+        sessionStorage.setItem('sat_splash_seen', 'true');
+      } catch (e) {}
     }, 3200);
     return () => clearTimeout(timer);
   }, []);
@@ -376,12 +385,25 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
       try {
         const currentUser = firebaseAuth.currentUser;
         let profile = await getUserProfile(tempUserId);
+        if (!profile && currentUser?.email) {
+          profile = await findUserProfileByEmail(currentUser.email);
+        }
+        if (!profile && email) {
+          profile = await findUserProfileByEmail(email.toLowerCase().trim());
+        }
         if (!profile) {
           await signOut(firebaseAuth);
           setError('This account is not registered in the system. Please contact your Super Admin.');
           setLoading(false);
           return;
         }
+
+        try {
+          sessionStorage.setItem('sat_otp_verified', 'true');
+          localStorage.setItem('sat_otp_verified', 'true');
+          localStorage.setItem('sat_user_session', JSON.stringify(profile));
+        } catch (e) {}
+
         if (profile.role === 'staff') {
           try {
             const { deleteDoc, doc } = await import('firebase/firestore');
@@ -462,7 +484,12 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
 
         <div className="w-full max-w-xs space-y-4">
           <button
-            onClick={() => setShowSplash(false)}
+            onClick={() => {
+              setShowSplash(false);
+              try {
+                sessionStorage.setItem('sat_splash_seen', 'true');
+              } catch (e) {}
+            }}
             className="w-full bg-amber-400 hover:bg-amber-500 text-slate-950 font-bold py-3.5 px-6 rounded-2xl transition-all duration-200 transform active:scale-95 shadow-[0_4px_20px_rgba(251,191,36,0.3)] font-sans text-sm"
           >
             Launch System Console

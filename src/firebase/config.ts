@@ -1,5 +1,10 @@
 import { initializeApp, getApps, getApp } from 'firebase/app';
-import { getAuth } from 'firebase/auth';
+import { 
+  getAuth, 
+  setPersistence, 
+  browserLocalPersistence, 
+  indexedDBLocalPersistence 
+} from 'firebase/auth';
 import { 
   initializeFirestore, 
   persistentLocalCache, 
@@ -22,6 +27,19 @@ const firebaseConfig = {
 // Initialize Firebase
 const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
 export const auth = getAuth(app);
+
+// Explicitly ensure robust local session persistence across reloads & iframes
+try {
+  setPersistence(auth, indexedDBLocalPersistence).catch(() => {
+    setPersistence(auth, browserLocalPersistence).catch(err => {
+      console.warn("Auth persistence setup error:", err);
+    });
+  });
+} catch (err) {
+  try {
+    setPersistence(auth, browserLocalPersistence).catch(() => {});
+  } catch (e) {}
+}
 
 const DB_NAME = "ai-studio-6630a5d3-18da-424e-ba5b-db65e1dcfa41";
 

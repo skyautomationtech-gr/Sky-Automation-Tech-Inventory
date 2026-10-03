@@ -3,6 +3,8 @@ import { onAuthStateChanged, signOut, EmailAuthProvider, reauthenticateWithCrede
 import { auth } from './firebase/config';
 import { 
   getUserProfile, 
+  findUserProfileByEmail,
+  createUserProfile,
   initializeUser,
   getCompanySettings, 
   getProducts, 
@@ -138,9 +140,27 @@ const MOCK_BRANDS: Brand[] = [
   { id: 'b-5', name: 'Baseus' }
 ];
 
+// Helper to restore verified user session across page reloads
+const getSavedUserSession = (): UserProfile | null => {
+  if (typeof window === 'undefined') return null;
+  try {
+    const isOtp = localStorage.getItem('sat_otp_verified') === 'true' || sessionStorage.getItem('sat_otp_verified') === 'true';
+    if (!isOtp) return null;
+    const sessionStr = localStorage.getItem('sat_user_session');
+    if (!sessionStr) return null;
+    const parsed = JSON.parse(sessionStr);
+    if (parsed && (parsed.id || parsed.email)) {
+      return parsed as UserProfile;
+    }
+    return null;
+  } catch {
+    return null;
+  }
+};
+
 export default function App() {
-  const [user, setUser] = useState<UserProfile | null>(null);
-  const [authChecking, setAuthChecking] = useState(true);
+  const [user, setUser] = useState<UserProfile | null>(() => getSavedUserSession());
+  const [authChecking, setAuthChecking] = useState<boolean>(() => !getSavedUserSession());
   const [isQuotaExceeded, setIsQuotaExceeded] = useState(false);
   const [isOfflineDemoMode, setIsOfflineDemoMode] = useState(false);
 
@@ -311,20 +331,59 @@ export default function App() {
 
   useEffect(() => {
     console.log('App: Setting up onAuthStateChanged listener...');
+    let isMounted = true;
+
+    // Pre-load company settings immediately if an active session is already restored
+    const initialSaved = getSavedUserSession();
+    if (initialSaved) {
+      getCompanySettings().then((settings) => {
+        if (!isMounted) return;
+        if (settings && settings.onboarded) {
+          setCompanySettings(settings);
+          setIsOnboarding(false);
+        }
+      }).catch((err) => {
+        console.warn("Could not pre-fetch company settings:", err);
+      });
+    }
+
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       console.log('App: onAuthStateChanged triggered. User:', firebaseUser ? firebaseUser.uid : 'null');
+      if (!isMounted) return;
+
       try {
         if (firebaseUser) {
-          // Logged In
+          // Logged In via Firebase Auth
           console.log('App: Fetching user profile for UID:', firebaseUser.uid);
           let profile = await getUserProfile(firebaseUser.uid);
           
+          // Fallback: If not found by UID, search by email to resolve legacy/migrated IDs
+          if (!profile && firebaseUser.email) {
+            console.log('App: Profile not found by UID, searching by email:', firebaseUser.email);
+            profile = await findUserProfileByEmail(firebaseUser.email);
+            if (profile && profile.id !== firebaseUser.uid) {
+              // Self-heal: link document to firebaseUser.uid
+              try {
+                await createUserProfile(firebaseUser.uid, { ...profile, id: firebaseUser.uid });
+              } catch (e) {
+                console.warn('Could not self-heal profile UID:', e);
+              }
+            }
+          }
+
+          // Fallback 2: Check local session cache if Firestore read failed or throttled
+          if (!profile) {
+            const saved = getSavedUserSession();
+            if (saved && (saved.id === firebaseUser.uid || saved.email === firebaseUser.email)) {
+              profile = saved;
+            }
+          }
+
           if (profile) {
             // Safety Check: Suspended Account
             if (profile.active === false && profile.role !== 'superadmin') {
               console.warn('App: Attempted access by suspended account:', profile.email);
-              await auth.signOut();
-              setUser(null);
+              await handleLogout();
               return;
             }
 
@@ -336,11 +395,17 @@ export default function App() {
             if (!isOtpVerified) {
               console.log('App: User signed in to Firebase Auth, but OTP is not verified yet. Waiting for OTP challenge in SplashAndAuth...');
               setUser(null);
+              setAuthChecking(false);
               return;
             }
 
             console.log('App: User session established:', profile.email, `[${profile.role}]`);
             setUser(profile);
+            try {
+              sessionStorage.setItem('sat_otp_verified', 'true');
+              localStorage.setItem('sat_otp_verified', 'true');
+              localStorage.setItem('sat_user_session', JSON.stringify(profile));
+            } catch (e) {}
             
             // Check onboarding
             try {
@@ -358,16 +423,59 @@ export default function App() {
               throw settingsErr;
             }
           } else {
-            // If no profile found, do NOT sign out automatically.
-            // Let SplashAndAuth or onboarding wizards handle their own state,
-            // otherwise self-healing and first-time setups would fail.
-            setUser(null);
+            // No profile found in Firestore or cache
+            const saved = getSavedUserSession();
+            if (saved) {
+              setUser(saved);
+            } else {
+              setUser(null);
+            }
           }
         } else {
-          // Signed out
-          setUser(null);
-          setCompanySettings(null);
-          setIsOnboarding(false);
+          // Firebase Auth user is null.
+          // Check if there is a verified local session (e.g. custom password, offline, or session restored across refresh)
+          const savedSession = getSavedUserSession();
+          if (savedSession) {
+            console.log('App: Firebase Auth user is null, but verified local session found for:', savedSession.email);
+            // Verify in background that the account is still valid and not suspended
+            try {
+              let verifiedProfile = await getUserProfile(savedSession.id);
+              if (!verifiedProfile && savedSession.email) {
+                verifiedProfile = await findUserProfileByEmail(savedSession.email);
+              }
+              if (verifiedProfile) {
+                if (verifiedProfile.active === false && verifiedProfile.role !== 'superadmin') {
+                  console.warn('App: Local session user has been suspended in Firestore:', verifiedProfile.email);
+                  await handleLogout();
+                  return;
+                }
+                setUser(verifiedProfile);
+                try {
+                  localStorage.setItem('sat_user_session', JSON.stringify(verifiedProfile));
+                } catch (e) {}
+              } else {
+                // Keep the savedSession if Firestore read was empty or offline
+                setUser(savedSession);
+              }
+
+              // Load company settings
+              try {
+                const settings = await getCompanySettings();
+                if (settings && settings.onboarded) {
+                  setCompanySettings(settings);
+                  setIsOnboarding(false);
+                }
+              } catch (e) {}
+            } catch (verifyErr) {
+              console.warn('App: Background verification failed, using saved session:', verifyErr);
+              setUser(savedSession);
+            }
+          } else {
+            // No local session either - truly signed out
+            setUser(null);
+            setCompanySettings(null);
+            setIsOnboarding(false);
+          }
         }
       } catch (err: any) {
         if (checkIfQuotaError(err)) {
@@ -376,13 +484,24 @@ export default function App() {
         } else {
           console.error('Error in onAuthStateChanged:', err);
         }
-        setUser(null);
+        // Don't wipe session on transient error if saved session exists
+        const saved = getSavedUserSession();
+        if (saved) {
+          setUser(saved);
+        } else {
+          setUser(null);
+        }
       } finally {
-        setAuthChecking(false);
+        if (isMounted) {
+          setAuthChecking(false);
+        }
       }
     });
 
-    return () => unsubscribe();
+    return () => {
+      isMounted = false;
+      unsubscribe();
+    };
   }, []);
 
   // Fetch application data
@@ -417,8 +536,16 @@ export default function App() {
   const refreshUserProfile = async () => {
     if (user?.id) {
       try {
-        const profile = await getUserProfile(user.id);
-        if (profile) setUser(profile);
+        let profile = await getUserProfile(user.id);
+        if (!profile && user.email) {
+          profile = await findUserProfileByEmail(user.email);
+        }
+        if (profile) {
+          setUser(profile);
+          try {
+            localStorage.setItem('sat_user_session', JSON.stringify(profile));
+          } catch (e) {}
+        }
       } catch (error: any) {
         if (checkIfQuotaError(error)) {
           setIsQuotaExceeded(true);
@@ -466,6 +593,7 @@ export default function App() {
     try {
       sessionStorage.setItem('sat_otp_verified', 'true');
       localStorage.setItem('sat_otp_verified', 'true');
+      localStorage.setItem('sat_user_session', JSON.stringify(profile));
     } catch (e) {}
     setUser(profile);
     try {
@@ -496,8 +624,12 @@ export default function App() {
     try {
       sessionStorage.removeItem('sat_otp_verified');
       localStorage.removeItem('sat_otp_verified');
+      localStorage.removeItem('sat_user_session');
+      localStorage.removeItem('sat_active_uid');
     } catch (e) {}
-    await signOut(auth);
+    try {
+      await signOut(auth);
+    } catch (e) {}
     setUser(null);
     setCompanySettings(null);
     setIsOnboarding(false);
