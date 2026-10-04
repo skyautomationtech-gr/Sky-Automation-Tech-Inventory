@@ -125,10 +125,10 @@ export default function Sidebar({
                       setIsOpen(false);
                     }}
                     title={item.name}
-                    className={`w-full flex items-center justify-center lg:justify-start gap-3 px-3 py-3 lg:py-2 rounded-xl lg:rounded-lg transition-all duration-200 font-sans text-sm ${
+                    className={`w-full flex items-center justify-center lg:justify-start gap-3 px-3 py-3 lg:py-2 rounded-xl lg:rounded-lg transition-colors font-sans text-sm cursor-pointer ${
                       isActive 
-                        ? 'bg-slate-900 text-[#D4AF37] font-bold border-l-2 border-[#D4AF37] lg:pl-2' 
-                        : 'text-slate-400 hover:bg-slate-900 hover:text-slate-100'
+                        ? 'bg-slate-900 text-[#D4AF37] font-bold border-l-2 border-[#D4AF37]' 
+                        : 'text-slate-400 hover:bg-slate-900 hover:text-slate-100 border-l-2 border-transparent'
                     }`}
                   >
                     <Icon size={isActive ? 20 : 18} className={`${isActive ? "text-[#D4AF37]" : "text-slate-400"} lg:size-4`} />
