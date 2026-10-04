@@ -1997,6 +1997,41 @@ export async function getAllAttendanceRecords(dateFilter?: string, userIdFilter?
   }
 }
 
+export async function cleanupOldAttendanceRecords(retentionDays: number = 30): Promise<{ deletedCount: number }> {
+  const cutoffTimestamp = Date.now() - (retentionDays * 24 * 60 * 60 * 1000);
+  let deletedCount = 0;
+
+  try {
+    const colRef = collection(db, 'attendance');
+    const snapshot = await getDocs(colRef);
+    let batch = writeBatch(db);
+    let count = 0;
+
+    for (const docSnap of snapshot.docs) {
+      const data = docSnap.data();
+      const checkInTime = data.checkInTime || 0;
+      if (checkInTime < cutoffTimestamp) {
+        batch.delete(docSnap.ref);
+        deletedCount++;
+        count++;
+        if (count === 400) {
+          await batch.commit();
+          batch = writeBatch(db);
+          count = 0;
+        }
+      }
+    }
+
+    if (count > 0) {
+      await batch.commit();
+    }
+    return { deletedCount };
+  } catch (err) {
+    console.warn('cleanupOldAttendanceRecords error:', err);
+    return { deletedCount: 0 };
+  }
+}
+
 export async function deleteSokolDemoData(): Promise<void> {
   // Guard: Only run once per session to avoid reading all categories, brands, and products on every navigation
   try {
@@ -2218,6 +2253,49 @@ export async function deleteCustomer(id: string): Promise<void> {
     localStore.set('customers', cached.filter(c => c.id !== id));
   } catch (error) {
     handleFirestoreError(error, OperationType.DELETE, 'customers/' + id);
+  }
+}
+
+export async function cleanupOldCustomers(retentionDays: number = 30): Promise<{ deletedCount: number }> {
+  dbCache.customers = null;
+  const cutoffTimestamp = Date.now() - (retentionDays * 24 * 60 * 60 * 1000);
+  let deletedCount = 0;
+
+  try {
+    const colRef = collection(db, 'customers');
+    const snapshot = await getDocs(colRef);
+    let batch = writeBatch(db);
+    let count = 0;
+
+    for (const docSnap of snapshot.docs) {
+      const data = docSnap.data() as Customer;
+      const createdAt = data.createdAt || 0;
+      if (createdAt < cutoffTimestamp) {
+        batch.delete(docSnap.ref);
+        deletedCount++;
+        count++;
+        if (count === 400) {
+          await batch.commit();
+          batch = writeBatch(db);
+          count = 0;
+        }
+      }
+    }
+
+    if (count > 0) {
+      await batch.commit();
+    }
+
+    const cached = localStore.get<Customer[]>('customers') || [];
+    localStore.set('customers', cached.filter(c => (c.createdAt || 0) >= cutoffTimestamp));
+    return { deletedCount };
+  } catch (err) {
+    console.warn('cleanupOldCustomers error:', err);
+    const cached = localStore.get<Customer[]>('customers') || [];
+    const remaining = cached.filter(c => (c.createdAt || 0) >= cutoffTimestamp);
+    deletedCount = cached.length - remaining.length;
+    localStore.set('customers', remaining);
+    return { deletedCount };
   }
 }
 
