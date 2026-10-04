@@ -625,16 +625,6 @@ export default function DashboardView({
         </div>
       )}
 
-      {/* Dynamic Header Row */}
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-2 border-b border-slate-200">
-        <div>
-          <span className="text-sm font-mono font-bold text-amber-500 uppercase tracking-widest">
-            OPERATIONAL HUD
-          </span>
-          <h2 className="text-xl font-bold text-slate-900 mt-1">Management Dashboard</h2>
-        </div>
-      </div>
-
       {/* Global Search and Scan Bar */}
       <div className="relative z-40 flex flex-col md:flex-row items-center gap-3">
         <div className="relative w-full">
