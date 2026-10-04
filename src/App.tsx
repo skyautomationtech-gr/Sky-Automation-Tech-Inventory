@@ -1052,14 +1052,14 @@ export default function App() {
       />
 
       {/* Main Content Workspace */}
-      <div className="flex-1 flex flex-col h-full min-h-0 min-w-0 max-w-full overflow-hidden">
+      <div className="flex-1 flex flex-col h-full min-h-0 min-w-0 max-w-full overflow-hidden bg-slate-50">
         
-        {/* Top Header Bar - Mobile/Tablet Only */}
+        {/* Top Header Bar - Mobile/Tablet Only (Fixed) */}
         <header className="lg:hidden fixed top-0 left-0 right-0 h-16 bg-slate-950 border-b border-slate-800 z-30 px-4 flex items-center justify-between">
           <div className="flex items-center gap-3">
             <button
               onClick={() => setIsSidebarOpen(true)}
-              className="p-2 text-slate-400 hover:text-white"
+              className="p-2 text-slate-400 hover:text-white cursor-pointer"
             >
               <Menu size={20} />
             </button>
@@ -1088,26 +1088,27 @@ export default function App() {
           </div>
         </header>
 
-        <main className="flex-1 overflow-y-auto overflow-x-hidden p-3 sm:p-4 md:p-6 lg:p-8 pt-20 lg:pt-8 bg-slate-50 w-full max-w-full min-w-0">
-          
-          {/* Desktop Header Bar */}
-          <div className="hidden lg:flex items-center justify-between pb-6 mb-6 border-b border-slate-200/80">
-            <div>
-              <div className="text-xs font-mono font-bold text-amber-600 uppercase tracking-widest">
-                {companySettings?.companyName || 'Sky Automation Tech'} Platform
-              </div>
-              <h2 className="text-xl font-black text-slate-900 capitalize">
-                {currentTab.replace('_', ' ')}
-              </h2>
+        {/* Permanent Desktop Top Header Bar (Fixed at the Top) */}
+        <header className="hidden lg:flex items-center justify-between px-8 py-3.5 bg-white/95 backdrop-blur-md border-b border-slate-200/90 z-20 shrink-0 shadow-2xs">
+          <div>
+            <div className="text-[11px] font-mono font-bold text-amber-600 uppercase tracking-widest">
+              {companySettings?.companyName || 'Sky Automation Tech'} Platform
             </div>
-
-            <div className="flex items-center gap-3">
-              {/* Glassmorphic Live Time & Date HUD */}
-              <LiveClockWidget variant="header" />
-              
-              <NotificationCenter user={user} products={products} onNavigate={navigateToTab} />
-            </div>
+            <h2 className="text-xl font-black text-slate-900 capitalize tracking-tight mt-0.5">
+              {currentTab.replace('_', ' ')}
+            </h2>
           </div>
+
+          <div className="flex items-center gap-3.5">
+            {/* Glassmorphic Live Time & Date HUD */}
+            <LiveClockWidget variant="header" />
+            
+            <NotificationCenter user={user} products={products} onNavigate={navigateToTab} />
+          </div>
+        </header>
+
+        {/* Scrollable Main Workspace */}
+        <main className="flex-1 overflow-y-auto overflow-x-hidden p-3 sm:p-4 md:p-6 lg:p-8 pt-20 lg:pt-6 bg-slate-50 w-full max-w-full min-w-0">
           
           {/* Offline Mode Banner */}
           {isOfflineDemoMode && (

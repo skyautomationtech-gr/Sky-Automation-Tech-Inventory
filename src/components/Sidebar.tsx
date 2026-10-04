@@ -7,18 +7,17 @@ import {
   LogOut, 
   Menu, 
   X, 
-  ShieldCheck, 
-  UserCircle,
-  Users,
-  ShoppingBag,
-  Contact,
-  Receipt,
-  Coins,
-  MessageSquare,
-  DollarSign,
-  Truck,
-  BarChart3,
-  Activity
+  ShieldCheck,
+  Users, 
+  ShoppingBag, 
+  Contact, 
+  Receipt, 
+  Coins, 
+  MessageSquare, 
+  DollarSign, 
+  Truck, 
+  BarChart3, 
+  Activity 
 } from 'lucide-react';
 import { UserProfile } from '../types';
 
@@ -174,32 +173,13 @@ export default function Sidebar({
 
         {/* User Info & Actions */}
         <div className="p-3 lg:p-4 border-t border-slate-800 bg-slate-900/20 shrink-0">
-          <div className="flex items-center justify-center lg:justify-start gap-3 mb-4 p-2 rounded-xl lg:rounded-lg bg-slate-900/40 border border-slate-800">
-            <div className="text-[#D4AF37] flex-shrink-0">
-              {user?.role === 'admin' ? <ShieldCheck size={28} className="lg:size-8" /> : <UserCircle size={28} className="lg:size-8" />}
-            </div>
-            <div className="hidden lg:block min-w-0 flex-1">
-              <h2 className="text-sm font-bold text-slate-100 truncate">{user?.name || 'Staff User'}</h2>
-              <p className="text-sm text-slate-400 truncate font-mono">{user?.email}</p>
-              <span className={`inline-block text-[9px] font-mono uppercase px-1.5 py-0.5 rounded-sm mt-1 font-bold ${
-                user?.role === 'superadmin' 
-                  ? 'bg-amber-500/10 text-amber-500 border border-amber-500/20'
-                  : user?.role === 'admin' 
-                    ? 'bg-[#D4AF37]/10 text-[#D4AF37] border border-[#D4AF37]/20' 
-                    : 'bg-[#008080]/10 text-teal-300 border border-[#008080]/20'
-              }`}>
-                {user?.role === 'superadmin' ? 'Super Admin' : user?.role === 'admin' ? 'Administrator' : 'Staff Access'}
-              </span>
-            </div>
-          </div>
-
           <button
             onClick={onLogout}
             title="Logout"
-            className="w-full flex items-center justify-center gap-2 px-3 py-3 lg:py-2 rounded-xl lg:rounded-lg border border-slate-800 hover:border-red-500/30 text-slate-400 hover:text-red-400 hover:bg-red-500/5 transition-all duration-200 font-sans text-sm"
+            className="w-full flex items-center justify-center gap-2 px-3 py-3 lg:py-2.5 rounded-xl lg:rounded-lg border border-slate-800 hover:border-red-500/30 text-slate-400 hover:text-red-400 hover:bg-red-500/5 transition-all duration-200 font-sans text-sm cursor-pointer"
           >
-            <LogOut size={16} className="lg:size-3.5" />
-            <span className="hidden lg:block">Logout System</span>
+            <LogOut size={16} className="lg:size-4" />
+            <span className="hidden lg:block font-medium">Logout System</span>
           </button>
         </div>
       </aside>
