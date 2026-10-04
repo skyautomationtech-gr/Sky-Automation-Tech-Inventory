@@ -85,7 +85,6 @@ import CompanySettingsView from './components/CompanySettingsView';
 import NotificationCenter from './components/NotificationCenter';
 import { PublicInvoiceVerification } from './components/PublicInvoiceVerification';
 import ErrorBoundary from './components/ErrorBoundary';
-import { PWAInstallButton } from './components/PWAInstallButton';
 import { OfflineIndicator } from './components/OfflineIndicator';
 
 // Mock/Fallback Data in case of Firestore permission/network errors
@@ -1083,7 +1082,6 @@ export default function App() {
             {dataLoading && (
               <div className="w-2 h-2 bg-amber-400 rounded-full animate-ping" />
             )}
-            <PWAInstallButton variant="compact" />
             <NotificationCenter user={user} products={products} onNavigate={navigateToTab} />
             <div className="w-8 h-8 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-amber-500 font-bold text-sm">
               {user?.name?.charAt(0) || 'U'}
@@ -1105,7 +1103,6 @@ export default function App() {
             </div>
 
             <div className="flex items-center gap-4">
-              <PWAInstallButton variant="compact" />
               <NotificationCenter user={user} products={products} onNavigate={navigateToTab} />
               <div className="flex items-center gap-3 pl-4 border-l border-slate-200">
                 <div className="w-9 h-9 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-center text-amber-400 font-bold text-sm shadow-xs">
