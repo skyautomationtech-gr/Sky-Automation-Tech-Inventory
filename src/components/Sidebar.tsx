@@ -82,12 +82,12 @@ export default function Sidebar({
       {/* Sidebar container */}
       <aside className={`
         fixed inset-y-0 left-0 z-40 bg-slate-950 text-slate-100 flex flex-col justify-between
-        border-r border-slate-800 transition-all duration-300 ease-in-out
+        border-r border-slate-800 transition-transform duration-300 ease-in-out
         ${isOpen ? 'translate-x-0 w-64 shadow-2xl' : '-translate-x-full lg:translate-x-0'}
-        lg:sticky lg:top-0 lg:h-screen lg:w-64 lg:flex-shrink-0
+        lg:static lg:top-0 lg:h-screen lg:w-64 lg:shrink-0 lg:flex-none
       `}>
         {/* Brand Header */}
-        <div className="p-4 lg:p-6 border-b border-slate-800 flex items-center justify-center lg:justify-start">
+        <div className="p-4 lg:p-6 border-b border-slate-800 flex items-center justify-center lg:justify-start shrink-0">
           <div className="flex items-center gap-3">
             <img 
               src={logoUrl || "/sat_logo.jpg"} 
@@ -110,7 +110,7 @@ export default function Sidebar({
         </div>
 
         {/* Navigation Menu */}
-        <div className="flex-1 px-3 lg:px-4 py-6 space-y-6 overflow-y-auto overflow-x-hidden">
+        <div className="flex-1 px-3 lg:px-4 py-4 space-y-4 overflow-y-auto overflow-x-hidden min-h-0">
           <div>
             <div className="hidden lg:block text-sm uppercase text-slate-500 font-bold tracking-widest px-2 mb-2">Main Menu</div>
             <nav className="space-y-1.5 lg:space-y-1">
@@ -174,7 +174,7 @@ export default function Sidebar({
         </div>
 
         {/* User Info & Actions */}
-        <div className="p-3 lg:p-4 border-t border-slate-800 bg-slate-900/20">
+        <div className="p-3 lg:p-4 border-t border-slate-800 bg-slate-900/20 shrink-0">
           <div className="flex items-center justify-center lg:justify-start gap-3 mb-4 p-2 rounded-xl lg:rounded-lg bg-slate-900/40 border border-slate-800">
             <div className="text-[#D4AF37] flex-shrink-0">
               {user?.role === 'admin' ? <ShieldCheck size={28} className="lg:size-8" /> : <UserCircle size={28} className="lg:size-8" />}
