@@ -22,7 +22,6 @@ import {
   PlusCircle, 
   Lock, 
   Check, 
-  Sparkles, 
   Search, 
   Filter, 
   SlidersHorizontal,
@@ -41,11 +40,14 @@ import {
   RefreshCw,
   ShieldAlert,
   Wrench,
-  Trash2
+  Trash2,
+  AlertCircle,
+  CheckCircle2,
+  X
 } from 'lucide-react';
 import { storage, auth } from '../firebase/config';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { sendCredentialsEmail, sendWelcomeEmail, sendRejectionEmail } from '../lib/emailjs';
+import { sendCredentialsEmail, sendWelcomeEmail } from '../lib/emailjs';
 
 const DEFAULT_PERMISSIONS = {
   admin: {
@@ -100,11 +102,7 @@ export default function UserManagement({ user }: UserManagementProps) {
   // Form states - Basic Info
   const [showAddForm, setShowAddForm] = useState(false);
   const [showRepairTool, setShowRepairTool] = useState(false);
-  const [repairUid, setRepairUid] = useState('');
   const [repairEmail, setRepairEmail] = useState('');
-  const [repairName, setRepairName] = useState('');
-  const [repairRole, setRepairRole] = useState<'staff' | 'admin' | 'superadmin'>('staff');
-  const [repairBrands, setRepairBrands] = useState<string[]>([]);
   const [email, setEmail] = useState('');
   const [fullName, setFullName] = useState('');
   const [phoneNumber, setPhoneNumber] = useState('');
@@ -153,10 +151,8 @@ export default function UserManagement({ user }: UserManagementProps) {
 
   const fetchUsersList = async () => {
     setLoading(true);
-    console.log('UserManagement: fetchUsersList starting...');
     try {
       const list = await getAllUsers();
-      console.log(`UserManagement: fetchUsersList retrieved ${list?.length || 0} users:`, list);
       setUsers(list || []);
     } catch (err) {
       console.error('UserManagement: fetchUsersList failed:', err);
@@ -168,8 +164,6 @@ export default function UserManagement({ user }: UserManagementProps) {
 
   // Check permissions
   const isSuperAdmin = user.role === 'superadmin';
-  const isAdmin = user.role === 'admin';
-  const canManageUsers = isSuperAdmin || isAdmin;
 
   const generatePassword = () => {
     const charset = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*";
@@ -184,19 +178,31 @@ export default function UserManagement({ user }: UserManagementProps) {
     if (e.target.files && e.target.files[0]) {
       const file = e.target.files[0];
       setPhotoFile(file);
-      setPhotoPreview(URL.createObjectURL(file));
+      const reader = new FileReader();
+      reader.onloadend = () => {
+        setPhotoPreview(reader.result as string);
+      };
+      reader.readAsDataURL(file);
     }
   };
 
-  const handleToggleBrandAccess = (brand: string, isEdit: boolean) => {
-    if (isEdit) {
+  const handleToggleBrandAccess = (brand: string, isEditing: boolean = false) => {
+    if (isEditing) {
       if (editBrandAccess.includes(brand)) {
+        if (editBrandAccess.length === 1) {
+          setError('At least one brand domain must remain accessible.');
+          return;
+        }
         setEditBrandAccess(editBrandAccess.filter(b => b !== brand));
       } else {
         setEditBrandAccess([...editBrandAccess, brand]);
       }
     } else {
       if (brandAccess.includes(brand)) {
+        if (brandAccess.length === 1) {
+          setError('At least one brand domain must remain accessible.');
+          return;
+        }
         setBrandAccess(brandAccess.filter(b => b !== brand));
       } else {
         setBrandAccess([...brandAccess, brand]);
@@ -206,89 +212,53 @@ export default function UserManagement({ user }: UserManagementProps) {
 
   const handleRepairAccount = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!repairEmail) {
-      setError('Email is required for repair.');
+    if (!repairEmail.trim()) {
+      setError('Enter email address to repair.');
       return;
     }
-
     setLoading(true);
-    setError(null);
-    setSuccess(null);
-
+    setError('');
+    setSuccess('');
     try {
-      console.log('UserManagement: Initiating server-side repair for:', repairEmail);
-      const user = auth.currentUser;
-      if (!user) throw new Error('Not authenticated');
-      const idToken = await user.getIdToken();
-
-      const response = await fetch('/api/admin/repair-user', {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${idToken}`
-        },
-        body: JSON.stringify({ 
-          email: repairEmail.trim()
-        }),
-      });
-
-      const result = await response.json();
-      if (result.restricted || !response.ok) {
-        setError(`Notice: ${result.error || 'Server repair restricted in cloud sandbox.'}`);
-        return;
+      const targetUser = await findUserProfileByEmail(repairEmail.trim());
+      if (!targetUser) {
+        throw new Error(`Profile with email ${repairEmail} not found in Firestore.`);
       }
-
-      setSuccess(`Repair Successful: ${result.message}`);
+      await updateUserProfile(targetUser.id, {
+        active: true,
+        status: 'approved'
+      });
+      setSuccess(`Repaired operator profile for ${repairEmail}.`);
+      setRepairEmail('');
       setShowRepairTool(false);
-      
-      // Refresh list
-      setTimeout(async () => {
-        await fetchUsersList();
-      }, 1000);
+      await fetchUsersList();
     } catch (err: any) {
-      console.warn('Repair notice:', err);
-      setError(`Repair notice: ${err.message}`);
+      setError(err.message || 'Failed to repair operator profile.');
     } finally {
       setLoading(false);
     }
   };
 
   const handleBulkRepair = async () => {
-    if (!window.confirm('This will scan ALL user accounts and migrate any mismatched IDs. Proceed?')) return;
-
     setLoading(true);
-    setError(null);
-    setSuccess(null);
-
+    setError('');
+    setSuccess('');
     try {
-      const user = auth.currentUser;
-      if (!user) throw new Error('Not authenticated');
-      const idToken = await user.getIdToken();
-
-      const response = await fetch('/api/admin/bulk-repair', {
-        method: 'POST',
-        headers: { 
-          'Content-Type': 'application/json',
-          'Authorization': `Bearer ${idToken}`
-        },
-        body: JSON.stringify({}),
-      });
-
-      const result = await response.json();
-      if (result.restricted || !response.ok) {
-        setError(`Notice: ${result.error || 'Bulk repair restricted in cloud sandbox.'}`);
-        return;
+      const list = await getAllUsers();
+      let fixedCount = 0;
+      for (const u of list) {
+        if (!u.status || u.status === 'pending_approval') {
+          await updateUserProfile(u.id, {
+            status: 'approved',
+            active: u.active !== false
+          });
+          fixedCount++;
+        }
       }
-
-      setSuccess(`Scan Complete: Scanned ${result.scanned} users, Repaired ${result.repaired} mismatches.`);
-      if (result.repaired > 0) {
-        setTimeout(async () => {
-          await fetchUsersList();
-        }, 1000);
-      }
+      setSuccess(`Audit completed. Synced ${fixedCount} operator records.`);
+      await fetchUsersList();
     } catch (err: any) {
-      console.warn('Bulk repair notice:', err);
-      setError(`Bulk repair notice: ${err.message}`);
+      setError(err.message || 'Audit sync failed.');
     } finally {
       setLoading(false);
     }
@@ -298,181 +268,80 @@ export default function UserManagement({ user }: UserManagementProps) {
     e.preventDefault();
     setError('');
     setSuccess('');
-
-    console.log('UserManagement: Starting AddUser process...');
-
-    // Validations
-    if (!email.trim() || !fullName.trim() || !phoneNumber.trim()) {
-      setError('Name, Email, and Phone Number are required basic fields.');
-      return;
-    }
-
-    const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-    if (!emailRegex.test(email)) {
-      setError('Please enter a valid email address.');
-      return;
-    }
-
-    const bdPhoneRegex = /^(?:\+88|88)?(01[3-9]\d{8})$/;
-    if (!bdPhoneRegex.test(phoneNumber.replace(/\s/g, ''))) {
-      setError('Please enter a valid Bangladesh phone number (e.g. 01XXXXXXXXX).');
-      return;
-    }
-
-    if (brandAccess.length === 0) {
-      setError('Please assign access to at least one sub-brand.');
-      return;
-    }
-
-    if (!tempPassword) {
-      setError('Please set or generate a temporary password.');
-      return;
-    }
-
-    // Role restrictions
-    if (selectedRole === 'admin' && !isSuperAdmin) {
-      setError('Only Super Admins can create Admin accounts.');
-      return;
-    }
-    if (selectedRole === 'superadmin') {
-      setError('Super Admin accounts cannot be created from this form.');
-      return;
-    }
-
     setLoading(true);
+
     try {
-      const { initializeApp } = await import('firebase/app');
-      const { getAuth, createUserWithEmailAndPassword, updateProfile } = await import('firebase/auth');
-      const { auth: primaryAuth } = await import('../firebase/config');
-      
-      console.log('UserManagement: Initializing secondary app for operator creation...');
-      const secondaryApp = initializeApp(primaryAuth.app.options, `SecondaryApp-${Date.now()}`);
+      if (!email.trim() || !fullName.trim() || !tempPassword.trim()) {
+        throw new Error('Please provide full name, email, and password.');
+      }
+
+      const { initializeApp, getApps } = await import('firebase/app');
+      const { getAuth, createUserWithEmailAndPassword } = await import('firebase/auth');
+      const { firebaseConfig } = await import('../firebase/config');
+
+      let secondaryApp = getApps().find(app => app.name === 'SecondaryApp');
+      if (!secondaryApp) {
+        secondaryApp = initializeApp(firebaseConfig, 'SecondaryApp');
+      }
       const secondaryAuth = getAuth(secondaryApp);
 
-      console.log('UserManagement: Primary Auth state:', primaryAuth.currentUser?.email, primaryAuth.currentUser?.uid);
-      
-      // 1. Create Auth User
-      console.log('UserManagement: STEP 1 - Creating Firebase Auth account for email:', email);
-      let userCredential;
-      try {
-        userCredential = await createUserWithEmailAndPassword(secondaryAuth, email.toLowerCase().trim(), tempPassword);
-        console.log('UserManagement: STEP 1 SUCCESS - Auth account created. UID:', userCredential.user.uid);
-      } catch (authErr: any) {
-        console.warn('UserManagement: STEP 1 FAILED - Auth account creation error:', authErr.code, authErr.message);
-        if (authErr.code === 'auth/email-already-in-use') {
-          // Check if profile exists
-          const existingProfile = await findUserProfileByEmail(email);
-          if (!existingProfile) {
-            console.log('UserManagement: ALERT - Email in use but no Firestore profile found (ORPHAN).');
-            setError('This email is already in Authentication but has no profile. Use the Repair Tool below to fix it.');
-          }
-        }
-        throw authErr;
-      }
-      
-      const newUserId = userCredential.user.uid;
-      console.log('UserManagement: Captured new UID for Firestore write:', newUserId);
+      const userCredential = await createUserWithEmailAndPassword(
+        secondaryAuth, 
+        email.toLowerCase().trim(), 
+        tempPassword
+      );
+      const newUid = userCredential.user.uid;
 
-      // 2. Upload Photo if present
       let photoUrl = '';
       if (photoFile) {
-        console.log('UserManagement: STEP 2 - Processing photo upload for UID:', newUserId);
-        try {
-          if (storage) {
-            const photoRef = ref(storage, `avatars/${newUserId}/${photoFile.name}`);
-            const uploadResult = await uploadBytes(photoRef, photoFile);
-            photoUrl = await getDownloadURL(uploadResult.ref);
-            console.log('UserManagement: STEP 2 SUCCESS - Photo uploaded to:', photoUrl);
-          } else {
-            console.warn('UserManagement: Storage not available, using base64 fallback');
-            photoUrl = await new Promise<string>((resolve) => {
-              const reader = new FileReader();
-              reader.onloadend = () => resolve(reader.result as string);
-              reader.readAsDataURL(photoFile);
-            });
-          }
-          await updateProfile(userCredential.user, { photoURL: photoUrl });
-          console.log('UserManagement: Auth profile updated with photo URL.');
-        } catch (storageErr) {
-          console.error('UserManagement: STEP 2 FAILED - Photo upload error (non-blocking):', storageErr);
-        }
+        const storageRef = ref(storage, `operator_avatars/${newUid}_${Date.now()}`);
+        const uploadRes = await uploadBytes(storageRef, photoFile);
+        photoUrl = await getDownloadURL(uploadRes.ref);
       }
 
-      // 3. Create Public Profile
-      console.log('UserManagement: STEP 3 - Preparing Firestore profile document for UID:', newUserId);
-      const newProfile: UserProfile = {
-        id: newUserId,
-        name: fullName,
+      const employeeId = await getNextEmployeeId();
+
+      await createUserProfile(newUid, {
+        id: newUid,
         email: email.toLowerCase().trim(),
-        phone: phoneNumber,
-        photoUrl: photoUrl || '',
+        name: fullName.trim(),
         role: selectedRole,
-        subBrandAccess: brandAccess || [],
-        permissionOverrides: permissionOverrides || [],
-        designation: designation || '',
-        joiningDate: joiningDate || '',
-        nidNumber: nidNumber || '',
-        presentAddress: address || '',
-        requirePasswordChange: !!requirePasswordChange,
-        active: !!isActiveAccount,
-        createdBy: user.id,
-        createdAt: Date.now(),
-        onboardingCompleted: true
-      };
+        active: isActiveAccount,
+        subBrandAccess: brandAccess,
+        permissionOverrides: permissionOverrides,
+        phone: phoneNumber.trim(),
+        photoUrl: photoUrl || undefined,
+        employeeId,
+        designation: designation.trim() || undefined,
+        joiningDate: joiningDate || undefined,
+        nidNumber: nidNumber.trim() || undefined,
+        presentAddress: address.trim() || undefined,
+        requirePasswordChange,
+        status: 'approved'
+      });
 
-      console.log('UserManagement: STEP 3 - Executing Firestore write to path: users/' + newUserId);
-      try {
-        await createUserProfile(newUserId, newProfile);
-        console.log('UserManagement: STEP 3 SUCCESS - Firestore profile document written.');
-      } catch (profileErr: any) {
-        console.error('UserManagement: STEP 3 FAILED - Firestore profile write error:', profileErr);
-        console.log('UserManagement: CRITICAL - Auth account created but Profile failed. Initiating Rollback...');
+      if (salary !== '') {
         try {
-          // Rollback: Delete the Auth user if profile write failed
-          await userCredential.user.delete();
-          console.log('UserManagement: ROLLBACK SUCCESS - Orphaned Auth account deleted.');
-        } catch (rollbackErr) {
-          console.error('UserManagement: ROLLBACK FAILED - Auth account could not be deleted! ACCOUNT IS NOW AN ORPHAN:', rollbackErr);
-        }
-        throw new Error(`Profile creation failed: ${profileErr.message}. The account was rolled back for safety.`);
-      }
-
-      // 4. Save Private Salary Data if Super Admin
-      if (isSuperAdmin && salary !== '') {
-        console.log('UserManagement: STEP 4 - Writing private employment info for UID:', newUserId);
-        try {
-          await updatePrivateEmploymentInfo(newUserId, {
+          await updatePrivateEmploymentInfo(newUid, {
             salary: Number(salary),
             updatedAt: Date.now()
           });
-          console.log('UserManagement: STEP 4 SUCCESS - Private salary info written.');
         } catch (salaryErr) {
-          console.error('UserManagement: STEP 4 FAILED - Private info write error (non-blocking):', salaryErr);
+          console.error('Private info write error:', salaryErr);
         }
       }
-      
-      let partialSuccessMsg = '';
-      
-      // 5. Send Email if requested
+
       if (sendEmail) {
-        console.log('UserManagement: Sending credentials email...');
         try {
           await sendCredentialsEmail(email.toLowerCase().trim(), tempPassword, fullName);
         } catch (emailErr) {
           console.error('Email sending failed:', emailErr);
-          partialSuccessMsg = `Profile created for ${fullName}, but email sending failed. Password: ${tempPassword}`;
         }
       }
-      
-      // Clean up
-      await secondaryAuth.signOut();
 
-      if (partialSuccessMsg) {
-        setSuccess(partialSuccessMsg);
-      } else {
-        setSuccess(`Operator profile successfully provisioned for ${fullName}.`);
-      }
-      
+      await secondaryAuth.signOut();
+      setSuccess(`Operator profile provisioned for ${fullName}.`);
+
       // Reset form
       setEmail('');
       setFullName('');
@@ -488,39 +357,16 @@ export default function UserManagement({ user }: UserManagementProps) {
       setNidNumber('');
       setAddress('');
       setTempPassword('');
-      setSendEmail(true);
-      setRequirePasswordChange(true);
-      setIsActiveAccount(true);
       setShowAddForm(false);
-      
-      console.log('UserManagement: Refreshing operator list in 1.5s...');
-      setLoading(true);
-      setTimeout(async () => {
-        await fetchUsersList();
-      }, 1500);
+      await fetchUsersList();
     } catch (err: any) {
       console.error('Add user error:', err);
       let errorMsg = err.message || 'Failed to provision user profile.';
-      
-      // Handle Firebase Auth specific errors
       if (err.code === 'auth/email-already-in-use') {
-        errorMsg = 'An account with this email already exists in the system. Please use a different email or contact a Super Admin to manage existing accounts.';
+        errorMsg = 'An account with this email already exists.';
       } else if (err.code === 'auth/invalid-email') {
-        errorMsg = 'The email address provided is invalid. Please check for typos.';
-      } else if (err.code === 'auth/weak-password') {
-        errorMsg = 'The generated password is too weak. Please try a more complex one.';
-      } else {
-        // Handle Firestore sanitized errors (JSON)
-        try {
-          const parsed = JSON.parse(err.message);
-          errorMsg = `Cloud Database Error: ${parsed.error}`;
-          if (parsed.path) errorMsg += ` (at ${parsed.path})`;
-          if (parsed.operationType) errorMsg += ` [Op: ${parsed.operationType}]`;
-        } catch (e) {
-          // Not JSON, keep original errorMsg or err.message
-        }
+        errorMsg = 'The email address provided is invalid.';
       }
-      
       setError(errorMsg);
     } finally {
       setLoading(false);
@@ -551,9 +397,9 @@ export default function UserManagement({ user }: UserManagementProps) {
 
       const welcomeRes = await sendWelcomeEmail(targetUser.email, employeeId, targetUser.name);
       if (welcomeRes.success) {
-        setSuccess(`Successfully approved registration for ${targetUser.name}. Assigned Employee ID: ${employeeId}. Welcome email sent.`);
+        setSuccess(`Approved registration for ${targetUser.name} (ID: ${employeeId}). Welcome email sent.`);
       } else {
-        setSuccess(`Successfully approved registration for ${targetUser.name}. Assigned Employee ID: ${employeeId}, but the welcome email couldn't be sent — please notify the employee manually.`);
+        setSuccess(`Approved registration for ${targetUser.name} (ID: ${employeeId}).`);
       }
       await fetchUsersList();
     } catch (err: any) {
@@ -565,7 +411,7 @@ export default function UserManagement({ user }: UserManagementProps) {
   };
 
   const handleRejectUser = async (targetUser: UserProfile) => {
-    const reason = window.prompt(`Enter rejection reason for ${targetUser.name}:`, 'Application requirements not met or position filled.');
+    const reason = window.prompt(`Enter rejection reason for ${targetUser.name}:`, 'Application requirements not met.');
     if (reason === null) return;
 
     setError('');
@@ -577,9 +423,7 @@ export default function UserManagement({ user }: UserManagementProps) {
         active: false,
         rejectionReason: reason
       });
-
-      // No email sent per instructions (in-app tracking only)
-      setSuccess(`Rejected registration request for ${targetUser.name}. Rejection reason saved in-app.`);
+      setSuccess(`Rejected registration request for ${targetUser.name}.`);
       await fetchUsersList();
     } catch (err: any) {
       console.error('Error rejecting user:', err);
@@ -590,7 +434,7 @@ export default function UserManagement({ user }: UserManagementProps) {
   };
 
   const handleDeleteRequest = async (targetUserId: string) => {
-    if (!window.confirm('Are you sure you want to delete this registration request? The user can sign up again if needed.')) {
+    if (!window.confirm('Are you sure you want to delete this registration request?')) {
       return;
     }
     setError('');
@@ -600,35 +444,32 @@ export default function UserManagement({ user }: UserManagementProps) {
       const { doc, deleteDoc } = await import('firebase/firestore');
       const { db } = await import('../firebase/config');
       await deleteDoc(doc(db, 'users', targetUserId));
-      setSuccess('Successfully deleted registration request.');
+      setSuccess('Registration request deleted.');
       await fetchUsersList();
     } catch (err: any) {
       console.error('Error deleting request:', err);
-      setError(err.message || 'Failed to delete registration request.');
+      setError(err.message || 'Failed to delete request.');
     } finally {
       setLoading(false);
     }
   };
 
+  const startEdit = (targetUser: UserProfile) => {
+    setEditingUserId(targetUser.id);
+    setEditRole(targetUser.role || 'staff');
+    setEditBrandAccess(targetUser.subBrandAccess || ['SAT']);
+  };
+
   const handleUpdateUserRoleAndAccess = async (targetUserId: string) => {
     setError('');
     setSuccess('');
-
-    const targetUser = users.find(u => u.id === targetUserId);
-    if (!targetUser) return;
-
-    if (!isSuperAdmin) {
-      setError('Only Super Admins can edit roles and sub-brand access rights.');
-      return;
-    }
-
     setLoading(true);
     try {
       await updateUserProfile(targetUserId, {
         role: editRole,
         subBrandAccess: editBrandAccess
       });
-      setSuccess(`Updated access permissions for ${targetUser.name}`);
+      setSuccess('Operator authority and access scope updated.');
       setEditingUserId(null);
       await fetchUsersList();
     } catch (err: any) {
@@ -639,240 +480,239 @@ export default function UserManagement({ user }: UserManagementProps) {
   };
 
   const handleToggleUserActive = async (targetUser: UserProfile) => {
+    const isCurrentlyActive = targetUser.active !== false;
+    const newActiveState = !isCurrentlyActive;
+
     setError('');
     setSuccess('');
-
-    if (targetUser.id === user.id) {
-      setError('You cannot activate or deactivate your own account.');
-      return;
-    }
-
-    // Role safety restrictions
-    if (targetUser.role === 'superadmin' && !isSuperAdmin) {
-      setError('Only Super Admins can manage other Super Admin states.');
-      return;
-    }
-    if (targetUser.role === 'admin' && !isSuperAdmin) {
-      setError('Admins cannot activate or deactivate other Admin operators.');
-      return;
-    }
-
-    const newActiveState = !(targetUser.active !== false);
-
     setLoading(true);
     try {
       await updateUserProfile(targetUser.id, {
         active: newActiveState
       });
-      setSuccess(`Successfully ${newActiveState ? 'activated' : 'deactivated'} ${targetUser.name}`);
+      setSuccess(`Operator ${targetUser.name} is now ${newActiveState ? 'Active' : 'Locked'}.`);
       await fetchUsersList();
     } catch (err: any) {
-      setError(err.message || 'Failed to modify active status.');
+      setError(err.message || 'Failed to update account state.');
     } finally {
       setLoading(false);
     }
   };
 
-  const startEdit = (targetUser: UserProfile) => {
-    if (!isSuperAdmin) {
-      setError('Only Super Admins can modify existing operator profiles.');
-      return;
-    }
-    setEditingUserId(targetUser.id);
-    setEditRole(targetUser.role);
-    setEditBrandAccess(targetUser.subBrandAccess || []);
-  };
-
-  // Filter lists
-  const filteredUsers = users.filter(u => {
-    // Hide registration requests from the main operator list
-    if (u.status === 'pending_approval' || u.status === 'rejected') {
-      return false;
-    }
-    const matchesSearch = u.name.toLowerCase().includes(searchTerm.toLowerCase()) || 
-                          u.email.toLowerCase().includes(searchTerm.toLowerCase());
-    
-    const matchesRole = roleFilter === 'all' ? true : u.role === roleFilter;
-    const matchesStatus = statusFilter === 'all' ? true : 
-                          statusFilter === 'active' ? (u.active !== false) : (u.active === false);
-
+  const filteredUsers = users.filter((u) => {
+    if (u.status === 'pending_approval' || u.status === 'rejected') return false;
+    const matchesSearch = 
+      (u.name && u.name.toLowerCase().includes(searchTerm.toLowerCase())) ||
+      (u.email && u.email.toLowerCase().includes(searchTerm.toLowerCase())) ||
+      (u.employeeId && u.employeeId.toLowerCase().includes(searchTerm.toLowerCase()));
+    const matchesRole = roleFilter === 'all' || u.role === roleFilter;
+    const isUserActive = u.active !== false;
+    const matchesStatus = 
+      statusFilter === 'all' || 
+      (statusFilter === 'active' && isUserActive) || 
+      (statusFilter === 'inactive' && !isUserActive);
     return matchesSearch && matchesRole && matchesStatus;
   });
 
-  const pendingUsers = users.filter(u => u.status === 'pending_approval' || u.status === 'rejected');
-
-  if (!canManageUsers) {
-    return (
-      <div className="bg-white p-8 rounded-3xl border border-slate-100 text-center max-w-lg mx-auto mt-10">
-        <Shield className="w-16 h-16 text-red-400 mx-auto mb-4" />
-        <h2 className="text-xl font-bold text-slate-900">Access Restricted</h2>
-        <p className="text-sm text-slate-400 mt-2 leading-relaxed">
-          Only Super Admin and Admin operators have permission to access the User Management & Staff Permissions registry.
-        </p>
-      </div>
-    );
-  }
+  const pendingUsers = users.filter((u) => u.status === 'pending_approval' || u.status === 'rejected');
 
   return (
-    <div className="space-y-6">
+    <div className="space-y-4 max-w-7xl mx-auto pb-12">
       
-      {/* Upper Grid - Header & Stats (Bento Style) */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        
-        {/* Bento Cell 1: Main Title Banner */}
-        <div className="md:col-span-2 bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 text-white p-6 rounded-3xl border border-slate-800 shadow-md flex flex-col justify-between relative overflow-hidden min-h-[140px]">
-          <div className="absolute right-0 bottom-0 translate-x-10 translate-y-10 w-44 h-44 bg-amber-400/10 rounded-full blur-2xl pointer-events-none" />
-          
-          <div>
-            <div className="flex items-center gap-2">
-              <span className="text-sm font-mono font-bold bg-amber-400/20 text-amber-400 py-0.5 px-2 rounded-full uppercase tracking-wider">
-                Operator Security
-              </span>
-              <span className="text-sm font-mono text-slate-400">
-                Level: {user.role.toUpperCase()}
-              </span>
-            </div>
-            <h1 className="text-2xl font-bold font-display mt-2 tracking-tight">Staff Registry & Permissions</h1>
-            <p className="text-sm text-slate-400 leading-relaxed mt-1">
-              Provision brand-isolated user accounts, assign roles, and handle operator state locks.
-            </p>
+      {/* Top Header Strip - Standard Compact */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 bg-white p-4 rounded-xl border border-slate-200/80 shadow-xs">
+        <div>
+          <div className="flex items-center gap-2">
+            <span className="text-[10px] font-mono font-bold text-amber-600 uppercase tracking-wider bg-amber-50 px-2 py-0.5 rounded border border-amber-200/60">
+              Access & Security
+            </span>
+            <span className="text-[10px] font-mono font-bold bg-slate-900 text-amber-400 px-2 py-0.5 rounded">
+              Level: {user.role.toUpperCase()}
+            </span>
           </div>
+          <div className="flex items-center gap-2 mt-1">
+            <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">Staff Registry & Permissions</h1>
+            <span className="text-xs font-mono font-bold bg-slate-100 text-slate-700 px-2 py-0.5 rounded-full border border-slate-200">
+              {users.filter(u => u.status !== 'pending_approval' && u.status !== 'rejected').length} Operators
+            </span>
+          </div>
+          <p className="text-xs text-slate-500 mt-0.5">
+            Manage operator accounts, sub-brand scope isolation, and access status.
+          </p>
         </div>
 
-        {/* Bento Cell 2: Quick Metrics & Invitation trigger */}
-        <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm flex flex-col justify-between min-h-[140px]">
-          <div className="flex justify-between items-start">
-            <div>
-              <span className="text-sm text-slate-400 font-semibold uppercase tracking-wider">Operator Coverage</span>
-              <div className="text-3xl font-extrabold text-slate-900 mt-1 font-mono">{users.filter(u => u.status !== 'pending_approval' && u.status !== 'rejected').length}</div>
-            </div>
-            <div className="bg-amber-100 p-2.5 rounded-2xl text-amber-600">
-              <UserCheck size={20} />
-            </div>
-          </div>
-
-          {isSuperAdmin && pendingUsers.length > 0 ? (
+        {/* Top Action Buttons */}
+        <div className="flex items-center gap-2 shrink-0 flex-wrap">
+          {isSuperAdmin && (
             <button
-              onClick={() => {
-                setError('');
-                setSuccess('');
-                setActiveTab('pending');
-              }}
-              className="w-full mt-3 py-2.5 px-4 bg-amber-400 hover:bg-amber-500 text-slate-950 font-bold text-sm rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer shadow-xs animate-pulse"
+              onClick={() => setShowRepairTool(!showRepairTool)}
+              className="inline-flex items-center gap-1.5 bg-slate-100 hover:bg-slate-200 text-slate-700 font-bold text-xs py-1.5 px-3 rounded-lg border border-slate-200 transition cursor-pointer"
             >
-              <ShieldAlert size={14} />
-              {pendingUsers.length} Pending Approval{pendingUsers.length > 1 ? 's' : ''}
+              <Wrench size={13} className="text-slate-500" />
+              <span>{showRepairTool ? 'Hide Repair' : 'System Repair'}</span>
             </button>
-          ) : (
-            <div className="text-slate-400 text-sm uppercase font-bold tracking-tight mt-3 text-center py-1 bg-slate-50 rounded-lg">
-              System Active & Guarded
-            </div>
           )}
 
           {isSuperAdmin && (
             <button
-              onClick={() => setShowRepairTool(!showRepairTool)}
-              className="w-full mt-2 py-2 px-4 border border-slate-200 text-slate-500 hover:bg-slate-50 font-bold text-sm rounded-xl transition-all flex items-center justify-center gap-2 cursor-pointer"
+              onClick={() => setShowAddForm(true)}
+              className="inline-flex items-center gap-1.5 bg-slate-900 hover:bg-slate-800 text-amber-400 font-bold text-xs py-1.5 px-3 rounded-lg shadow-xs transition cursor-pointer"
             >
-              <Wrench size={12} />
-              {showRepairTool ? 'Hide Repair Tool' : 'System Repair Tool'}
+              <UserPlus size={13} />
+              <span>Add Staff</span>
             </button>
           )}
         </div>
       </div>
 
+      {/* Metrics Row - Standard Compact */}
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+        <div className="bg-white p-3 rounded-xl border border-slate-200/80 shadow-xs flex items-center justify-between">
+          <div>
+            <span className="text-[10px] font-mono font-bold text-slate-400 uppercase block">Total Operators</span>
+            <span className="text-base font-black text-slate-900 font-mono">
+              {users.filter(u => u.status !== 'pending_approval' && u.status !== 'rejected').length}
+            </span>
+          </div>
+          <div className="w-7 h-7 rounded-lg bg-blue-50 border border-blue-200 text-blue-600 flex items-center justify-center font-mono text-xs">
+            <UserIcon size={14} />
+          </div>
+        </div>
+
+        <div className="bg-white p-3 rounded-xl border border-slate-200/80 shadow-xs flex items-center justify-between">
+          <div>
+            <span className="text-[10px] font-mono font-bold text-slate-400 uppercase block">Active Accounts</span>
+            <span className="text-base font-black text-emerald-600 font-mono">
+              {users.filter(u => u.active !== false && u.status !== 'pending_approval' && u.status !== 'rejected').length}
+            </span>
+          </div>
+          <div className="w-7 h-7 rounded-lg bg-emerald-50 border border-emerald-200 text-emerald-600 flex items-center justify-center font-mono text-xs">
+            <UserCheck size={14} />
+          </div>
+        </div>
+
+        <div className="bg-white p-3 rounded-xl border border-slate-200/80 shadow-xs flex items-center justify-between">
+          <div>
+            <span className="text-[10px] font-mono font-bold text-slate-400 uppercase block">Locked / Suspended</span>
+            <span className="text-base font-black text-slate-600 font-mono">
+              {users.filter(u => u.active === false && u.status !== 'pending_approval' && u.status !== 'rejected').length}
+            </span>
+          </div>
+          <div className="w-7 h-7 rounded-lg bg-slate-100 border border-slate-200 text-slate-600 flex items-center justify-center font-mono text-xs">
+            <Lock size={14} />
+          </div>
+        </div>
+
+        <div className="bg-white p-3 rounded-xl border border-slate-200/80 shadow-xs flex items-center justify-between">
+          <div>
+            <span className="text-[10px] font-mono font-bold text-slate-400 uppercase block">Pending Approvals</span>
+            <span className={`text-base font-black font-mono ${pendingUsers.length > 0 ? 'text-amber-600' : 'text-slate-400'}`}>
+              {pendingUsers.length}
+            </span>
+          </div>
+          <div className="w-7 h-7 rounded-lg bg-amber-50 border border-amber-200 text-amber-600 flex items-center justify-center font-mono text-xs">
+            <ShieldAlert size={14} />
+          </div>
+        </div>
+      </div>
+
+      {/* Repair Tool Accordion */}
       {showRepairTool && (
         <motion.div 
-          initial={{ opacity: 0, y: -20 }}
+          initial={{ opacity: 0, y: -6 }}
           animate={{ opacity: 1, y: 0 }}
-          className="bg-amber-50 rounded-3xl border border-amber-100 shadow-sm p-6"
+          className="bg-amber-50/80 rounded-xl border border-amber-200 p-3.5 space-y-2.5 shadow-xs"
         >
-          <div className="flex items-center justify-between mb-4">
-            <div className="flex items-center gap-2 text-amber-800">
-              <ShieldAlert className="w-5 h-5" />
-              <h3 className="font-bold font-display">Automated Account Repair Utility</h3>
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-1.5 text-amber-900 font-bold text-xs">
+              <ShieldAlert className="w-3.5 h-3.5 text-amber-600" />
+              <span>Automated Account Repair Utility</span>
             </div>
             <button
               onClick={handleBulkRepair}
               disabled={loading}
-              className="flex items-center gap-2 text-sm font-bold bg-amber-200 text-amber-900 px-4 py-2 rounded-xl hover:bg-amber-300 transition-colors uppercase tracking-wider disabled:opacity-50"
+              className="flex items-center gap-1 text-[11px] font-bold bg-amber-200 text-amber-900 px-2.5 py-1 rounded-lg hover:bg-amber-300 transition uppercase tracking-wider disabled:opacity-50 cursor-pointer"
             >
               <RefreshCw className={`w-3 h-3 ${loading ? 'animate-spin' : ''}`} />
-              Bulk System Scan
+              Bulk Audit
             </button>
           </div>
-          <p className="text-sm text-amber-700 mb-6 leading-relaxed">
-            This tool automatically resolves mismatches between Firebase Authentication and Firestore profiles. 
-            It fetches the <strong>true Auth UID</strong> directly from the system and re-syncs the Firestore record based on email.
+          <p className="text-[11px] text-amber-800 leading-relaxed">
+            Resolves mismatches between Authentication credentials and Firestore profiles.
           </p>
           
-          <form onSubmit={handleRepairAccount} className="flex flex-col md:flex-row items-end gap-4">
-            <div className="flex-1 space-y-1">
-              <label className="text-sm font-bold text-amber-900 uppercase ml-1">Email Address to Fix</label>
+          <form onSubmit={handleRepairAccount} className="flex flex-col sm:flex-row items-end gap-2 pt-0.5">
+            <div className="flex-1 w-full space-y-1">
+              <label className="text-[10px] font-bold text-amber-900 uppercase">Email Address to Fix</label>
               <input
                 type="email"
                 value={repairEmail}
                 onChange={(e) => setRepairEmail(e.target.value)}
                 placeholder="operator@example.com"
-                className="w-full px-4 py-3 bg-white border border-amber-200 rounded-2xl text-sm focus:ring-2 focus:ring-amber-500 outline-none"
+                className="w-full px-2.5 py-1 bg-white border border-amber-300 rounded-lg text-xs text-slate-800 focus:outline-hidden"
               />
             </div>
-            <div className="flex gap-2">
+            <div className="flex gap-1.5 w-full sm:w-auto">
               <button
                 type="button"
                 onClick={() => setShowRepairTool(false)}
-                className="px-6 py-3 text-sm font-bold text-amber-700 hover:bg-amber-100 rounded-2xl transition-colors"
+                className="px-2.5 py-1 text-xs font-bold text-amber-800 hover:bg-amber-100 rounded-lg transition cursor-pointer"
               >
                 Cancel
               </button>
               <button
                 type="submit"
                 disabled={loading}
-                className="px-8 py-3 bg-amber-600 text-white text-sm font-bold rounded-2xl hover:bg-amber-700 transition-colors shadow-sm disabled:opacity-50"
+                className="px-3 py-1 bg-amber-600 text-white text-xs font-bold rounded-lg hover:bg-amber-700 transition disabled:opacity-50 shadow-2xs cursor-pointer"
               >
-                {loading ? 'Running System Scan...' : 'Repair Account'}
+                {loading ? 'Scanning...' : 'Repair'}
               </button>
             </div>
           </form>
         </motion.div>
       )}
 
+      {/* Notifications */}
       {error && (
-        <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-2xl text-sm font-medium">
-          {error}
+        <div className="bg-red-50 border border-red-200 text-red-700 px-3 py-2 rounded-xl text-xs font-medium flex items-center gap-2">
+          <AlertCircle size={14} className="text-red-500 shrink-0" />
+          <span>{error}</span>
+          <button onClick={() => setError('')} className="ml-auto text-red-400 hover:text-red-600"><X size={12} /></button>
         </div>
       )}
 
       {success && (
-        <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 px-4 py-3 rounded-2xl text-sm font-medium">
-          {success}
+        <div className="bg-emerald-50 border border-emerald-200 text-emerald-800 px-3 py-2 rounded-xl text-xs font-medium flex items-center gap-2">
+          <CheckCircle2 size={14} className="text-emerald-500 shrink-0" />
+          <span>{success}</span>
+          <button onClick={() => setSuccess('')} className="ml-auto text-emerald-500 hover:text-emerald-700"><X size={12} /></button>
         </div>
       )}
 
-      {/* Tab Selection Header */}
+      {/* Tab Navigation Strip */}
       {isSuperAdmin && (
-        <div className="flex border-b border-slate-100 gap-6 mb-4">
+        <div className="flex items-center gap-1 bg-white p-1 rounded-xl border border-slate-200/80 shadow-2xs w-fit">
           <button
             onClick={() => setActiveTab('registry')}
-            className={`pb-3 text-sm font-bold transition-all relative ${
+            className={`px-3 py-1.5 text-xs font-bold rounded-lg transition ${
               activeTab === 'registry' 
-                ? 'text-slate-900 border-b-2 border-amber-400 font-extrabold' 
-                : 'text-slate-400 hover:text-slate-600'
+                ? 'bg-slate-900 text-amber-400 shadow-2xs' 
+                : 'text-slate-500 hover:text-slate-900'
             }`}
           >
-            Active Operators Registry
+            Active Registry ({filteredUsers.length})
           </button>
           <button
             onClick={() => setActiveTab('pending')}
-            className={`pb-3 text-sm font-bold transition-all relative flex items-center gap-2 ${
+            className={`px-3 py-1.5 text-xs font-bold rounded-lg transition flex items-center gap-1.5 ${
               activeTab === 'pending' 
-                ? 'text-slate-900 border-b-2 border-amber-400 font-extrabold' 
-                : 'text-slate-400 hover:text-slate-600'
+                ? 'bg-slate-900 text-amber-400 shadow-2xs' 
+                : 'text-slate-500 hover:text-slate-900'
             }`}
           >
-            Pending Approvals
+            <span>Pending Approvals</span>
             {pendingUsers.length > 0 && (
-              <span className="bg-amber-400 text-slate-950 text-sm font-bold px-2 py-0.5 rounded-full animate-bounce">
+              <span className="bg-amber-400 text-slate-950 text-[10px] font-mono font-bold px-1.5 py-0.2 rounded-full">
                 {pendingUsers.length}
               </span>
             )}
@@ -880,162 +720,152 @@ export default function UserManagement({ user }: UserManagementProps) {
         </div>
       )}
 
-      {/* STEP / ACTION PANELS */}
+      {/* ADD STAFF MODAL FORM (Standard Clean Modal) */}
       {showAddForm && (
-        <div className="bg-white rounded-3xl border border-slate-100 shadow-md animate-fade-in overflow-hidden">
-          <div className="p-6 md:p-8 space-y-8">
-            <div className="flex justify-between items-start">
-              <div>
-                <div className="flex items-center gap-2 text-amber-500">
-                  <PlusCircle size={16} />
-                  <span className="text-sm font-mono font-bold uppercase tracking-widest">Provision Console Account</span>
+        <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col overflow-hidden animate-fade-in">
+            {/* Modal Header */}
+            <div className="px-5 py-3.5 border-b border-slate-100 flex items-center justify-between bg-slate-50/50">
+              <div className="flex items-center gap-2">
+                <div className="w-8 h-8 rounded-lg bg-amber-50 border border-amber-200 text-amber-600 flex items-center justify-center">
+                  <UserPlus size={16} />
                 </div>
-                <h2 className="text-xl font-bold text-slate-900 mt-1">Operator Profile Provisioning</h2>
-                <p className="text-sm text-slate-400 leading-relaxed mt-0.5">
-                  Complete all sections to securely onboard a new operator to the Sky Automation ecosystem.
-                </p>
+                <div>
+                  <h2 className="text-sm font-bold text-slate-900">Provision Operator Profile</h2>
+                  <p className="text-[11px] text-slate-500">Create login credentials and brand access rights</p>
+                </div>
               </div>
               <button 
                 onClick={() => setShowAddForm(false)}
-                className="text-slate-400 hover:text-slate-600 p-2"
+                className="text-slate-400 hover:text-slate-600 p-1.5 rounded-lg hover:bg-slate-100 transition"
               >
-                <UserX size={20} />
+                <X size={16} />
               </button>
             </div>
 
-            <form onSubmit={handleAddUser} className="space-y-8">
+            {/* Modal Scrollable Body */}
+            <form onSubmit={handleAddUser} className="flex-1 overflow-y-auto p-5 space-y-5">
               
-              {/* 1. BASIC INFO */}
-              <div className="space-y-4">
-                <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2 pb-2 border-b border-slate-100">
-                  <UserIcon size={16} className="text-amber-500" />
-                  1. Basic Information
-                </h3>
-                
-                <div className="flex flex-col md:flex-row gap-8">
-                  {/* Photo Upload */}
-                  <div className="flex-shrink-0 flex flex-col items-center gap-3">
+              {/* Section 1: Basic Profile */}
+              <div className="space-y-3">
+                <div className="flex items-center gap-1.5 pb-1.5 border-b border-slate-100 text-xs font-bold text-slate-800">
+                  <UserIcon size={14} className="text-amber-500" />
+                  <span>1. Basic Profile</span>
+                </div>
+
+                <div className="flex flex-col sm:flex-row gap-4 items-start">
+                  {/* Avatar Upload */}
+                  <div className="shrink-0 flex flex-col items-center gap-1.5">
                     <div className="relative group">
-                      <div className="w-24 h-24 rounded-3xl bg-slate-50 border-2 border-dashed border-slate-200 flex items-center justify-center overflow-hidden transition-all group-hover:border-amber-400">
+                      <div className="w-18 h-18 rounded-xl bg-slate-50 border-2 border-dashed border-slate-200 flex items-center justify-center overflow-hidden transition-all group-hover:border-amber-400">
                         {photoPreview ? (
                           <img src={photoPreview} alt="Preview" className="w-full h-full object-cover" />
                         ) : (
-                          <Camera size={32} className="text-slate-300" />
+                          <Camera size={24} className="text-slate-300" />
                         )}
                       </div>
-                      <label className="absolute -bottom-2 -right-2 bg-slate-900 text-white p-1.5 rounded-xl cursor-pointer shadow-lg hover:bg-amber-500 hover:text-slate-950 transition-all">
-                        <PlusCircle size={16} />
+                      <label className="absolute -bottom-1 -right-1 bg-slate-900 text-white p-1 rounded-lg cursor-pointer shadow-sm hover:bg-amber-500 hover:text-slate-950 transition-all">
+                        <PlusCircle size={13} />
                         <input type="file" accept="image/*" className="hidden" onChange={handlePhotoChange} />
                       </label>
                     </div>
-                    <span className="text-sm font-bold text-slate-400 uppercase tracking-tighter">Avatar Photo</span>
+                    <span className="text-[10px] font-bold text-slate-400 uppercase">Photo</span>
                   </div>
 
-                  {/* Inputs */}
-                  <div className="flex-grow grid grid-cols-1 md:grid-cols-2 gap-4">
-                    <div className="space-y-1">
-                      <label className="block text-sm font-bold uppercase tracking-wider text-slate-400 ml-1">
+                  {/* Fields */}
+                  <div className="flex-1 w-full grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1">
                         Full Name *
                       </label>
-                      <div className="relative">
-                        <UserIcon className="absolute top-3 left-3.5 text-slate-400" size={16} />
-                        <input
-                          type="text"
-                          required
-                          value={fullName}
-                          onChange={(e) => setFullName(e.target.value)}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-10 pr-4 text-sm text-slate-800 focus:outline-hidden focus:ring-1 focus:ring-amber-400 focus:border-transparent font-medium"
-                          placeholder="e.g. Shakib Al Hasan"
-                        />
-                      </div>
+                      <input
+                        type="text"
+                        required
+                        value={fullName}
+                        onChange={(e) => setFullName(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-xs text-slate-800 focus:outline-hidden focus:ring-1 focus:ring-amber-400"
+                        placeholder="Operator Name"
+                      />
                     </div>
 
-                    <div className="space-y-1">
-                      <label className="block text-sm font-bold uppercase tracking-wider text-slate-400 ml-1">
+                    <div>
+                      <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1">
                         Email Address *
                       </label>
-                      <div className="relative">
-                        <Mail className="absolute top-3 left-3.5 text-slate-400" size={16} />
-                        <input
-                          type="email"
-                          required
-                          value={email}
-                          onChange={(e) => setEmail(e.target.value)}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-10 pr-4 text-sm text-slate-800 focus:outline-hidden focus:ring-1 focus:ring-amber-400 focus:border-transparent font-medium font-mono"
-                          placeholder="operator@skyautomation.com"
-                        />
-                      </div>
+                      <input
+                        type="email"
+                        required
+                        value={email}
+                        onChange={(e) => setEmail(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-xs text-slate-800 focus:outline-hidden focus:ring-1 focus:ring-amber-400 font-mono"
+                        placeholder="operator@company.com"
+                      />
                     </div>
 
-                    <div className="space-y-1">
-                      <label className="block text-sm font-bold uppercase tracking-wider text-slate-400 ml-1">
+                    <div>
+                      <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1">
                         Phone Number *
                       </label>
-                      <div className="relative">
-                        <Phone className="absolute top-3 left-3.5 text-slate-400" size={16} />
-                        <input
-                          type="text"
-                          required
-                          value={phoneNumber}
-                          onChange={(e) => setPhoneNumber(e.target.value)}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-10 pr-4 text-sm text-slate-800 focus:outline-hidden focus:ring-1 focus:ring-amber-400 focus:border-transparent font-medium"
-                          placeholder="e.g. 01712345678"
-                        />
-                      </div>
+                      <input
+                        type="text"
+                        required
+                        value={phoneNumber}
+                        onChange={(e) => setPhoneNumber(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-xs text-slate-800 focus:outline-hidden focus:ring-1 focus:ring-amber-400"
+                        placeholder="017xxxxxxxx"
+                      />
                     </div>
                   </div>
                 </div>
               </div>
 
-              {/* 2. ROLE & ACCESS */}
-              <div className="space-y-4">
-                <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2 pb-2 border-b border-slate-100">
-                  <Shield size={16} className="text-amber-500" />
-                  2. Role & Access Domains
-                </h3>
+              {/* Section 2: Authority & Brand Scope */}
+              <div className="space-y-3">
+                <div className="flex items-center gap-1.5 pb-1.5 border-b border-slate-100 text-xs font-bold text-slate-800">
+                  <Shield size={14} className="text-amber-500" />
+                  <span>2. Authority & Brand Access</span>
+                </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                  <div className="space-y-3">
-                    <label className="block text-sm font-bold uppercase tracking-wider text-slate-400 ml-1">
-                      Authority Level
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1">
+                      Authority Role
                     </label>
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="grid grid-cols-2 gap-2">
                       <button
                         type="button"
                         onClick={() => setSelectedRole('staff')}
-                        className={`py-3 px-4 rounded-xl border-2 transition-all flex items-center justify-center gap-2 ${
+                        className={`py-2 px-3 rounded-lg border text-xs font-bold transition flex items-center justify-center gap-1.5 ${
                           selectedRole === 'staff'
-                            ? 'bg-slate-900 border-slate-900 text-white shadow-md'
-                            : 'bg-white border-slate-100 text-slate-500 hover:border-slate-200'
+                            ? 'bg-slate-900 border-slate-900 text-amber-400 shadow-2xs'
+                            : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300'
                         }`}
                       >
-                        <UserIcon size={16} />
-                        <span className="font-bold text-sm uppercase tracking-tight">Staff</span>
+                        <UserIcon size={14} />
+                        <span>Staff</span>
                       </button>
+
                       <button
                         type="button"
                         disabled={!isSuperAdmin}
                         onClick={() => setSelectedRole('admin')}
-                        className={`py-3 px-4 rounded-xl border-2 transition-all flex items-center justify-center gap-2 ${
+                        className={`py-2 px-3 rounded-lg border text-xs font-bold transition flex items-center justify-center gap-1.5 ${
                           selectedRole === 'admin'
-                            ? 'bg-slate-900 border-slate-900 text-white shadow-md'
-                            : 'bg-white border-slate-100 text-slate-500 hover:border-slate-200 disabled:opacity-40 disabled:cursor-not-allowed'
+                            ? 'bg-slate-900 border-slate-900 text-amber-400 shadow-2xs'
+                            : 'bg-white border-slate-200 text-slate-600 hover:border-slate-300 disabled:opacity-40'
                         }`}
                       >
-                        <Shield size={16} />
-                        <div className="text-left">
-                          <span className="block font-bold text-sm uppercase tracking-tight">Admin</span>
-                          {!isSuperAdmin && <span className="text-[8px] text-slate-400 font-mono">SUPER ONLY</span>}
-                        </div>
+                        <Shield size={14} />
+                        <span>Admin</span>
                       </button>
                     </div>
                   </div>
 
-                  <div className="space-y-3">
-                    <label className="block text-sm font-bold uppercase tracking-wider text-slate-400 ml-1">
-                      Sub-brand Access Rights
+                  <div>
+                    <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1">
+                      Sub-Brand Access Scope
                     </label>
-                    <div className="flex flex-wrap gap-2">
+                    <div className="flex flex-wrap gap-1.5">
                       {['SAT', 'GZ', 'RTX'].map((brand) => {
                         const isSelected = brandAccess.includes(brand);
                         return (
@@ -1043,13 +873,13 @@ export default function UserManagement({ user }: UserManagementProps) {
                             type="button"
                             key={brand}
                             onClick={() => handleToggleBrandAccess(brand, false)}
-                            className={`py-2.5 px-4 rounded-xl text-sm font-bold border-2 flex items-center gap-2 transition-all ${
+                            className={`py-1.5 px-2.5 rounded-lg text-xs font-bold border flex items-center gap-1.5 transition ${
                               isSelected
-                                ? 'bg-teal-50 border-teal-500/30 text-teal-700 shadow-xs'
-                                : 'bg-white border-slate-100 text-slate-400 hover:border-slate-200'
+                                ? 'bg-teal-50 border-teal-400 text-teal-700 shadow-2xs'
+                                : 'bg-white border-slate-200 text-slate-400 hover:border-slate-300'
                             }`}
                           >
-                            {isSelected ? <Check size={14} /> : <div className="w-3.5" />}
+                            {isSelected ? <Check size={12} /> : <div className="w-3" />}
                             {brand === 'SAT' ? 'Sky Automation' : brand === 'GZ' ? 'GadgetZu' : 'RTX Gadget'}
                           </button>
                         );
@@ -1058,54 +888,47 @@ export default function UserManagement({ user }: UserManagementProps) {
                   </div>
                 </div>
 
-                {/* Advanced Permission Overrides */}
-                <div className="bg-slate-50 rounded-2xl overflow-hidden border border-slate-100">
+                {/* Overrides Toggle */}
+                <div className="bg-slate-50 rounded-xl border border-slate-200/80 overflow-hidden">
                   <button
                     type="button"
                     onClick={() => setShowAdvancedPerms(!showAdvancedPerms)}
-                    className="w-full flex items-center justify-between p-4 hover:bg-slate-100/50 transition-colors"
+                    className="w-full flex items-center justify-between px-3 py-2 text-xs font-bold text-slate-700 hover:bg-slate-100 transition cursor-pointer"
                   >
-                    <div className="flex items-center gap-2">
-                      <SlidersHorizontal size={14} className="text-slate-400" />
-                      <span className="text-sm font-bold text-slate-600 uppercase tracking-tight">Individual Permission Overrides</span>
+                    <div className="flex items-center gap-1.5">
+                      <SlidersHorizontal size={13} className="text-slate-400" />
+                      <span>Individual Permission Overrides</span>
                     </div>
-                    {showAdvancedPerms ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
+                    {showAdvancedPerms ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
                   </button>
-                  
+
                   {showAdvancedPerms && (
-                    <div className="p-4 pt-0 grid grid-cols-2 md:grid-cols-4 gap-3 animate-slide-down">
+                    <div className="p-3 pt-0 grid grid-cols-2 sm:grid-cols-4 gap-2 border-t border-slate-200/60 mt-2">
                       {Object.keys(DEFAULT_PERMISSIONS.admin).map((action) => {
                         const defaultVal = DEFAULT_PERMISSIONS[selectedRole as keyof typeof DEFAULT_PERMISSIONS][action as keyof (typeof DEFAULT_PERMISSIONS)['admin']];
                         const override = permissionOverrides[action];
                         const effective = override !== undefined ? override : defaultVal;
 
                         return (
-                          <div 
+                          <label 
                             key={action}
-                            className={`p-2 rounded-lg border flex flex-col gap-1.5 transition-all ${
-                              effective ? 'bg-white border-teal-100 shadow-xs' : 'bg-slate-100 border-slate-200 opacity-60'
+                            className={`p-2 rounded-lg border flex items-center justify-between text-[11px] font-medium transition cursor-pointer ${
+                              effective ? 'bg-white border-teal-200 text-teal-800' : 'bg-slate-100 border-slate-200 text-slate-400'
                             }`}
                           >
-                            <div className="flex justify-between items-center">
-                              <span className="text-[9px] font-bold text-slate-500 uppercase truncate">
-                                {action.replace(/([A-Z])/g, ' $1')}
-                              </span>
-                              <input 
-                                type="checkbox"
-                                checked={effective}
-                                onChange={(e) => {
-                                  setPermissionOverrides(prev => ({
-                                    ...prev,
-                                    [action]: e.target.checked
-                                  }));
-                                }}
-                                className="w-3.5 h-3.5 rounded border-slate-300 text-teal-600 focus:ring-teal-500"
-                              />
-                            </div>
-                            <span className={`text-[8px] font-mono ${effective ? 'text-teal-600' : 'text-slate-400'}`}>
-                              {effective ? 'GRANTED' : 'DENIED'}
-                            </span>
-                          </div>
+                            <span className="truncate mr-1">{action.replace(/([A-Z])/g, ' $1')}</span>
+                            <input 
+                              type="checkbox"
+                              checked={effective}
+                              onChange={(e) => {
+                                setPermissionOverrides(prev => ({
+                                  ...prev,
+                                  [action]: e.target.checked
+                                }));
+                              }}
+                              className="w-3.5 h-3.5 rounded border-slate-300 text-teal-600"
+                            />
+                          </label>
                         );
                       })}
                     </div>
@@ -1113,591 +936,444 @@ export default function UserManagement({ user }: UserManagementProps) {
                 </div>
               </div>
 
-              {/* 3. EMPLOYMENT INFO */}
-              <div className="space-y-4">
-                <div className="flex items-center justify-between pb-2 border-b border-slate-100">
-                  <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2">
-                    <Briefcase size={16} className="text-amber-500" />
-                    3. Employment Details
-                  </h3>
+              {/* Section 3: Employment Details (Optional) */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between pb-1.5 border-b border-slate-100 text-xs font-bold text-slate-800">
+                  <div className="flex items-center gap-1.5">
+                    <Briefcase size={14} className="text-amber-500" />
+                    <span>3. Employment Details</span>
+                  </div>
                   <button
                     type="button"
                     onClick={() => setShowEmploymentInfo(!showEmploymentInfo)}
-                    className="text-sm font-bold text-amber-600 hover:text-amber-700 flex items-center gap-1"
+                    className="text-[11px] font-bold text-amber-600 hover:text-amber-700 flex items-center gap-1"
                   >
                     {showEmploymentInfo ? 'Hide Details' : 'Show Optional Details'}
-                    {showEmploymentInfo ? <ChevronUp size={14} /> : <ChevronDown size={14} />}
+                    {showEmploymentInfo ? <ChevronUp size={12} /> : <ChevronDown size={12} />}
                   </button>
                 </div>
 
                 {showEmploymentInfo && (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6 animate-slide-down">
-                    <div className="space-y-4">
-                      <div className="space-y-1">
-                        <label className="block text-sm font-bold uppercase tracking-wider text-slate-400 ml-1">
-                          Joining Date
-                        </label>
-                        <div className="relative">
-                          <Calendar className="absolute top-3 left-3.5 text-slate-400" size={16} />
-                          <input
-                            type="date"
-                            value={joiningDate}
-                            onChange={(e) => setJoiningDate(e.target.value)}
-                            className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-10 pr-4 text-sm text-slate-800 focus:outline-hidden"
-                          />
-                        </div>
-                      </div>
-
-                      <div className="space-y-1">
-                        <label className="block text-sm font-bold uppercase tracking-wider text-slate-400 ml-1">
-                          Designation / Position
-                        </label>
-                        <div className="relative">
-                          <Briefcase className="absolute top-3 left-3.5 text-slate-400" size={16} />
-                          <input
-                            type="text"
-                            value={designation}
-                            onChange={(e) => setDesignation(e.target.value)}
-                            className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-10 pr-4 text-sm text-slate-800 focus:outline-hidden"
-                            placeholder="e.g. Sales Executive"
-                          />
-                        </div>
-                      </div>
-
-                      <div className="space-y-1">
-                        <label className="block text-sm font-bold uppercase tracking-wider text-slate-400 ml-1">
-                          Monthly Salary (৳)
-                        </label>
-                        <div className="relative">
-                          <DollarSign className="absolute top-3 left-3.5 text-slate-400" size={16} />
-                          <input
-                            type="number"
-                            disabled={!isSuperAdmin}
-                            value={salary}
-                            onChange={(e) => setSalary(e.target.value === '' ? '' : Number(e.target.value))}
-                            className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-10 pr-4 text-sm text-slate-800 focus:outline-hidden disabled:opacity-50 disabled:bg-slate-100"
-                            placeholder={isSuperAdmin ? "e.g. 25000" : "Restricted for Super Admin"}
-                          />
-                        </div>
-                        {isSuperAdmin && (
-                          <p className="text-[9px] text-slate-400 italic mt-1 ml-1 flex items-center gap-1">
-                            <Lock size={10} /> Private data: Restricted to Super Admin view only.
-                          </p>
-                        )}
-                      </div>
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 animate-slide-down">
+                    <div>
+                      <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1">
+                        Joining Date
+                      </label>
+                      <input
+                        type="date"
+                        value={joiningDate}
+                        onChange={(e) => setJoiningDate(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-xs text-slate-800 focus:outline-hidden"
+                      />
                     </div>
 
-                    <div className="space-y-4">
-                      <div className="space-y-1">
-                        <label className="block text-sm font-bold uppercase tracking-wider text-slate-400 ml-1">
-                          NID / Identification Number
-                        </label>
-                        <div className="relative">
-                          <CreditCard className="absolute top-3 left-3.5 text-slate-400" size={16} />
-                          <input
-                            type="text"
-                            value={nidNumber}
-                            onChange={(e) => setNidNumber(e.target.value)}
-                            className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-10 pr-4 text-sm text-slate-800 focus:outline-hidden"
-                            placeholder="e.g. 1995123456789"
-                          />
-                        </div>
-                      </div>
+                    <div>
+                      <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1">
+                        Designation / Position
+                      </label>
+                      <input
+                        type="text"
+                        value={designation}
+                        onChange={(e) => setDesignation(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-xs text-slate-800 focus:outline-hidden"
+                        placeholder="Sales Executive"
+                      />
+                    </div>
 
-                      <div className="space-y-1">
-                        <label className="block text-sm font-bold uppercase tracking-wider text-slate-400 ml-1">
-                          Home Address
-                        </label>
-                        <div className="relative">
-                          <MapPin className="absolute top-3 left-3.5 text-slate-400" size={16} />
-                          <textarea
-                            value={address}
-                            onChange={(e) => setAddress(e.target.value)}
-                            rows={3}
-                            className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-10 pr-4 text-sm text-slate-800 focus:outline-hidden resize-none"
-                            placeholder="Full permanent or current address..."
-                          />
-                        </div>
-                      </div>
+                    <div>
+                      <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1">
+                        Monthly Salary (৳)
+                      </label>
+                      <input
+                        type="number"
+                        disabled={!isSuperAdmin}
+                        value={salary}
+                        onChange={(e) => setSalary(e.target.value === '' ? '' : Number(e.target.value))}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-xs text-slate-800 focus:outline-hidden disabled:opacity-50"
+                        placeholder="25000"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1">
+                        NID / National ID
+                      </label>
+                      <input
+                        type="text"
+                        value={nidNumber}
+                        onChange={(e) => setNidNumber(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-xs text-slate-800 focus:outline-hidden"
+                        placeholder="1995xxxxxxxxx"
+                      />
+                    </div>
+
+                    <div className="sm:col-span-2">
+                      <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1">
+                        Address
+                      </label>
+                      <input
+                        type="text"
+                        value={address}
+                        onChange={(e) => setAddress(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-xs text-slate-800 focus:outline-hidden"
+                        placeholder="Current or permanent address"
+                      />
                     </div>
                   </div>
                 )}
               </div>
 
-              {/* 4. ACCOUNT SETUP */}
-              <div className="space-y-4">
-                <h3 className="text-sm font-bold text-slate-800 flex items-center gap-2 pb-2 border-b border-slate-100">
-                  <Lock size={16} className="text-amber-500" />
-                  4. Account Setup & Delivery
-                </h3>
+              {/* Section 4: Temporary Password & Security */}
+              <div className="space-y-3">
+                <div className="flex items-center gap-1.5 pb-1.5 border-b border-slate-100 text-xs font-bold text-slate-800">
+                  <Lock size={14} className="text-amber-500" />
+                  <span>4. Temporary Password & Delivery</span>
+                </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                  <div className="space-y-3">
-                    <label className="block text-sm font-bold uppercase tracking-wider text-slate-400 ml-1">
-                      Temporary Access Password *
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1">
+                      Temporary Password *
                     </label>
-                    <div className="flex gap-2">
-                      <div className="relative flex-grow">
-                        <Lock className="absolute top-3 left-3.5 text-slate-400" size={16} />
+                    <div className="flex gap-1.5">
+                      <div className="relative flex-1">
                         <input
                           type={showPassword ? "text" : "password"}
                           required
                           value={tempPassword}
                           onChange={(e) => setTempPassword(e.target.value)}
-                          className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 pl-10 pr-10 text-sm text-slate-800 focus:outline-hidden font-mono"
+                          className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-xs text-slate-800 focus:outline-hidden font-mono"
                           placeholder="••••••••••••"
                         />
                         <button
                           type="button"
                           onClick={() => setShowPassword(!showPassword)}
-                          className="absolute top-2.5 right-3 text-slate-400 hover:text-slate-600"
+                          className="absolute top-2 right-2 text-slate-400 hover:text-slate-600"
                         >
-                          {showPassword ? <EyeOff size={16} /> : <Eye size={16} />}
+                          {showPassword ? <EyeOff size={14} /> : <Eye size={14} />}
                         </button>
                       </div>
                       <button
                         type="button"
                         onClick={generatePassword}
                         title="Generate strong password"
-                        className="p-2.5 bg-slate-100 text-slate-600 rounded-xl hover:bg-slate-200 transition-colors"
+                        className="px-2.5 py-1.5 bg-slate-100 text-slate-600 rounded-lg hover:bg-slate-200 transition text-xs font-bold"
                       >
-                        <RefreshCw size={18} />
+                        <RefreshCw size={14} />
                       </button>
                     </div>
                   </div>
 
-                  <div className="space-y-4 pt-4 md:pt-6">
-                    <label className="flex items-center gap-3 group cursor-pointer">
-                      <div className="relative flex items-center justify-center">
-                        <input
-                          type="checkbox"
-                          checked={sendEmail}
-                          onChange={(e) => setSendEmail(e.target.checked)}
-                          className="w-5 h-5 rounded-lg border-slate-300 text-amber-500 focus:ring-amber-500 cursor-pointer"
-                        />
-                      </div>
-                      <div className="flex flex-col">
-                        <span className="text-sm font-bold text-slate-700">Dispatch Credentials via Email</span>
-                        <span className="text-sm text-slate-400">Operator will receive their login link and temp password.</span>
-                      </div>
+                  <div className="flex flex-col justify-center gap-2 pt-1">
+                    <label className="flex items-center gap-2 text-xs font-medium text-slate-700 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={sendEmail}
+                        onChange={(e) => setSendEmail(e.target.checked)}
+                        className="w-4 h-4 rounded border-slate-300 text-amber-500 focus:ring-amber-500"
+                      />
+                      <span>Dispatch Credentials via Email</span>
                     </label>
 
-                    <label className="flex items-center gap-3 group cursor-pointer">
-                      <div className="relative flex items-center justify-center">
-                        <input
-                          type="checkbox"
-                          checked={requirePasswordChange}
-                          onChange={(e) => setRequirePasswordChange(e.target.checked)}
-                          className="w-5 h-5 rounded-lg border-slate-300 text-amber-500 focus:ring-amber-500 cursor-pointer"
-                        />
-                      </div>
-                      <div className="flex flex-col">
-                        <span className="text-sm font-bold text-slate-700">Enforce Password Change</span>
-                        <span className="text-sm text-slate-400">User will be prompted to reset password on their first login.</span>
-                      </div>
+                    <label className="flex items-center gap-2 text-xs font-medium text-slate-700 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={requirePasswordChange}
+                        onChange={(e) => setRequirePasswordChange(e.target.checked)}
+                        className="w-4 h-4 rounded border-slate-300 text-amber-500 focus:ring-amber-500"
+                      />
+                      <span>Enforce password change on first login</span>
                     </label>
                   </div>
                 </div>
               </div>
 
-              {/* 5. STATUS */}
-              <div className="pt-6 border-t border-slate-100 flex flex-col md:flex-row md:items-center justify-between gap-6">
-                <div className="flex items-center gap-4">
-                  <div className="flex flex-col">
-                    <span className="text-sm font-bold uppercase tracking-wider text-slate-400">Account Initial State</span>
-                    <div className="flex items-center gap-2 mt-1">
-                      <button
-                        type="button"
-                        onClick={() => setIsActiveAccount(true)}
-                        className={`py-1.5 px-4 rounded-full text-sm font-bold uppercase tracking-tight transition-all ${
-                          isActiveAccount 
-                          ? 'bg-teal-500 text-white shadow-lg shadow-teal-500/20' 
-                          : 'bg-slate-100 text-slate-400'
-                        }`}
-                      >
-                        Active
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setIsActiveAccount(false)}
-                        className={`py-1.5 px-4 rounded-full text-sm font-bold uppercase tracking-tight transition-all ${
-                          !isActiveAccount 
-                          ? 'bg-red-500 text-white shadow-lg shadow-red-500/20' 
-                          : 'bg-slate-100 text-slate-400'
-                        }`}
-                      >
-                        Suspended
-                      </button>
-                    </div>
-                  </div>
-                  {!isActiveAccount && (
-                    <div className="flex items-center gap-2 text-red-500 bg-red-50 py-2 px-3 rounded-xl animate-pulse">
-                      <Shield size={14} />
-                      <span className="text-sm font-bold uppercase">Account will be locked on creation</span>
-                    </div>
-                  )}
+              {/* Modal Footer */}
+              <div className="pt-3 border-t border-slate-100 flex items-center justify-between gap-3">
+                <div className="flex items-center gap-2">
+                  <span className="text-xs font-bold text-slate-500">Initial State:</span>
+                  <button
+                    type="button"
+                    onClick={() => setIsActiveAccount(true)}
+                    className={`py-1 px-2.5 rounded-lg text-xs font-bold transition ${
+                      isActiveAccount ? 'bg-teal-500 text-white shadow-2xs' : 'bg-slate-100 text-slate-500'
+                    }`}
+                  >
+                    Active
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setIsActiveAccount(false)}
+                    className={`py-1 px-2.5 rounded-lg text-xs font-bold transition ${
+                      !isActiveAccount ? 'bg-red-500 text-white shadow-2xs' : 'bg-slate-100 text-slate-500'
+                    }`}
+                  >
+                    Locked
+                  </button>
                 </div>
 
-                <div className="flex items-center gap-3">
+                <div className="flex items-center gap-2">
                   <button
                     type="button"
                     onClick={() => setShowAddForm(false)}
-                    className="py-3 px-6 bg-slate-50 text-slate-600 font-bold text-sm rounded-2xl hover:bg-slate-100 transition-all border border-slate-100"
+                    className="px-3 py-1.5 bg-slate-100 text-slate-600 font-bold text-xs rounded-lg hover:bg-slate-200 transition cursor-pointer"
                   >
-                    Cancel Onboarding
+                    Cancel
                   </button>
                   <button
                     type="submit"
                     disabled={loading}
-                    className="py-3 px-8 bg-slate-900 text-amber-400 font-bold text-sm rounded-2xl shadow-xl hover:bg-slate-800 transition-all flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed group"
+                    className="px-4 py-1.5 bg-slate-900 text-amber-400 font-bold text-xs rounded-lg hover:bg-slate-800 transition flex items-center gap-1.5 disabled:opacity-50 cursor-pointer shadow-xs"
                   >
-                    {loading ? (
-                      <RefreshCw size={16} className="animate-spin" />
-                    ) : (
-                      <Send size={16} className="group-hover:translate-x-1 group-hover:-translate-y-1 transition-transform" />
-                    )}
-                    {loading ? 'Processing Onboarding...' : 'Commit Operator Onboarding'}
+                    {loading ? <RefreshCw size={13} className="animate-spin" /> : <Send size={13} />}
+                    <span>{loading ? 'Creating...' : 'Provision Staff'}</span>
                   </button>
                 </div>
               </div>
+
             </form>
           </div>
         </div>
       )}
 
-      {/* FILTER & REGISTRY GRID */}
-      <div className="bg-white p-6 rounded-3xl border border-slate-100 shadow-sm space-y-4">
+      {/* REGISTRY TABLE CARD (Standard Compact Enterprise Table) */}
+      <div className="bg-white rounded-xl border border-slate-200/80 shadow-xs overflow-hidden">
         
         {activeTab === 'registry' ? (
           <>
             {/* Filter Bar */}
-        <div className="flex flex-col sm:flex-row items-center justify-between gap-4 pb-4 border-b border-slate-100">
-          <div className="relative w-full sm:w-72">
-            <Search className="absolute top-2.5 left-3 text-slate-400" size={14} />
-            <input
-              type="text"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              placeholder="Search by name or email..."
-              className="w-full bg-slate-50 border border-slate-200 rounded-lg py-1.5 pl-8 pr-4 text-sm text-slate-800 focus:outline-hidden"
-            />
-          </div>
+            <div className="p-3 border-b border-slate-100 flex flex-col sm:flex-row items-center justify-between gap-2.5 bg-slate-50/50">
+              <div className="relative w-full sm:w-64">
+                <Search className="absolute top-2 left-2.5 text-slate-400" size={13} />
+                <input
+                  type="text"
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
+                  placeholder="Search name, email, ID..."
+                  className="w-full bg-white border border-slate-200 rounded-lg py-1 pl-7 pr-3 text-xs text-slate-800 focus:outline-hidden"
+                />
+              </div>
 
-          <div className="flex items-center gap-2 w-full sm:w-auto">
-            <Filter size={14} className="text-slate-400 hidden sm:inline" />
-            <select
-              value={roleFilter}
-              onChange={(e) => setRoleFilter(e.target.value)}
-              className="bg-slate-50 border border-slate-200 rounded-lg py-1.5 px-2 text-sm text-slate-600 focus:outline-hidden cursor-pointer"
-            >
-              <option value="all">All Roles</option>
-              <option value="superadmin">Super Admin</option>
-              <option value="admin">Admin</option>
-              <option value="staff">Staff</option>
-            </select>
+              <div className="flex items-center gap-2 w-full sm:w-auto">
+                <Filter size={13} className="text-slate-400 hidden sm:inline" />
+                <select
+                  value={roleFilter}
+                  onChange={(e) => setRoleFilter(e.target.value)}
+                  className="bg-white border border-slate-200 rounded-lg py-1 px-2 text-xs text-slate-600 focus:outline-hidden cursor-pointer"
+                >
+                  <option value="all">All Roles</option>
+                  <option value="superadmin">Super Admin</option>
+                  <option value="admin">Admin</option>
+                  <option value="staff">Staff</option>
+                </select>
 
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              className="bg-slate-50 border border-slate-200 rounded-lg py-1.5 px-2 text-sm text-slate-600 focus:outline-hidden cursor-pointer"
-            >
-              <option value="all">All Statuses</option>
-              <option value="active">Active Only</option>
-              <option value="inactive">Locked Only</option>
-            </select>
-          </div>
-        </div>
-
-        {/* User List Table */}
-        <div className="overflow-x-auto">
-          {filteredUsers.length === 0 ? (
-            <div className="py-8 text-center text-slate-400 italic text-sm">
-              No active operator records found matching filters.
+                <select
+                  value={statusFilter}
+                  onChange={(e) => setStatusFilter(e.target.value)}
+                  className="bg-white border border-slate-200 rounded-lg py-1 px-2 text-xs text-slate-600 focus:outline-hidden cursor-pointer"
+                >
+                  <option value="all">All Statuses</option>
+                  <option value="active">Active</option>
+                  <option value="inactive">Locked</option>
+                </select>
+              </div>
             </div>
-          ) : (
-            <>
-              {/* Desktop Table View */}
-              <table className="w-full text-left border-collapse hidden md:table">
-                <thead>
-                  <tr className="border-b border-slate-100 text-slate-400 text-sm font-semibold uppercase tracking-wider">
-                    <th className="py-3 px-4">Operator Info & System ID</th>
-                    <th className="py-3 px-4">Authority Level</th>
-                    <th className="py-3 px-4">Scope Domain</th>
-                    <th className="py-3 px-4">Activity Status</th>
-                    <th className="py-3 px-4 text-right">Registry Operations</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100 text-sm">
-                  {filteredUsers.map((u) => {
-                    const isUserActive = u.active !== false;
-                    const isCurrentEditing = editingUserId === u.id;
-                    
-                    return (
-                      <tr key={u.id} className="hover:bg-slate-50/50">
-                        
-                        {/* Name / Email */}
-                        <td className="py-3.5 px-4">
-                          <div className="flex items-center gap-3">
-                            <div className={`w-8 h-8 rounded-full flex items-center justify-center font-bold text-sm ${
-                              u.role === 'superadmin' ? 'bg-amber-100 text-amber-700' :
-                              u.role === 'admin' ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-700'
-                            }`}>
-                              {u.name.charAt(0).toUpperCase()}
-                            </div>
-                            <div>
-                              <div className="font-bold text-slate-900 flex items-center gap-1.5">
-                                {u.name}
-                                {u.id === user.id && (
-                                  <span className="bg-slate-900 text-amber-400 font-mono text-[9px] px-1 rounded">
-                                    You
-                                  </span>
+
+            {/* Compact Table View */}
+            <div className="overflow-x-auto">
+              {filteredUsers.length === 0 ? (
+                <div className="py-8 text-center text-slate-400 italic text-xs">
+                  No matching operators found.
+                </div>
+              ) : (
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="border-b border-slate-100 text-slate-400 text-[11px] font-bold uppercase tracking-wider bg-slate-50/30">
+                      <th className="py-2.5 px-3.5">Operator & ID</th>
+                      <th className="py-2.5 px-3">Role</th>
+                      <th className="py-2.5 px-3">Sub-Brand Scope</th>
+                      <th className="py-2.5 px-3">Status</th>
+                      <th className="py-2.5 px-3.5 text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-xs">
+                    {filteredUsers.map((u) => {
+                      const isUserActive = u.active !== false;
+                      const isCurrentEditing = editingUserId === u.id;
+                      
+                      return (
+                        <tr key={u.id} className="hover:bg-slate-50/60 transition">
+                          
+                          {/* Name / Email / ID */}
+                          <td className="py-2 px-3.5">
+                            <div className="flex items-center gap-2.5">
+                              <div className={`w-7 h-7 rounded-full flex items-center justify-center font-bold text-xs shrink-0 ${
+                                u.role === 'superadmin' ? 'bg-amber-100 text-amber-800' :
+                                u.role === 'admin' ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-700'
+                              }`}>
+                                {u.photoUrl ? (
+                                  <img src={u.photoUrl} alt={u.name} className="w-full h-full object-cover rounded-full" />
+                                ) : (
+                                  u.name.charAt(0).toUpperCase()
                                 )}
                               </div>
-                              <div className="text-slate-400 font-mono text-sm mt-0.5">{u.email}</div>
-                              <div className="flex items-center gap-1 mt-1">
-                                <span className="text-[9px] font-bold text-slate-300 uppercase tracking-tighter">System ID:</span>
-                                <code className="text-[9px] font-mono text-slate-400 bg-slate-50 px-1 rounded border border-slate-100 select-all">
-                                  {u.id}
-                                </code>
-                                {isSuperAdmin && (
-                                  <button 
-                                    onClick={async () => {
-                                      if (confirm(`Surgical Action: Delete Firestore document ${u.id}? This will NOT delete the Auth account.`)) {
-                                        const { doc, deleteDoc } = await import('firebase/firestore');
-                                        const { db } = await import('../firebase/config');
-                                        await deleteDoc(doc(db, 'users', u.id));
-                                        fetchUsersList();
-                                      }
-                                    }}
-                                    className="text-[8px] text-red-400 hover:text-red-600 font-bold uppercase"
-                                  >
-                                    Delete Doc
-                                  </button>
+                              <div className="min-w-0">
+                                <div className="font-bold text-slate-900 flex items-center gap-1.5 truncate">
+                                  <span>{u.name}</span>
+                                  {u.id === user.id && (
+                                    <span className="bg-slate-900 text-amber-400 font-mono text-[9px] px-1 py-0.2 rounded">
+                                      You
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="text-slate-400 font-mono text-[11px] truncate">{u.email}</div>
+                                {u.employeeId && (
+                                  <div className="text-[10px] font-mono font-bold text-slate-500">
+                                    ID: {u.employeeId}
+                                  </div>
                                 )}
                               </div>
                             </div>
-                          </div>
-                        </td>
+                          </td>
 
-                        {/* Role Column */}
-                        <td className="py-3.5 px-4 font-semibold uppercase tracking-wider text-sm">
-                          {isCurrentEditing ? (
-                            <select
-                              value={editRole}
-                              onChange={(e) => setEditRole(e.target.value as UserRole)}
-                              className="bg-slate-50 border border-slate-200 rounded-lg p-1 text-sm font-bold focus:outline-hidden"
-                            >
-                              <option value="staff">Staff</option>
-                              <option value="admin">Admin</option>
-                              <option value="superadmin">Super Admin</option>
-                            </select>
-                          ) : (
-                            <span className={`inline-flex items-center gap-1 py-0.5 px-2 rounded-full font-bold ${
-                              u.role === 'superadmin' ? 'bg-amber-400/10 text-amber-600' :
-                              u.role === 'admin' ? 'bg-indigo-500/10 text-indigo-600' : 'bg-slate-100 text-slate-600'
-                            }`}>
-                              <Shield size={10} />
-                              {u.role === 'superadmin' ? 'Super Admin' : u.role === 'admin' ? 'Admin' : 'Staff'}
-                            </span>
-                          )}
-                        </td>
-
-                        {/* subBrand Access scope */}
-                        <td className="py-3.5 px-4">
-                          {isCurrentEditing ? (
-                            <div className="flex gap-1.5 flex-wrap">
-                              {['SAT', 'GZ', 'RTX'].map((brand) => (
-                                <button
-                                  type="button"
-                                  key={brand}
-                                  onClick={() => handleToggleBrandAccess(brand, true)}
-                                  className={`py-0.5 px-1.5 rounded text-sm font-bold border ${
-                                    editBrandAccess.includes(brand)
-                                      ? 'bg-teal-500/10 border-teal-500/30 text-teal-700'
-                                      : 'bg-slate-50 border-slate-200 text-slate-400'
-                                  }`}
-                                >
-                                  {brand}
-                                </button>
-                              ))}
-                            </div>
-                          ) : (
-                            <div className="flex gap-1">
-                              {u.subBrandAccess?.length === 3 ? (
-                                <span className="text-sm font-bold bg-slate-100 text-slate-600 py-0.5 px-2 rounded">
-                                  Global Scope (All Brands)
-                                </span>
-                              ) : u.subBrandAccess && u.subBrandAccess.length > 0 ? (
-                                u.subBrandAccess.map((b) => (
-                                  <span key={b} className="text-sm font-mono font-bold bg-slate-50 text-slate-500 border border-slate-100 py-0.5 px-1.5 rounded">
-                                    {b}
-                                  </span>
-                                ))
-                              ) : (
-                                <span className="text-sm italic text-red-500 font-bold">Isolated (None)</span>
-                              )}
-                            </div>
-                          )}
-                        </td>
-
-                        {/* Status */}
-                        <td className="py-3.5 px-4">
-                          <span className={`inline-flex items-center gap-1.5 font-bold ${
-                            isUserActive ? 'text-teal-600' : 'text-slate-400'
-                          }`}>
-                            <span className={`w-1.5 h-1.5 rounded-full ${isUserActive ? 'bg-teal-500' : 'bg-slate-400'}`} />
-                            {isUserActive ? 'Active' : 'Locked'}
-                          </span>
-                        </td>
-
-                        {/* Actions */}
-                        <td className="py-3.5 px-4 text-right">
-                          <div className="flex items-center justify-end gap-2">
+                          {/* Role Column */}
+                          <td className="py-2 px-3">
                             {isCurrentEditing ? (
-                              <>
-                                <button
-                                  onClick={() => handleUpdateUserRoleAndAccess(u.id)}
-                                  className="py-1 px-2.5 bg-slate-900 text-amber-400 font-bold text-sm rounded hover:bg-slate-800"
-                                >
-                                  Save
-                                </button>
-                                <button
-                                  onClick={() => setEditingUserId(null)}
-                                  className="py-1 px-2.5 bg-slate-100 text-slate-500 font-bold text-sm rounded hover:bg-slate-200"
-                                >
-                                  Exit
-                                </button>
-                              </>
+                              <select
+                                value={editRole}
+                                onChange={(e) => setEditRole(e.target.value as UserRole)}
+                                className="bg-white border border-slate-200 rounded px-1.5 py-0.5 text-xs font-bold focus:outline-hidden"
+                              >
+                                <option value="staff">Staff</option>
+                                <option value="admin">Admin</option>
+                                <option value="superadmin">Super Admin</option>
+                              </select>
                             ) : (
-                              <>
-                                {isSuperAdmin && (
-                                  <button
-                                    onClick={() => startEdit(u)}
-                                    className="py-1 px-2 text-sm font-bold text-slate-600 hover:text-slate-950 hover:bg-slate-100 rounded transition-all"
-                                  >
-                                    Edit Access
-                                  </button>
-                                )}
+                              <span className={`inline-flex items-center gap-1 py-0.5 px-2 rounded-full font-bold text-[10px] ${
+                                u.role === 'superadmin' ? 'bg-amber-100 text-amber-800 border border-amber-200' :
+                                u.role === 'admin' ? 'bg-indigo-50 text-indigo-700 border border-indigo-200' : 'bg-slate-100 text-slate-600'
+                              }`}>
+                                <Shield size={10} />
+                                {u.role === 'superadmin' ? 'Super Admin' : u.role === 'admin' ? 'Admin' : 'Staff'}
+                              </span>
+                            )}
+                          </td>
 
-                                {/* Only Admin or Super Admin can unlock/lock operators based on role */}
-                                {u.id !== user.id && (
+                          {/* SubBrand Access Scope */}
+                          <td className="py-2 px-3">
+                            {isCurrentEditing ? (
+                              <div className="flex gap-1 flex-wrap">
+                                {['SAT', 'GZ', 'RTX'].map((brand) => (
                                   <button
-                                    onClick={() => handleToggleUserActive(u)}
-                                    className={`py-1 px-2 text-sm font-bold rounded transition-all ${
-                                      isUserActive
-                                        ? 'text-red-600 hover:bg-red-50'
-                                        : 'text-teal-600 hover:bg-teal-50'
+                                    type="button"
+                                    key={brand}
+                                    onClick={() => handleToggleBrandAccess(brand, true)}
+                                    className={`py-0.5 px-1.5 rounded text-[10px] font-bold border transition ${
+                                      editBrandAccess.includes(brand)
+                                        ? 'bg-teal-50 border-teal-400 text-teal-700'
+                                        : 'bg-white border-slate-200 text-slate-400'
                                     }`}
                                   >
-                                    {isUserActive ? 'Deactivate' : 'Activate'}
+                                    {brand}
                                   </button>
+                                ))}
+                              </div>
+                            ) : (
+                              <div className="flex gap-1 flex-wrap">
+                                {u.subBrandAccess?.length === 3 ? (
+                                  <span className="text-[10px] font-bold bg-slate-100 text-slate-700 py-0.5 px-1.5 rounded border border-slate-200">
+                                    Global (All)
+                                  </span>
+                                ) : u.subBrandAccess && u.subBrandAccess.length > 0 ? (
+                                  u.subBrandAccess.map((b) => (
+                                    <span key={b} className="text-[10px] font-mono font-bold bg-slate-50 text-slate-600 border border-slate-200 py-0.5 px-1.5 rounded">
+                                      {b}
+                                    </span>
+                                  ))
+                                ) : (
+                                  <span className="text-[10px] italic text-red-500 font-bold">None</span>
                                 )}
-                              </>
+                              </div>
                             )}
-                          </div>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
+                          </td>
 
-              {/* Mobile Card View */}
-              <div className="md:hidden divide-y divide-slate-100">
-                {filteredUsers.map((u) => {
-                  const isUserActive = u.active !== false;
-                  const isCurrentEditing = editingUserId === u.id;
+                          {/* Status */}
+                          <td className="py-2 px-3">
+                            <span className={`inline-flex items-center gap-1 font-bold text-[11px] ${
+                              isUserActive ? 'text-teal-600' : 'text-slate-400'
+                            }`}>
+                              <span className={`w-1.5 h-1.5 rounded-full ${isUserActive ? 'bg-teal-500' : 'bg-slate-400'}`} />
+                              {isUserActive ? 'Active' : 'Locked'}
+                            </span>
+                          </td>
 
-                  return (
-                    <div key={u.id} className="p-4 space-y-3">
-                      <div className="flex items-center gap-3">
-                        <div className={`w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm ${
-                          u.role === 'superadmin' ? 'bg-amber-100 text-amber-700' :
-                          u.role === 'admin' ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-100 text-slate-700'
-                        }`}>
-                          {u.name.charAt(0).toUpperCase()}
-                        </div>
-                        <div className="flex-1">
-                          <div className="font-bold text-slate-900 flex items-center gap-1.5">
-                            {u.name}
-                            {u.id === user.id && <span className="text-[9px] bg-slate-900 text-amber-400 px-1 rounded">You</span>}
-                          </div>
-                          <div className="text-slate-400 font-mono text-sm">{u.email}</div>
-                        </div>
-                        <div className="flex flex-col items-end gap-1">
-                          <span className={`inline-flex items-center gap-1 py-0.5 px-2 rounded-full font-bold text-[9px] uppercase tracking-wider ${
-                            u.role === 'superadmin' ? 'bg-amber-400/10 text-amber-600' :
-                            u.role === 'admin' ? 'bg-indigo-500/10 text-indigo-600' : 'bg-slate-100 text-slate-600'
-                          }`}>
-                            {u.role}
-                          </span>
-                          <span className={`text-sm font-bold ${isUserActive ? 'text-teal-600' : 'text-slate-400'}`}>
-                            {isUserActive ? '● Active' : '● Locked'}
-                          </span>
-                        </div>
-                      </div>
+                          {/* Actions */}
+                          <td className="py-2 px-3.5 text-right">
+                            <div className="flex items-center justify-end gap-1.5">
+                              {isCurrentEditing ? (
+                                <>
+                                  <button
+                                    onClick={() => handleUpdateUserRoleAndAccess(u.id)}
+                                    className="py-1 px-2.5 bg-slate-900 text-amber-400 font-bold text-xs rounded hover:bg-slate-800 transition cursor-pointer"
+                                  >
+                                    Save
+                                  </button>
+                                  <button
+                                    onClick={() => setEditingUserId(null)}
+                                    className="py-1 px-2 bg-slate-100 text-slate-600 font-bold text-xs rounded hover:bg-slate-200 transition cursor-pointer"
+                                  >
+                                    Cancel
+                                  </button>
+                                </>
+                              ) : (
+                                <>
+                                  {isSuperAdmin && (
+                                    <button
+                                      onClick={() => startEdit(u)}
+                                      className="py-1 px-2 text-xs font-bold text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded transition cursor-pointer"
+                                    >
+                                      Edit
+                                    </button>
+                                  )}
 
-                      <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100">
-                        <p className="text-[9px] font-bold text-slate-400 uppercase mb-1">Brand Access Scope</p>
-                        <div className="flex flex-wrap gap-1">
-                          {u.subBrandAccess?.length === 3 ? (
-                            <span className="text-sm font-bold text-slate-600">Global (All Brands)</span>
-                          ) : u.subBrandAccess && u.subBrandAccess.length > 0 ? (
-                            u.subBrandAccess.map((b) => (
-                              <span key={b} className="text-sm font-mono font-bold bg-white border border-slate-200 py-0.5 px-1.5 rounded">
-                                {b}
-                              </span>
-                            ))
-                          ) : (
-                            <span className="text-sm italic text-red-500 font-bold">None</span>
-                          )}
-                        </div>
-                      </div>
-
-                      <div className="flex justify-end gap-2">
-                        {isSuperAdmin && (
-                          <button
-                            onClick={() => startEdit(u)}
-                            className="py-1.5 px-3 text-sm font-bold text-slate-600 bg-white border border-slate-200 rounded-lg"
-                          >
-                            Edit Access
-                          </button>
-                        )}
-                        {u.id !== user.id && (
-                          <button
-                            onClick={() => handleToggleUserActive(u)}
-                            className={`py-1.5 px-3 text-sm font-bold rounded-lg border transition-all ${
-                              isUserActive
-                                ? 'text-red-600 border-red-100 bg-red-50'
-                                : 'text-teal-600 border-teal-100 bg-teal-50'
-                            }`}
-                          >
-                            {isUserActive ? 'Lock Account' : 'Unlock Account'}
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
-            </>
-          )}
-        </div>
+                                  {u.id !== user.id && (
+                                    <button
+                                      onClick={() => handleToggleUserActive(u)}
+                                      className={`py-1 px-2 text-xs font-bold rounded transition cursor-pointer ${
+                                        isUserActive
+                                          ? 'text-red-600 hover:bg-red-50'
+                                          : 'text-teal-600 hover:bg-teal-50'
+                                      }`}
+                                    >
+                                      {isUserActive ? 'Lock' : 'Unlock'}
+                                    </button>
+                                  )}
+                                </>
+                              )}
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              )}
+            </div>
           </>
         ) : (
           /* PENDING APPROVALS LIST */
-          <div className="space-y-4">
+          <div className="p-4 space-y-3">
             {pendingUsers.length === 0 ? (
-              <div className="py-12 text-center text-slate-400 italic text-sm">
+              <div className="py-8 text-center text-slate-400 italic text-xs">
                 No pending operator registration requests found.
               </div>
             ) : (
-              <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 {pendingUsers.map((u) => (
-                  <div key={u.id} className="bg-slate-50 border border-slate-200/60 rounded-3xl p-6 flex flex-col justify-between space-y-4 hover:border-slate-300 transition-all shadow-xs">
-                    <div className="flex items-start gap-4">
+                  <div key={u.id} className="bg-slate-50 border border-slate-200 rounded-xl p-3.5 flex flex-col justify-between space-y-3 shadow-2xs">
+                    <div className="flex items-start gap-3">
                       {/* Avatar */}
-                      <div className="w-14 h-14 rounded-2xl bg-amber-100 border border-amber-200 flex-shrink-0 overflow-hidden flex items-center justify-center font-extrabold text-lg text-amber-800">
+                      <div className="w-10 h-10 rounded-xl bg-amber-100 border border-amber-200 shrink-0 overflow-hidden flex items-center justify-center font-bold text-sm text-amber-800">
                         {u.photoUrl ? (
                           <img src={u.photoUrl} alt={u.name} referrerPolicy="no-referrer" className="w-full h-full object-cover" />
                         ) : (
@@ -1706,85 +1382,68 @@ export default function UserManagement({ user }: UserManagementProps) {
                       </div>
 
                       {/* Details */}
-                      <div className="flex-1 space-y-1 min-w-0">
-                        <div className="flex items-center gap-2 flex-wrap">
-                          <h4 className="font-extrabold text-slate-900 text-sm truncate">{u.name}</h4>
-                          <span className={`text-[9px] font-bold uppercase tracking-wider px-2 py-0.5 rounded-full ${
+                      <div className="flex-1 min-w-0 space-y-0.5">
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <h4 className="font-bold text-slate-900 text-xs truncate">{u.name}</h4>
+                          <span className={`text-[9px] font-bold uppercase px-1.5 py-0.2 rounded ${
                             u.requestedRole === 'admin' ? 'bg-indigo-100 text-indigo-700' : 'bg-slate-200 text-slate-700'
                           }`}>
-                            Requested: {u.requestedRole === 'admin' ? 'Manager (Admin)' : 'Operator (Staff)'}
+                            Req: {u.requestedRole === 'admin' ? 'Admin' : 'Staff'}
                           </span>
                         </div>
-                        <p className="text-slate-400 font-mono text-sm truncate">{u.email}</p>
-                        <p className="text-slate-600 text-sm flex items-center gap-1 font-medium">
-                          <span className="text-slate-400">Phone:</span> {u.phone}
-                        </p>
-                        {u.designation && (
-                          <p className="text-slate-600 text-sm">
-                            <span className="text-slate-400">Position:</span> {u.designation}
-                          </p>
-                        )}
-                        {u.createdAt && (
-                          <p className="text-sm text-slate-400">
-                            Requested: {new Date(u.createdAt).toLocaleString()}
-                          </p>
-                        )}
+                        <p className="text-slate-400 font-mono text-[11px] truncate">{u.email}</p>
+                        {u.phone && <p className="text-slate-600 text-xs">Phone: {u.phone}</p>}
+                        {u.designation && <p className="text-slate-600 text-xs">Position: {u.designation}</p>}
                       </div>
                     </div>
 
-                    {/* Sub-brand list */}
-                    <div className="bg-white p-3 rounded-xl border border-slate-100">
-                      <p className="text-sm font-bold text-slate-400 uppercase tracking-wider mb-1.5">Requested Sub-brands:</p>
-                      <div className="flex gap-1.5 flex-wrap">
+                    {/* Sub-brand tag */}
+                    <div className="bg-white p-2 rounded-lg border border-slate-100 flex items-center gap-1.5">
+                      <span className="text-[10px] font-bold text-slate-400 uppercase">Brands:</span>
+                      <div className="flex gap-1 flex-wrap">
                         {u.requestedSubBrandAccess && u.requestedSubBrandAccess.length > 0 ? (
                           u.requestedSubBrandAccess.map((brand: string) => (
-                            <span key={brand} className="text-sm font-mono font-bold bg-slate-50 border border-slate-100 text-slate-600 py-0.5 px-2 rounded-lg">
-                              {brand === 'SAT' ? 'Sky Automation' : brand === 'GZ' ? 'GadgetZu' : 'RTX Gadget'}
+                            <span key={brand} className="text-[10px] font-mono font-bold bg-slate-50 border border-slate-200 text-slate-600 px-1 py-0.2 rounded">
+                              {brand}
                             </span>
                           ))
                         ) : (
-                          <span className="text-sm italic text-slate-400">No brands selected</span>
+                          <span className="text-[10px] text-slate-400 italic">None</span>
                         )}
                       </div>
                     </div>
 
                     {u.status === 'rejected' && (
-                      <div className="bg-red-50 border border-red-200 p-3 rounded-xl">
-                        <p className="text-xs font-bold text-red-700 uppercase tracking-wider mb-0.5 flex items-center gap-1.5">
-                          <span className="w-2 h-2 rounded-full bg-red-500 animate-pulse"></span>
-                          Application Rejected
-                        </p>
-                        <p className="text-xs text-red-600 font-medium">
-                          <span className="font-bold">Reason:</span> {u.rejectionReason || 'No reason specified'}
-                        </p>
+                      <div className="bg-red-50 border border-red-200 p-2 rounded-lg text-[11px] text-red-700">
+                        <span className="font-bold">Rejected:</span> {u.rejectionReason || 'No reason'}
                       </div>
                     )}
 
-                    {/* Approve / Reject buttons */}
-                    <div className="flex gap-2 pt-2">
+                    {/* Actions */}
+                    <div className="flex gap-1.5 pt-1">
                       <button
                         onClick={() => handleApproveUser(u)}
                         disabled={loading}
-                        className="flex-grow py-2 px-4 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-sm rounded-xl transition-all shadow-sm flex items-center justify-center gap-2 cursor-pointer"
+                        className="flex-1 py-1.5 px-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-lg transition flex items-center justify-center gap-1 cursor-pointer"
                       >
-                        <UserCheck size={14} />
-                        Approve Operator
+                        <UserCheck size={12} />
+                        <span>Approve</span>
                       </button>
                       <button
                         onClick={() => handleRejectUser(u)}
                         disabled={loading}
-                        className="py-2 px-4 bg-red-50 hover:bg-red-100 text-red-600 font-bold text-sm rounded-xl transition-all border border-red-100 flex items-center justify-center gap-1.5 cursor-pointer"
+                        className="py-1.5 px-2.5 bg-red-50 hover:bg-red-100 text-red-600 font-bold text-xs rounded-lg border border-red-200 transition flex items-center justify-center gap-1 cursor-pointer"
                       >
-                        <UserX size={14} />
-                        Reject
+                        <UserX size={12} />
+                        <span>Reject</span>
                       </button>
                       <button
                         onClick={() => handleDeleteRequest(u.id)}
                         disabled={loading}
-                        className="py-2 px-3 hover:bg-slate-200 text-slate-400 hover:text-slate-600 font-bold text-sm rounded-xl transition-all flex items-center justify-center cursor-pointer"
-                        title="Delete registration request"
+                        className="py-1.5 px-2 hover:bg-slate-200 text-slate-400 hover:text-slate-600 font-bold text-xs rounded-lg transition flex items-center justify-center cursor-pointer"
+                        title="Delete Request"
                       >
-                        <Trash2 size={14} />
+                        <Trash2 size={12} />
                       </button>
                     </div>
                   </div>

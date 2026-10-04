@@ -15,7 +15,7 @@ import { getStorage } from 'firebase/storage';
 
 // Configuration keys for Firebase
 // These are sourced from /firebase-applet-config.json
-const firebaseConfig = {
+export const firebaseConfig = {
   apiKey: "AIzaSyC6-JTG8zI6cwBsJC9sT5BJHCtafBPNPpA",
   authDomain: "gen-lang-client-0634961568.firebaseapp.com",
   projectId: "gen-lang-client-0634961568",
