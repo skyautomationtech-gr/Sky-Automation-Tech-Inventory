@@ -28,7 +28,8 @@ import {
   deleteCustomer, 
   getOrders, 
   subscribeToCustomers, 
-  subscribeToOrders 
+  subscribeToOrders,
+  localStore
 } from '../firebase/db';
 
 interface CustomerManagementProps {
@@ -44,9 +45,12 @@ export default function CustomerManagement({
   initialCustomerId,
   clearInitialCustomerId
 }: CustomerManagementProps) {
-  const [customers, setCustomers] = useState<Customer[]>([]);
-  const [orders, setOrders] = useState<Order[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [customers, setCustomers] = useState<Customer[]>(() => localStore.get<Customer[]>('customers') || []);
+  const [orders, setOrders] = useState<Order[]>(() => localStore.get<Order[]>('orders') || []);
+  const [loading, setLoading] = useState<boolean>(() => {
+    const cached = localStore.get<Customer[]>('customers');
+    return !(cached && cached.length > 0);
+  });
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [copiedPhone, setCopiedPhone] = useState<string | null>(null);
@@ -77,7 +81,6 @@ export default function CustomerManagement({
     (user?.permissionOverrides?.manageOrders !== false && user?.role === 'admin');
 
   useEffect(() => {
-    setLoading(true);
     const unsubCust = subscribeToCustomers((customersData) => {
       setCustomers(customersData || []);
       setLoading(false);
