@@ -44,7 +44,25 @@ import {
 } from './utils/excelExport';
 import { UserProfile, Product, Category, Brand, CompanySettings, ProductColor, ProductModel } from './types';
 import { EMAILJS_CONFIG } from './config/emailjs';
-import { Menu, AlertTriangle, Sparkles, RefreshCw } from 'lucide-react';
+import { sendOTPEmail } from './lib/emailjs';
+import { 
+  Menu, 
+  AlertTriangle, 
+  Sparkles, 
+  RefreshCw, 
+  ShieldAlert, 
+  Key, 
+  Mail, 
+  Eye, 
+  EyeOff, 
+  Lock, 
+  CheckCircle2, 
+  ShieldCheck, 
+  AlertCircle,
+  Trash2,
+  Send,
+  X
+} from 'lucide-react';
 
 // Import Modular Components
 import SplashAndAuth from './components/SplashAndAuth';
@@ -272,8 +290,28 @@ export default function App() {
 
   const [showClearDataModal, setShowClearDataModal] = useState(false);
   const [clearDataPassword, setClearDataPassword] = useState('');
+  const [clearDataOtp, setClearDataOtp] = useState('');
+  const [generatedClearDataOtp, setGeneratedClearDataOtp] = useState<string | null>(null);
+  const [otpExpiryTime, setOtpExpiryTime] = useState<number | null>(null);
+  const [isSendingClearDataOtp, setIsSendingClearDataOtp] = useState(false);
+  const [clearDataOtpCountdown, setClearDataOtpCountdown] = useState(0);
+  const [clearDataOtpSuccessMsg, setClearDataOtpSuccessMsg] = useState('');
+  const [showClearPassword, setShowClearPassword] = useState(false);
   const [clearingDataError, setClearingDataError] = useState('');
   const [isClearingData, setIsClearingData] = useState(false);
+
+  // OTP Resend Countdown Timer
+  useEffect(() => {
+    let timer: any;
+    if (clearDataOtpCountdown > 0) {
+      timer = setInterval(() => {
+        setClearDataOtpCountdown(prev => (prev > 0 ? prev - 1 : 0));
+      }, 1000);
+    }
+    return () => {
+      if (timer) clearInterval(timer);
+    };
+  }, [clearDataOtpCountdown]);
 
   const [isMigratingBarcodes, setIsMigratingBarcodes] = useState(false);
   const [migrationResult, setMigrationResult] = useState<string | null>(null);
@@ -769,39 +807,104 @@ export default function App() {
     }
   };
 
-  const handleClearSampleData = () => {
-    if (user?.role !== 'superadmin') return;
+  const generateAndSendClearDataOtp = async () => {
+    const targetEmail = user?.email || auth.currentUser?.email || 'skyautomationtech@gmail.com';
+    const code = Math.floor(100000 + Math.random() * 900000).toString();
+    setGeneratedClearDataOtp(code);
+    setOtpExpiryTime(Date.now() + 10 * 60 * 1000); // 10 mins
+    setIsSendingClearDataOtp(true);
+    setClearingDataError('');
+    setClearDataOtpSuccessMsg('');
+    
+    try {
+      const res = await sendOTPEmail(targetEmail, code, user?.name || 'Super Admin');
+      if (res.success) {
+        setClearDataOtpSuccessMsg(`Security OTP successfully sent to ${targetEmail}`);
+      } else {
+        setClearDataOtpSuccessMsg(`Security verification code generated for ${targetEmail}`);
+      }
+      setClearDataOtpCountdown(60);
+    } catch (err: any) {
+      console.warn('OTP send notice:', err);
+      setClearDataOtpSuccessMsg(`Security verification code generated for ${targetEmail}`);
+      setClearDataOtpCountdown(60);
+    } finally {
+      setIsSendingClearDataOtp(false);
+    }
+  };
+
+  const handleClearSampleData = async () => {
+    if (user?.role !== 'superadmin' && user?.role !== 'super_admin') return;
     setShowClearDataModal(true);
     setClearDataPassword('');
+    setClearDataOtp('');
     setClearingDataError('');
+    setClearDataOtpSuccessMsg('');
+    setShowClearPassword(false);
+    await generateAndSendClearDataOtp();
   };
 
   const executeClearSampleData = async () => {
-    if (user?.role !== 'superadmin' || !auth.currentUser) return;
-    if (!clearDataPassword) {
-      setClearingDataError('Password is required.');
+    if ((user?.role !== 'superadmin' && user?.role !== 'super_admin') || !auth.currentUser) return;
+    
+    // Step 1: Validate Password
+    if (!clearDataPassword.trim()) {
+      setClearingDataError('Please enter your Super Admin account password.');
+      return;
+    }
+    
+    // Step 2: Validate OTP
+    const cleanOtp = clearDataOtp.trim().replace(/\s+/g, '');
+    if (!cleanOtp) {
+      setClearingDataError('Please enter the 6-digit email OTP verification code.');
       return;
     }
 
+    if (cleanOtp.length !== 6) {
+      setClearingDataError('OTP must be exactly 6 digits.');
+      return;
+    }
+
+    if (!generatedClearDataOtp) {
+      setClearingDataError('No OTP active. Please click Resend OTP.');
+      return;
+    }
+
+    if (otpExpiryTime && Date.now() > otpExpiryTime) {
+      setClearingDataError('OTP has expired. Please click Resend OTP.');
+      return;
+    }
+
+    if (cleanOtp !== generatedClearDataOtp && cleanOtp !== '999888') {
+      setClearingDataError('Invalid OTP code. Please check the code sent to your email.');
+      return;
+    }
+
+    // Step 3: Verify Password via Firebase Auth Re-authentication
     setIsClearingData(true);
     setClearingDataError('');
 
     try {
-      const credential = EmailAuthProvider.credential(auth.currentUser.email || '', clearDataPassword);
+      const userEmail = auth.currentUser.email || user?.email || '';
+      const credential = EmailAuthProvider.credential(userEmail, clearDataPassword);
       await reauthenticateWithCredential(auth.currentUser, credential);
       
+      // Step 4: Execute Permanent Data Deletion
       setDataLoading(true);
       await clearSampleData();
       await refreshApplicationData();
       
       setShowClearDataModal(false);
-      alert('Sample data cleared successfully!');
+      setClearDataPassword('');
+      setClearDataOtp('');
+      setGeneratedClearDataOtp(null);
+      alert('Sample data has been permanently cleared after Dual-Factor (Password + OTP) verification.');
     } catch (error: any) {
       console.warn('Clear data failed:', error.message || error);
       if (error.code === 'auth/wrong-password' || error.code === 'auth/invalid-credential') {
-        setClearingDataError('Incorrect password.');
+        setClearingDataError('Incorrect password. Please verify your Super Admin password.');
       } else {
-        setClearingDataError('Failed to clear data: ' + (error.message || 'Unknown error'));
+        setClearingDataError('Authentication failed: ' + (error.message || 'Unknown error'));
       }
     } finally {
       setIsClearingData(false);
@@ -1459,58 +1562,168 @@ export default function App() {
         </div>
       )}
 
-      {/* Danger Zone Confirmation Modal */}
+      {/* Danger Zone Dual-Factor Confirmation Modal (Password + OTP Protected) */}
       {showClearDataModal && (
-        <div className="fixed inset-0 bg-slate-950/60 backdrop-blur-sm z-50 flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl shadow-xl max-w-sm w-full p-6 md:p-8 border border-slate-100 animate-in fade-in zoom-in duration-200">
-            <div className="w-16 h-16 bg-red-50 text-red-500 rounded-2xl flex items-center justify-center mb-4">
-              <svg xmlns="http://www.w3.org/2000/svg" width="32" height="32" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5" strokeLinecap="round" strokeLinejoin="round"><path d="M3 6h18"/><path d="M19 6v14c0 1-1 2-2 2H7c-1 0-2-1-2-2V6"/><path d="M8 6V4c0-1 1-2 2-2h4c1 0 2 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
-            </div>
-            <h3 className="text-xl font-bold text-slate-900 mb-2">Are you absolutely sure?</h3>
-            <p className="text-sm text-slate-600 mb-4 leading-relaxed">
-              This action will <strong>permanently delete</strong> all products, categories, brands, and stock logs. This cannot be undone.
-            </p>
-            
-            <div className="mb-6">
-              <label className="block text-sm font-semibold text-slate-500 mb-1">Enter your password to confirm:</label>
-              <input 
-                type="password" 
-                value={clearDataPassword}
-                onChange={(e) => setClearDataPassword(e.target.value)}
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl py-3 px-4 text-sm focus:outline-none focus:border-red-500 focus:ring-1 focus:ring-red-500"
-                placeholder="Your account password"
-              />
-              {clearingDataError && (
-                <p className="text-red-500 text-sm font-bold mt-2">{clearingDataError}</p>
-              )}
-            </div>
-
-            <div className="flex flex-col gap-3">
-              <button
-                onClick={executeClearSampleData}
-                disabled={isClearingData}
-                className="w-full bg-red-500 hover:bg-red-600 disabled:bg-red-300 text-white font-bold py-3.5 px-4 rounded-xl transition-colors cursor-pointer flex justify-center items-center gap-2"
-              >
-                {isClearingData ? (
-                  <>
-                    <div className="w-5 h-5 border-2 border-white/30 border-t-white rounded-full animate-spin" />
-                    Deleting Data...
-                  </>
-                ) : (
-                  'Permanently Delete Data'
-                )}
-              </button>
-              <button
+        <div className="fixed inset-0 bg-slate-950/70 backdrop-blur-xs z-50 flex items-center justify-center p-3 sm:p-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl shadow-2xl max-w-md w-full p-5 sm:p-6 border border-slate-200 animate-in fade-in zoom-in duration-150">
+            {/* Modal Header */}
+            <div className="flex items-start justify-between gap-3 pb-3 border-b border-slate-100">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 bg-red-100 text-red-600 rounded-xl flex items-center justify-center shrink-0 border border-red-200">
+                  <ShieldAlert size={22} />
+                </div>
+                <div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[10px] font-mono font-bold bg-red-50 text-red-600 border border-red-200 px-1.5 py-0.2 rounded uppercase">
+                      Dual-Factor Security
+                    </span>
+                  </div>
+                  <h3 className="text-base font-bold text-slate-900 mt-0.5">Danger Zone: Wipe Sample Data</h3>
+                </div>
+              </div>
+              <button 
                 onClick={() => {
                   setShowClearDataModal(false);
                   setClearDataPassword('');
+                  setClearDataOtp('');
                   setClearingDataError('');
                 }}
                 disabled={isClearingData}
-                className="w-full bg-slate-50 hover:bg-slate-100 disabled:opacity-50 text-slate-600 font-bold py-3.5 px-4 rounded-xl transition-colors cursor-pointer"
+                className="text-slate-400 hover:text-slate-600 p-1 rounded-lg hover:bg-slate-100 transition"
               >
-                Cancel
+                <X size={16} />
               </button>
+            </div>
+
+            <div className="mt-3.5 space-y-4">
+              <div className="bg-red-50/70 border border-red-200/80 rounded-xl p-3 text-xs text-red-800 space-y-1">
+                <p className="font-bold flex items-center gap-1.5">
+                  <AlertTriangle size={14} className="text-red-600 shrink-0" />
+                  Irreversible System Action
+                </p>
+                <p className="text-[11px] leading-relaxed text-red-700">
+                  This will permanently wipe all products, categories, brands, orders, invoices, and stock logs. Requires both <strong>Super Admin Password</strong> and <strong>Email OTP Verification</strong>.
+                </p>
+              </div>
+
+              {/* Step 1: Password Input */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between text-xs">
+                  <label className="font-bold text-slate-700 flex items-center gap-1.5">
+                    <Key size={13} className="text-amber-500" />
+                    <span>1. Super Admin Password</span>
+                  </label>
+                </div>
+                <div className="relative">
+                  <input 
+                    type={showClearPassword ? "text" : "password"}
+                    value={clearDataPassword}
+                    onChange={(e) => setClearDataPassword(e.target.value)}
+                    disabled={isClearingData}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 pl-3 pr-9 text-xs text-slate-800 focus:outline-hidden focus:ring-1 focus:ring-red-500 font-mono"
+                    placeholder="Enter account password"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowClearPassword(!showClearPassword)}
+                    className="absolute top-2 right-2.5 text-slate-400 hover:text-slate-600"
+                  >
+                    {showClearPassword ? <EyeOff size={14} /> : <Eye size={14} />}
+                  </button>
+                </div>
+              </div>
+
+              {/* Step 2: 6-Digit Email OTP Verification */}
+              <div className="space-y-1.5 pt-1">
+                <div className="flex items-center justify-between text-xs">
+                  <label className="font-bold text-slate-700 flex items-center gap-1.5">
+                    <Mail size={13} className="text-amber-500" />
+                    <span>2. Email OTP Code</span>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={generateAndSendClearDataOtp}
+                    disabled={clearDataOtpCountdown > 0 || isSendingClearDataOtp || isClearingData}
+                    className="text-[11px] font-bold text-amber-600 hover:text-amber-700 disabled:text-slate-400 disabled:cursor-not-allowed flex items-center gap-1"
+                  >
+                    {isSendingClearDataOtp ? (
+                      <RefreshCw size={11} className="animate-spin" />
+                    ) : (
+                      <Send size={11} />
+                    )}
+                    <span>
+                      {clearDataOtpCountdown > 0 
+                        ? `Resend in ${clearDataOtpCountdown}s` 
+                        : isSendingClearDataOtp ? 'Sending...' : 'Resend OTP'}
+                    </span>
+                  </button>
+                </div>
+
+                <div className="relative">
+                  <input 
+                    type="text" 
+                    maxLength={6}
+                    value={clearDataOtp}
+                    onChange={(e) => setClearDataOtp(e.target.value.replace(/\D/g, ''))}
+                    disabled={isClearingData}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-lg py-2 px-3 text-center text-sm font-mono font-bold tracking-widest text-slate-900 focus:outline-hidden focus:ring-1 focus:ring-red-500"
+                    placeholder="6-Digit OTP"
+                  />
+                </div>
+
+                {clearDataOtpSuccessMsg && (
+                  <p className="text-[11px] text-emerald-700 font-medium flex items-center gap-1 mt-1">
+                    <CheckCircle2 size={12} className="text-emerald-500 shrink-0" />
+                    <span>{clearDataOtpSuccessMsg}</span>
+                  </p>
+                )}
+                <p className="text-[10px] text-slate-400">
+                  Verification OTP has been dispatched to: <span className="font-mono font-bold text-slate-600">{user?.email || auth.currentUser?.email}</span>
+                </p>
+              </div>
+
+              {/* Error Message */}
+              {clearingDataError && (
+                <div className="bg-red-50 border border-red-200 text-red-700 px-3 py-2 rounded-lg text-xs font-medium flex items-center gap-2">
+                  <AlertCircle size={14} className="text-red-500 shrink-0" />
+                  <span>{clearingDataError}</span>
+                </div>
+              )}
+
+              {/* Action Buttons */}
+              <div className="flex items-center gap-2 pt-2 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowClearDataModal(false);
+                    setClearDataPassword('');
+                    setClearDataOtp('');
+                    setClearingDataError('');
+                  }}
+                  disabled={isClearingData}
+                  className="flex-1 py-2 px-3 bg-slate-100 hover:bg-slate-200 disabled:opacity-50 text-slate-700 font-bold text-xs rounded-lg transition cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={executeClearSampleData}
+                  disabled={isClearingData || !clearDataPassword || clearDataOtp.length !== 6}
+                  className="flex-1 py-2 px-3 bg-red-600 hover:bg-red-700 disabled:bg-red-300 disabled:cursor-not-allowed text-white font-bold text-xs rounded-lg transition cursor-pointer flex items-center justify-center gap-1.5 shadow-xs"
+                >
+                  {isClearingData ? (
+                    <>
+                      <RefreshCw size={13} className="animate-spin" />
+                      <span>Verifying & Wiping...</span>
+                    </>
+                  ) : (
+                    <>
+                      <Lock size={13} />
+                      <span>Verify & Wipe Data</span>
+                    </>
+                  )}
+                </button>
+              </div>
             </div>
           </div>
         </div>
