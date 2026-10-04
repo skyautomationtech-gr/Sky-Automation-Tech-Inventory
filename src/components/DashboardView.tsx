@@ -41,6 +41,7 @@ import {
   CartesianGrid 
 } from 'recharts';
 import { Product, UserProfile, Order, Customer, Invoice } from '../types';
+import { PWAInstallButton } from './PWAInstallButton';
 import { 
   checkInUser, 
   checkOutUser, 
@@ -575,6 +576,9 @@ export default function DashboardView({
 
   return (
     <div className="space-y-6">
+      
+      {/* PWA In-App Install Banner (hides when already installed/standalone) */}
+      <PWAInstallButton variant="banner" />
       
       {/* Live Staff Login Codes Widget for Super Admin */}
       {user?.role === 'superadmin' && liveLoginCodes.length > 0 && (

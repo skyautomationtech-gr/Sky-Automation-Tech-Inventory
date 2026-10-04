@@ -1,6 +1,21 @@
 <!doctype html>
 <html lang="en">
   <head>
+    <script>
+      (function() {
+        const _origErr = console.error;
+        console.error = function(...args) {
+          try {
+            const msg = args.map(a => (typeof a === 'string' ? a : (a && a.message) || '')).join(' ').toLowerCase();
+            if (msg.includes('[vite]') || msg.includes('websocket') || msg.includes('vite-plugin-pwa')) {
+              console.debug('[suppressed vite hmr notice]:', ...args);
+              return;
+            }
+          } catch (_) {}
+          _origErr.apply(console, args);
+        };
+      })();
+    </script>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>Sky Automation Tech</title>

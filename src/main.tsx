@@ -2,6 +2,24 @@ import {StrictMode} from 'react';
 import {createRoot} from 'react-dom/client';
 import App from './App.tsx';
 import './index.css';
+import { registerSW } from 'virtual:pwa-register';
+
+// Register PWA service worker for offline support and asset caching
+if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
+  try {
+    registerSW({
+      immediate: true,
+      onNeedRefresh() {
+        console.log('[PWA] New version ready.');
+      },
+      onOfflineReady() {
+        console.log('[PWA] App ready for offline use.');
+      },
+    });
+  } catch (e) {
+    console.debug('[PWA notice]:', e);
+  }
+}
 
 // Intercept Firestore Quota Exceeded and expected benign Firebase Auth validation error logs to avoid automated error flagging and enable graceful transitions
 const originalConsoleError = console.error;
@@ -28,7 +46,10 @@ console.error = function (...args) {
         lower.includes('auth/cancelled-popup-request') ||
         lower.includes('emailjs') ||
         lower.includes('recipients address is empty') ||
-        lower.includes('recipient email')
+        lower.includes('recipient email') ||
+        lower.includes('[vite]') ||
+        lower.includes('websocket') ||
+        lower.includes('vite-plugin-pwa')
       );
     } catch (_) {
       return false;
