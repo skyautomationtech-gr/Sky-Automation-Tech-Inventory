@@ -12,16 +12,17 @@ import {
   getFirestore 
 } from 'firebase/firestore';
 import { getStorage } from 'firebase/storage';
+import appletConfig from '../../firebase-applet-config.json';
 
 // Configuration keys for Firebase
-// These are sourced from /firebase-applet-config.json
+// Sourced dynamically from environment variables and firebase-applet-config.json
 export const firebaseConfig = {
-  apiKey: "AIzaSyC6-JTG8zI6cwBsJC9sT5BJHCtafBPNPpA",
-  authDomain: "gen-lang-client-0634961568.firebaseapp.com",
-  projectId: "gen-lang-client-0634961568",
-  storageBucket: "gen-lang-client-0634961568.firebasestorage.app",
-  messagingSenderId: "1012947381625",
-  appId: "1:1012947381625:web:621c645c6e6de3f37ed3a8"
+  apiKey: import.meta.env.VITE_FIREBASE_API_KEY || appletConfig.apiKey,
+  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN || appletConfig.authDomain,
+  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID || appletConfig.projectId,
+  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET || appletConfig.storageBucket,
+  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID || appletConfig.messagingSenderId,
+  appId: import.meta.env.VITE_FIREBASE_APP_ID || appletConfig.appId
 };
 
 // Initialize Firebase
@@ -41,7 +42,7 @@ try {
   } catch (e) {}
 }
 
-const DB_NAME = "ai-studio-6630a5d3-18da-424e-ba5b-db65e1dcfa41";
+const DB_NAME = (appletConfig as any).firestoreDatabaseId || "ai-studio-6630a5d3-18da-424e-ba5b-db65e1dcfa41";
 
 // Initialize Firestore with Persistent IndexedDB multi-tab cache
 // This dramatically reduces billable read costs by serving cached data locally and only fetching changed documents.

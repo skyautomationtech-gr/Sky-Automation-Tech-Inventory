@@ -41,7 +41,6 @@ import {
   CartesianGrid 
 } from 'recharts';
 import { Product, UserProfile, Order, Customer, Invoice } from '../types';
-import { PWAInstallButton } from './PWAInstallButton';
 import { 
   checkInUser, 
   checkOutUser, 
@@ -577,9 +576,6 @@ export default function DashboardView({
   return (
     <div className="space-y-6">
       
-      {/* PWA In-App Install Banner (hides when already installed/standalone) */}
-      <PWAInstallButton variant="banner" />
-      
       {/* Live Staff Login Codes Widget for Super Admin */}
       {user?.role === 'superadmin' && liveLoginCodes.length > 0 && (
         <div className="bg-gradient-to-r from-amber-500/15 via-amber-400/10 to-amber-500/15 border-2 border-amber-400/50 rounded-2xl p-4 md:p-5 shadow-lg animate-pulse">
@@ -636,16 +632,6 @@ export default function DashboardView({
             OPERATIONAL HUD
           </span>
           <h2 className="text-xl font-bold text-slate-900 mt-1">Management Dashboard</h2>
-        </div>
-        
-        <div className="flex items-center gap-3 bg-white p-2 rounded-xl border border-slate-100 shadow-xs">
-          <div className="w-8 h-8 rounded-full bg-teal-50 flex items-center justify-center text-teal-600">
-            {user?.role === 'admin' ? <ShieldCheck size={18} /> : <UserCircle size={18} />}
-          </div>
-          <div className="text-left pr-2">
-            <p className="text-sm font-bold text-slate-800 leading-tight">{user?.name || 'Operator'}</p>
-            <p className="text-sm text-slate-400 font-mono tracking-wider">{user?.role?.toUpperCase()} CONTEXT</p>
-          </div>
         </div>
       </div>
 

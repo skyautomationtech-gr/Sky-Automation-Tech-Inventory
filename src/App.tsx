@@ -86,6 +86,7 @@ import NotificationCenter from './components/NotificationCenter';
 import { PublicInvoiceVerification } from './components/PublicInvoiceVerification';
 import ErrorBoundary from './components/ErrorBoundary';
 import { OfflineIndicator } from './components/OfflineIndicator';
+import { LiveClockWidget } from './components/LiveClockWidget';
 
 // Mock/Fallback Data in case of Firestore permission/network errors
 const MOCK_PRODUCTS: Product[] = [
@@ -1082,10 +1083,8 @@ export default function App() {
             {dataLoading && (
               <div className="w-2 h-2 bg-amber-400 rounded-full animate-ping" />
             )}
+            <LiveClockWidget variant="compact" className="hidden sm:inline-flex" />
             <NotificationCenter user={user} products={products} onNavigate={navigateToTab} />
-            <div className="w-8 h-8 rounded-full bg-slate-800 border border-slate-700 flex items-center justify-center text-amber-500 font-bold text-sm">
-              {user?.name?.charAt(0) || 'U'}
-            </div>
           </div>
         </header>
 
@@ -1102,17 +1101,11 @@ export default function App() {
               </h2>
             </div>
 
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-3">
+              {/* Glassmorphic Live Time & Date HUD */}
+              <LiveClockWidget variant="header" />
+              
               <NotificationCenter user={user} products={products} onNavigate={navigateToTab} />
-              <div className="flex items-center gap-3 pl-4 border-l border-slate-200">
-                <div className="w-9 h-9 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-center text-amber-400 font-bold text-sm shadow-xs">
-                  {user?.name?.charAt(0) || 'U'}
-                </div>
-                <div className="text-left">
-                  <div className="text-xs font-bold text-slate-900">{user?.name || 'Staff User'}</div>
-                  <div className="text-[10px] text-slate-500 capitalize">{user?.role || 'staff'}</div>
-                </div>
-              </div>
             </div>
           </div>
           
