@@ -352,11 +352,11 @@ export default function CustomerManagement({
     : [];
 
   return (
-    <div className="space-y-4 max-w-7xl mx-auto pb-12">
+    <div className="w-full max-w-full space-y-3.5 pb-12 overflow-x-hidden">
       {/* Top Header Section - Compact Standardized */}
-      <div className="bg-white p-4 rounded-xl border border-slate-200/80 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div>
-          <div className="flex items-center gap-2">
+      <div className="bg-white p-3.5 sm:p-4 rounded-xl border border-slate-200/80 shadow-xs flex flex-col sm:flex-row sm:items-center justify-between gap-3 w-full">
+        <div className="min-w-0">
+          <div className="flex items-center gap-1.5 flex-wrap">
             <span className="text-[10px] font-mono font-bold text-amber-600 uppercase tracking-wider bg-amber-50 px-2 py-0.5 rounded border border-amber-200/60">
               Customer Ledger
             </span>
@@ -364,13 +364,13 @@ export default function CustomerManagement({
               Permanent Records
             </span>
           </div>
-          <div className="flex items-center gap-2 mt-1">
-            <h1 className="text-lg sm:text-xl font-bold text-slate-900 tracking-tight">Customer Directory</h1>
-            <span className="text-xs font-mono font-bold bg-slate-100 text-slate-700 px-2 py-0.5 rounded-full border border-slate-200">
+          <div className="flex items-center gap-2 mt-1 flex-wrap">
+            <h1 className="text-base sm:text-lg font-bold text-slate-900 tracking-tight">Customer Directory</h1>
+            <span className="text-xs font-mono font-bold bg-slate-100 text-slate-700 px-2 py-0.2 rounded-full border border-slate-200">
               {filteredCustomers.length} Total
             </span>
           </div>
-          <p className="text-xs text-slate-500 mt-0.5">
+          <p className="text-xs text-slate-500 mt-0.5 truncate">
             Maintain client profiles, contact history, sub-brand associations, and lifetime value records.
           </p>
         </div>
@@ -393,7 +393,7 @@ export default function CustomerManagement({
       </div>
 
       {/* Metrics Row (Standard Compact 3-Card Grid) */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5">
+      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2.5 w-full">
         <div className="bg-white p-3 rounded-xl border border-slate-200/80 shadow-xs flex items-center justify-between">
           <div>
             <span className="text-[10px] font-mono font-bold text-slate-400 uppercase block">Total Customers</span>
@@ -442,7 +442,7 @@ export default function CustomerManagement({
       )}
 
       {/* Standardized Compact Search and Filter Bar */}
-      <div className="bg-white p-2.5 rounded-xl border border-slate-200/80 shadow-xs flex flex-col sm:flex-row gap-2 items-center justify-between bg-slate-50/50">
+      <div className="bg-white p-2.5 rounded-xl border border-slate-200/80 shadow-xs flex flex-col sm:flex-row gap-2 items-center justify-between bg-slate-50/50 w-full">
         {/* Search */}
         <div className="relative w-full sm:flex-1">
           <Search className="absolute left-2.5 top-2 text-slate-400" size={13} />
@@ -477,7 +477,7 @@ export default function CustomerManagement({
       </div>
 
       {/* Full Screen Unified Table Container (Standard Enterprise Table) */}
-      <div className="bg-white rounded-xl border border-slate-200/80 shadow-xs overflow-hidden w-full">
+      <div className="bg-white rounded-xl border border-slate-200/80 shadow-xs overflow-hidden w-full max-w-full">
         {loading ? (
           <div className="p-8 text-center flex flex-col items-center justify-center space-y-2">
             <div className="w-6 h-6 border-2 border-amber-400 border-t-transparent rounded-full animate-spin" />
@@ -492,10 +492,10 @@ export default function CustomerManagement({
             </p>
           </div>
         ) : (
-          <div className="overflow-x-auto w-full">
+          <div className="w-full overflow-x-auto max-w-full">
             <table className="w-full border-collapse text-left">
               <thead>
-                <tr className="bg-slate-50/50 border-b border-slate-100 text-[11px] font-bold uppercase tracking-wider text-slate-400">
+                <tr className="bg-slate-50/50 border-b border-slate-100 text-[11px] font-bold uppercase tracking-wider text-slate-400 whitespace-nowrap">
                   <th className="py-2.5 px-3.5">
                     <button onClick={() => toggleSort('name')} className="flex items-center gap-1 hover:text-slate-700 cursor-pointer">
                       <span>Customer & ID</span>

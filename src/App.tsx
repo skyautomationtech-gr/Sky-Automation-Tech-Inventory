@@ -1037,7 +1037,7 @@ export default function App() {
   }
 
   return (
-    <div className="min-h-screen bg-slate-100 text-slate-800 flex flex-col lg:flex-row">
+    <div className="min-h-screen bg-slate-100 text-slate-800 flex flex-col lg:flex-row w-full max-w-full overflow-x-hidden">
       
       {/* Sidebar Navigation */}
       <Sidebar 
@@ -1052,7 +1052,7 @@ export default function App() {
       />
 
       {/* Main Content Workspace */}
-      <div className="flex-1 flex flex-col min-h-screen relative">
+      <div className="flex-1 flex flex-col min-h-screen relative min-w-0 max-w-full overflow-x-hidden">
         
         {/* Top Header Bar - Mobile/Tablet Only */}
         <header className="lg:hidden fixed top-0 left-0 right-0 h-16 bg-slate-950 border-b border-slate-800 z-30 px-4 flex items-center justify-between">
@@ -1091,7 +1091,7 @@ export default function App() {
           </div>
         </header>
 
-        <main className="flex-1 overflow-y-auto p-4 md:p-6 lg:p-8 pt-20 lg:pt-8 bg-slate-50">
+        <main className="flex-1 overflow-y-auto overflow-x-hidden p-3 sm:p-4 md:p-6 lg:p-8 pt-20 lg:pt-8 bg-slate-50 w-full max-w-full min-w-0">
           
           {/* Desktop Header Bar */}
           <div className="hidden lg:flex items-center justify-between pb-6 mb-6 border-b border-slate-200/80">
