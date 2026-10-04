@@ -8,7 +8,7 @@ import {
   checkInOnBehalf,
   checkOutOnBehalf
 } from '../firebase/db';
-import { Clock, Filter, Calendar, User, Trash2, ShieldAlert, Sparkles, LogIn, LogOut, CheckCircle, X } from 'lucide-react';
+import { Clock, Filter, Calendar, User, Trash2, ShieldAlert, Sparkles, LogIn, LogOut, CheckCircle, X, Shield, Users } from 'lucide-react';
 
 interface AttendanceLogProps {
   user: UserProfile | null;
@@ -124,70 +124,90 @@ export default function AttendanceLog({ user }: AttendanceLogProps) {
   };
 
   return (
-    <div className="space-y-6">
-      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4 pb-2 border-b border-slate-200">
+    <div className="space-y-5">
+      {/* Header Row */}
+      <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 pb-3 border-b border-slate-200">
         <div>
-          <span className="text-sm font-mono font-bold text-amber-500 uppercase tracking-widest">
+          <span className="text-xs font-mono font-bold text-amber-500 uppercase tracking-widest">
             WORKFORCE MANAGEMENT
           </span>
-          <h2 className="text-xl font-bold text-slate-900 mt-1">Attendance Log</h2>
+          <h2 className="text-xl font-black text-slate-900 font-sans tracking-tight">Attendance Log</h2>
         </div>
         {user?.role === 'superadmin' && (
           <button
             onClick={handleCleanup}
             disabled={cleaning}
-            className="bg-amber-100 text-amber-700 font-bold text-sm uppercase tracking-widest px-4 py-2 rounded-xl hover:bg-amber-200 transition-all flex items-center gap-2 border border-amber-200 shadow-sm"
+            className="bg-amber-100/80 hover:bg-amber-100 text-amber-800 font-bold text-xs uppercase tracking-wider px-3.5 py-2 rounded-xl transition-all flex items-center gap-1.5 border border-amber-300/60 shadow-xs cursor-pointer"
           >
             {cleaning ? (
               <div className="w-3 h-3 border-2 border-amber-600 border-t-transparent rounded-full animate-spin" />
             ) : (
-              <Sparkles size={14} />
+              <Sparkles size={13} />
             )}
             Run Duplicate Cleanup
           </button>
         )}
       </div>
 
-      {/* Staff Session Board - Super Admin Only */}
+      {/* Staff Session Board - Super Admin Only (Standard Compact Sizing) */}
       {user?.role === 'superadmin' && (
-        <div className="bg-white rounded-2xl shadow-sm border border-slate-200 p-6 space-y-4">
-          <div>
-            <span className="text-sm font-mono font-bold text-amber-500 uppercase tracking-widest flex items-center gap-2">
-              <Clock size={14} /> Session Management
-            </span>
-            <h3 className="text-base font-bold text-slate-900 mt-1">Staff Session Status & Behalf Actions</h3>
-            <p className="text-sm text-slate-500 mt-1">
-              Real-time shift dashboard. Initiate or end work sessions for team members.
+        <div className="bg-white rounded-2xl shadow-xs border border-slate-200 p-4 sm:p-5 space-y-3.5">
+          <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 border-b border-slate-100 pb-3">
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="text-xs font-mono font-bold text-amber-600 uppercase tracking-wider flex items-center gap-1.5">
+                  <Clock size={13} /> Session Management
+                </span>
+                <span className="text-[10px] font-mono font-bold bg-slate-100 text-slate-700 px-2 py-0.2 rounded-md">
+                  {users.length} Staff
+                </span>
+              </div>
+              <h3 className="text-sm font-bold text-slate-900 mt-0.5">Staff Session Status & Behalf Actions</h3>
+            </div>
+            <p className="text-xs text-slate-500">
+              Real-time shift monitor. Check in or out on behalf of team members.
             </p>
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-3">
             {users.map(u => {
               const isCheckedIn = u.currentSessionStatus === 'checked_in';
               return (
-                <div key={u.id} className="border border-slate-150 rounded-xl p-4 bg-slate-50/50 flex flex-col justify-between hover:border-slate-250 transition-all shadow-xs">
+                <div 
+                  key={u.id} 
+                  className="border border-slate-200/90 rounded-xl p-3 bg-slate-50/40 hover:bg-white hover:border-slate-300 transition-all shadow-xs flex flex-col justify-between gap-2.5"
+                >
                   <div className="flex justify-between items-start gap-2">
-                    <div>
-                      <h4 className="font-bold text-slate-800 text-sm">{u.name}</h4>
-                      <p className="text-sm text-slate-500 font-semibold uppercase tracking-wider mt-0.5 capitalize">
-                        {u.role} &bull; {u.subBrandAccess?.join(', ') || 'None'}
-                      </p>
+                    <div className="flex items-center gap-2.5 min-w-0">
+                      <div className={`w-8 h-8 rounded-lg flex items-center justify-center font-bold text-xs font-mono shrink-0 shadow-xs ${
+                        isCheckedIn ? 'bg-emerald-600 text-white' : 'bg-slate-800 text-amber-400'
+                      }`}>
+                        {u.name.charAt(0).toUpperCase()}
+                      </div>
+                      <div className="min-w-0">
+                        <h4 className="font-bold text-slate-900 text-xs truncate" title={u.name}>{u.name}</h4>
+                        <p className="text-[10px] text-slate-500 font-semibold uppercase tracking-wider truncate mt-0.5">
+                          {u.role} &bull; {u.subBrandAccess?.join(', ') || 'All'}
+                        </p>
+                      </div>
                     </div>
-                    <span className={`text-[9px] font-black px-2 py-0.5 rounded-full uppercase tracking-wider border ${
+
+                    <span className={`text-[9px] font-bold px-2 py-0.5 rounded-full uppercase tracking-wider shrink-0 flex items-center gap-1 border ${
                       isCheckedIn 
-                        ? 'bg-emerald-50 text-emerald-700 border-emerald-150 animate-pulse' 
+                        ? 'bg-emerald-50 text-emerald-700 border-emerald-200' 
                         : 'bg-slate-100 text-slate-600 border-slate-200'
                     }`}>
-                      {isCheckedIn ? 'Checked In' : 'Checked Out'}
+                      <span className={`w-1.5 h-1.5 rounded-full ${isCheckedIn ? 'bg-emerald-500 animate-ping' : 'bg-slate-400'}`} />
+                      {isCheckedIn ? 'In' : 'Out'}
                     </span>
                   </div>
 
-                  <div className="mt-4 pt-3 border-t border-slate-100 flex gap-2">
+                  <div className="pt-2 border-t border-slate-150">
                     {isCheckedIn ? (
                       <button
                         type="button"
                         onClick={() => handleOpenBehalfModal('checkout', u)}
-                        className="w-full py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-lg text-sm font-bold uppercase tracking-wider transition-all border border-rose-150 flex items-center justify-center gap-1 cursor-pointer"
+                        className="w-full py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-lg text-xs font-bold uppercase tracking-wider transition-all border border-rose-200/80 flex items-center justify-center gap-1.5 cursor-pointer shadow-xs active:scale-98"
                       >
                         <LogOut size={12} /> Check Out on Behalf
                       </button>
@@ -195,7 +215,7 @@ export default function AttendanceLog({ user }: AttendanceLogProps) {
                       <button
                         type="button"
                         onClick={() => handleOpenBehalfModal('checkin', u)}
-                        className="w-full py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded-lg text-sm font-bold uppercase tracking-wider transition-all border border-emerald-150 flex items-center justify-center gap-1 cursor-pointer"
+                        className="w-full py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-700 rounded-lg text-xs font-bold uppercase tracking-wider transition-all border border-emerald-200/80 flex items-center justify-center gap-1.5 cursor-pointer shadow-xs active:scale-98"
                       >
                         <LogIn size={12} /> Check In on Behalf
                       </button>
@@ -208,27 +228,28 @@ export default function AttendanceLog({ user }: AttendanceLogProps) {
         </div>
       )}
 
-      <div className="bg-white rounded-2xl shadow-sm border border-slate-200 overflow-hidden">
-        <div className="p-4 border-b border-slate-100 flex flex-col sm:flex-row gap-4 items-end bg-slate-50/50">
+      {/* Filter and Log Table */}
+      <div className="bg-white rounded-2xl shadow-xs border border-slate-200 overflow-hidden">
+        <div className="p-3.5 border-b border-slate-100 flex flex-col sm:flex-row gap-3 items-end bg-slate-50/50">
           <div className="flex-1 w-full">
-            <label className="block text-sm font-bold text-slate-400 uppercase tracking-widest mb-1.5 flex items-center gap-1">
+            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1 flex items-center gap-1">
               <Calendar size={12} /> Date Filter
             </label>
             <input 
               type="date"
               value={dateFilter}
               onChange={(e) => setDateFilter(e.target.value)}
-              className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm text-slate-800 font-medium focus:outline-none focus:border-amber-400 focus:ring-1 focus:ring-amber-400"
+              className="w-full bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-xs text-slate-800 font-medium focus:outline-hidden focus:ring-2 focus:ring-amber-400/40"
             />
           </div>
           <div className="flex-1 w-full">
-            <label className="block text-sm font-bold text-slate-400 uppercase tracking-widest mb-1.5 flex items-center gap-1">
+            <label className="block text-xs font-bold text-slate-500 uppercase tracking-wider mb-1 flex items-center gap-1">
               <User size={12} /> Staff Member
             </label>
             <select 
               value={userFilter}
               onChange={(e) => setUserFilter(e.target.value)}
-              className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm text-slate-800 font-medium focus:outline-none focus:border-amber-400 focus:ring-1 focus:ring-amber-400"
+              className="w-full bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-xs text-slate-800 font-medium focus:outline-hidden focus:ring-2 focus:ring-amber-400/40"
             >
               <option value="">All Staff</option>
               {users.map(u => (
@@ -239,96 +260,97 @@ export default function AttendanceLog({ user }: AttendanceLogProps) {
           <div className="w-full sm:w-auto">
             <button 
               onClick={fetchLogs}
-              className="w-full sm:w-auto bg-slate-900 text-white font-bold text-sm px-5 py-2.5 rounded-xl hover:bg-slate-800 transition-colors flex items-center justify-center gap-2"
+              className="w-full sm:w-auto bg-slate-900 text-white font-bold text-xs px-4 py-2 rounded-xl hover:bg-slate-800 transition-colors flex items-center justify-center gap-1.5 shadow-xs cursor-pointer"
             >
-              <Filter size={14} /> Filter
+              <Filter size={13} /> Filter
             </button>
           </div>
         </div>
 
         <div className="overflow-x-auto">
           {loading ? (
-            <div className="p-12 flex justify-center text-slate-400">
-              <div className="w-8 h-8 border-2 border-amber-400 border-t-transparent rounded-full animate-spin" />
+            <div className="p-10 flex justify-center text-slate-400">
+              <div className="w-7 h-7 border-2 border-amber-400 border-t-transparent rounded-full animate-spin" />
             </div>
           ) : logs.length === 0 ? (
-            <div className="p-12 text-center text-slate-400 text-sm font-medium">
+            <div className="p-10 text-center text-slate-400 text-xs font-medium">
               No attendance records found matching filters.
             </div>
           ) : (
             <>
               {/* Desktop Table View */}
               <table className="w-full text-left hidden md:table">
-                <thead className="bg-slate-50 text-sm uppercase text-slate-400 font-black tracking-wider border-b border-slate-100">
+                <thead className="bg-slate-50 text-xs uppercase text-slate-400 font-black tracking-wider border-b border-slate-100">
                   <tr>
-                    <th className="px-6 py-3">Staff Member</th>
-                    <th className="px-6 py-3">Role & Brand</th>
-                    <th className="px-6 py-3">Date</th>
-                    <th className="px-6 py-3">Check In</th>
-                    <th className="px-6 py-3">Check Out</th>
-                    <th className="px-6 py-3 text-right">Duration</th>
-                    {user?.role === 'superadmin' && <th className="px-6 py-3 text-right">Action</th>}
+                    <th className="px-5 py-3">Staff Member</th>
+                    <th className="px-5 py-3">Role & Brand</th>
+                    <th className="px-5 py-3">Date</th>
+                    <th className="px-5 py-3">Check In</th>
+                    <th className="px-5 py-3">Check Out</th>
+                    <th className="px-5 py-3 text-right">Duration</th>
+                    {user?.role === 'superadmin' && <th className="px-5 py-3 text-right">Action</th>}
                   </tr>
                 </thead>
-                <tbody className="divide-y divide-slate-100 text-sm">
+                <tbody className="divide-y divide-slate-100 text-xs">
                   {logs.map((log) => (
-                    <tr key={log.id} className="hover:bg-slate-50/50 transition-colors">
-                      <td className="px-6 py-4 font-bold text-slate-800">
+                    <tr key={log.id} className="hover:bg-slate-50/60 transition-colors">
+                      <td className="px-5 py-3 font-bold text-slate-900">
                         <div className="flex flex-col">
                           <span className="flex items-center gap-1.5">
                             {log.userName}
                             {log.isManualEntry && (
-                              <span className="text-[9px] bg-slate-100 text-slate-600 font-semibold px-1.5 py-0.5 rounded-md border border-slate-200">
+                              <span className="text-[9px] bg-slate-100 text-slate-600 font-semibold px-1.5 py-0.2 rounded border border-slate-200">
                                 Manual Entry
                               </span>
                             )}
                           </span>
                         </div>
                       </td>
-                      <td className="px-6 py-4 font-medium text-slate-500">
+                      <td className="px-5 py-3 font-medium text-slate-500">
                         <span className="capitalize">{log.role}</span> &bull; {log.subBrand}
                       </td>
-                      <td className="px-6 py-4 font-mono font-medium text-slate-600">
+                      <td className="px-5 py-3 font-mono font-medium text-slate-600">
                         {log.date}
                       </td>
-                      <td className="px-6 py-4 font-mono text-emerald-600 font-bold">
+                      <td className="px-5 py-3 font-mono text-emerald-600 font-bold">
                         <div>
                           {new Date(log.checkInTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                           {log.isManualEntry && log.checkedInBy && (
-                            <div className="text-sm text-slate-400 font-normal mt-0.5">
+                            <div className="text-[10px] text-slate-400 font-normal mt-0.5">
                               Manually by {log.checkedInBy}
                             </div>
                           )}
                         </div>
                       </td>
-                      <td className="px-6 py-4 font-mono font-bold text-slate-600">
+                      <td className="px-5 py-3 font-mono font-bold text-slate-600">
                         {log.checkOutTime ? (
                           <div>
                             {new Date(log.checkOutTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                             {log.isManualEntry && log.checkedOutBy && (
-                              <div className="text-sm text-slate-400 font-normal mt-0.5">
+                              <div className="text-[10px] text-slate-400 font-normal mt-0.5">
                                 Manually by {log.checkedOutBy}
                               </div>
                             )}
                           </div>
                         ) : (
-                          <span className="text-amber-500 text-sm uppercase tracking-wider bg-amber-50 px-2 py-0.5 rounded-sm animate-pulse">Active</span>
+                          <span className="text-amber-500 text-xs uppercase tracking-wider bg-amber-50 px-2 py-0.5 rounded border border-amber-200 animate-pulse">Active</span>
                         )}
                       </td>
-                      <td className="px-6 py-4 font-mono font-bold text-slate-800 text-right">
+                      <td className="px-5 py-3 font-mono font-bold text-slate-800 text-right">
                         {log.durationMinutes ? `${Math.floor(log.durationMinutes / 60)}h ${log.durationMinutes % 60}m` : '-'}
                       </td>
                       {user?.role === 'superadmin' && (
-                        <td className="px-6 py-4 text-right">
+                        <td className="px-5 py-3 text-right">
                           <button
                             onClick={() => handleDelete(log.id)}
                             disabled={deletingId === log.id}
-                            className="p-1 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg disabled:opacity-50"
+                            className="p-1 text-slate-400 hover:text-red-500 hover:bg-red-50 rounded-lg disabled:opacity-50 transition"
+                            title="Delete Record"
                           >
                             {deletingId === log.id ? (
-                              <div className="w-4 h-4 border-2 border-red-400 border-t-transparent rounded-full animate-spin" />
+                              <div className="w-3.5 h-3.5 border-2 border-red-400 border-t-transparent rounded-full animate-spin" />
                             ) : (
-                              <Trash2 size={16} />
+                              <Trash2 size={14} />
                             )}
                           </button>
                         </td>
@@ -341,32 +363,32 @@ export default function AttendanceLog({ user }: AttendanceLogProps) {
               {/* Mobile Card View */}
               <div className="md:hidden divide-y divide-slate-100">
                 {logs.map((log) => (
-                  <div key={log.id} className="p-4 space-y-4">
+                  <div key={log.id} className="p-3.5 space-y-2.5">
                     <div className="flex justify-between items-start">
                       <div>
-                        <h4 className="font-bold text-slate-900 flex items-center gap-1.5 flex-wrap">
+                        <h4 className="font-bold text-slate-900 text-xs flex items-center gap-1.5 flex-wrap">
                           {log.userName}
                           {log.isManualEntry && (
-                            <span className="text-[9px] bg-slate-100 text-slate-600 font-semibold px-1.5 py-0.5 rounded-md border border-slate-200">
+                            <span className="text-[9px] bg-slate-100 text-slate-600 font-semibold px-1.5 py-0.2 rounded border border-slate-200">
                               Manual
                             </span>
                           )}
                         </h4>
-                        <p className="text-sm text-slate-400 font-bold uppercase tracking-widest mt-0.5">
+                        <p className="text-[10px] text-slate-400 font-bold uppercase tracking-wider mt-0.5">
                           {log.role} &bull; {log.subBrand}
                         </p>
                       </div>
                       <div className="text-right">
-                        <span className="text-sm font-mono font-bold text-slate-500 bg-slate-100 px-2 py-1 rounded-md">
+                        <span className="text-xs font-mono font-bold text-slate-600 bg-slate-100 px-2 py-0.5 rounded">
                           {log.date}
                         </span>
                       </div>
                     </div>
 
-                    <div className="grid grid-cols-2 gap-4 bg-slate-50/50 p-3 rounded-xl border border-slate-100">
+                    <div className="grid grid-cols-2 gap-2 bg-slate-50/60 p-2.5 rounded-xl border border-slate-100">
                       <div>
-                        <p className="text-[9px] font-bold text-slate-400 uppercase mb-1">Check In</p>
-                        <p className="text-sm font-mono font-bold text-emerald-600">
+                        <p className="text-[9px] font-bold text-slate-400 uppercase mb-0.5">Check In</p>
+                        <p className="text-xs font-mono font-bold text-emerald-600">
                           {new Date(log.checkInTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                         </p>
                         {log.isManualEntry && log.checkedInBy && (
@@ -374,10 +396,10 @@ export default function AttendanceLog({ user }: AttendanceLogProps) {
                         )}
                       </div>
                       <div>
-                        <p className="text-[9px] font-bold text-slate-400 uppercase mb-1">Check Out</p>
-                        <p className="text-sm font-mono font-bold text-slate-600">
+                        <p className="text-[9px] font-bold text-slate-400 uppercase mb-0.5">Check Out</p>
+                        <p className="text-xs font-mono font-bold text-slate-600">
                           {log.checkOutTime ? new Date(log.checkOutTime).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : (
-                            <span className="text-amber-500 animate-pulse">Active</span>
+                            <span className="text-amber-500 animate-pulse text-[10px]">Active</span>
                           )}
                         </p>
                         {log.isManualEntry && log.checkedOutBy && (
@@ -388,8 +410,8 @@ export default function AttendanceLog({ user }: AttendanceLogProps) {
 
                     <div className="flex justify-between items-center">
                       <div className="flex items-center gap-1.5 text-slate-600">
-                        <Clock size={14} className="text-slate-400" />
-                        <span className="text-sm font-mono font-bold">
+                        <Clock size={13} className="text-slate-400" />
+                        <span className="text-xs font-mono font-bold">
                           {log.durationMinutes ? `${Math.floor(log.durationMinutes / 60)}h ${log.durationMinutes % 60}m` : 'In Progress'}
                         </span>
                       </div>
@@ -398,14 +420,14 @@ export default function AttendanceLog({ user }: AttendanceLogProps) {
                         <button
                           onClick={() => handleDelete(log.id)}
                           disabled={deletingId === log.id}
-                          className="flex items-center gap-1.5 text-sm font-bold text-red-500 hover:bg-red-50 px-3 py-1.5 rounded-lg border border-red-100 transition-all active:scale-95"
+                          className="flex items-center gap-1 text-xs font-bold text-red-500 hover:bg-red-50 px-2.5 py-1 rounded-lg border border-red-100 transition"
                         >
                           {deletingId === log.id ? (
-                            <div className="w-3.5 h-3.5 border-2 border-red-400 border-t-transparent rounded-full animate-spin" />
+                            <div className="w-3 h-3 border-2 border-red-400 border-t-transparent rounded-full animate-spin" />
                           ) : (
-                            <Trash2 size={14} />
+                            <Trash2 size={13} />
                           )}
-                          Delete Record
+                          Delete
                         </button>
                       )}
                     </div>
@@ -419,42 +441,42 @@ export default function AttendanceLog({ user }: AttendanceLogProps) {
 
       {/* Behalf Confirmation Modal */}
       {behalfModal && (
-        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
+        <div className="fixed inset-0 z-50 overflow-y-auto bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4 animate-in fade-in duration-150">
           <div className="bg-white rounded-2xl max-w-md w-full shadow-xl border border-slate-200 overflow-hidden">
-            <div className="p-6 space-y-4">
+            <div className="p-5 space-y-4">
               <div className="flex justify-between items-start">
-                <div className="flex items-center gap-2">
+                <div className="flex items-center gap-2.5">
                   <div className={`p-2 rounded-xl ${behalfModal.type === 'checkin' ? 'bg-emerald-50 text-emerald-600' : 'bg-rose-50 text-rose-600'}`}>
-                    {behalfModal.type === 'checkin' ? <LogIn size={20} /> : <LogOut size={20} />}
+                    {behalfModal.type === 'checkin' ? <LogIn size={18} /> : <LogOut size={18} />}
                   </div>
                   <div>
-                    <h3 className="text-base font-bold text-slate-900">
+                    <h3 className="text-sm font-bold text-slate-900">
                       {behalfModal.type === 'checkin' ? 'Check In on Behalf' : 'Check Out on Behalf'}
                     </h3>
-                    <p className="text-sm text-slate-500">Super Admin Manual Action</p>
+                    <p className="text-xs text-slate-500">Super Admin Manual Action</p>
                   </div>
                 </div>
                 <button 
                   onClick={() => setBehalfModal(null)}
-                  className="p-1.5 text-slate-400 hover:bg-slate-50 rounded-xl transition-all"
+                  className="p-1.5 text-slate-400 hover:bg-slate-50 rounded-xl transition"
                 >
                   <X size={16} />
                 </button>
               </div>
 
               {behalfModal.error && (
-                <div className="p-3 bg-red-50 border border-red-100 text-red-700 text-sm font-semibold rounded-xl flex items-start gap-2">
+                <div className="p-3 bg-red-50 border border-red-100 text-red-700 text-xs font-semibold rounded-xl flex items-start gap-2">
                   <ShieldAlert size={14} className="mt-0.5 shrink-0" />
                   <span>{behalfModal.error}</span>
                 </div>
               )}
 
-              <p className="text-sm text-slate-600 font-medium">
+              <p className="text-xs text-slate-600 font-medium">
                 Are you sure you want to {behalfModal.type === 'checkin' ? 'start' : 'end'} the work session for <strong className="text-slate-900">{behalfModal.targetUser.name}</strong>?
               </p>
 
-              <div className="pt-2 space-y-3">
-                <label className="flex items-center gap-2 text-sm font-bold text-slate-700 cursor-pointer select-none">
+              <div className="pt-1 space-y-2.5">
+                <label className="flex items-center gap-2 text-xs font-bold text-slate-700 cursor-pointer select-none">
                   <input 
                     type="checkbox" 
                     checked={behalfModal.useCustomTime}
@@ -466,25 +488,25 @@ export default function AttendanceLog({ user }: AttendanceLogProps) {
 
                 {behalfModal.useCustomTime && (
                   <div className="space-y-1">
-                    <label className="block text-sm font-bold text-slate-400 uppercase tracking-wider">
+                    <label className="block text-[10px] font-bold text-slate-400 uppercase tracking-wider">
                       Session Date & Time
                     </label>
                     <input 
                       type="datetime-local" 
                       value={behalfModal.customDateTime}
                       onChange={(e) => setBehalfModal(prev => prev ? { ...prev, customDateTime: e.target.value } : null)}
-                      className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm text-slate-800 font-medium focus:outline-none focus:border-amber-400 focus:ring-1 focus:ring-amber-400"
+                      className="w-full bg-white border border-slate-200 rounded-xl px-3 py-1.5 text-xs text-slate-800 font-medium focus:outline-hidden focus:ring-2 focus:ring-amber-400/40"
                     />
                   </div>
                 )}
               </div>
 
-              <div className="flex gap-3 pt-3 border-t border-slate-100">
+              <div className="flex gap-2.5 pt-2 border-t border-slate-100">
                 <button
                   type="button"
                   onClick={() => setBehalfModal(null)}
                   disabled={behalfModal.submitting}
-                  className="flex-1 py-2 border border-slate-200 hover:bg-slate-50 text-slate-700 font-bold text-sm uppercase tracking-wider rounded-xl transition-all"
+                  className="flex-1 py-2 border border-slate-200 hover:bg-slate-50 text-slate-700 font-bold text-xs uppercase tracking-wider rounded-xl transition"
                 >
                   Cancel
                 </button>
@@ -492,7 +514,7 @@ export default function AttendanceLog({ user }: AttendanceLogProps) {
                   type="button"
                   onClick={handleBehalfSubmit}
                   disabled={behalfModal.submitting}
-                  className={`flex-1 py-2 font-bold text-sm uppercase tracking-wider rounded-xl transition-all text-white flex items-center justify-center gap-1.5 ${
+                  className={`flex-1 py-2 font-bold text-xs uppercase tracking-wider rounded-xl transition text-white flex items-center justify-center gap-1.5 shadow-xs ${
                     behalfModal.type === 'checkin' 
                       ? 'bg-emerald-600 hover:bg-emerald-500' 
                       : 'bg-rose-600 hover:bg-rose-500'
@@ -501,7 +523,7 @@ export default function AttendanceLog({ user }: AttendanceLogProps) {
                   {behalfModal.submitting ? (
                     <div className="w-3.5 h-3.5 border-2 border-white border-t-transparent rounded-full animate-spin" />
                   ) : (
-                    behalfModal.type === 'checkin' ? <LogIn size={14} /> : <LogOut size={14} />
+                    behalfModal.type === 'checkin' ? <LogIn size={13} /> : <LogOut size={13} />
                   )}
                   Confirm
                 </button>
