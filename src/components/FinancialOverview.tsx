@@ -23,6 +23,7 @@ import {
   Image as ImageIcon,
   Download,
   Sparkles,
+  Zap,
   PlusCircle,
   ArrowUpRight,
   ArrowDownRight,
@@ -134,6 +135,7 @@ export const EXPENSE_PAYMENT_METHODS: { id: ExpensePaymentMethod; label: string;
 
 export const INCOME_CATEGORY_CONFIG: { id: IncomeCategory; label: string; icon: string; color: string; bg: string; border: string }[] = [
   { id: 'Product Sale', label: 'Product Sale', icon: '🛒', color: 'text-emerald-700', bg: 'bg-emerald-50', border: 'border-emerald-200' },
+  { id: 'XYZ Income', label: 'XYZ Income', icon: '⚡', color: 'text-violet-700', bg: 'bg-violet-50', border: 'border-violet-200' },
   { id: 'Delivery/Courier Income', label: 'Delivery/Courier Income', icon: '🚚', color: 'text-blue-700', bg: 'bg-blue-50', border: 'border-blue-200' },
   { id: 'Digital Service / Top-up', label: 'Digital Service / Top-up', icon: '💎', color: 'text-purple-700', bg: 'bg-purple-50', border: 'border-purple-200' },
   { id: 'Other Income', label: 'Other Income', icon: '💳', color: 'text-indigo-700', bg: 'bg-indigo-50', border: 'border-indigo-200' },
@@ -152,7 +154,7 @@ export const PAYMENT_METHODS: { id: IncomePaymentMethod; label: string; icon: st
 
 export default function FinancialOverview({ user, products, onRefreshData }: FinancialOverviewProps) {
   // Navigation
-  const [activeTab, setActiveTab] = useState<'overview' | 'income' | 'expenses'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'income' | 'expenses' | 'xyz_income'>('overview');
 
   // Permission evaluation
   const canManageFinances = useMemo(() => {
@@ -182,6 +184,11 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
   const [incomeCategoryFilter, setIncomeCategoryFilter] = useState<string>('All');
   const [incomePaymentFilter, setIncomePaymentFilter] = useState<string>('All');
   const [incomeSourceFilter, setIncomeSourceFilter] = useState<'All' | 'auto_sale' | 'manual'>('All');
+
+  // XYZ Income-specific Filters
+  const [xyzSearch, setXyzSearch] = useState('');
+  const [xyzPaymentFilter, setXyzPaymentFilter] = useState<string>('All');
+  const [xyzSubBrandFilter, setXyzSubBrandFilter] = useState<'All' | 'SAT' | 'GZ' | 'RTX'>('All');
 
   // Expense-specific Ledger Filters
   const [ledgerSearch, setLedgerSearch] = useState('');
@@ -399,6 +406,11 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
     const totalManualIncome = filteredIncomes
       .filter(inc => inc.source === 'manual')
       .reduce((sum, inc) => sum + (inc.amount || 0), 0);
+    const xyzIncomesFiltered = filteredIncomes.filter(inc => inc.category === 'XYZ Income');
+    const totalXyzIncome = xyzIncomesFiltered.reduce((sum, inc) => sum + (inc.amount || 0), 0);
+    const countXyzIncome = xyzIncomesFiltered.length;
+    const xyzMaxIncome = countXyzIncome > 0 ? Math.max(...xyzIncomesFiltered.map(i => i.amount || 0)) : 0;
+    const xyzAvgIncome = countXyzIncome > 0 ? Math.round(totalXyzIncome / countXyzIncome) : 0;
 
     // 2. Sold Products Purchase Cost (COGS - বিক্রিত পণ্যের ক্রয়মূল্য / কেনা দাম)
     const productCostMap = new Map<string, number>();
@@ -530,6 +542,10 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
       totalIncome,
       totalSalesIncome,
       totalManualIncome,
+      totalXyzIncome,
+      countXyzIncome,
+      xyzMaxIncome,
+      xyzAvgIncome,
       totalProductCost: totalSoldProductCost,
       totalSoldProductCost,
       grossProfit,
@@ -591,6 +607,65 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
       return dateMatch && subBrandMatch && categoryMatch && paymentMatch && sourceMatch && textMatch;
     });
   }, [allCombinedIncomes, startDate, endDate, subBrandFilter, incomeCategoryFilter, incomePaymentFilter, incomeSourceFilter, incomeSearch]);
+
+  // Filtered XYZ Incomes specifically for the XYZ Income Hub
+  const filteredXyzIncomes = useMemo(() => {
+    const startMs = startDate ? new Date(startDate + 'T00:00:00').getTime() : 0;
+    const endMs = endDate ? new Date(endDate + 'T23:59:59').getTime() : Infinity;
+
+    return allCombinedIncomes.filter(inc => {
+      if (inc.category !== 'XYZ Income') return false;
+
+      const incTime = inc.createdAt || new Date(inc.date + 'T00:00:00').getTime();
+      const dateMatch = incTime >= startMs && incTime <= endMs;
+      const subBrandMatch = xyzSubBrandFilter === 'All' || inc.subBrand === xyzSubBrandFilter || inc.subBrand === 'ALL' || inc.subBrand === '' || !inc.subBrand;
+      const paymentMatch = xyzPaymentFilter === 'All' || inc.paymentMethod === xyzPaymentFilter;
+
+      const searchLower = xyzSearch.toLowerCase().trim();
+      const textMatch = !searchLower ||
+        (inc.incomeId && inc.incomeId.toLowerCase().includes(searchLower)) ||
+        (inc.customerName && inc.customerName.toLowerCase().includes(searchLower)) ||
+        (inc.invoiceNo && inc.invoiceNo.toLowerCase().includes(searchLower)) ||
+        (inc.reference && inc.reference.toLowerCase().includes(searchLower)) ||
+        (inc.notes && inc.notes.toLowerCase().includes(searchLower)) ||
+        (inc.addedBy && inc.addedBy.toLowerCase().includes(searchLower)) ||
+        inc.amount.toString().includes(searchLower);
+
+      return dateMatch && subBrandMatch && paymentMatch && textMatch;
+    });
+  }, [allCombinedIncomes, startDate, endDate, xyzSubBrandFilter, xyzPaymentFilter, xyzSearch]);
+
+  // Export XYZ Incomes to CSV
+  const handleExportXyzCSV = () => {
+    if (filteredXyzIncomes.length === 0) {
+      setErrorMsg('No XYZ Income records available to export.');
+      setTimeout(() => setErrorMsg(''), 3000);
+      return;
+    }
+    const headers = ['Income ID', 'Date', 'Time', 'Customer/Source', 'Payment Method', 'Sub-Brand', 'Reference', 'Notes', 'Amount', 'Added By'];
+    const rows = filteredXyzIncomes.map(i => [
+      `"${i.incomeId || ''}"`,
+      `"${i.date || ''}"`,
+      `"${i.time || ''}"`,
+      `"${(i.customerName || '').replace(/"/g, '""')}"`,
+      `"${i.paymentMethod || 'Cash'}"`,
+      `"${i.subBrand || 'ALL'}"`,
+      `"${(i.reference || '').replace(/"/g, '""')}"`,
+      `"${(i.notes || '').replace(/"/g, '""')}"`,
+      i.amount,
+      `"${i.addedBy || ''}"`
+    ]);
+    const csvContent = 'data:text/csv;charset=utf-8,' + [headers.join(','), ...rows.map(e => e.join(','))].join('\n');
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement('a');
+    link.setAttribute('href', encodedUri);
+    link.setAttribute('download', `xyz_income_ledger_${startDate}_to_${endDate}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    setSuccessMsg('XYZ Income ledger exported to CSV successfully!');
+    setTimeout(() => setSuccessMsg(''), 3500);
+  };
 
   // Render variables for Expense Ledger (filtered by ledger controls)
   const filteredLedgerExpenses = useMemo(() => {
@@ -657,6 +732,24 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
     setIncomeFormReference('');
     setIncomeFormSubBrand('');
     setIncomeFormNotes('');
+    setShowAddIncomeModal(true);
+  };
+
+  // Handle Open Add XYZ Income specifically
+  const handleOpenAddXyzIncome = () => {
+    if (!canManageFinances) return;
+    setEditingIncome(null);
+    setIncomeFormId(generateIncomeId());
+    setIncomeFormCategory('XYZ Income');
+    setIncomeFormAmount('');
+    setIncomeFormDate(new Date().toISOString().split('T')[0]);
+    setIncomeFormTime(new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }));
+    setIncomeFormPaymentMethod('Cash');
+    setIncomeFormCustomerName('');
+    setIncomeFormInvoiceNo('');
+    setIncomeFormReference('');
+    setIncomeFormSubBrand('');
+    setIncomeFormNotes('XYZ Income stream entry');
     setShowAddIncomeModal(true);
   };
 
@@ -1480,6 +1573,17 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
                 <span>💵 Income (আয়)</span>
               </button>
               <button
+                onClick={() => setActiveTab('xyz_income')}
+                className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
+                  activeTab === 'xyz_income'
+                    ? 'bg-violet-600 text-white shadow-md font-black ring-1 ring-violet-400/50'
+                    : 'text-slate-400 hover:text-white'
+                }`}
+              >
+                <Zap size={14} className={activeTab === 'xyz_income' ? 'text-amber-300' : 'text-violet-400'} />
+                <span>⚡ XYZ Income</span>
+              </button>
+              <button
                 onClick={() => setActiveTab('expenses')}
                 className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
                   activeTab === 'expenses'
@@ -1552,7 +1656,16 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
 
           {/* Quick Add Income & Expense & Clear Demo buttons directly in header bar */}
           {canManageFinances && (
-            <div className="flex items-center gap-1.5 ml-auto sm:ml-2">
+            <div className="flex flex-wrap items-center gap-1.5 ml-auto sm:ml-2">
+              <button
+                type="button"
+                onClick={handleOpenAddXyzIncome}
+                className="px-3 py-1.5 bg-violet-600 hover:bg-violet-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-xs transition-colors"
+                title="Directly record an XYZ Income transaction"
+              >
+                <span>⚡</span>
+                <span>Add XYZ Income</span>
+              </button>
               <button
                 type="button"
                 onClick={handleOpenAddIncome}
@@ -1568,16 +1681,6 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
               >
                 <Plus size={13} />
                 <span>Add Expense</span>
-              </button>
-              <button
-                type="button"
-                onClick={handleClearDemoData}
-                disabled={clearingDemo}
-                className="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer transition-colors"
-                title="Delete all demo/sample income & expense entries"
-              >
-                <Trash2 size={12} className="text-rose-600" />
-                <span>{clearingDemo ? 'Deleting...' : 'Delete Demo'}</span>
               </button>
             </div>
           )}
@@ -1780,7 +1883,7 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
               </span>
             </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
               {/* 6. This Month Income */}
               <div className="bg-white p-4 sm:p-5 rounded-3xl border border-slate-100 shadow-2xs flex flex-col justify-between min-h-[135px]">
                 <div className="flex items-center justify-between">
@@ -1826,6 +1929,41 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
                   <p className="text-xs text-slate-400 mt-1 font-medium">
                     Total <strong className="text-slate-700 font-mono">{financialMetrics.thisMonthExpenseCount}</strong> expense items this month
                   </p>
+                </div>
+              </div>
+
+              {/* XYZ Income Spotlight Card */}
+              <div 
+                onClick={() => {
+                  setActiveTab('xyz_income');
+                }}
+                role="button"
+                tabIndex={0}
+                className="bg-white hover:bg-violet-50/50 p-4 sm:p-5 rounded-3xl border border-violet-200/90 shadow-2xs flex flex-col justify-between min-h-[135px] cursor-pointer transition-all group hover:border-violet-300"
+                title="Click to open dedicated XYZ Income Stream Hub"
+              >
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="p-2 bg-violet-100 text-violet-700 rounded-xl group-hover:scale-110 transition-transform">
+                      ⚡
+                    </span>
+                    <div>
+                      <span className="text-xs font-black text-slate-800 uppercase tracking-wider">XYZ Income</span>
+                      <p className="text-[10px] text-slate-400">এক্সওয়াইজেড আয়</p>
+                    </div>
+                  </div>
+                  <span className="text-[10px] font-bold font-mono px-2 py-0.5 bg-violet-100 text-violet-800 rounded-full border border-violet-200">
+                    ⚡ Stream
+                  </span>
+                </div>
+                <div className="mt-3">
+                  <h3 className="text-2xl font-black text-violet-800 font-mono">
+                    ৳{financialMetrics.totalXyzIncome.toLocaleString()}
+                  </h3>
+                  <div className="text-xs text-slate-400 mt-1 font-medium flex items-center justify-between">
+                    <span><strong className="text-slate-700 font-mono">{financialMetrics.countXyzIncome}</strong> recorded</span>
+                    <span className="text-[10px] text-violet-600 font-bold group-hover:translate-x-0.5 transition-transform">Filter Ledger →</span>
+                  </div>
                 </div>
               </div>
 
@@ -2087,24 +2225,22 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
                 {canManageFinances && (
                   <button
                     type="button"
-                    onClick={handleOpenAddIncome}
-                    className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-xs transition-colors"
+                    onClick={handleOpenAddXyzIncome}
+                    className="px-3.5 py-2 bg-violet-600 hover:bg-violet-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-xs transition-colors"
                   >
-                    <Plus size={14} />
-                    <span>Add Income (নতুন আয়)</span>
+                    <span>⚡</span>
+                    <span>Add XYZ Income (এক্সওয়াইজেড আয়)</span>
                   </button>
                 )}
 
                 {canManageFinances && (
                   <button
                     type="button"
-                    onClick={handleClearDemoData}
-                    disabled={clearingDemo}
-                    className="px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-xl text-xs font-bold border border-rose-200 flex items-center gap-1.5 cursor-pointer transition-colors"
-                    title="Delete demo income and expense data"
+                    onClick={handleOpenAddIncome}
+                    className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-xs transition-colors"
                   >
-                    <Trash2 size={13} className="text-rose-600" />
-                    <span>{clearingDemo ? 'Deleting...' : 'Delete Demo Data (ডেমো মুছুন)'}</span>
+                    <Plus size={14} />
+                    <span>Add Income (নতুন আয়)</span>
                   </button>
                 )}
 
@@ -2129,6 +2265,82 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
                   <span>Export CSV</span>
                 </button>
               </div>
+            </div>
+
+            {/* Quick Category Filter Chips */}
+            <div className="flex flex-wrap items-center gap-1.5 pt-1">
+              <span className="text-[10px] font-bold text-slate-400 uppercase tracking-wider mr-1">Category Filter:</span>
+              <button
+                type="button"
+                onClick={() => setIncomeCategoryFilter('All')}
+                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                  incomeCategoryFilter === 'All'
+                    ? 'bg-slate-800 text-white shadow-xs'
+                    : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+                }`}
+              >
+                All Categories
+              </button>
+              <button
+                type="button"
+                onClick={() => setIncomeCategoryFilter('XYZ Income')}
+                className={`px-2.5 py-1 rounded-lg text-xs font-black transition-all cursor-pointer flex items-center gap-1 ${
+                  incomeCategoryFilter === 'XYZ Income'
+                    ? 'bg-violet-600 text-white shadow-xs ring-2 ring-violet-300'
+                    : 'bg-violet-50 text-violet-700 hover:bg-violet-100 border border-violet-200'
+                }`}
+              >
+                <span>⚡</span>
+                <span>XYZ Income ({financialMetrics.countXyzIncome})</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setIncomeCategoryFilter('Product Sale')}
+                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1 ${
+                  incomeCategoryFilter === 'Product Sale'
+                    ? 'bg-emerald-600 text-white shadow-xs'
+                    : 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100 border border-emerald-200'
+                }`}
+              >
+                <span>🛒</span>
+                <span>Product Sale</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setIncomeCategoryFilter('Delivery/Courier Income')}
+                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1 ${
+                  incomeCategoryFilter === 'Delivery/Courier Income'
+                    ? 'bg-blue-600 text-white shadow-xs'
+                    : 'bg-blue-50 text-blue-700 hover:bg-blue-100 border border-blue-200'
+                }`}
+              >
+                <span>🚚</span>
+                <span>Delivery Income</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setIncomeCategoryFilter('Digital Service / Top-up')}
+                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1 ${
+                  incomeCategoryFilter === 'Digital Service / Top-up'
+                    ? 'bg-purple-600 text-white shadow-xs'
+                    : 'bg-purple-50 text-purple-700 hover:bg-purple-100 border border-purple-200'
+                }`}
+              >
+                <span>💎</span>
+                <span>Digital Service</span>
+              </button>
+              <button
+                type="button"
+                onClick={() => setIncomeCategoryFilter('Other Income')}
+                className={`px-2.5 py-1 rounded-lg text-xs font-bold transition-all cursor-pointer flex items-center gap-1 ${
+                  incomeCategoryFilter === 'Other Income'
+                    ? 'bg-indigo-600 text-white shadow-xs'
+                    : 'bg-indigo-50 text-indigo-700 hover:bg-indigo-100 border border-indigo-200'
+                }`}
+              >
+                <span>💳</span>
+                <span>Other Income</span>
+              </button>
             </div>
 
             {/* Filters Row */}
@@ -2345,6 +2557,311 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
       )}
 
       {/* ========================================================================= */}
+      {/* TAB 4: XYZ INCOME SPECIALIZED LEDGER & HUB (⚡ XYZ Income / এক্সওয়াইজেড আয়) */}
+      {/* ========================================================================= */}
+      {activeTab === 'xyz_income' && (
+        <div className="space-y-5">
+          {/* Top Control Bar & XYZ Banner */}
+          <div className="bg-white p-5 lg:p-6 rounded-3xl border border-violet-100 shadow-2xs space-y-4">
+            <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-4 border-b border-slate-100 pb-4">
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="p-2 bg-violet-100 text-violet-700 rounded-xl font-bold">⚡</span>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-base font-black text-slate-800 uppercase tracking-tight">
+                        XYZ Income Stream Ledger (এক্সওয়াইজেড আয় খতিয়ান)
+                      </h3>
+                      <span className="px-2.5 py-0.5 rounded-full bg-violet-100 text-violet-800 text-[10px] font-black uppercase tracking-wider border border-violet-200">
+                        {filteredXyzIncomes.length} Records
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      Dedicated register for ancillary revenues, specialized venture inflows, and custom earnings
+                    </p>
+                  </div>
+                </div>
+              </div>
+
+              {/* Action Buttons */}
+              <div className="flex flex-wrap items-center gap-2">
+                {canManageFinances && (
+                  <button
+                    type="button"
+                    onClick={handleOpenAddXyzIncome}
+                    className="px-3.5 py-2 bg-violet-600 hover:bg-violet-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-xs transition-colors"
+                  >
+                    <span>⚡</span>
+                    <span>Add XYZ Income (নতুন এক্সওয়াইজেড আয়)</span>
+                  </button>
+                )}
+
+                <button
+                  type="button"
+                  onClick={handleExportXyzCSV}
+                  className="px-3 py-2 bg-violet-50 hover:bg-violet-100 text-violet-800 rounded-xl text-xs font-bold border border-violet-200 flex items-center gap-1.5 cursor-pointer"
+                >
+                  <Download size={13} className="text-violet-600" />
+                  <span>Export CSV</span>
+                </button>
+
+                <button
+                  type="button"
+                  onClick={() => setActiveTab('income')}
+                  className="px-3 py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold border border-slate-200 flex items-center gap-1.5 cursor-pointer"
+                >
+                  <ChevronRight size={13} />
+                  <span>View All Incomes</span>
+                </button>
+              </div>
+            </div>
+
+            {/* XYZ Metric Spotlight Cards */}
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+              <div className="bg-violet-50/60 p-4 rounded-2xl border border-violet-100">
+                <span className="text-[10px] font-bold text-violet-600 uppercase tracking-wider block">Total XYZ Inflow</span>
+                <span className="text-xl sm:text-2xl font-black text-violet-900 font-mono block mt-1">
+                  ৳{financialMetrics.totalXyzIncome.toLocaleString()}
+                </span>
+                <span className="text-[10px] text-violet-500 mt-0.5 block">Filtered Date Period</span>
+              </div>
+              <div className="bg-slate-50 p-4 rounded-2xl border border-slate-100">
+                <span className="text-[10px] font-bold text-slate-500 uppercase tracking-wider block">Total Transactions</span>
+                <span className="text-xl sm:text-2xl font-black text-slate-800 font-mono block mt-1">
+                  {financialMetrics.countXyzIncome}
+                </span>
+                <span className="text-[10px] text-slate-400 mt-0.5 block">Recorded Entries</span>
+              </div>
+              <div className="bg-emerald-50/60 p-4 rounded-2xl border border-emerald-100">
+                <span className="text-[10px] font-bold text-emerald-600 uppercase tracking-wider block">Average Ticket Size</span>
+                <span className="text-xl sm:text-2xl font-black text-emerald-800 font-mono block mt-1">
+                  ৳{financialMetrics.xyzAvgIncome.toLocaleString()}
+                </span>
+                <span className="text-[10px] text-emerald-500 mt-0.5 block">Per Transaction</span>
+              </div>
+              <div className="bg-amber-50/60 p-4 rounded-2xl border border-amber-100">
+                <span className="text-[10px] font-bold text-amber-600 uppercase tracking-wider block">Highest Receipt</span>
+                <span className="text-xl sm:text-2xl font-black text-amber-800 font-mono block mt-1">
+                  ৳{financialMetrics.xyzMaxIncome.toLocaleString()}
+                </span>
+                <span className="text-[10px] text-amber-500 mt-0.5 block">Peak Single Record</span>
+              </div>
+            </div>
+
+            {/* Filters Row */}
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pt-1">
+              {/* Search Bar */}
+              <div className="relative">
+                <Search className="absolute left-3 top-2.5 text-slate-400 size-3.5" />
+                <input
+                  type="text"
+                  placeholder="Search XYZ ID, customer, reference, notes..."
+                  value={xyzSearch}
+                  onChange={(e) => setXyzSearch(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-100 rounded-xl py-2 pl-8 pr-3 text-xs text-slate-800 focus:outline-hidden"
+                />
+              </div>
+
+              {/* Payment Method Filter */}
+              <div>
+                <select
+                  value={xyzPaymentFilter}
+                  onChange={(e) => setXyzPaymentFilter(e.target.value)}
+                  className="w-full bg-slate-50 border border-slate-100 rounded-xl py-2 px-3 text-xs text-slate-700 font-semibold focus:outline-hidden"
+                >
+                  <option value="All">All Payment Methods (সব মাধ্যম)</option>
+                  {PAYMENT_METHODS.map(pm => (
+                    <option key={pm.id} value={pm.id}>{pm.icon} {pm.label}</option>
+                  ))}
+                </select>
+              </div>
+
+              {/* Sub-Brand Filter */}
+              <div>
+                <select
+                  value={xyzSubBrandFilter}
+                  onChange={(e) => setXyzSubBrandFilter(e.target.value as any)}
+                  className="w-full bg-slate-50 border border-slate-100 rounded-xl py-2 px-3 text-xs text-slate-700 font-semibold focus:outline-hidden"
+                >
+                  <option value="All">All Sub-Brands (সব ব্র্যান্ড)</option>
+                  <option value="SAT">SAT - Sky Automation Tech</option>
+                  <option value="GZ">GZ - Gadget Zone</option>
+                  <option value="RTX">RTX - RTX Gadget</option>
+                </select>
+              </div>
+            </div>
+
+            {/* Summary Ribbon */}
+            <div className="bg-violet-50/70 border border-violet-100 p-3.5 rounded-2xl flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2 text-xs">
+              <span className="font-semibold text-violet-900">
+                Showing {filteredXyzIncomes.length} XYZ income transaction(s)
+              </span>
+              <div className="flex items-center gap-4">
+                <span className="font-mono text-violet-800">
+                  Cash: <strong>৳{filteredXyzIncomes.filter(i => i.paymentMethod === 'Cash').reduce((s, i) => s + i.amount, 0).toLocaleString()}</strong>
+                </span>
+                <span className="font-mono text-violet-800">
+                  MFS / Bank: <strong>৳{filteredXyzIncomes.filter(i => i.paymentMethod !== 'Cash').reduce((s, i) => s + i.amount, 0).toLocaleString()}</strong>
+                </span>
+                <span className="font-mono font-black text-violet-950 text-sm border-l border-violet-200 pl-4">
+                  Total: ৳{filteredXyzIncomes.reduce((s, i) => s + i.amount, 0).toLocaleString()}
+                </span>
+              </div>
+            </div>
+
+            {/* XYZ Income Table */}
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs border-collapse">
+                <thead>
+                  <tr className="border-b border-slate-100 text-slate-400 font-bold uppercase text-[9px] tracking-wider">
+                    <th className="py-3 px-2.5">Income ID & Date</th>
+                    <th className="py-3 px-2.5">Source / Customer</th>
+                    <th className="py-3 px-2.5">Payment Method</th>
+                    <th className="py-3 px-2.5">Reference / TrxID</th>
+                    <th className="py-3 px-2.5">Sub-Brand</th>
+                    <th className="py-3 px-2.5 text-right">Amount (৳)</th>
+                    <th className="py-3 px-2.5">Notes</th>
+                    <th className="py-3 px-2.5 text-center">Actions</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-50">
+                  {filteredXyzIncomes.length === 0 ? (
+                    <tr>
+                      <td colSpan={8} className="py-12 text-center">
+                        <div className="max-w-xs mx-auto text-center space-y-3">
+                          <div className="w-12 h-12 bg-violet-100 text-violet-600 rounded-2xl flex items-center justify-center mx-auto text-xl font-bold">
+                            ⚡
+                          </div>
+                          <div>
+                            <h4 className="text-sm font-bold text-slate-800">No XYZ Income Records Found</h4>
+                            <p className="text-xs text-slate-400 mt-1">
+                              Record your specialized venture income, ancillary revenue, or bonus earnings here.
+                            </p>
+                          </div>
+                          {canManageFinances && (
+                            <button
+                              type="button"
+                              onClick={handleOpenAddXyzIncome}
+                              className="px-4 py-2 bg-violet-600 hover:bg-violet-700 text-white rounded-xl text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer shadow-xs transition-colors"
+                            >
+                              <span>⚡</span>
+                              <span>Record First XYZ Income</span>
+                            </button>
+                          )}
+                        </div>
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredXyzIncomes.map((inc) => {
+                      const pmConfig = PAYMENT_METHODS.find(p => p.id === inc.paymentMethod) || PAYMENT_METHODS[0];
+
+                      return (
+                        <tr key={inc.id} className="hover:bg-violet-50/30 transition-colors">
+                          {/* Income ID & Date */}
+                          <td className="py-3 px-2.5 whitespace-nowrap">
+                            <div className="flex items-center gap-1.5">
+                              <span className="p-1 bg-violet-100 text-violet-700 rounded-md text-[10px]">⚡</span>
+                              <p className="font-mono font-bold text-slate-800">{inc.incomeId}</p>
+                            </div>
+                            <p className="text-[10px] text-slate-400">{inc.date} {inc.time ? `• ${inc.time}` : ''}</p>
+                          </td>
+
+                          {/* Customer / Source */}
+                          <td className="py-3 px-2.5 max-w-[160px]">
+                            <p className="font-semibold text-slate-800 truncate" title={inc.customerName || 'N/A'}>
+                              {inc.customerName || <span className="text-slate-300 font-normal">N/A</span>}
+                            </p>
+                            {inc.invoiceNo && (
+                              <p className="text-[10px] text-slate-400 font-mono truncate" title={`Invoice: ${inc.invoiceNo}`}>
+                                Inv: {inc.invoiceNo}
+                              </p>
+                            )}
+                          </td>
+
+                          {/* Payment Method */}
+                          <td className="py-3 px-2.5 whitespace-nowrap">
+                            <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold border ${pmConfig.border} ${pmConfig.bg} ${pmConfig.text}`}>
+                              <span>{pmConfig.icon}</span>
+                              <span>{inc.paymentMethod || 'Cash'}</span>
+                            </span>
+                          </td>
+
+                          {/* Reference */}
+                          <td className="py-3 px-2.5 whitespace-nowrap">
+                            {inc.reference ? (
+                              <span className="font-mono text-xs text-slate-700 bg-slate-100 px-2 py-0.5 rounded-md border border-slate-200">
+                                {inc.reference}
+                              </span>
+                            ) : (
+                              <span className="text-slate-300 text-xs">—</span>
+                            )}
+                          </td>
+
+                          {/* Sub-Brand */}
+                          <td className="py-3 px-2.5 whitespace-nowrap">
+                            {inc.subBrand ? (
+                              <span className="px-2 py-0.5 rounded-md text-[10px] font-black uppercase tracking-wider bg-violet-100 text-violet-800 border border-violet-200">
+                                {inc.subBrand}
+                              </span>
+                            ) : (
+                              <span className="text-[10px] text-slate-400">All / Shared</span>
+                            )}
+                          </td>
+
+                          {/* Amount */}
+                          <td className="py-3 px-2.5 text-right whitespace-nowrap">
+                            <span className="font-mono font-bold text-sm text-violet-800">
+                              +৳{inc.amount.toLocaleString()}
+                            </span>
+                          </td>
+
+                          {/* Notes */}
+                          <td className="py-3 px-2.5 max-w-[200px]">
+                            <p className="text-slate-600 truncate" title={inc.notes || ''}>
+                              {inc.notes || <span className="text-slate-300">—</span>}
+                            </p>
+                            <p className="text-[9px] text-slate-400">
+                              By {inc.addedBy || 'Admin'}
+                            </p>
+                          </td>
+
+                          {/* Actions */}
+                          <td className="py-3 px-2.5 text-center whitespace-nowrap">
+                            {canManageFinances ? (
+                              <div className="flex items-center justify-center gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => handleEditIncomeClick(inc)}
+                                  className="p-1.5 text-slate-500 hover:text-emerald-700 hover:bg-emerald-50 rounded-lg transition-colors cursor-pointer"
+                                  title="Edit Income Record"
+                                >
+                                  <Edit size={13} />
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleDeleteIncomeClick(inc)}
+                                  className="p-1.5 text-slate-500 hover:text-rose-700 hover:bg-rose-50 rounded-lg transition-colors cursor-pointer"
+                                  title="Delete Income Record"
+                                >
+                                  <Trash2 size={13} />
+                                </button>
+                              </div>
+                            ) : (
+                              <span className="text-[10px] text-slate-400 italic">View Only</span>
+                            )}
+                          </td>
+                        </tr>
+                      );
+                    })
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ========================================================================= */}
       {/* TAB 3: EXPENSES LEDGER & ENTRY (💸 খরচ / Expenses)                        */}
       {/* ========================================================================= */}
       {activeTab === 'expenses' && (
@@ -2377,19 +2894,6 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
                   >
                     <Plus size={14} />
                     <span>Add Expense (নতুন খরচ)</span>
-                  </button>
-                )}
-
-                {canManageFinances && (
-                  <button
-                    type="button"
-                    onClick={handleClearDemoData}
-                    disabled={clearingDemo}
-                    className="px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-xl text-xs font-bold border border-rose-200 flex items-center gap-1.5 cursor-pointer transition-colors"
-                    title="Delete demo expense and income records"
-                  >
-                    <Trash2 size={13} className="text-rose-600" />
-                    <span>{clearingDemo ? 'Deleting...' : 'Delete Demo Data (ডেমো মুছুন)'}</span>
                   </button>
                 )}
 
@@ -2989,11 +3493,17 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
             {/* Modal Header */}
             <div className="flex items-center justify-between border-b border-slate-100 pb-4">
               <div>
-                <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 text-[10px] font-black uppercase tracking-wider mb-1">
-                  💵 Income Entry (আয় যোগ)
+                <div className={`inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider mb-1 ${
+                  incomeFormCategory === 'XYZ Income'
+                    ? 'bg-violet-100 text-violet-800 border border-violet-200'
+                    : 'bg-emerald-50 text-emerald-700'
+                }`}>
+                  {incomeFormCategory === 'XYZ Income' ? '⚡ XYZ Income Stream (এক্সওয়াইজেড আয়)' : '💵 Income Entry (আয় যোগ)'}
                 </div>
                 <h3 className="text-lg font-black text-slate-800">
-                  {editingIncome ? 'Edit Income Record' : 'Record New Income (নতুন আয়)'}
+                  {editingIncome 
+                    ? `Edit ${editingIncome.category} Record` 
+                    : (incomeFormCategory === 'XYZ Income' ? 'Record XYZ Income (নতুন এক্সওয়াইজেড আয়)' : 'Record New Income (নতুন আয়)')}
                 </h3>
               </div>
               <button
@@ -3053,8 +3563,12 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
                         onClick={() => setIncomeFormCategory(cat.id)}
                         className={`p-2.5 rounded-2xl border text-left flex items-center gap-2 transition-all cursor-pointer ${
                           isSelected
-                            ? 'bg-emerald-600 border-emerald-700 text-white shadow-sm ring-2 ring-emerald-300'
-                            : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100'
+                            ? (cat.id === 'XYZ Income'
+                                ? 'bg-violet-600 border-violet-700 text-white shadow-sm ring-2 ring-violet-300'
+                                : 'bg-emerald-600 border-emerald-700 text-white shadow-sm ring-2 ring-emerald-300')
+                            : (cat.id === 'XYZ Income'
+                                ? 'bg-violet-50/70 border-violet-200 text-violet-800 hover:bg-violet-100'
+                                : 'bg-slate-50 border-slate-200 text-slate-700 hover:bg-slate-100')
                         }`}
                       >
                         <span className="text-lg">{cat.icon}</span>

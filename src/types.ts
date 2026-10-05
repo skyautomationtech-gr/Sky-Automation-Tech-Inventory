@@ -435,6 +435,7 @@ export type IncomeCategory =
   | 'Product Sale'
   | 'Delivery/Courier Income'
   | 'Digital Service / Top-up'
+  | 'XYZ Income'
   | 'Other Income'
   | 'Customer Refund Received'
   | 'Other Business Income';
@@ -464,7 +465,7 @@ export interface Income {
 export interface AuditLog {
   id: string;
   action: 'CREATE' | 'UPDATE' | 'DELETE' | 'PRICE_CHANGE' | 'STOCK_ADJUSTMENT' | 'STATUS_CHANGE';
-  targetType: 'Product' | 'Order' | 'Customer' | 'Supplier' | 'User' | 'Expense' | 'Income';
+  targetType: 'Product' | 'Order' | 'Customer' | 'Supplier' | 'User' | 'Expense' | 'Income' | 'Investment' | 'CompanyPurchase' | 'CompanyLoss';
   targetId: string;
   targetName: string;
   details: string;
@@ -472,5 +473,83 @@ export interface AuditLog {
   userName: string;
   userRole: string;
   timestamp: number;
+}
+
+// ===========================================
+// ACCOUNTING & BUSINESS HEALTH TYPES
+// ===========================================
+
+export interface InvestmentEntry {
+  id: string;
+  date: string; // YYYY-MM-DD
+  amount: number;
+  note: string; // e.g. "Initial capital", "Additional investment - August"
+  subBrand?: 'SAT' | 'GZ' | 'RTX' | 'ALL' | '';
+  createdBy: string;
+  createdAt: number;
+  isLocked?: boolean;
+}
+
+export type CompanyPurchaseCategory = 
+  | 'Equipment' 
+  | 'Furniture' 
+  | 'Vehicle' 
+  | 'Electronics' 
+  | 'Packaging Supplies' 
+  | 'Other';
+
+export interface CompanyPurchase {
+  id: string;
+  itemName: string;
+  category: CompanyPurchaseCategory;
+  amount: number;
+  purchaseDate: string; // YYYY-MM-DD
+  vendor?: string;
+  notes?: string;
+  receiptUrl?: string;
+  subBrand?: 'SAT' | 'GZ' | 'RTX' | 'ALL' | '';
+  createdBy: string;
+  createdAt: number;
+}
+
+export type CompanyLossType = 
+  | 'Damaged Stock' 
+  | 'Bad Debt Written Off' 
+  | 'Theft/Missing Inventory' 
+  | 'Clearance Sale Loss' 
+  | 'Other';
+
+export interface CompanyLoss {
+  id: string;
+  lossType: CompanyLossType;
+  linkedProductId?: string;
+  linkedProductName?: string;
+  linkedCustomerId?: string;
+  linkedCustomerName?: string;
+  amount: number;
+  date: string; // YYYY-MM-DD
+  notes?: string;
+  subBrand?: 'SAT' | 'GZ' | 'RTX' | 'ALL' | '';
+  createdBy: string;
+  createdAt: number;
+}
+
+export interface CashReconciliation {
+  id: string;
+  actualAmount: number;
+  calculatedAmount: number;
+  difference: number;
+  note?: string;
+  reconciledBy: string;
+  createdAt: number;
+  date: string; // YYYY-MM-DD
+}
+
+export interface CashBalanceSettings {
+  openingBalance: number;
+  lastReconciledAt?: number;
+  lastReconciledAmount?: number;
+  reconciledBy?: string;
+  updatedAt?: number;
 }
 

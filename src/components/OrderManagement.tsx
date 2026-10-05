@@ -1474,20 +1474,77 @@ export default function OrderManagement({
                       <Edit size={11} /> Edit Items & Prices
                     </button>
                   </div>
-                  <div className="p-3 bg-slate-50 border border-slate-100 rounded-2xl divide-y divide-slate-200/55 max-h-[160px] overflow-y-auto space-y-2">
-                    {selectedOrder.items.map((item, idx) => (
-                      <div key={idx} className="flex justify-between items-center text-sm pt-2 first:pt-0">
-                        <div className="min-w-0 pr-2">
-                          <p className="font-bold text-slate-800 truncate">{item.productName}</p>
-                          <span className="text-sm text-slate-400 font-mono">Var: {item.variantLabel}</span>
+                  <div className="p-3 bg-slate-50 border border-slate-100 rounded-2xl divide-y divide-slate-200/55 max-h-[220px] overflow-y-auto space-y-2">
+                    {selectedOrder.items.map((item, idx) => {
+                      const prod = products.find(p => p.id === item.productId);
+                      const v = prod?.variants.find(varItem => varItem.id === item.variantId);
+                      const purchaseCost = (v?.costPrice !== undefined ? v.costPrice : prod?.costPrice) ?? (item.unitPrice * 0.7);
+                      const unitProfit = item.unitPrice - purchaseCost;
+                      const lineProfit = unitProfit * item.qty;
+                      const isLoss = lineProfit < 0;
+
+                      return (
+                        <div key={idx} className="flex justify-between items-center text-sm pt-2 first:pt-0">
+                          <div className="min-w-0 pr-2">
+                            <p className="font-bold text-slate-800 truncate">{item.productName}</p>
+                            <span className="text-sm text-slate-400 font-mono">Var: {item.variantLabel}</span>
+                            {isSuperAdmin && (
+                              <div className="flex items-center gap-1.5 mt-0.5 text-[11px] font-mono">
+                                <span className="text-slate-500">Cost: ৳{purchaseCost.toLocaleString()}</span>
+                                {isLoss ? (
+                                  <span className="px-1.5 py-0.2 rounded-sm bg-rose-100 text-rose-700 font-bold border border-rose-200">
+                                    ⚠️ Loss: −৳{Math.abs(lineProfit).toLocaleString()}
+                                  </span>
+                                ) : (
+                                  <span className="text-emerald-700 font-bold">
+                                    Profit: +৳{lineProfit.toLocaleString()}
+                                  </span>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                          <div className="text-right flex-shrink-0 font-mono">
+                            <span className="text-slate-500 font-semibold">{item.qty} x </span>
+                            <span className="font-black text-slate-900">৳{item.unitPrice.toLocaleString()}</span>
+                          </div>
                         </div>
-                        <div className="text-right flex-shrink-0 font-mono">
-                          <span className="text-slate-500 font-semibold">{item.qty} x </span>
-                          <span className="font-black text-slate-900">৳{item.unitPrice.toLocaleString()}</span>
+                      );
+                    })}
+                  </div>
+
+                  {/* Super Admin Order Profit/Loss Summary */}
+                  {isSuperAdmin && (() => {
+                    const totalOrderCost = selectedOrder.items.reduce((sum, itm) => {
+                      const p = products.find(prodItem => prodItem.id === itm.productId);
+                      const v = p?.variants.find(vItem => vItem.id === itm.variantId);
+                      const cost = (v?.costPrice !== undefined ? v.costPrice : p?.costPrice) ?? (itm.unitPrice * 0.7);
+                      return sum + (cost * itm.qty);
+                    }, 0);
+                    const netOrderProfit = (selectedOrder.totalAmount || 0) - totalOrderCost;
+                    const isNetLoss = netOrderProfit < 0;
+
+                    return (
+                      <div className={`p-3 rounded-2xl border flex items-center justify-between text-xs font-mono ${
+                        isNetLoss 
+                          ? 'bg-rose-50 border-rose-200 text-rose-800' 
+                          : 'bg-emerald-50 border-emerald-200 text-emerald-800'
+                      }`}>
+                        <div>
+                          <span className="font-bold uppercase tracking-wider block text-[10px]">
+                            {isNetLoss ? '⚠️ Loss-Making Order' : 'Order Net Profit'}
+                          </span>
+                          <span className="text-[11px] text-slate-500">
+                            Rev: ৳{selectedOrder.totalAmount.toLocaleString()} − Cost: ৳{totalOrderCost.toLocaleString()}
+                          </span>
+                        </div>
+                        <div className="text-right">
+                          <span className={`text-base font-black ${isNetLoss ? 'text-rose-700' : 'text-emerald-700'}`}>
+                            {isNetLoss ? `−৳${Math.abs(netOrderProfit).toLocaleString()}` : `+৳${netOrderProfit.toLocaleString()}`}
+                          </span>
                         </div>
                       </div>
-                    ))}
-                  </div>
+                    );
+                  })()}
                 </div>
 
                 {/* Status Timeline History */}

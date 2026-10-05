@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   DollarSign, 
   Package, 
@@ -23,7 +23,10 @@ import {
   AlertCircle,
   Coins,
   Truck,
-  Percent
+  Percent,
+  Landmark,
+  Lock,
+  Wallet
 } from 'lucide-react';
 import { 
   ResponsiveContainer, 
@@ -355,6 +358,21 @@ export default function DashboardView({
   const pendingUsersCount = allUsers.filter(u => u.status === 'pending_approval').length;
 
   // Top Selling Products (This Month)
+  const inventoryValueAtCost = useMemo(() => {
+    return products.reduce((total, p) => {
+      if (p.archived) return total;
+      const qty = p.variants && p.variants.length > 0
+        ? p.variants.reduce((s, v) => s + (v.stock || 0), 0)
+        : (p.totalStock || 0);
+      return total + ((p.costPrice || 0) * qty);
+    }, 0);
+  }, [products]);
+
+  const deliveredSalesRevenue = useMemo(() => {
+    return allOrders
+      .filter(o => o.status === 'Delivered')
+      .reduce((sum, o) => sum + (o.totalAmount || 0), 0);
+  }, [allOrders]);
   const getTopSellingProducts = () => {
     const salesMap = new Map<string, { id: string; name: string; shortName: string; qty: number; revenue: number }>();
     const monthOrders = allOrders.filter(o => o.createdAt >= startOfThisMonth.getTime() && o.status !== 'Returned/Cancelled');
@@ -770,6 +788,83 @@ export default function DashboardView({
           </div>
         )}
       </div>
+
+      {/* Super Admin Executive Financial Health Widget */}
+      {user?.role === 'superadmin' && (
+        <div className="bg-gradient-to-br from-slate-900 via-slate-950 to-slate-900 border border-slate-800 text-white rounded-3xl p-5 md:p-6 shadow-xl relative overflow-hidden">
+          <div className="relative z-10 flex flex-col md:flex-row md:items-center justify-between gap-4 pb-4 border-b border-slate-800/80">
+            <div>
+              <div className="inline-flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[10px] font-black uppercase tracking-wider bg-emerald-500/20 text-emerald-400 border border-emerald-500/30 mb-1">
+                <Landmark size={12} /> Executive Financial Health • Super Admin Only
+              </div>
+              <h3 className="text-lg md:text-xl font-black text-white flex items-center gap-2">
+                <span>Business Financial Health (ব্যবসায়িক আর্থিক অবস্থা)</span>
+              </h3>
+            </div>
+            <button
+              onClick={() => onNavigateToTab('accounting')}
+              className="px-4 py-2 bg-[#D4AF37] hover:bg-[#c39e2d] text-slate-950 rounded-xl text-xs font-black flex items-center gap-1.5 self-start md:self-auto cursor-pointer shadow-md transition-all hover:scale-105"
+            >
+              <span>Full Accounting Overview</span>
+              <ArrowRight size={14} />
+            </button>
+          </div>
+
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mt-5">
+            {/* 1. Total Investment */}
+            <div className="bg-slate-800/60 border border-slate-700/60 rounded-2xl p-4">
+              <div className="flex items-center justify-between text-slate-400 text-xs font-bold mb-1">
+                <span>Total Investment</span>
+                <span className="text-[10px] text-amber-400 flex items-center gap-0.5 font-mono">
+                  <Lock size={10} /> Locked
+                </span>
+              </div>
+              <div className="text-xl md:text-2xl font-black font-mono text-emerald-400">
+                ৳ 40,000
+              </div>
+              <div className="text-[10px] text-slate-400 mt-1">One-time initial capital</div>
+            </div>
+
+            {/* 2. Inventory Value (At Cost) */}
+            <div className="bg-slate-800/60 border border-slate-700/60 rounded-2xl p-4">
+              <div className="flex items-center justify-between text-slate-400 text-xs font-bold mb-1">
+                <span>Inventory (At Cost)</span>
+                <Package size={13} className="text-blue-400" />
+              </div>
+              <div className="text-xl md:text-2xl font-black font-mono text-blue-400">
+                ৳ {inventoryValueAtCost.toLocaleString()}
+              </div>
+              <div className="text-[10px] text-slate-400 mt-1">Total stock purchase value</div>
+            </div>
+
+            {/* 3. Delivered Sales Revenue */}
+            <div className="bg-slate-800/60 border border-slate-700/60 rounded-2xl p-4">
+              <div className="flex items-center justify-between text-slate-400 text-xs font-bold mb-1">
+                <span>Delivered Sales</span>
+                <TrendingUp size={13} className="text-emerald-400" />
+              </div>
+              <div className="text-xl md:text-2xl font-black font-mono text-white">
+                ৳ {deliveredSalesRevenue.toLocaleString()}
+              </div>
+              <div className="text-[10px] text-slate-400 mt-1">All-time delivered orders</div>
+            </div>
+
+            {/* 4. Active Cash / Overview Link */}
+            <div className="bg-slate-800/60 border border-slate-700/60 rounded-2xl p-4 flex flex-col justify-between">
+              <div>
+                <div className="flex items-center justify-between text-slate-400 text-xs font-bold mb-1">
+                  <span>Accounting Module</span>
+                  <Wallet size={13} className="text-[#D4AF37]" />
+                </div>
+                <div className="text-sm md:text-base font-bold text-[#D4AF37] mt-0.5">
+                  Ledgers & Assets
+                </div>
+                <div className="text-[10px] text-slate-400 mt-1">Cash on hand, loss tracking & audits</div>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Top Metrics Grid (4 columns) */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
