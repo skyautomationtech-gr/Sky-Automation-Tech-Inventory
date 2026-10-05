@@ -958,15 +958,6 @@ export default function AccountingOverview({
           <div className="flex flex-wrap items-center gap-2.5">
             <button
               type="button"
-              onClick={handleOpenAddInvestment}
-              className="px-3.5 py-2.5 bg-gradient-to-r from-emerald-600 to-teal-600 hover:from-emerald-500 hover:to-teal-500 text-white rounded-xl text-xs font-black flex items-center gap-1.5 shadow-md active:scale-95 transition-all cursor-pointer"
-            >
-              <Plus size={14} />
-              <span>+ Add Investment</span>
-            </button>
-
-            <button
-              type="button"
               onClick={handleOpenAddPurchase}
               className="px-3.5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-black flex items-center gap-1.5 shadow-md active:scale-95 transition-all cursor-pointer"
             >
@@ -1489,21 +1480,10 @@ export default function AccountingOverview({
                 </h3>
                 <p className="text-xs text-slate-400">Initial business capital (এককালীন প্রারম্ভিক মূলধন)</p>
               </div>
-              {isInvestmentLocked ? (
-                <div className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-50 border border-amber-200 text-amber-800 rounded-xl text-xs font-bold shadow-xs">
-                  <Lock size={12} className="text-amber-600" />
-                  <span>One-Time Capital Locked (বিনিয়োগ সম্পন্ন)</span>
-                </div>
-              ) : (
-                <button
-                  type="button"
-                  onClick={handleOpenAddInvestment}
-                  className="px-3.5 py-1.5 bg-emerald-600 hover:bg-emerald-700 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 cursor-pointer shadow-xs transition-colors"
-                >
-                  <Plus size={13} />
-                  <span>Add Investment</span>
-                </button>
-              )}
+              <div className="inline-flex items-center gap-1.5 px-3 py-1.5 bg-amber-50 border border-amber-200 text-amber-800 rounded-xl text-xs font-bold shadow-xs">
+                <Lock size={12} className="text-amber-600" />
+                <span>One-Time Capital Locked (এককালীন মূলধন বিনিয়োগ)</span>
+              </div>
             </div>
 
             {/* One-Time Capital Notice */}
