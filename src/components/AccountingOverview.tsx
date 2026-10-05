@@ -454,7 +454,7 @@ export default function AccountingOverview({
       RTX: { cost: 0, retail: 0, qty: 0, products: 0 }
     };
 
-    products.forEach(prod => {
+    products.filter(prod => prod.status === 'approved' && !prod.archived).forEach(prod => {
       const brand = (prod.subBrand as 'SAT' | 'GZ' | 'RTX') || 'SAT';
       if (!brandStats[brand]) {
         brandStats[brand] = { cost: 0, retail: 0, qty: 0, products: 0 };
