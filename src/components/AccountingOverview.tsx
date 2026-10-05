@@ -933,158 +933,158 @@ export default function AccountingOverview({
 
   return (
     <div className="space-y-6 pb-16">
-      {/* Top Header Card */}
-      <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-slate-900 text-white p-6 sm:p-8 rounded-3xl shadow-xl border border-slate-800 relative overflow-hidden">
-        <div className="relative z-10 flex flex-col lg:flex-row lg:items-center lg:justify-between gap-6">
+      {/* Top Header Card - Standard Compact Size */}
+      <div className="bg-slate-900 text-white p-4 sm:p-5 rounded-2xl shadow-sm border border-slate-800">
+        <div className="flex flex-col lg:flex-row lg:items-center lg:justify-between gap-3">
           <div>
-            <div className="flex items-center gap-2 mb-2">
-              <span className="p-2 bg-[#D4AF37]/20 border border-[#D4AF37]/40 text-[#D4AF37] rounded-xl font-bold flex items-center gap-1.5 text-xs">
-                <Landmark size={14} />
-                <span>Super Admin Exclusive</span>
+            <div className="flex items-center gap-2 mb-1">
+              <span className="px-2 py-0.5 bg-[#D4AF37]/20 border border-[#D4AF37]/40 text-[#D4AF37] rounded-md font-bold text-[10px] uppercase tracking-wider flex items-center gap-1">
+                <Landmark size={11} />
+                <span>Super Admin</span>
               </span>
-              <span className="px-2.5 py-1 rounded-full bg-emerald-500/20 text-emerald-300 text-[10px] font-bold border border-emerald-500/30">
-                Enterprise Accounting
+              <span className="px-2 py-0.5 rounded-md bg-emerald-500/20 text-emerald-300 text-[10px] font-bold border border-emerald-500/30">
+                Accounting & Equity
               </span>
             </div>
-            <h1 className="text-2xl sm:text-3xl font-black tracking-tight text-white flex items-center gap-3">
+            <h1 className="text-lg sm:text-xl font-black tracking-tight text-white flex items-center gap-2">
               <span>BUSINESS ACCOUNTING & EQUITY</span>
             </h1>
-            <p className="text-slate-300 text-xs sm:text-sm mt-1 max-w-2xl leading-relaxed">
-              Complete financial health picture: Capital Investments, Net Business Profit, Liquid Cash on Hand, Dual Inventory Valuation, Capital Assets, and Loss Auditing.
+            <p className="text-slate-400 text-xs mt-0.5 line-clamp-1">
+              Capital investments, net profit, liquid cash, inventory assets & loss auditing.
             </p>
           </div>
 
           {/* Quick Actions & Navigation to Day-to-Day Financials */}
-          <div className="flex flex-wrap items-center gap-2.5">
+          <div className="flex flex-wrap items-center gap-2">
             <button
               type="button"
               onClick={handleOpenAddPurchase}
-              className="px-3.5 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-black flex items-center gap-1.5 shadow-md active:scale-95 transition-all cursor-pointer"
+              className="px-3 py-1.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-xs active:scale-95 transition-all cursor-pointer"
             >
-              <Building size={14} />
-              <span>+ Company Purchase</span>
+              <Building size={13} />
+              <span>+ Purchase</span>
             </button>
 
             <button
               type="button"
               onClick={handleOpenAddLoss}
-              className="px-3.5 py-2.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-black flex items-center gap-1.5 shadow-md active:scale-95 transition-all cursor-pointer"
+              className="px-3 py-1.5 bg-rose-600 hover:bg-rose-500 text-white rounded-xl text-xs font-bold flex items-center gap-1.5 shadow-xs active:scale-95 transition-all cursor-pointer"
             >
-              <AlertTriangle size={14} />
+              <AlertTriangle size={13} />
               <span>+ Record Loss</span>
             </button>
 
             <button
               type="button"
               onClick={() => onNavigateToTab && onNavigateToTab('financials')}
-              className="px-3.5 py-2.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer"
+              className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 border border-slate-700/80 rounded-xl text-xs font-bold flex items-center gap-1.5 transition-all cursor-pointer"
               title="Open day-to-day revenue & cost entries"
             >
-              <Receipt size={14} className="text-[#D4AF37]" />
+              <Receipt size={13} className="text-[#D4AF37]" />
               <span>Income & Expense ↗</span>
             </button>
 
             <button
               type="button"
               onClick={handleExportAccountingCSV}
-              className="p-2.5 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 rounded-xl transition-all cursor-pointer"
+              className="p-1.5 bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700/80 rounded-xl transition-all cursor-pointer"
               title="Export complete accounting summary to CSV"
             >
-              <Download size={15} />
+              <Download size={14} />
             </button>
           </div>
         </div>
 
         {/* Global Filter Bar inside Header */}
-        <div className="relative z-10 mt-6 pt-5 border-t border-slate-800 flex flex-wrap items-center justify-between gap-4">
+        <div className="mt-3.5 pt-3 border-t border-slate-800/80 flex flex-wrap items-center justify-between gap-2.5">
           {/* Main Navigation Tabs */}
-          <div className="flex items-center gap-1.5 bg-slate-950/60 p-1 rounded-2xl border border-slate-800">
+          <div className="flex items-center gap-1 bg-slate-950/70 p-1 rounded-xl border border-slate-800/80">
             <button
               type="button"
               onClick={() => setActiveTab('overview')}
-              className={`px-3.5 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer ${
+              className={`px-3 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
                 activeTab === 'overview'
-                  ? 'bg-[#D4AF37] text-slate-950 shadow-md'
+                  ? 'bg-[#D4AF37] text-slate-950 font-black shadow-xs'
                   : 'text-slate-400 hover:text-white'
               }`}
             >
-              <TrendingUp size={13} />
+              <TrendingUp size={12} />
               <span>Overview & Balances</span>
             </button>
             <button
               type="button"
               onClick={() => setActiveTab('purchases')}
-              className={`px-3.5 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer ${
+              className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
                 activeTab === 'purchases'
-                  ? 'bg-blue-500 text-white shadow-md'
+                  ? 'bg-blue-500 text-white font-black shadow-xs'
                   : 'text-slate-400 hover:text-white'
               }`}
             >
-              <Building size={13} />
+              <Building size={12} />
               <span>Company Assets ({companyPurchases.length})</span>
             </button>
             <button
               type="button"
               onClick={() => setActiveTab('losses')}
-              className={`px-3.5 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer ${
+              className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
                 activeTab === 'losses'
-                  ? 'bg-rose-500 text-white shadow-md'
+                  ? 'bg-rose-500 text-white font-black shadow-xs'
                   : 'text-slate-400 hover:text-white'
               }`}
             >
-              <AlertTriangle size={13} />
+              <AlertTriangle size={12} />
               <span>Company Losses ({companyLosses.length})</span>
             </button>
             <button
               type="button"
               onClick={() => setActiveTab('loss_orders')}
-              className={`px-3.5 py-2 rounded-xl text-xs font-black transition-all flex items-center gap-1.5 cursor-pointer ${
+              className={`px-2.5 py-1.5 rounded-lg text-xs font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
                 activeTab === 'loss_orders'
-                  ? 'bg-amber-500 text-slate-950 shadow-md'
+                  ? 'bg-amber-500 text-slate-950 font-black shadow-xs'
                   : 'text-slate-400 hover:text-white'
               }`}
             >
-              <ShieldAlert size={13} />
-              <span>Loss-Making Orders ({lossMakingOrders.length})</span>
+              <ShieldAlert size={12} />
+              <span>Loss Orders ({lossMakingOrders.length})</span>
             </button>
           </div>
 
           {/* Sub-brand & Period Filters */}
           <div className="flex flex-wrap items-center gap-2">
             {/* Period selector */}
-            <div className="flex items-center bg-slate-950/60 p-1 rounded-xl border border-slate-800 text-[11px] font-bold">
+            <div className="flex items-center bg-slate-950/70 p-0.5 rounded-xl border border-slate-800/80 text-[11px] font-bold">
               <button
                 type="button"
                 onClick={() => setTimePeriod('all')}
-                className={`px-2.5 py-1 rounded-lg transition-colors cursor-pointer ${timePeriod === 'all' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-white'}`}
+                className={`px-2 py-1 rounded-lg transition-colors cursor-pointer ${timePeriod === 'all' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-white'}`}
               >
                 All Time
               </button>
               <button
                 type="button"
                 onClick={() => setTimePeriod('year')}
-                className={`px-2.5 py-1 rounded-lg transition-colors cursor-pointer ${timePeriod === 'year' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-white'}`}
+                className={`px-2 py-1 rounded-lg transition-colors cursor-pointer ${timePeriod === 'year' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-white'}`}
               >
                 This Year
               </button>
               <button
                 type="button"
                 onClick={() => setTimePeriod('month')}
-                className={`px-2.5 py-1 rounded-lg transition-colors cursor-pointer ${timePeriod === 'month' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-white'}`}
+                className={`px-2 py-1 rounded-lg transition-colors cursor-pointer ${timePeriod === 'month' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-white'}`}
               >
                 This Month
               </button>
               <button
                 type="button"
                 onClick={() => setTimePeriod('week')}
-                className={`px-2.5 py-1 rounded-lg transition-colors cursor-pointer ${timePeriod === 'week' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-white'}`}
+                className={`px-2 py-1 rounded-lg transition-colors cursor-pointer ${timePeriod === 'week' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-white'}`}
               >
                 This Week
               </button>
               <button
                 type="button"
                 onClick={() => setTimePeriod('today')}
-                className={`px-2.5 py-1 rounded-lg transition-colors cursor-pointer ${timePeriod === 'today' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-white'}`}
+                className={`px-2 py-1 rounded-lg transition-colors cursor-pointer ${timePeriod === 'today' ? 'bg-slate-700 text-white' : 'text-slate-400 hover:text-white'}`}
               >
                 Today
               </button>
@@ -1094,7 +1094,7 @@ export default function AccountingOverview({
             <select
               value={subBrandFilter}
               onChange={(e) => setSubBrandFilter(e.target.value as any)}
-              className="bg-slate-950/80 border border-slate-700 text-slate-200 text-xs font-bold rounded-xl py-1.5 px-3 focus:outline-hidden"
+              className="bg-slate-950/90 border border-slate-800 text-slate-200 text-xs font-bold rounded-xl py-1.5 px-2.5 focus:outline-hidden cursor-pointer"
             >
               <option value="ALL">All Sub-Brands</option>
               <option value="SAT">SAT - Sky Automation</option>
@@ -1127,7 +1127,7 @@ export default function AccountingOverview({
           {/* 4 Pillars Highlight Row */}
           <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
             {/* 1. Total Investment */}
-            <div className="bg-white p-5 rounded-3xl border border-slate-200/80 shadow-xs flex flex-col justify-between min-h-[145px] hover:shadow-md transition-shadow">
+            <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs flex flex-col justify-between min-h-[145px] hover:shadow-md transition-shadow">
               <div className="flex items-center justify-between">
                 <span className="p-2 bg-emerald-50 text-emerald-700 rounded-xl font-bold">
                   <Landmark size={18} />
@@ -1149,7 +1149,7 @@ export default function AccountingOverview({
             </div>
 
             {/* 2. Comprehensive Net Profit */}
-            <div className={`p-5 rounded-3xl border shadow-xs flex flex-col justify-between min-h-[145px] hover:shadow-md transition-shadow ${
+            <div className={`p-5 rounded-2xl border shadow-xs flex flex-col justify-between min-h-[145px] hover:shadow-md transition-shadow ${
               profitMetrics.netBusinessProfit >= 0
                 ? 'bg-gradient-to-br from-emerald-50/70 via-white to-white border-emerald-200'
                 : 'bg-gradient-to-br from-rose-50/70 via-white to-white border-rose-200'
@@ -1180,7 +1180,7 @@ export default function AccountingOverview({
             </div>
 
             {/* 3. Cash on Hand */}
-            <div className="bg-white p-5 rounded-3xl border border-slate-200/80 shadow-xs flex flex-col justify-between min-h-[145px] hover:shadow-md transition-shadow">
+            <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs flex flex-col justify-between min-h-[145px] hover:shadow-md transition-shadow">
               <div className="flex items-center justify-between">
                 <span className="p-2 bg-amber-50 text-amber-700 rounded-xl font-bold">
                   <Wallet size={18} />
@@ -1206,7 +1206,7 @@ export default function AccountingOverview({
             </div>
 
             {/* 4. Inventory Value (At Cost) */}
-            <div className="bg-white p-5 rounded-3xl border border-slate-200/80 shadow-xs flex flex-col justify-between min-h-[145px] hover:shadow-md transition-shadow">
+            <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs flex flex-col justify-between min-h-[145px] hover:shadow-md transition-shadow">
               <div className="flex items-center justify-between">
                 <span className="p-2 bg-blue-50 text-blue-700 rounded-xl font-bold">
                   <Package size={18} />
