@@ -177,7 +177,7 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
   const [endDate, setEndDate] = useState(() => {
     return new Date().toISOString().split('T')[0];
   });
-  const [subBrandFilter, setSubBrandFilter] = useState<'All' | 'SAT' | 'GZ' | 'RTX'>('All');
+  const [subBrandFilter, setSubBrandFilter] = useState<'All' | 'SAT' | 'GZ' | 'RTX'>('SAT');
 
   // Income Ledger Filters
   const [incomeSearch, setIncomeSearch] = useState('');
@@ -188,7 +188,7 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
   // XYZ Income-specific Filters
   const [xyzSearch, setXyzSearch] = useState('');
   const [xyzPaymentFilter, setXyzPaymentFilter] = useState<string>('All');
-  const [xyzSubBrandFilter, setXyzSubBrandFilter] = useState<'All' | 'SAT' | 'GZ' | 'RTX'>('All');
+  const [xyzSubBrandFilter, setXyzSubBrandFilter] = useState<'All' | 'SAT' | 'GZ' | 'RTX'>('SAT');
 
   // Expense-specific Ledger Filters
   const [ledgerSearch, setLedgerSearch] = useState('');
@@ -210,7 +210,7 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
   const [incomeFormCustomerName, setIncomeFormCustomerName] = useState('');
   const [incomeFormInvoiceNo, setIncomeFormInvoiceNo] = useState('');
   const [incomeFormReference, setIncomeFormReference] = useState('');
-  const [incomeFormSubBrand, setIncomeFormSubBrand] = useState<'SAT' | 'GZ' | 'RTX' | 'ALL' | ''>('');
+  const [incomeFormSubBrand, setIncomeFormSubBrand] = useState<'SAT' | 'GZ' | 'RTX' | 'ALL' | ''>('SAT');
   const [incomeFormNotes, setIncomeFormNotes] = useState('');
   const [isSubmittingIncome, setIsSubmittingIncome] = useState(false);
 
@@ -229,7 +229,7 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
   const [expenseFormSupplierName, setExpenseFormSupplierName] = useState('');
   const [expenseFormReference, setExpenseFormReference] = useState('');
   const [expenseFormInvoiceNo, setExpenseFormInvoiceNo] = useState('');
-  const [expenseFormSubBrand, setExpenseFormSubBrand] = useState<'SAT' | 'GZ' | 'RTX' | 'ALL' | ''>('');
+  const [expenseFormSubBrand, setExpenseFormSubBrand] = useState<'SAT' | 'GZ' | 'RTX' | 'ALL' | ''>('SAT');
   const [expenseFormNotes, setExpenseFormNotes] = useState('');
   const [expenseReceiptFile, setExpenseReceiptFile] = useState<File | null>(null);
   const [expenseReceiptUrl, setExpenseReceiptUrl] = useState('');
@@ -1709,18 +1709,15 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
             />
           </div>
 
-          {/* Sub-brand selector */}
+          {/* Sub-brand selector - Locked to Sky Automation Tech */}
           <div>
             <label className="block text-[9px] font-bold text-slate-400 uppercase tracking-tight mb-1">Sub-Brand</label>
             <select
-              value={subBrandFilter}
-              onChange={(e) => setSubBrandFilter(e.target.value as any)}
-              className="w-full bg-slate-50 border border-slate-100 rounded-xl py-2 px-2.5 text-xs text-slate-700 font-semibold focus:outline-hidden"
+              disabled
+              value="SAT"
+              className="w-full bg-slate-100 border border-slate-100 rounded-xl py-2 px-2.5 text-xs text-slate-400 font-semibold focus:outline-hidden cursor-not-allowed opacity-80"
             >
-              <option value="All">All Brands</option>
               <option value="SAT">Sky Auto (SAT)</option>
-              <option value="GZ">GadgetZu (GZ)</option>
-              <option value="RTX">RTX Gadget (RTX)</option>
             </select>
           </div>
 
@@ -2676,17 +2673,14 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
                 </select>
               </div>
 
-              {/* Sub-Brand Filter */}
+              {/* Sub-Brand Filter - Locked to Sky Automation Tech */}
               <div>
                 <select
-                  value={xyzSubBrandFilter}
-                  onChange={(e) => setXyzSubBrandFilter(e.target.value as any)}
-                  className="w-full bg-slate-50 border border-slate-100 rounded-xl py-2 px-3 text-xs text-slate-700 font-semibold focus:outline-hidden"
+                  disabled
+                  value="SAT"
+                  className="w-full bg-slate-100 border border-slate-100 rounded-xl py-2 px-3 text-xs text-slate-400 font-semibold focus:outline-hidden cursor-not-allowed opacity-80"
                 >
-                  <option value="All">All Sub-Brands (সব ব্র্যান্ড)</option>
                   <option value="SAT">SAT - Sky Automation Tech</option>
-                  <option value="GZ">GZ - Gadget Zone</option>
-                  <option value="RTX">RTX - RTX Gadget</option>
                 </select>
               </div>
             </div>
@@ -3372,14 +3366,11 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
                     Allocate to Sub-Brand
                   </label>
                   <select
-                    value={expenseFormSubBrand}
-                    onChange={(e) => setExpenseFormSubBrand(e.target.value as any)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 font-semibold focus:outline-hidden focus:border-amber-500 focus:bg-white"
+                    disabled
+                    value="SAT"
+                    className="w-full bg-slate-100 border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-400 font-semibold focus:outline-hidden cursor-not-allowed opacity-80"
                   >
-                    <option value="">Shared (All Brands)</option>
                     <option value="SAT">Sky Auto (SAT)</option>
-                    <option value="GZ">GadgetZu (GZ)</option>
-                    <option value="RTX">RTX Gadget (RTX)</option>
                   </select>
                 </div>
               </div>
@@ -3694,14 +3685,11 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
                     Allocate to Sub-Brand
                   </label>
                   <select
-                    value={incomeFormSubBrand}
-                    onChange={(e) => setIncomeFormSubBrand(e.target.value as any)}
-                    className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 font-semibold focus:outline-hidden focus:border-emerald-500 focus:bg-white"
+                    disabled
+                    value="SAT"
+                    className="w-full bg-slate-100 border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-400 font-semibold focus:outline-hidden cursor-not-allowed opacity-80"
                   >
-                    <option value="">Shared (All Brands)</option>
                     <option value="SAT">Sky Auto (SAT)</option>
-                    <option value="GZ">GadgetZu (GZ)</option>
-                    <option value="RTX">RTX Gadget (RTX)</option>
                   </select>
                 </div>
               </div>

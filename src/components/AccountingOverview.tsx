@@ -114,7 +114,7 @@ export default function AccountingOverview({
 
   // Global Time Period Filter for calculations
   const [timePeriod, setTimePeriod] = useState<'all' | 'year' | 'month' | 'week' | 'today'>('all');
-  const [subBrandFilter, setSubBrandFilter] = useState<'ALL' | 'SAT' | 'GZ' | 'RTX'>('ALL');
+  const [subBrandFilter, setSubBrandFilter] = useState<'ALL' | 'SAT' | 'GZ' | 'RTX'>('SAT');
 
   // Modal States
   const [showInvestmentModal, setShowInvestmentModal] = useState(false);
@@ -122,7 +122,7 @@ export default function AccountingOverview({
   const [invAmount, setInvAmount] = useState<number | ''>('');
   const [invDate, setInvDate] = useState(() => new Date().toISOString().split('T')[0]);
   const [invNote, setInvNote] = useState('');
-  const [invSubBrand, setInvSubBrand] = useState<'SAT' | 'GZ' | 'RTX' | 'ALL' | ''>('');
+  const [invSubBrand, setInvSubBrand] = useState<'SAT' | 'GZ' | 'RTX' | 'ALL' | ''>('SAT');
 
   const [showPurchaseModal, setShowPurchaseModal] = useState(false);
   const [editingPurchase, setEditingPurchase] = useState<CompanyPurchase | null>(null);
@@ -132,7 +132,7 @@ export default function AccountingOverview({
   const [purDate, setPurDate] = useState(() => new Date().toISOString().split('T')[0]);
   const [purVendor, setPurVendor] = useState('');
   const [purNotes, setPurNotes] = useState('');
-  const [purSubBrand, setPurSubBrand] = useState<'SAT' | 'GZ' | 'RTX' | 'ALL' | ''>('');
+  const [purSubBrand, setPurSubBrand] = useState<'SAT' | 'GZ' | 'RTX' | 'ALL' | ''>('SAT');
 
   const [showLossModal, setShowLossModal] = useState(false);
   const [editingLoss, setEditingLoss] = useState<CompanyLoss | null>(null);
@@ -142,7 +142,7 @@ export default function AccountingOverview({
   const [lossNotes, setLossNotes] = useState('');
   const [lossLinkedProductId, setLossLinkedProductId] = useState('');
   const [lossCustomerName, setLossCustomerName] = useState('');
-  const [lossSubBrand, setLossSubBrand] = useState<'SAT' | 'GZ' | 'RTX' | 'ALL' | ''>('');
+  const [lossSubBrand, setLossSubBrand] = useState<'SAT' | 'GZ' | 'RTX' | 'ALL' | ''>('SAT');
 
   const [showReconcileModal, setShowReconcileModal] = useState(false);
   const [countedCash, setCountedCash] = useState<number | ''>('');
@@ -1090,16 +1090,13 @@ export default function AccountingOverview({
               </button>
             </div>
 
-            {/* Sub-brand selector */}
+            {/* Sub-brand selector - Locked to Sky Automation Tech */}
             <select
-              value={subBrandFilter}
-              onChange={(e) => setSubBrandFilter(e.target.value as any)}
-              className="bg-slate-950/90 border border-slate-800 text-slate-200 text-xs font-bold rounded-xl py-1.5 px-2.5 focus:outline-hidden cursor-pointer"
+              disabled
+              value="SAT"
+              className="bg-slate-900 border border-slate-800 text-slate-400 text-xs font-bold rounded-xl py-1.5 px-2.5 cursor-not-allowed opacity-80"
             >
-              <option value="ALL">All Sub-Brands</option>
-              <option value="SAT">SAT - Sky Automation</option>
-              <option value="GZ">GZ - Gadget Zone</option>
-              <option value="RTX">RTX - RTX Gadget</option>
+              <option value="SAT">SAT - Sky Automation Tech</option>
             </select>
           </div>
         </div>
@@ -2012,14 +2009,11 @@ export default function AccountingOverview({
                   Earmarked Sub-Brand (ঐচ্ছিক)
                 </label>
                 <select
-                  value={invSubBrand}
-                  onChange={(e) => setInvSubBrand(e.target.value as any)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 focus:outline-hidden"
+                  disabled
+                  value="SAT"
+                  className="w-full bg-slate-100 border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-400 focus:outline-hidden cursor-not-allowed opacity-80"
                 >
-                  <option value="">General / All Brands</option>
                   <option value="SAT">SAT - Sky Automation Tech</option>
-                  <option value="GZ">GZ - Gadget Zone</option>
-                  <option value="RTX">RTX - RTX Gadget</option>
                 </select>
               </div>
 
@@ -2138,14 +2132,11 @@ export default function AccountingOverview({
                   Sub-Brand
                 </label>
                 <select
-                  value={purSubBrand}
-                  onChange={(e) => setPurSubBrand(e.target.value as any)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 focus:outline-hidden"
+                  disabled
+                  value="SAT"
+                  className="w-full bg-slate-100 border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-400 focus:outline-hidden cursor-not-allowed opacity-80"
                 >
-                  <option value="">General / Shared</option>
                   <option value="SAT">SAT</option>
-                  <option value="GZ">GZ</option>
-                  <option value="RTX">RTX</option>
                 </select>
               </div>
 
