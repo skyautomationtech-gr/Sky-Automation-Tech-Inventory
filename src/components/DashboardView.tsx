@@ -506,12 +506,17 @@ export default function DashboardView({
     products.forEach(p => {
       if (p.archived || p.status !== 'approved') return;
       const cat = p.mainCategory || p.category || 'Uncategorized';
-      const stock = p.variants.reduce((sum, v) => sum + (v.stock || 0), 0);
+      const stock = p.variants && p.variants.length > 0 
+        ? p.variants.reduce((sum, v) => sum + (v.stock || 0), 0)
+        : (p.totalStock || 0);
       catMap[cat] = (catMap[cat] || 0) + stock;
     });
-    return Object.entries(catMap).map(([name, value]) => ({ name, value }));
+    return Object.entries(catMap)
+      .map(([name, value]) => ({ name, value }))
+      .sort((a, b) => b.value - a.value);
   };
   const categoryStockData = getCategoryStockData();
+  const totalCategoryStock = categoryStockData.reduce((acc, c) => acc + c.value, 0);
   const COLORS = ['#008080', '#D4AF37', '#f97316', '#6366f1', '#ec4899', '#8b5cf6', '#10b981'];
 
   // Recent Orders (5)
@@ -985,40 +990,88 @@ export default function DashboardView({
               </div>
 
               {/* Category Stock Distribution */}
-              <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
-                <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wide mb-3 flex items-center justify-between">
-                  <span>📊 Category Stock Distribution</span>
-                  <span className="text-[10px] font-mono text-slate-400">Units</span>
-                </h4>
-                <div className="h-56 w-full flex items-center justify-center">
-                  {categoryStockData.length > 0 ? (
-                    <ResponsiveContainer width="100%" height="100%">
-                      <PieChart>
-                        <Pie
-                          data={categoryStockData}
-                          cx="50%"
-                          cy="50%"
-                          innerRadius={50}
-                          outerRadius={80}
-                          paddingAngle={3}
-                          dataKey="value"
-                          label={({ name, percent }) => `${name} (${(percent * 100).toFixed(0)}%)`}
-                          labelLine={false}
-                        >
-                          {categoryStockData.map((entry, index) => (
-                            <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                          ))}
-                        </Pie>
-                        <Tooltip 
-                          contentStyle={{ backgroundColor: '#0f172a', border: 'none', borderRadius: '8px', color: '#fff', fontSize: '12px' }}
-                          formatter={(val: any) => [`${val} units`, 'Stock']}
-                        />
-                      </PieChart>
-                    </ResponsiveContainer>
-                  ) : (
-                    <p className="text-xs text-slate-400 italic">No stock inventory data available</p>
-                  )}
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 flex flex-col justify-between">
+                <div className="flex items-center justify-between mb-3">
+                  <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wide flex items-center gap-1.5">
+                    <span>📊 Category Stock Distribution</span>
+                  </h4>
+                  <span className="text-[10px] font-mono font-bold bg-slate-200/80 text-slate-600 px-2 py-0.5 rounded-full">
+                    {totalCategoryStock.toLocaleString()} Units
+                  </span>
                 </div>
+
+                {categoryStockData.length > 0 ? (
+                  <div className="flex flex-col sm:flex-row items-center gap-4">
+                    {/* Donut Chart with Center Total */}
+                    <div className="h-44 w-44 shrink-0 relative flex items-center justify-center">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <PieChart>
+                          <Pie
+                            data={categoryStockData}
+                            cx="50%"
+                            cy="50%"
+                            innerRadius={46}
+                            outerRadius={68}
+                            paddingAngle={3}
+                            dataKey="value"
+                            stroke="#fff"
+                            strokeWidth={2}
+                          >
+                            {categoryStockData.map((entry, index) => (
+                              <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                            ))}
+                          </Pie>
+                          <Tooltip 
+                            contentStyle={{ backgroundColor: '#0f172a', border: 'none', borderRadius: '10px', color: '#fff', fontSize: '12px', boxShadow: '0 10px 15px -3px rgba(0,0,0,0.3)' }}
+                            formatter={(val: any, name: any) => [
+                              `${Number(val).toLocaleString()} units (${totalCategoryStock > 0 ? ((Number(val) / totalCategoryStock) * 100).toFixed(1) : 0}%)`,
+                              name
+                            ]}
+                          />
+                        </PieChart>
+                      </ResponsiveContainer>
+                      <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none text-center">
+                        <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider">Total</span>
+                        <span className="text-base font-black font-mono text-slate-900 leading-tight">
+                          {totalCategoryStock.toLocaleString()}
+                        </span>
+                        <span className="text-[9px] text-slate-400">units</span>
+                      </div>
+                    </div>
+
+                    {/* Clean Category Legend Breakdown */}
+                    <div className="flex-1 w-full max-h-44 overflow-y-auto space-y-1.5 pr-1 divide-y divide-slate-200/50">
+                      {categoryStockData.map((item, idx) => {
+                        const pct = totalCategoryStock > 0 ? ((item.value / totalCategoryStock) * 100).toFixed(1) : '0';
+                        return (
+                          <div 
+                            key={item.name} 
+                            className="flex items-center justify-between gap-2 pt-1.5 first:pt-0 group hover:bg-white/80 p-1 rounded-md transition-colors"
+                            title={`${item.name}: ${item.value.toLocaleString()} units (${pct}%)`}
+                          >
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span 
+                                className="w-2.5 h-2.5 rounded-full shrink-0 shadow-2xs" 
+                                style={{ backgroundColor: COLORS[idx % COLORS.length] }} 
+                              />
+                              <span className="text-xs font-semibold text-slate-700 truncate group-hover:text-slate-950">
+                                {item.name}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-1.5 font-mono text-[11px] shrink-0 text-right">
+                              <span className="font-bold text-slate-900">{item.value.toLocaleString()}</span>
+                              <span className="text-slate-400 font-medium">({pct}%)</span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="h-56 flex items-center justify-center">
+                    <p className="text-xs text-slate-400 italic">No stock inventory data available</p>
+                  </div>
+                )}
               </div>
             </div>
 
