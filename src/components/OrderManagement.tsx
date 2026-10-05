@@ -1039,8 +1039,8 @@ export default function OrderManagement({
                 className="bg-slate-50 border border-slate-200 rounded-xl py-1.5 px-3 text-sm text-slate-700 font-medium"
               >
                 <option value="">Courier Desk</option>
-                <option value="CarryBee (Inside Dhaka)">CarryBee (Inside)</option>
-                <option value="Steadfast (Outside Dhaka)">Steadfast (Outside)</option>
+                <option value="CarryBee (Inside Dhaka)">CarryBee (Inside Dhaka)</option>
+                <option value="Steadfast (Outside Dhaka)">Steadfast (Outside Dhaka)</option>
                 <option value="Paperfly">Paperfly</option>
                 <option value="Hand to Hand">Hand to Hand</option>
               </select>

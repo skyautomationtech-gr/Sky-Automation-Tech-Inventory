@@ -304,8 +304,8 @@ export interface Customer {
 
 export type SalesChannel = 'Facebook' | 'TikTok' | 'Instagram' | 'Daraz' | 'CartUp' | 'Packly' | 'Direct/WhatsApp';
 export type CourierName = 
-  | 'Steadfast (Outside Dhaka)' 
   | 'CarryBee (Inside Dhaka)'
+  | 'Steadfast (Outside Dhaka)' 
   | 'Paperfly'
   | 'Hand to Hand'
   | string;
