@@ -393,12 +393,19 @@ export default function DashboardView({
     let steadfastPending = 0; // Shipped but not Delivered
     let carryBeeShipped = 0;
     let carryBeePending = 0; // Shipped but not Delivered
+    let paperflyShipped = 0;
+    let paperflyPending = 0;
+    let handToHandShipped = 0;
+    let handToHandPending = 0;
 
     const monthOrders = allOrders.filter(o => o.createdAt >= startOfThisMonth.getTime() && o.status !== 'Returned/Cancelled');
     
     monthOrders.forEach(o => {
-      const isSteadfast = o.courier?.toLowerCase().includes('steadfast');
-      const isCarryBee = o.courier?.toLowerCase().includes('carrybee');
+      const courierStr = (o.courier || '').toLowerCase();
+      const isSteadfast = courierStr.includes('steadfast');
+      const isCarryBee = courierStr.includes('carrybee');
+      const isPaperfly = courierStr.includes('paperfly');
+      const isHandToHand = courierStr.includes('hand to hand') || courierStr.includes('hand');
       
       if (isSteadfast) {
         steadfastShipped++;
@@ -406,6 +413,12 @@ export default function DashboardView({
       } else if (isCarryBee) {
         carryBeeShipped++;
         if (o.status === 'Shipped') carryBeePending++;
+      } else if (isPaperfly) {
+        paperflyShipped++;
+        if (o.status === 'Shipped') paperflyPending++;
+      } else if (isHandToHand) {
+        handToHandShipped++;
+        if (o.status === 'Shipped') handToHandPending++;
       }
     });
 
@@ -413,7 +426,11 @@ export default function DashboardView({
       steadfastShipped,
       steadfastPending,
       carryBeeShipped,
-      carryBeePending
+      carryBeePending,
+      paperflyShipped,
+      paperflyPending,
+      handToHandShipped,
+      handToHandPending
     };
   };
   const courierStats = getCourierStats();
@@ -1392,16 +1409,26 @@ export default function DashboardView({
               <Truck size={16} className="text-slate-700" />
               Courier Desk Performance
             </h3>
-            <div className="grid grid-cols-2 gap-4 border-b border-slate-100 pb-4">
-              <div className="p-3 bg-slate-50 border border-slate-100 rounded-xl">
-                <p className="text-sm font-bold text-slate-400 uppercase tracking-wider">Steadfast</p>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 border-b border-slate-100 pb-4">
+              <div className="p-3 bg-slate-50 border border-slate-100 rounded-xl hover:bg-slate-100/60 transition-colors">
+                <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Steadfast</p>
                 <h4 className="text-xl font-black text-slate-800 mt-1 font-mono">{courierStats.steadfastShipped}</h4>
                 <p className="text-[9px] text-red-500 mt-1 font-bold">{courierStats.steadfastPending} pending delivery</p>
               </div>
-              <div className="p-3 bg-slate-50 border border-slate-100 rounded-xl">
-                <p className="text-sm font-bold text-slate-400 uppercase tracking-wider">CarryBee</p>
+              <div className="p-3 bg-slate-50 border border-slate-100 rounded-xl hover:bg-slate-100/60 transition-colors">
+                <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">CarryBee</p>
                 <h4 className="text-xl font-black text-slate-800 mt-1 font-mono">{courierStats.carryBeeShipped}</h4>
                 <p className="text-[9px] text-red-500 mt-1 font-bold">{courierStats.carryBeePending} pending delivery</p>
+              </div>
+              <div className="p-3 bg-slate-50 border border-slate-100 rounded-xl hover:bg-slate-100/60 transition-colors">
+                <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Paperfly</p>
+                <h4 className="text-xl font-black text-slate-800 mt-1 font-mono">{courierStats.paperflyShipped}</h4>
+                <p className="text-[9px] text-red-500 mt-1 font-bold">{courierStats.paperflyPending} pending delivery</p>
+              </div>
+              <div className="p-3 bg-slate-50 border border-slate-100 rounded-xl hover:bg-slate-100/60 transition-colors">
+                <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Hand To Hand</p>
+                <h4 className="text-xl font-black text-slate-800 mt-1 font-mono">{courierStats.handToHandShipped}</h4>
+                <p className="text-[9px] text-red-500 mt-1 font-bold">{courierStats.handToHandPending} pending delivery</p>
               </div>
             </div>
             <p className="text-sm text-slate-400 text-center mt-3">Counts reflect active shipments processed this calendar month.</p>

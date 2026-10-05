@@ -119,7 +119,7 @@ export default function OrderManagement({
   // Step 2: Settings
   const [orderSubBrand, setOrderSubBrand] = useState<'SAT' | 'GZ' | 'RTX'>('SAT');
   const [orderSalesChannel, setOrderSalesChannel] = useState<'Facebook' | 'TikTok' | 'Instagram' | 'Daraz' | 'CartUp' | 'Packly' | 'Direct/WhatsApp'>('Direct/WhatsApp');
-  const [orderCourier, setOrderCourier] = useState<'Steadfast (Outside Dhaka)' | 'CarryBee (Inside Dhaka)'>('CarryBee (Inside Dhaka)');
+  const [orderCourier, setOrderCourier] = useState<CourierName>('CarryBee (Inside Dhaka)');
   const [deliveryAddress, setDeliveryAddress] = useState('');
   const [orderNotes, setOrderNotes] = useState('');
 
@@ -1036,11 +1036,13 @@ export default function OrderManagement({
               <select
                 value={courierFilter}
                 onChange={(e) => setCourierFilter(e.target.value)}
-                className="bg-slate-50 border border-slate-200 rounded-xl py-1.5 px-3 text-sm text-slate-700"
+                className="bg-slate-50 border border-slate-200 rounded-xl py-1.5 px-3 text-sm text-slate-700 font-medium"
               >
                 <option value="">Courier Desk</option>
-                <option value="Steadfast (Outside Dhaka)">Steadfast (Outside)</option>
                 <option value="CarryBee (Inside Dhaka)">CarryBee (Inside)</option>
+                <option value="Steadfast (Outside Dhaka)">Steadfast (Outside)</option>
+                <option value="Paperfly">Paperfly</option>
+                <option value="Hand to Hand">Hand to Hand</option>
               </select>
 
               <select
@@ -1832,10 +1834,12 @@ export default function OrderManagement({
                     <select
                       value={orderCourier}
                       onChange={(e) => setOrderCourier(e.target.value as any)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-sm"
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-sm font-semibold text-slate-800"
                     >
                       <option value="CarryBee (Inside Dhaka)">CarryBee (Inside Dhaka)</option>
                       <option value="Steadfast (Outside Dhaka)">Steadfast (Outside Dhaka)</option>
+                      <option value="Paperfly">Paperfly</option>
+                      <option value="Hand to Hand">Hand to Hand</option>
                     </select>
                   </div>
 
@@ -2280,6 +2284,8 @@ export default function OrderManagement({
                     >
                       <option value="CarryBee (Inside Dhaka)">CarryBee (Inside Dhaka)</option>
                       <option value="Steadfast (Outside Dhaka)">Steadfast (Outside Dhaka)</option>
+                      <option value="Paperfly">Paperfly</option>
+                      <option value="Hand to Hand">Hand to Hand</option>
                     </select>
                   </div>
 
