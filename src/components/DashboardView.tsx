@@ -356,11 +356,12 @@ export default function DashboardView({
 
   // Top Selling Products (This Month)
   const getTopSellingProducts = () => {
-    const salesMap = new Map<string, { id: string; name: string; qty: number; revenue: number }>();
+    const salesMap = new Map<string, { id: string; name: string; shortName: string; qty: number; revenue: number }>();
     const monthOrders = allOrders.filter(o => o.createdAt >= startOfThisMonth.getTime() && o.status !== 'Returned/Cancelled');
     
     monthOrders.forEach(order => {
       order.items.forEach(item => {
+        const pName = item.productName || 'Unknown Product';
         const existing = salesMap.get(item.productId);
         if (existing) {
           existing.qty += item.qty;
@@ -368,7 +369,8 @@ export default function DashboardView({
         } else {
           salesMap.set(item.productId, {
             id: item.productId,
-            name: item.productName || 'Unknown Product',
+            name: pName,
+            shortName: pName.length > 20 ? pName.slice(0, 18) + '…' : pName,
             qty: item.qty,
             revenue: item.qty * item.unitPrice
           });
@@ -844,9 +846,9 @@ export default function DashboardView({
         </div>
 
         {/* Stat: Inventory Valuation */}
-        <div className="bg-gradient-to-br from-[#008080] via-teal-800 to-slate-900 text-white border border-teal-700/50 rounded-2xl p-5 shadow-md flex flex-col justify-between min-h-40 transition-all duration-300 hover:shadow-lg">
+        <div className="bg-[#0c0a0a] text-white border border-slate-800 rounded-2xl p-5 shadow-md flex flex-col justify-between min-h-40 transition-all duration-300 hover:shadow-lg">
           <div>
-            <div className="flex justify-between items-center gap-2">
+            <div className="flex justify-between items-center gap-2 bg-[#0c0a0a]">
               <span className="text-xs font-bold text-teal-200 uppercase tracking-wide truncate">Inventory Asset</span>
               <span className="text-[11px] font-mono font-bold bg-amber-400 text-slate-950 px-2 py-0.5 rounded-full whitespace-nowrap">
                 Live Valuation
@@ -996,18 +998,43 @@ export default function DashboardView({
                 <span>🏆 Top Selling Products (By Quantity Sold)</span>
                 <span className="text-[10px] font-mono text-slate-400">Top 5</span>
               </h4>
-              <div className="h-48 w-full">
+              <div className="h-60 w-full">
                 {topSellingProducts.length > 0 ? (
                   <ResponsiveContainer width="100%" height="100%">
-                    <BarChart data={topSellingProducts} layout="vertical" margin={{ top: 5, right: 30, left: 40, bottom: 5 }}>
-                      <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" />
-                      <XAxis type="number" stroke="#64748b" fontSize={11} />
-                      <YAxis type="category" dataKey="name" stroke="#64748b" fontSize={10} width={100} />
-                      <Tooltip 
-                        contentStyle={{ backgroundColor: '#0f172a', border: 'none', borderRadius: '8px', color: '#fff', fontSize: '12px' }}
-                        formatter={(val: any, name: string) => [name === 'qty' ? `${val} units` : `৳ ${val.toLocaleString()}`, name === 'qty' ? 'Quantity Sold' : 'Revenue']}
+                    <BarChart 
+                      data={topSellingProducts} 
+                      layout="vertical" 
+                      margin={{ top: 10, right: 30, left: 10, bottom: 5 }}
+                      barSize={18}
+                    >
+                      <CartesianGrid strokeDasharray="3 3" stroke="#e2e8f0" horizontal={false} />
+                      <XAxis type="number" stroke="#64748b" fontSize={11} allowDecimals={false} />
+                      <YAxis 
+                        type="category" 
+                        dataKey="shortName" 
+                        stroke="#334155" 
+                        fontSize={11} 
+                        fontWeight={600}
+                        width={130} 
+                        tickLine={false}
+                        axisLine={{ stroke: '#cbd5e1' }}
                       />
-                      <Bar dataKey="qty" fill="#D4AF37" radius={[0, 4, 4, 0]} />
+                      <Tooltip 
+                        content={({ active, payload }) => {
+                          if (active && payload && payload.length) {
+                            const data = payload[0].payload;
+                            return (
+                              <div className="bg-slate-900 border border-slate-700 p-3 rounded-xl shadow-xl text-white text-xs font-sans space-y-1 max-w-xs">
+                                <p className="font-bold text-amber-400 text-sm">{data.name}</p>
+                                <p className="text-slate-300">Quantity Sold: <span className="font-mono font-bold text-white">{data.qty} units</span></p>
+                                <p className="text-slate-300">Total Revenue: <span className="font-mono font-bold text-emerald-400">৳ {data.revenue.toLocaleString()}</span></p>
+                              </div>
+                            );
+                          }
+                          return null;
+                        }}
+                      />
+                      <Bar dataKey="qty" fill="#D4AF37" radius={[0, 6, 6, 0]} />
                     </BarChart>
                   </ResponsiveContainer>
                 ) : (
