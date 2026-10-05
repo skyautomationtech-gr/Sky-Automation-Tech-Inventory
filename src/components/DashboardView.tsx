@@ -1245,25 +1245,31 @@ export default function DashboardView({
             {topSellingProducts.length === 0 ? (
               <p className="text-sm text-slate-400 py-6 text-center">No product sales logged this month.</p>
             ) : (
-              <div className="space-y-3.5">
+              <div className="space-y-3">
                 {topSellingProducts.map((product, index) => (
                   <div 
                     key={product.id} 
-                    className="flex items-center justify-between p-2 hover:bg-slate-50 rounded-xl transition-colors cursor-pointer"
+                    className="flex items-center justify-between gap-2.5 p-2 hover:bg-slate-50 rounded-xl transition-colors cursor-pointer border border-transparent hover:border-slate-100"
                     onClick={() => onNavigateToTab('products', undefined, product.id)}
                   >
-                    <div className="flex items-center gap-3">
-                      <div className="w-6 h-6 rounded-lg bg-amber-50 border border-amber-100 flex items-center justify-center text-sm font-bold text-amber-700 shrink-0">
+                    <div className="flex items-center gap-2.5 min-w-0 flex-1">
+                      <div className="w-6 h-6 rounded-lg bg-amber-50 border border-amber-200/60 flex items-center justify-center text-xs font-bold text-amber-700 shrink-0 font-mono">
                         {index + 1}
                       </div>
-                      <div className="min-w-0 font-sans">
-                        <p className="text-sm font-bold text-slate-800 truncate leading-tight">{product.name}</p>
-                        <p className="text-sm text-slate-400 mt-0.5">{product.qty} unit{product.qty !== 1 ? 's' : ''} sold</p>
+                      <div className="min-w-0 flex-1">
+                        <p className="text-xs sm:text-sm font-bold text-slate-800 truncate leading-tight" title={product.name}>
+                          {product.name}
+                        </p>
+                        <p className="text-[11px] text-slate-400 mt-0.5 font-medium">
+                          {product.qty} unit{product.qty !== 1 ? 's' : ''} sold
+                        </p>
                       </div>
                     </div>
-                    <span className="text-sm font-bold text-slate-900 font-mono shrink-0">
-                      ৳ {product.revenue.toLocaleString()}
-                    </span>
+                    <div className="shrink-0 text-right">
+                      <span className="inline-block text-xs sm:text-sm font-bold text-slate-900 font-mono bg-slate-100/90 px-2 py-0.5 rounded-lg border border-slate-200/60">
+                        ৳ {product.revenue.toLocaleString()}
+                      </span>
+                    </div>
                   </div>
                 ))}
               </div>
@@ -1314,7 +1320,7 @@ export default function DashboardView({
                         {dayData.count} order{dayData.count !== 1 ? 's' : ''}
                       </span>
                     </div>
-                    <span className="text-sm font-bold text-slate-800 font-mono w-16 text-right">
+                    <span className="text-sm font-bold text-slate-800 font-mono min-w-[4rem] text-right shrink-0">
                       ৳ {dayData.amount.toLocaleString()}
                     </span>
                   </div>
@@ -1342,15 +1348,17 @@ export default function DashboardView({
                 {reorderList.map(prod => (
                   <div 
                     key={prod.id} 
-                    className="flex justify-between items-center p-2 hover:bg-slate-50 rounded-xl transition-colors cursor-pointer"
+                    className="flex justify-between items-center gap-2.5 p-2 hover:bg-slate-50 rounded-xl transition-colors cursor-pointer border border-transparent hover:border-slate-100"
                     onClick={() => onNavigateToTab('products', undefined, prod.id)}
                   >
-                    <div className="min-w-0 pr-3 font-sans">
-                      <p className="text-sm font-bold text-slate-800 truncate leading-tight">{prod.name}</p>
-                      <p className="text-sm text-slate-400 mt-0.5">Threshold: {prod.reorderThreshold} units</p>
+                    <div className="min-w-0 flex-1 font-sans">
+                      <p className="text-xs sm:text-sm font-bold text-slate-800 truncate leading-tight" title={prod.name}>
+                        {prod.name}
+                      </p>
+                      <p className="text-[11px] text-slate-400 mt-0.5">Threshold: {prod.reorderThreshold} units</p>
                     </div>
                     <div className="text-right shrink-0">
-                      <span className="px-2 py-0.5 bg-red-50 text-red-700 border border-red-100 rounded text-sm font-bold font-mono">
+                      <span className="px-2 py-0.5 bg-red-50 text-red-700 border border-red-100 rounded text-xs font-bold font-mono">
                         {prod.stock} Left
                       </span>
                     </div>
