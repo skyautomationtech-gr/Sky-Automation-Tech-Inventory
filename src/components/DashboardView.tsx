@@ -23,7 +23,10 @@ import {
   AlertCircle,
   Coins,
   Truck,
-  Percent
+  Percent,
+  Calculator,
+  Wallet,
+  Building2
 } from 'lucide-react';
 import { 
   ResponsiveContainer, 
@@ -40,7 +43,21 @@ import {
   Legend, 
   CartesianGrid 
 } from 'recharts';
-import { Product, UserProfile, Order, Customer, Invoice } from '../types';
+import { 
+  Product, 
+  UserProfile, 
+  Order, 
+  Customer, 
+  Invoice,
+  Investment,
+  OtherReceivable,
+  CompanyPurchase,
+  PaymentPlatformEntry,
+  CompanyLoss,
+  ImportShippingRecord,
+  StockPurchaseRecord,
+  Expense
+} from '../types';
 import { 
   checkInUser, 
   checkOutUser, 
@@ -48,7 +65,15 @@ import {
   getOrders, 
   getCustomers,
   getInvoices,
-  getAllUsers
+  getAllUsers,
+  getInvestments,
+  getOtherReceivables,
+  getCompanyPurchases,
+  getPaymentPlatformEntries,
+  getCompanyLosses,
+  getImportShippingRecords,
+  getStockPurchases,
+  getExpenses
 } from '../firebase/db';
 
 interface DashboardViewProps {
@@ -81,6 +106,14 @@ export default function DashboardView({
   const [allUsers, setAllUsers] = useState<UserProfile[]>([]);
   const [loadingData, setLoadingData] = useState(true);
   const [liveLoginCodes, setLiveLoginCodes] = useState<any[]>([]);
+
+  // Super Admin Financial Health Widget State
+  const [financialHealth, setFinancialHealth] = useState({
+    totalInvestment: 0,
+    netProfitAllTime: 0,
+    cashOnHand: 0,
+    inventoryValueAtCost: 0
+  });
 
   useEffect(() => {
     if (user?.role !== 'superadmin') return;
@@ -132,6 +165,76 @@ export default function DashboardView({
         setAllCustomers(customers || []);
         setAllInvoices(invoices || []);
         setAllUsers(users || []);
+
+        if (user?.role === 'superadmin') {
+          try {
+            const [invs, recs, cps, ppes, cls, imps, sps, exps] = await Promise.all([
+              getInvestments(),
+              getOtherReceivables(),
+              getCompanyPurchases(),
+              getPaymentPlatformEntries(),
+              getCompanyLosses(),
+              getImportShippingRecords(),
+              getStockPurchases(),
+              getExpenses()
+            ]);
+
+            const totalInv = (invs || []).reduce((sum, i) => sum + (Number(i.amount) || 0), 0);
+            const collectedOrders = (orders || []).filter(o => o.status !== 'Returned/Cancelled').reduce((sum, o) => sum + (Number(o.amountPaid) || 0), 0);
+            const recoveredRec = (recs || []).reduce((sum, r) => sum + (Number(r.recoveredAmount) || 0), 0);
+            const platWithdrawals = (ppes || []).filter(p => p.type === 'Withdraw to Cash').reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+            const totalInflows = totalInv + collectedOrders + recoveredRec + platWithdrawals;
+
+            const stockOut = (sps || []).reduce((sum, s) => sum + (Number(s.amount) || 0), 0);
+            const recDisbursed = (recs || []).reduce((sum, r) => sum + (Number(r.amount) || 0), 0);
+            const cpOut = (cps || []).reduce((sum, c) => sum + (Number(c.amount) || 0), 0);
+            const expOut = (exps || []).filter(e => e.category !== 'Import / Shipping').reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
+            const platOut = (ppes || []).filter(p => p.type === 'Transfer to Platform').reduce((sum, p) => sum + (Number(p.amount) || 0), 0);
+            const lossOut = (cls || []).reduce((sum, l) => sum + (Number(l.amount) || 0), 0);
+            const impOut = (imps || []).reduce((sum, im) => sum + (Number(im.amount) || 0), 0) + (exps || []).filter(e => e.category === 'Import / Shipping').reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
+
+            const totalOutflows = stockOut + recDisbursed + cpOut + expOut + platOut + lossOut + impOut;
+            const cashOnHand = totalInflows - totalOutflows;
+
+            // Net Profit All-Time
+            const productCostMap = new Map<string, number>();
+            (products || []).forEach(p => productCostMap.set(p.id, Number(p.costPrice) || 0));
+
+            let rev = 0;
+            let cogs = 0;
+            (orders || []).forEach(o => {
+              if (o.status === 'Returned/Cancelled') return;
+              rev += (Number(o.totalAmount) || 0);
+              (o.items || []).forEach(it => {
+                const c = productCostMap.get(it.productId) || 0;
+                cogs += c * (Number(it.qty) || 1);
+              });
+            });
+            const allExpenses = (exps || []).reduce((sum, e) => sum + (Number(e.amount) || 0), 0);
+            const allLosses = (cls || []).reduce((sum, l) => sum + (Number(l.amount) || 0), 0);
+            const netProfit = (rev - cogs) - allExpenses - allLosses;
+
+            // Inventory Value at Cost
+            let costVal = 0;
+            (products || []).forEach(p => {
+              if (p.archived || p.status !== 'approved') return;
+              const uCost = Number(p.costPrice) || 0;
+              (p.variants || []).forEach(v => {
+                const q = Number(v.stock) || 0;
+                if (q > 0) costVal += q * uCost;
+              });
+            });
+
+            setFinancialHealth({
+              totalInvestment: totalInv,
+              netProfitAllTime: netProfit,
+              cashOnHand: cashOnHand,
+              inventoryValueAtCost: costVal
+            });
+          } catch (e) {
+            console.warn('Accounting widget fetch error:', e);
+          }
+        }
       } catch (err) {
         console.error("Error fetching dashboard data", err);
       } finally {
@@ -786,6 +889,70 @@ export default function DashboardView({
           </div>
         )}
       </div>
+
+      {/* Super Admin Financial Health Widget */}
+      {user?.role === 'superadmin' && (
+        <div className="bg-gradient-to-r from-slate-950 via-slate-900 to-slate-950 border border-amber-500/30 rounded-3xl p-5 md:p-6 text-white shadow-xl relative overflow-hidden">
+          <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 pb-4 border-b border-slate-800">
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 rounded-2xl bg-amber-500/20 text-[#D4AF37] border border-amber-500/30 flex items-center justify-center shrink-0">
+                <Calculator size={20} />
+              </div>
+              <div>
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] font-mono font-bold uppercase tracking-wider bg-amber-400/20 text-amber-300 px-2 py-0.5 rounded border border-amber-400/30">
+                    Super Admin Financial Health
+                  </span>
+                </div>
+                <h3 className="text-base font-extrabold text-white mt-0.5">
+                  Executive Cash & Accounting Health (কোম্পানির আর্থিক অবস্থা)
+                </h3>
+              </div>
+            </div>
+
+            <button
+              onClick={() => onNavigateToTab('accounting')}
+              className="px-4 py-2 bg-[#D4AF37] hover:bg-amber-400 text-slate-950 font-bold text-xs rounded-xl shadow-xs transition flex items-center justify-center gap-1.5 cursor-pointer shrink-0"
+            >
+              <span>Full Accounting Ledger →</span>
+            </button>
+          </div>
+
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 pt-4">
+            {/* Total Investment */}
+            <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-4">
+              <span className="text-[11px] font-mono text-slate-400 uppercase block">Total Investment (মূলধন)</span>
+              <p className="text-xl md:text-2xl font-black font-mono text-white mt-1">
+                ৳ {financialHealth.totalInvestment.toLocaleString()}
+              </p>
+            </div>
+
+            {/* Net Profit (All-Time) */}
+            <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-4">
+              <span className="text-[11px] font-mono text-slate-400 uppercase block">Net Profit (All-Time)</span>
+              <p className={`text-xl md:text-2xl font-black font-mono mt-1 ${financialHealth.netProfitAllTime >= 0 ? 'text-emerald-400' : 'text-rose-400'}`}>
+                ৳ {financialHealth.netProfitAllTime.toLocaleString()}
+              </p>
+            </div>
+
+            {/* Cash on Hand */}
+            <div className="bg-slate-900/80 border border-amber-500/20 rounded-2xl p-4">
+              <span className="text-[11px] font-mono text-amber-300 uppercase block">Cash on Hand (হাতে নগদ)</span>
+              <p className={`text-xl md:text-2xl font-black font-mono mt-1 ${financialHealth.cashOnHand >= 0 ? 'text-amber-400' : 'text-rose-400'}`}>
+                ৳ {financialHealth.cashOnHand.toLocaleString()}
+              </p>
+            </div>
+
+            {/* Inventory Value (At Cost) */}
+            <div className="bg-slate-900/80 border border-slate-800 rounded-2xl p-4">
+              <span className="text-[11px] font-mono text-slate-400 uppercase block">Inventory Value (At Cost)</span>
+              <p className="text-xl md:text-2xl font-black font-mono text-teal-300 mt-1">
+                ৳ {financialHealth.inventoryValueAtCost.toLocaleString()}
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Top Metrics Grid (4 columns) */}
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">

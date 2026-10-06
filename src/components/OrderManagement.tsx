@@ -1103,7 +1103,23 @@ export default function OrderManagement({
                         >
                           <td className="py-3 px-4">
                             <div className="flex flex-col gap-0.5">
-                              <span className="font-mono font-black text-slate-900 uppercase">#{order.id.substring(0, 8)}</span>
+                              <div className="flex items-center gap-1.5">
+                                <span className="font-mono font-black text-slate-900 uppercase">#{order.id.substring(0, 8)}</span>
+                                {(() => {
+                                  let totalCost = 0;
+                                  (order.items || []).forEach(it => {
+                                    const p = products.find(prod => prod.id === it.productId);
+                                    const c = Number(p?.costPrice) || 0;
+                                    totalCost += c * (Number(it.qty) || 1);
+                                  });
+                                  const profit = (Number(order.totalAmount) || 0) - totalCost;
+                                  return profit < 0 ? (
+                                    <span className="px-1.5 py-0.2 rounded text-[9px] font-mono font-black bg-red-100 text-red-700 border border-red-300 uppercase">
+                                      Loss
+                                    </span>
+                                  ) : null;
+                                })()}
+                              </div>
                               <span className="text-sm text-slate-400 font-mono">{new Date(order.createdAt).toLocaleDateString()}</span>
                             </div>
                           </td>
@@ -1190,13 +1206,29 @@ export default function OrderManagement({
                     <span className="text-[9px] font-mono tracking-widest text-slate-400 block uppercase">SALES RECORD</span>
                     <h3 className="font-black font-sans text-base text-amber-400 mt-1">#{selectedOrder.id.substring(0, 12).toUpperCase()}</h3>
                   </div>
-                  <span className={`text-sm font-mono font-bold px-2 py-0.5 rounded-sm ${
-                    selectedOrder.status === 'Delivered' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' :
-                    selectedOrder.status === 'Returned/Cancelled' ? 'bg-red-500/20 text-red-300 border border-red-500/30' :
-                    'bg-slate-800 text-slate-300'
-                  }`}>
-                    {selectedOrder.status.toUpperCase()}
-                  </span>
+                  <div className="flex items-center gap-1.5">
+                    {(() => {
+                      let totalCost = 0;
+                      (selectedOrder.items || []).forEach(it => {
+                        const p = products.find(prod => prod.id === it.productId);
+                        const c = Number(p?.costPrice) || 0;
+                        totalCost += c * (Number(it.qty) || 1);
+                      });
+                      const profit = (Number(selectedOrder.totalAmount) || 0) - totalCost;
+                      return profit < 0 ? (
+                        <span className="px-2 py-0.5 rounded text-[10px] font-mono font-black bg-red-500/20 text-red-300 border border-red-500/40 uppercase">
+                          LOSS: -৳{Math.abs(profit).toLocaleString()}
+                        </span>
+                      ) : null;
+                    })()}
+                    <span className={`text-sm font-mono font-bold px-2 py-0.5 rounded-sm ${
+                      selectedOrder.status === 'Delivered' ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30' :
+                      selectedOrder.status === 'Returned/Cancelled' ? 'bg-red-500/20 text-red-300 border border-red-500/30' :
+                      'bg-slate-800 text-slate-300'
+                    }`}>
+                      {selectedOrder.status.toUpperCase()}
+                    </span>
+                  </div>
                 </div>
 
                 <div className="grid grid-cols-2 gap-4 border-t border-slate-800 pt-4 font-mono text-sm">
@@ -1491,6 +1523,86 @@ export default function OrderManagement({
                     ))}
                   </div>
                 </div>
+
+                {/* Super Admin Per-Transaction Profit/Loss View */}
+                {isSuperAdmin && (() => {
+                  let totalCOGS = 0;
+                  const lines = (selectedOrder.items || []).map(item => {
+                    const prod = products.find(p => p.id === item.productId);
+                    const unitCost = Number(prod?.costPrice) || 0;
+                    const unitSell = Number(item.unitPrice) || 0;
+                    const qty = Number(item.qty) || 1;
+                    const lineCost = unitCost * qty;
+                    const lineProfit = (unitSell - unitCost) * qty;
+                    totalCOGS += lineCost;
+                    return {
+                      name: item.productName,
+                      variant: item.variantLabel,
+                      unitSell,
+                      unitCost,
+                      margin: unitSell - unitCost,
+                      qty,
+                      lineProfit
+                    };
+                  });
+                  const totalRev = Number(selectedOrder.totalAmount) || 0;
+                  const netProfit = totalRev - totalCOGS;
+                  const isLoss = netProfit < 0;
+
+                  return (
+                    <div className={`p-3.5 rounded-2xl border space-y-2.5 ${isLoss ? 'bg-red-50/70 border-red-200' : 'bg-slate-900 text-white border-slate-800'}`}>
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-1.5">
+                          <span className={`text-[10px] font-mono font-bold uppercase tracking-wider px-2 py-0.5 rounded ${isLoss ? 'bg-red-200 text-red-800 font-black' : 'bg-amber-400/20 text-amber-300'}`}>
+                            {isLoss ? '⚠️ LOSS ORDER' : 'PROFIT ANALYSIS'}
+                          </span>
+                          <span className={`text-[10px] font-mono ${isLoss ? 'text-red-700' : 'text-slate-400'}`}>
+                            (Super Admin Only)
+                          </span>
+                        </div>
+                        <span className={`text-xs font-mono font-black ${isLoss ? 'text-red-700' : 'text-emerald-400'}`}>
+                          {isLoss ? 'LOSS: -৳' : 'PROFIT: +৳'}{Math.abs(netProfit).toLocaleString()}
+                        </span>
+                      </div>
+
+                      <div className={`overflow-x-auto rounded-xl border text-[11px] ${isLoss ? 'bg-white border-red-200' : 'bg-slate-950 border-slate-800'}`}>
+                        <table className="w-full text-left font-mono">
+                          <thead className={`text-[9px] uppercase border-b ${isLoss ? 'bg-red-50 text-red-700 border-red-100' : 'bg-slate-900 text-slate-400 border-slate-800'}`}>
+                            <tr>
+                              <th className="py-1.5 px-2">Item</th>
+                              <th className="py-1.5 px-1.5 text-right">Sell</th>
+                              <th className="py-1.5 px-1.5 text-right">Cost</th>
+                              <th className="py-1.5 px-1.5 text-center">Qty</th>
+                              <th className="py-1.5 px-2 text-right">Margin</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                            {lines.map((l, i) => (
+                              <tr key={i}>
+                                <td className={`py-1.5 px-2 font-sans truncate max-w-[110px] ${isLoss ? 'text-slate-800' : 'text-slate-200'}`}>
+                                  {l.name}
+                                </td>
+                                <td className={`py-1.5 px-1.5 text-right ${isLoss ? 'text-slate-700' : 'text-slate-300'}`}>৳{l.unitSell}</td>
+                                <td className={`py-1.5 px-1.5 text-right ${isLoss ? 'text-slate-600' : 'text-slate-400'}`}>৳{l.unitCost}</td>
+                                <td className={`py-1.5 px-1.5 text-center ${isLoss ? 'text-slate-600' : 'text-slate-400'}`}>{l.qty}</td>
+                                <td className={`py-1.5 px-2 text-right font-black ${l.lineProfit >= 0 ? 'text-emerald-600' : 'text-red-600'}`}>
+                                  {l.lineProfit >= 0 ? '+' : ''}৳{l.lineProfit}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+
+                      <div className={`flex items-center justify-between text-[11px] font-mono pt-1 ${isLoss ? 'text-red-800' : 'text-slate-300'}`}>
+                        <span>Total COGS: ৳{totalCOGS.toLocaleString()}</span>
+                        <span>Net Margin: <strong className={isLoss ? 'text-red-700 font-black' : 'text-emerald-400 font-black'}>
+                          {isLoss ? '-৳' : '+৳'}{Math.abs(netProfit).toLocaleString()}
+                        </strong></span>
+                      </div>
+                    </div>
+                  );
+                })()}
 
                 {/* Status Timeline History */}
                 <div className="space-y-2">

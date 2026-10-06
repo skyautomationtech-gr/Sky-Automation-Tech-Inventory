@@ -51,7 +51,9 @@ import {
   CashBalanceSettings,
   OtherReceivable,
   PaymentPlatformLedger,
-  ImportShippingCost
+  ImportShippingCost,
+  ChartOfAccount,
+  AccountingVoucher
 } from '../types';
 
 // --- Data Sanitization Helper ---
@@ -4087,30 +4089,8 @@ export async function addInvestment(data: Omit<InvestmentEntry, 'id'>): Promise<
 }
 
 export async function ensureInitialInvestmentIfEmpty(): Promise<void> {
-  try {
-    const colRef = collection(db, 'investments');
-    const existing = await getDocs(colRef);
-    if (existing.empty) {
-      await addDoc(colRef, {
-        amount: 39550,
-        date: new Date().toISOString().split('T')[0],
-        note: 'প্রারম্ভিক মূলধন (Initial Capital Investment)',
-        subBrand: '',
-        createdBy: 'Super Admin',
-        createdAt: Date.now(),
-        isLocked: true
-      });
-      console.log('Seeded one-time ৳39,550 capital investment.');
-    } else {
-      const firstDoc = existing.docs[0];
-      const data = firstDoc.data();
-      if (data.amount !== 39550) {
-        await updateDoc(doc(db, 'investments', firstDoc.id), { amount: 39550 });
-      }
-    }
-  } catch (e) {
-    console.warn('ensureInitialInvestmentIfEmpty warning:', e);
-  }
+  // No automatic seeding - keep everything completely empty
+  return;
 }
 
 export async function updateInvestment(id: string, data: Partial<InvestmentEntry>): Promise<void> {
@@ -4522,6 +4502,8 @@ export async function clearAllAccountingData(includeExpenses: boolean = true): P
   if (includeExpenses) {
     collectionsToClear.push('expenses');
   }
+  collectionsToClear.push('accountingVouchers');
+  collectionsToClear.push('chartOfAccounts');
 
   for (const colName of collectionsToClear) {
     try {
@@ -4545,5 +4527,156 @@ export async function clearAllAccountingData(includeExpenses: boolean = true): P
     console.warn('Error resetting cash balance settings:', err);
   }
 }
+
+// --- 8. Chart of Accounts Services ---
+export const DEFAULT_CHART_OF_ACCOUNTS: Omit<ChartOfAccount, 'id'>[] = [
+  // Assets (1000 - 1999)
+  { code: '1010', name: 'নগদ ক্যাশ (Cash in Hand)', category: 'Asset', subType: 'Current Asset', description: 'মূল ক্যাশ ড্রয়ার ও তরল অর্থ', isSystem: true, balance: 0 },
+  { code: '1020', name: 'বিকাশ মার্চেন্ট / এজেন্ট (bKash Balance)', category: 'Asset', subType: 'Current Asset', description: 'বিকাশ ওয়ালেট ও মার্চেন্ট ব্যালেন্স', isSystem: true, balance: 0 },
+  { code: '1030', name: 'নগদ ওয়ালেট (Nagad Balance)', category: 'Asset', subType: 'Current Asset', description: 'নগদ একাউন্ট জমা', isSystem: true, balance: 0 },
+  { code: '1040', name: 'ব্যাংক হিসাব (Primary Bank Account)', category: 'Asset', subType: 'Current Asset', description: 'মূল ব্যাংক চলতি / সঞ্চয়ী হিসাব', isSystem: true, balance: 0 },
+  { code: '1100', name: 'পণ্য স্টক মূল্য (Inventory / Stock Asset)', category: 'Asset', subType: 'Current Asset', description: 'গুদাম ও শো-রুমের বর্তমান মজুদ পণ্যের ক্রয়মূল্য', isSystem: true, balance: 0 },
+  { code: '1200', name: 'গ্রাহকের নিকট বাকি (Accounts Receivable / Dues)', category: 'Asset', subType: 'Current Asset', description: 'অর্ডার ও ইনভয়েস হতে প্রাপ্তব্য টাকা', isSystem: true, balance: 0 },
+  { code: '1300', name: 'অগ্রিম ও জামানত (Advances & Deposits)', category: 'Asset', subType: 'Current Asset', description: 'দোকান জামানত ও স্টাফ অগ্রিম', isSystem: true, balance: 0 },
+  { code: '1500', name: 'অফিস যন্ত্রপাতি ও কম্পিউটার (Equipment & Gadgets)', category: 'Asset', subType: 'Fixed Asset', description: 'ল্যাপটপ, প্রিন্টার, সিসিটিভি ইত্যাদি', isSystem: true, balance: 0 },
+
+  // Liabilities (2000 - 2999)
+  { code: '2010', name: 'সাপ্লায়ার দেনা (Accounts Payable / Supplier Dues)', category: 'Liability', subType: 'Current Liability', description: 'মহাজন ও ভেন্ডারদের কাছে বাকি ক্রয়মূল্য', isSystem: true, balance: 0 },
+  { code: '2020', name: 'গ্রাহকের অগ্রিম জমা (Customer Advance Payments)', category: 'Liability', subType: 'Current Liability', description: 'অর্ডারের বুকিং বা অগ্রিম কিস্তি', isSystem: true, balance: 0 },
+  { code: '2100', name: 'স্বল্পমেয়াদী ঋণ (Short-term Borrowings)', category: 'Liability', subType: 'Current Liability', description: 'ব্যবসায়িক বা ব্যক্তিগত ঋণ', isSystem: true, balance: 0 },
+
+  // Equity (3000 - 3999)
+  { code: '3010', name: 'মালিকের মূলধন (Owner Initial Capital / Equity)', category: 'Equity', subType: 'Equity', description: 'প্রারম্ভিক মূলধন বিনিয়োগ', isSystem: true, balance: 0 },
+  { code: '3020', name: 'মালিকের উত্তোলন (Owner Drawings)', category: 'Equity', subType: 'Equity', description: 'ব্যবসা থেকে ব্যক্তিগত উত্তোলন', isSystem: true, balance: 0 },
+  { code: '3030', name: 'সংরক্ষিত লাভ (Retained Earnings)', category: 'Equity', subType: 'Equity', description: 'পূর্ববর্তী মুনাফা সঞ্চিতি', isSystem: true, balance: 0 },
+
+  // Revenue (4000 - 4999)
+  { code: '4010', name: 'পণ্য বিক্রয় আয় (Sales Revenue)', category: 'Revenue', subType: 'Operating Revenue', description: 'গ্যাজেট ও এক্সেসরিজ সরাসরি ও অনলাইন বিক্রয়', isSystem: true, balance: 0 },
+  { code: '4020', name: 'ডেলিভারি চার্জ আয় (Delivery Fee Collected)', category: 'Revenue', subType: 'Operating Revenue', description: 'গ্রাহকদের নিকট থেকে সংগৃহীত কুরিয়ার চার্জ', isSystem: true, balance: 0 },
+  { code: '4090', name: 'অন্যান্য ব্যবসায়িক আয় (Other Revenue)', category: 'Revenue', subType: 'Non-Operating Revenue', description: 'কমিশন, ক্যাশব্যাক ও বিবিধ আয়', isSystem: true, balance: 0 },
+
+  // Expenses (5000 - 5999)
+  { code: '5010', name: 'বিক্রিত পণ্যের ক্রয়মূল্য (Cost of Goods Sold - COGS)', category: 'Expense', subType: 'Direct Cost', description: 'পণ্য কেনা ও কার্যাবলি খরচ', isSystem: true, balance: 0 },
+  { code: '5020', name: 'কুরিয়ার ও শিপিং খরচ (Courier & Shipping Expense)', category: 'Expense', subType: 'Direct Cost', description: 'Steadfast, CarryBee, পেপারফ্লাই বিল', isSystem: true, balance: 0 },
+  { code: '5030', name: 'প্যাকেজিং খরচ (Packaging & Boxes)', category: 'Expense', subType: 'Direct Cost', description: 'বক্স, বাবল র‍্যাপ, টেপ ও স্টিকার', isSystem: true, balance: 0 },
+  { code: '5110', name: 'বিজ্ঞাপন ও প্রমোশন (Meta/Facebook Ads & Marketing)', category: 'Expense', subType: 'Operating Expense', description: 'ফেসবুক বুস্টিং, টিকটক অ্যাড ও ব্যানার', isSystem: true, balance: 0 },
+  { code: '5120', name: 'দোকান / গোডাউন ভাড়া (Rent & Utilities)', category: 'Expense', subType: 'Operating Expense', description: 'অফিস ও স্টোর স্পেস ভাড়া', isSystem: true, balance: 0 },
+  { code: '5130', name: 'স্টাফ বেতন ও ভাতা (Staff Salaries & Allowance)', category: 'Expense', subType: 'Operating Expense', description: 'টিম মেম্বারদের মাসিক বেতন', isSystem: true, balance: 0 },
+  { code: '5140', name: 'বিদ্যুৎ, ইন্টারনেট ও মোবাইল বিল (Utilities & Telecom)', category: 'Expense', subType: 'Operating Expense', description: 'ওয়াইফাই, বিদ্যুৎ ও সিম বিল', isSystem: true, balance: 0 },
+  { code: '5150', name: 'গেটওয়ে ও ব্যাংক চার্জ (MFS & Gateway Fee)', category: 'Expense', subType: 'Financial Expense', description: 'বিকাশ ও ব্যাংক লেনদেন ফি (১.৫%-১.৮%)', isSystem: true, balance: 0 },
+  { code: '5190', name: 'পণ্য ক্ষতি ও অপচয় (Loss & Damages)', category: 'Expense', subType: 'Other Expense', description: 'ভাঙা, নষ্ট বা হারানো মালপত্র', isSystem: true, balance: 0 },
+];
+
+export async function getChartOfAccounts(): Promise<ChartOfAccount[]> {
+  try {
+    const colRef = collection(db, 'chartOfAccounts');
+    const q = query(colRef, orderBy('code', 'asc'));
+    const snapshot = await getDocs(q);
+    const accounts: ChartOfAccount[] = [];
+    snapshot.forEach(docSnap => {
+      accounts.push({ id: docSnap.id, ...docSnap.data() } as ChartOfAccount);
+    });
+    return accounts;
+  } catch (error) {
+    console.warn('Failed to fetch chart of accounts:', error);
+    return [];
+  }
+}
+
+export function subscribeToChartOfAccounts(callback: (accounts: ChartOfAccount[]) => void): Unsubscribe {
+  const colRef = collection(db, 'chartOfAccounts');
+  const q = query(colRef, orderBy('code', 'asc'));
+  return onSnapshot(q, (snapshot) => {
+    const accounts: ChartOfAccount[] = [];
+    snapshot.forEach(docSnap => {
+      accounts.push({ id: docSnap.id, ...docSnap.data() } as ChartOfAccount);
+    });
+    callback(accounts);
+  }, (error) => {
+    console.warn('Chart of accounts subscription error:', error);
+  });
+}
+
+export async function addChartOfAccount(data: Omit<ChartOfAccount, 'id'>): Promise<string> {
+  try {
+    const colRef = collection(db, 'chartOfAccounts');
+    const docRef = await addDoc(colRef, sanitizeData(data));
+    return docRef.id;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, 'chartOfAccounts');
+  }
+}
+
+export async function updateChartOfAccount(id: string, data: Partial<ChartOfAccount>): Promise<void> {
+  try {
+    const docRef = doc(db, 'chartOfAccounts', id);
+    await updateDoc(docRef, sanitizeData(data));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, `chartOfAccounts/${id}`);
+  }
+}
+
+export async function deleteChartOfAccount(id: string): Promise<void> {
+  try {
+    const docRef = doc(db, 'chartOfAccounts', id);
+    await deleteDoc(docRef);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `chartOfAccounts/${id}`);
+  }
+}
+
+// --- 9. Accounting Vouchers / Journal Entries ---
+export async function getAccountingVouchers(): Promise<AccountingVoucher[]> {
+  try {
+    const colRef = collection(db, 'accountingVouchers');
+    const q = query(colRef, orderBy('createdAt', 'desc'), limit(200));
+    const snapshot = await getDocs(q);
+    const vouchers: AccountingVoucher[] = [];
+    snapshot.forEach(docSnap => {
+      vouchers.push({ id: docSnap.id, ...docSnap.data() } as AccountingVoucher);
+    });
+    return vouchers;
+  } catch (error) {
+    console.warn('Failed to fetch accounting vouchers:', error);
+    return [];
+  }
+}
+
+export function subscribeToAccountingVouchers(callback: (vouchers: AccountingVoucher[]) => void): Unsubscribe {
+  const colRef = collection(db, 'accountingVouchers');
+  const q = query(colRef, orderBy('createdAt', 'desc'), limit(200));
+  return onSnapshot(q, (snapshot) => {
+    const vouchers: AccountingVoucher[] = [];
+    snapshot.forEach(docSnap => {
+      vouchers.push({ id: docSnap.id, ...docSnap.data() } as AccountingVoucher);
+    });
+    callback(vouchers);
+  }, (error) => {
+    console.warn('Accounting vouchers subscription error:', error);
+  });
+}
+
+export async function addAccountingVoucher(data: Omit<AccountingVoucher, 'id'>): Promise<string> {
+  try {
+    const colRef = collection(db, 'accountingVouchers');
+    const docRef = await addDoc(colRef, sanitizeData({
+      ...data,
+      createdAt: data.createdAt || Date.now()
+    }));
+    return docRef.id;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, 'accountingVouchers');
+  }
+}
+
+export async function deleteAccountingVoucher(id: string): Promise<void> {
+  try {
+    const docRef = doc(db, 'accountingVouchers', id);
+    await deleteDoc(docRef);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `accountingVouchers/${id}`);
+  }
+}
+
 
 

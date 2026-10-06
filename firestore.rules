@@ -35,6 +35,12 @@ service cloud.firestore {
     match /settings/cashBalance {
       allow read, write: if isSuperAdmin();
     }
+    match /chartOfAccounts/{accountId} {
+      allow read, write: if isSuperAdmin();
+    }
+    match /accountingVouchers/{voucherId} {
+      allow read, write: if isSuperAdmin();
+    }
 
     // App operational data collections
     match /{document=**} {

@@ -17,7 +17,8 @@ import {
   DollarSign, 
   Truck, 
   BarChart3, 
-  Activity
+  Activity,
+  Calculator
 } from 'lucide-react';
 import { UserProfile } from '../types';
 
@@ -52,6 +53,7 @@ export default function Sidebar({
     { id: 'orders', name: 'Order Desk', icon: ShoppingBag },
     { id: 'invoices', name: 'Invoice Desk', icon: Receipt },
     { id: 'receivables', name: 'Due Payments', icon: Coins },
+    { id: 'accounting', name: 'Accounting Desk', icon: Calculator },
     { id: 'suppliers', name: 'Supplier Directory', icon: Truck },
     { id: 'reports', name: 'Reports & Analytics', icon: BarChart3 },
     ...(isPrivileged ? [{ id: 'audit_logs', name: 'Audit Logs', icon: Activity }] : []),

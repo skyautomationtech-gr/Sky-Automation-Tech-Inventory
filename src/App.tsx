@@ -78,6 +78,7 @@ import OrderManagement from './components/OrderManagement';
 import InvoiceManagement from './components/InvoiceManagement';
 import DuePayments from './components/DuePayments';
 import FinancialOverview from './components/FinancialOverview';
+import { AccountingDesk } from './components/Accounting';
 import SupplierManagement from './components/SupplierManagement';
 import ReportsAnalytics from './components/ReportsAnalytics';
 import { AuditLogView } from './components/AuditLogView';
@@ -1256,6 +1257,13 @@ export default function App() {
               </p>
             </div>
           )
+        )}
+
+        {/* Tab Accounting: Zero-Setup Plain Minimal Accounting Desk */}
+        {currentTab === 'accounting' && (
+          <ErrorBoundary fallbackTitle="Accounting Desk encountered an issue">
+            <AccountingDesk user={user} />
+          </ErrorBoundary>
         )}
 
         {/* Tab Attendance: Attendance Log View */}

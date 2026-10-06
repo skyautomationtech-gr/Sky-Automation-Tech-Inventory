@@ -474,3 +474,145 @@ export interface AuditLog {
   timestamp: number;
 }
 
+// ==========================================
+// ACCOUNTING & FINANCIAL EQUITY INTERFACES
+// ==========================================
+
+export interface InvestmentEntry {
+  id: string;
+  amount: number;
+  date: string;
+  note?: string;
+  subBrand?: string;
+  createdBy?: string;
+  createdAt: number;
+  isLocked?: boolean;
+  source?: string;
+}
+
+export interface CompanyPurchase {
+  id: string;
+  title: string;
+  category: string;
+  amount: number;
+  date: string;
+  paidVia: string;
+  supplier?: string;
+  invoiceNo?: string;
+  note?: string;
+  createdAt: number;
+  subBrand?: string;
+}
+
+export interface CompanyLoss {
+  id: string;
+  title: string;
+  reason: 'Product Damage' | 'Courier Return Loss' | 'Theft/Missing' | 'Bad Debt' | 'Depreciation' | 'System Error' | 'Other' | string;
+  amount: number;
+  date: string;
+  note?: string;
+  recordedBy?: string;
+  createdAt: number;
+  subBrand?: string;
+}
+
+export interface CashBalanceSettings {
+  openingBalance: number;
+  lastReconciledAmount?: number;
+  lastReconciledAt?: number;
+  reconciledBy?: string;
+  updatedAt: number;
+}
+
+export interface CashReconciliation {
+  id: string;
+  systemBalance: number;
+  physicalCount: number;
+  discrepancy: number;
+  notes?: string;
+  date: string;
+  reconciledBy: string;
+  createdAt: number;
+}
+
+export interface OtherReceivable {
+  id: string;
+  borrowerName: string;
+  phone?: string;
+  type: 'Loan Given' | 'Advance Salary' | 'Security Deposit' | 'Supplier Advance' | 'Other';
+  amount: number;
+  paidDate: string;
+  expectedReturnDate?: string;
+  status: 'Pending' | 'Partially Recovered' | 'Recovered' | 'Written Off';
+  recoveredAmount: number;
+  notes?: string;
+  createdAt: number;
+}
+
+export interface PaymentPlatformLedger {
+  id: string;
+  platform: 'bKash Merchant' | 'Nagad Merchant' | 'Rocket' | 'Bank Account' | 'Cash Drawer' | 'POS Card' | string;
+  accountNo?: string;
+  currentBalance: number;
+  pendingSettlement?: number;
+  feePercentage?: number;
+  lastUpdated: number;
+  notes?: string;
+  createdAt: number;
+}
+
+export interface ImportShippingCost {
+  id: string;
+  batchOrShipmentNo: string;
+  trackingNo?: string;
+  carrierOrAgent: string;
+  freightCost: number;
+  customsTaxCost: number;
+  handlingOrClearingCost: number;
+  totalCost: number;
+  currency?: string;
+  exchangeRate?: number;
+  shipmentDate: string;
+  status: 'In Transit' | 'Customs Cleared' | 'Received' | 'Paid';
+  notes?: string;
+  createdAt: number;
+}
+
+export type AccountCategory = 'Asset' | 'Liability' | 'Equity' | 'Revenue' | 'Expense';
+
+export interface ChartOfAccount {
+  id: string;
+  code: string;
+  name: string;
+  category: AccountCategory;
+  subType: string;
+  description?: string;
+  isSystem?: boolean;
+  balance: number;
+}
+
+export type VoucherType = 'Receipt' | 'Payment' | 'Journal' | 'Contra' | 'Sales' | 'Purchase';
+
+export interface VoucherEntry {
+  accountId: string;
+  accountName: string;
+  debit: number;
+  credit: number;
+  narration?: string;
+}
+
+export interface AccountingVoucher {
+  id: string;
+  voucherNo: string;
+  voucherType: VoucherType;
+  date: string;
+  reference?: string;
+  entries: VoucherEntry[];
+  totalAmount: number;
+  notes?: string;
+  subBrand?: string;
+  createdBy: string;
+  createdAt: number;
+}
+
+
