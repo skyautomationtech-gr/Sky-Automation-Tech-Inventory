@@ -303,7 +303,7 @@ export interface Customer {
 }
 
 export type SalesChannel = 'Facebook' | 'TikTok' | 'Instagram' | 'Daraz' | 'CartUp' | 'Packly' | 'Direct/WhatsApp';
-export type CourierName = 'Steadfast (Outside Dhaka)' | 'CarryBee (Inside Dhaka)';
+export type CourierName = 'Steadfast (Outside Dhaka)' | 'CarryBee (Inside Dhaka)' | 'Paperfly' | 'Hand to Hand' | string;
 export type PaymentMethod = 'Cash' | 'bKash' | 'Nagad' | 'Bank Transfer';
 export type PaymentStatus = 'Paid' | 'Due' | 'Partial';
 export type OrderStatus = 'Pending' | 'Confirmed' | 'Packed' | 'Shipped' | 'Delivered' | 'Returned/Cancelled';
