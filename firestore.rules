@@ -1,33 +1,6 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    
-    function isSuperAdmin() {
-      return request.auth != null && (
-        request.auth.token.email == 'skyautomationtech@gmail.com' ||
-        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
-         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'superadmin')
-      );
-    }
-
-    // Super Admin only collections for Accounting & Financial Health
-    match /investments/{investmentId} {
-      allow read, write: if isSuperAdmin();
-    }
-    match /companyPurchases/{purchaseId} {
-      allow read, write: if isSuperAdmin();
-    }
-    match /companyLosses/{lossId} {
-      allow read, write: if isSuperAdmin();
-    }
-    match /cashReconciliations/{reconciliationId} {
-      allow read, write: if isSuperAdmin();
-    }
-    match /settings/cashBalance {
-      allow read, write: if isSuperAdmin();
-    }
-
-    // App operational data collections
     match /{document=**} {
       allow read, write: if true;
     }

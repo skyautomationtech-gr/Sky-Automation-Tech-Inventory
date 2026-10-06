@@ -175,84 +175,6 @@
         "voidedBy": { "type": "string" },
         "voidedAt": { "type": "number" }
       }
-    },
-    "Investment": {
-      "title": "Investment",
-      "description": "Capital investment entries",
-      "type": "object",
-      "properties": {
-        "date": { "type": "string" },
-        "amount": { "type": "number" },
-        "note": { "type": "string" },
-        "subBrand": { "type": "string" },
-        "createdBy": { "type": "string" },
-        "createdAt": { "type": "number" }
-      },
-      "required": ["date", "amount", "note", "createdAt"]
-    },
-    "CompanyPurchase": {
-      "title": "CompanyPurchase",
-      "description": "Company assets and equipment purchases",
-      "type": "object",
-      "properties": {
-        "itemName": { "type": "string" },
-        "category": { "type": "string" },
-        "amount": { "type": "number" },
-        "purchaseDate": { "type": "string" },
-        "vendor": { "type": "string" },
-        "notes": { "type": "string" },
-        "receiptUrl": { "type": "string" },
-        "subBrand": { "type": "string" },
-        "createdBy": { "type": "string" },
-        "createdAt": { "type": "number" }
-      },
-      "required": ["itemName", "category", "amount", "purchaseDate", "createdAt"]
-    },
-    "CompanyLoss": {
-      "title": "CompanyLoss",
-      "description": "Explicit business loss tracking entries",
-      "type": "object",
-      "properties": {
-        "lossType": { "type": "string" },
-        "linkedProductId": { "type": "string" },
-        "linkedProductName": { "type": "string" },
-        "linkedCustomerId": { "type": "string" },
-        "linkedCustomerName": { "type": "string" },
-        "amount": { "type": "number" },
-        "date": { "type": "string" },
-        "notes": { "type": "string" },
-        "subBrand": { "type": "string" },
-        "createdBy": { "type": "string" },
-        "createdAt": { "type": "number" }
-      },
-      "required": ["lossType", "amount", "date", "createdAt"]
-    },
-    "CashReconciliation": {
-      "title": "CashReconciliation",
-      "description": "Cash on hand reconciliation log",
-      "type": "object",
-      "properties": {
-        "actualAmount": { "type": "number" },
-        "calculatedAmount": { "type": "number" },
-        "difference": { "type": "number" },
-        "note": { "type": "string" },
-        "reconciledBy": { "type": "string" },
-        "createdAt": { "type": "number" },
-        "date": { "type": "string" }
-      },
-      "required": ["actualAmount", "calculatedAmount", "difference", "createdAt"]
-    },
-    "CashBalanceSettings": {
-      "title": "CashBalanceSettings",
-      "description": "Cash balance settings and baseline",
-      "type": "object",
-      "properties": {
-        "openingBalance": { "type": "number" },
-        "lastReconciledAt": { "type": "number" },
-        "lastReconciledAmount": { "type": "number" },
-        "reconciledBy": { "type": "string" },
-        "updatedAt": { "type": "number" }
-      }
     }
   },
   "firestore": {
@@ -275,10 +197,6 @@
     "/settings/customerCounter": {
       "schema": "CustomerCounters",
       "description": "Customer sequential counter document"
-    },
-    "/settings/cashBalance": {
-      "schema": "CashBalanceSettings",
-      "description": "Cash on hand baseline settings"
     },
     "/customers/{customerId}": {
       "schema": "Customer",
@@ -303,22 +221,6 @@
     "/notifications/{notificationId}": {
       "schema": "AppNotification",
       "description": "System notifications collection"
-    },
-    "/investments/{investmentId}": {
-      "schema": "Investment",
-      "description": "Capital investment entries collection"
-    },
-    "/companyPurchases/{purchaseId}": {
-      "schema": "CompanyPurchase",
-      "description": "Company capital assets and equipment purchases collection"
-    },
-    "/companyLosses/{lossId}": {
-      "schema": "CompanyLoss",
-      "description": "Explicit business losses collection"
-    },
-    "/cashReconciliations/{reconciliationId}": {
-      "schema": "CashReconciliation",
-      "description": "Cash count audit reconciliation log collection"
     }
   }
 }

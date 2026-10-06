@@ -177,7 +177,7 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
   const [endDate, setEndDate] = useState(() => {
     return new Date().toISOString().split('T')[0];
   });
-  const [subBrandFilter, setSubBrandFilter] = useState<'All' | 'SAT' | 'GZ' | 'RTX'>('SAT');
+  const [subBrandFilter, setSubBrandFilter] = useState<'All' | 'SAT' | 'GZ' | 'RTX'>('All');
 
   // Income Ledger Filters
   const [incomeSearch, setIncomeSearch] = useState('');
@@ -188,7 +188,7 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
   // XYZ Income-specific Filters
   const [xyzSearch, setXyzSearch] = useState('');
   const [xyzPaymentFilter, setXyzPaymentFilter] = useState<string>('All');
-  const [xyzSubBrandFilter, setXyzSubBrandFilter] = useState<'All' | 'SAT' | 'GZ' | 'RTX'>('SAT');
+  const [xyzSubBrandFilter, setXyzSubBrandFilter] = useState<'All' | 'SAT' | 'GZ' | 'RTX'>('All');
 
   // Expense-specific Ledger Filters
   const [ledgerSearch, setLedgerSearch] = useState('');
@@ -210,7 +210,7 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
   const [incomeFormCustomerName, setIncomeFormCustomerName] = useState('');
   const [incomeFormInvoiceNo, setIncomeFormInvoiceNo] = useState('');
   const [incomeFormReference, setIncomeFormReference] = useState('');
-  const [incomeFormSubBrand, setIncomeFormSubBrand] = useState<'SAT' | 'GZ' | 'RTX' | 'ALL' | ''>('SAT');
+  const [incomeFormSubBrand, setIncomeFormSubBrand] = useState<'SAT' | 'GZ' | 'RTX' | 'ALL' | ''>('');
   const [incomeFormNotes, setIncomeFormNotes] = useState('');
   const [isSubmittingIncome, setIsSubmittingIncome] = useState(false);
 
@@ -229,7 +229,7 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
   const [expenseFormSupplierName, setExpenseFormSupplierName] = useState('');
   const [expenseFormReference, setExpenseFormReference] = useState('');
   const [expenseFormInvoiceNo, setExpenseFormInvoiceNo] = useState('');
-  const [expenseFormSubBrand, setExpenseFormSubBrand] = useState<'SAT' | 'GZ' | 'RTX' | 'ALL' | ''>('SAT');
+  const [expenseFormSubBrand, setExpenseFormSubBrand] = useState<'SAT' | 'GZ' | 'RTX' | 'ALL' | ''>('');
   const [expenseFormNotes, setExpenseFormNotes] = useState('');
   const [expenseReceiptFile, setExpenseReceiptFile] = useState<File | null>(null);
   const [expenseReceiptUrl, setExpenseReceiptUrl] = useState('');
@@ -1682,6 +1682,16 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
                 <Plus size={13} />
                 <span>Add Expense</span>
               </button>
+              <button
+                type="button"
+                onClick={handleClearDemoData}
+                disabled={clearingDemo}
+                className="px-2.5 py-1.5 bg-rose-50 hover:bg-rose-100 text-rose-700 border border-rose-200 rounded-xl text-xs font-bold flex items-center gap-1 cursor-pointer transition-colors"
+                title="Delete all demo/sample income & expense entries"
+              >
+                <Trash2 size={12} className="text-rose-600" />
+                <span>{clearingDemo ? 'Deleting...' : 'Delete Demo'}</span>
+              </button>
             </div>
           )}
         </div>
@@ -1709,15 +1719,18 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
             />
           </div>
 
-          {/* Sub-brand selector - Locked to Sky Automation Tech */}
+          {/* Sub-brand selector */}
           <div>
             <label className="block text-[9px] font-bold text-slate-400 uppercase tracking-tight mb-1">Sub-Brand</label>
             <select
-              disabled
-              value="SAT"
-              className="w-full bg-slate-100 border border-slate-100 rounded-xl py-2 px-2.5 text-xs text-slate-400 font-semibold focus:outline-hidden cursor-not-allowed opacity-80"
+              value={subBrandFilter}
+              onChange={(e) => setSubBrandFilter(e.target.value as any)}
+              className="w-full bg-slate-50 border border-slate-100 rounded-xl py-2 px-2.5 text-xs text-slate-700 font-semibold focus:outline-hidden"
             >
+              <option value="All">All Brands</option>
               <option value="SAT">Sky Auto (SAT)</option>
+              <option value="GZ">GadgetZu (GZ)</option>
+              <option value="RTX">RTX Gadget (RTX)</option>
             </select>
           </div>
 
@@ -2241,6 +2254,19 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
                   </button>
                 )}
 
+                {canManageFinances && (
+                  <button
+                    type="button"
+                    onClick={handleClearDemoData}
+                    disabled={clearingDemo}
+                    className="px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-xl text-xs font-bold border border-rose-200 flex items-center gap-1.5 cursor-pointer transition-colors"
+                    title="Delete demo income and expense data"
+                  >
+                    <Trash2 size={13} className="text-rose-600" />
+                    <span>{clearingDemo ? 'Deleting...' : 'Delete Demo Data (ডেমো মুছুন)'}</span>
+                  </button>
+                )}
+
                 {canManageFinances && incomes.length > 0 && (
                   <button
                     type="button"
@@ -2673,14 +2699,17 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
                 </select>
               </div>
 
-              {/* Sub-Brand Filter - Locked to Sky Automation Tech */}
+              {/* Sub-Brand Filter */}
               <div>
                 <select
-                  disabled
-                  value="SAT"
-                  className="w-full bg-slate-100 border border-slate-100 rounded-xl py-2 px-3 text-xs text-slate-400 font-semibold focus:outline-hidden cursor-not-allowed opacity-80"
+                  value={xyzSubBrandFilter}
+                  onChange={(e) => setXyzSubBrandFilter(e.target.value as any)}
+                  className="w-full bg-slate-50 border border-slate-100 rounded-xl py-2 px-3 text-xs text-slate-700 font-semibold focus:outline-hidden"
                 >
+                  <option value="All">All Sub-Brands (সব ব্র্যান্ড)</option>
                   <option value="SAT">SAT - Sky Automation Tech</option>
+                  <option value="GZ">GZ - Gadget Zone</option>
+                  <option value="RTX">RTX - RTX Gadget</option>
                 </select>
               </div>
             </div>
@@ -2888,6 +2917,19 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
                   >
                     <Plus size={14} />
                     <span>Add Expense (নতুন খরচ)</span>
+                  </button>
+                )}
+
+                {canManageFinances && (
+                  <button
+                    type="button"
+                    onClick={handleClearDemoData}
+                    disabled={clearingDemo}
+                    className="px-3 py-2 bg-rose-50 hover:bg-rose-100 text-rose-700 rounded-xl text-xs font-bold border border-rose-200 flex items-center gap-1.5 cursor-pointer transition-colors"
+                    title="Delete demo expense and income records"
+                  >
+                    <Trash2 size={13} className="text-rose-600" />
+                    <span>{clearingDemo ? 'Deleting...' : 'Delete Demo Data (ডেমো মুছুন)'}</span>
                   </button>
                 )}
 
@@ -3366,11 +3408,14 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
                     Allocate to Sub-Brand
                   </label>
                   <select
-                    disabled
-                    value="SAT"
-                    className="w-full bg-slate-100 border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-400 font-semibold focus:outline-hidden cursor-not-allowed opacity-80"
+                    value={expenseFormSubBrand}
+                    onChange={(e) => setExpenseFormSubBrand(e.target.value as any)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 font-semibold focus:outline-hidden focus:border-amber-500 focus:bg-white"
                   >
+                    <option value="">Shared (All Brands)</option>
                     <option value="SAT">Sky Auto (SAT)</option>
+                    <option value="GZ">GadgetZu (GZ)</option>
+                    <option value="RTX">RTX Gadget (RTX)</option>
                   </select>
                 </div>
               </div>
@@ -3685,11 +3730,14 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
                     Allocate to Sub-Brand
                   </label>
                   <select
-                    disabled
-                    value="SAT"
-                    className="w-full bg-slate-100 border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-400 font-semibold focus:outline-hidden cursor-not-allowed opacity-80"
+                    value={incomeFormSubBrand}
+                    onChange={(e) => setIncomeFormSubBrand(e.target.value as any)}
+                    className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 font-semibold focus:outline-hidden focus:border-emerald-500 focus:bg-white"
                   >
+                    <option value="">Shared (All Brands)</option>
                     <option value="SAT">Sky Auto (SAT)</option>
+                    <option value="GZ">GadgetZu (GZ)</option>
+                    <option value="RTX">RTX Gadget (RTX)</option>
                   </select>
                 </div>
               </div>

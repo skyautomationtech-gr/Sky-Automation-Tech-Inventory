@@ -3942,11 +3942,13 @@ export default function ProductManagement({
                             Division <span className="text-red-500">*</span>
                           </label>
                           <select
-                            disabled
-                            value="SAT"
-                            className="w-full bg-slate-100 border border-slate-200 rounded-xl py-2.5 px-3 text-sm text-slate-400 focus:outline-hidden cursor-not-allowed opacity-80"
+                            value={formSubBrand}
+                            onChange={(e) => setFormSubBrand(e.target.value as any)}
+                            className="w-full bg-white border border-slate-200 rounded-xl py-2.5 px-3 text-sm text-slate-800 focus:outline-hidden focus:border-amber-400 focus:ring-4 focus:ring-amber-400/10 transition-all cursor-pointer"
                           >
                             <option value="SAT">SAT (Sky Auto)</option>
+                            <option value="GZ">GadgetZu</option>
+                            <option value="RTX">RTX Gadget</option>
                           </select>
                         </div>
 

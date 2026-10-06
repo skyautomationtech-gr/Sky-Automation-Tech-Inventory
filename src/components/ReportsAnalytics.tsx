@@ -36,7 +36,7 @@ export default function ReportsAnalytics({ user }: ReportsAnalyticsProps) {
   const [loading, setLoading] = useState(true);
 
   // Filters
-  const [activeReportTab, setActiveReportTab] = useState<'sales' | 'profit_loss' | 'products_rank' | 'subbrand_comp' | 'channels' | 'loss_orders'>('sales');
+  const [activeReportTab, setActiveReportTab] = useState<'sales' | 'profit_loss' | 'products_rank' | 'subbrand_comp' | 'channels'>('sales');
   const [dateRangeType, setDateRangeType] = useState<'today' | 'this_week' | 'this_month' | 'last_month' | 'this_year' | 'custom'>('this_month');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
@@ -244,57 +244,11 @@ export default function ReportsAnalytics({ user }: ReportsAnalyticsProps) {
     });
   }, [orders, expenses, rangeStartTs, rangeEndTs, productCostMap]);
 
-  // Loss-Making Orders list for Super Admin review
-  const lossOrdersList = useMemo(() => {
-    return filteredOrders.map(order => {
-      let orderCost = 0;
-      const itemsDetail = (order.items || []).map(item => {
-        const unitCost = productCostMap.get(item.productId) ?? (item.unitPrice * 0.7);
-        const lineCost = unitCost * item.qty;
-        const lineRev = item.unitPrice * item.qty;
-        const lineProfit = lineRev - lineCost;
-        orderCost += lineCost;
-        return {
-          ...item,
-          unitCost,
-          lineCost,
-          lineProfit,
-          isLoss: lineProfit < 0
-        };
-      });
-      const orderProfit = (order.totalAmount || 0) - orderCost;
-      return {
-        order,
-        orderCost,
-        orderProfit,
-        isLoss: orderProfit < 0 || itemsDetail.some(i => i.isLoss),
-        itemsDetail
-      };
-    }).filter(o => o.isLoss);
-  }, [filteredOrders, productCostMap]);
-
   // CSV Export
   const handleExportCSV = () => {
     let csvContent = 'data:text/csv;charset=utf-8,';
 
-    if (activeReportTab === 'loss_orders') {
-      csvContent += 'Order ID,Date,Customer,Phone,Sub-Brand,Selling Total,Cost Total,Net Loss,Items\n';
-      lossOrdersList.forEach(item => {
-        const itemsStr = item.itemsDetail.map(i => `${i.productName} (${i.qty}x)`).join('; ');
-        const row = [
-          item.order.id,
-          new Date(item.order.createdAt).toLocaleDateString(),
-          `"${item.order.customerName}"`,
-          `"${item.order.customerPhone}"`,
-          item.order.subBrand,
-          item.order.totalAmount,
-          item.orderCost,
-          item.orderProfit,
-          `"${itemsStr}"`
-        ].join(',');
-        csvContent += row + '\n';
-      });
-    } else if (activeReportTab === 'sales') {
+    if (activeReportTab === 'sales') {
       csvContent += 'Order ID,Date,Customer Name,Sub-Brand,Channel,Total Amount (BDT),Status\n';
       filteredOrders.forEach(o => {
         const row = [
@@ -491,20 +445,6 @@ export default function ReportsAnalytics({ user }: ReportsAnalyticsProps) {
             <span>Sales Channels</span>
           </div>
         </button>
-
-        {isSuperAdmin && (
-          <button
-            onClick={() => setActiveReportTab('loss_orders')}
-            className={`px-4 py-2.5 text-xs font-bold border-b-2 transition-all cursor-pointer ${
-              activeReportTab === 'loss_orders' ? 'border-rose-500 text-rose-600 bg-rose-50/50 rounded-t-xl' : 'border-transparent text-slate-600 hover:text-slate-900'
-            }`}
-          >
-            <div className="flex items-center gap-2">
-              <ShieldAlert size={16} className="text-rose-600" />
-              <span>Loss-Making Orders ({lossOrdersList.length})</span>
-            </div>
-          </button>
-        )}
       </div>
 
       {/* Main Tab Views */}
@@ -786,94 +726,6 @@ export default function ReportsAnalytics({ user }: ReportsAnalyticsProps) {
               </tbody>
             </table>
           </div>
-        </div>
-      )}
-
-      {/* View 6: Loss-Making Orders (Super Admin Exclusive) */}
-      {activeReportTab === 'loss_orders' && (
-        <div className="bg-white rounded-2xl border border-slate-200/80 shadow-xs overflow-hidden">
-          <div className="p-4 sm:p-5 border-b border-slate-100 flex items-center justify-between">
-            <div>
-              <h3 className="text-sm font-black text-slate-800 uppercase tracking-tight flex items-center gap-2">
-                <ShieldAlert size={16} className="text-rose-600" />
-                <span>Loss-Making & Pricing Discrepancy Orders</span>
-              </h3>
-              <p className="text-xs text-slate-400 mt-0.5">
-                Orders where selling price was lower than purchase cost, resulting in net transaction losses
-              </p>
-            </div>
-            <div className="text-right">
-              <span className="text-xs font-mono font-bold px-2.5 py-1 bg-rose-50 text-rose-700 rounded-lg border border-rose-200">
-                {lossOrdersList.length} Flagged
-              </span>
-            </div>
-          </div>
-
-          {lossOrdersList.length === 0 ? (
-            <div className="py-16 text-center text-slate-400 text-xs">
-              🎉 No loss-making orders found in the selected date range. All transactions are profitable!
-            </div>
-          ) : (
-            <div className="overflow-x-auto">
-              <table className="w-full text-left border-collapse text-xs">
-                <thead>
-                  <tr className="bg-slate-50 text-slate-500 border-b border-slate-200 font-bold uppercase text-[10px]">
-                    <th className="p-3">Order ID & Date</th>
-                    <th className="p-3">Customer</th>
-                    <th className="p-3">Sub-Brand</th>
-                    <th className="p-3">Items Sold</th>
-                    <th className="p-3 text-right">Selling Price</th>
-                    <th className="p-3 text-right">Purchase Cost</th>
-                    <th className="p-3 text-right">Net Loss</th>
-                  </tr>
-                </thead>
-                <tbody className="divide-y divide-slate-100">
-                  {lossOrdersList.map(({ order, orderCost, orderProfit, itemsDetail }) => (
-                    <tr key={order.id} className="hover:bg-rose-50/20">
-                      <td className="p-3 whitespace-nowrap">
-                        <span className="font-mono font-bold text-slate-800">{order.id}</span>
-                        <span className="block text-[10px] text-slate-400">{new Date(order.createdAt).toLocaleDateString()}</span>
-                      </td>
-                      <td className="p-3">
-                        <span className="font-bold text-slate-800 block">{order.customerName}</span>
-                        <span className="font-mono text-[10px] text-slate-400">{order.customerPhone}</span>
-                      </td>
-                      <td className="p-3">
-                        <span className="px-2 py-0.5 bg-slate-100 text-slate-700 rounded text-[10px] font-bold">
-                          {order.subBrand}
-                        </span>
-                      </td>
-                      <td className="p-3">
-                        <div className="space-y-1">
-                          {itemsDetail.map((itm, i) => (
-                            <div key={i} className="flex items-center gap-1.5 text-[11px]">
-                              <span className="font-medium text-slate-700">{itm.productName} ({itm.qty}x)</span>
-                              {itm.isLoss && (
-                                <span className="px-1.5 py-0.2 rounded-sm bg-rose-100 text-rose-700 font-mono font-bold text-[9px]">
-                                  −৳{Math.abs(itm.lineProfit).toLocaleString()}
-                                </span>
-                              )}
-                            </div>
-                          ))}
-                        </div>
-                      </td>
-                      <td className="p-3 text-right font-mono font-bold text-slate-800">
-                        ৳{order.totalAmount.toLocaleString()}
-                      </td>
-                      <td className="p-3 text-right font-mono text-slate-500">
-                        ৳{orderCost.toLocaleString()}
-                      </td>
-                      <td className="p-3 text-right whitespace-nowrap">
-                        <span className="font-mono font-black text-rose-700 bg-rose-100 px-2 py-0.5 rounded border border-rose-200">
-                          −৳{Math.abs(orderProfit).toLocaleString()}
-                        </span>
-                      </td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
         </div>
       )}
     </div>
