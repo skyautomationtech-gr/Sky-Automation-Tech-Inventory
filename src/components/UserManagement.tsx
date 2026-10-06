@@ -7,7 +7,6 @@ import {
   createUserProfile, 
   findUserProfileByEmail,
   updateUserProfile, 
-  deleteSokolDemoData,
   getPrivateEmploymentInfo,
   updatePrivateEmploymentInfo,
   getNextEmployeeId

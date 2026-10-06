@@ -43,7 +43,15 @@ import {
   SupplierPayment,
   AppNotification,
   Branch,
-  AuditLog
+  AuditLog,
+  InvestmentEntry,
+  CompanyPurchase,
+  CompanyLoss,
+  CashReconciliation,
+  CashBalanceSettings,
+  OtherReceivable,
+  PaymentPlatformLedger,
+  ImportShippingCost
 } from '../types';
 
 // --- Data Sanitization Helper ---
@@ -2029,37 +2037,6 @@ export async function cleanupOldAttendanceRecords(retentionDays: number = 30): P
   } catch (err) {
     console.warn('cleanupOldAttendanceRecords error:', err);
     return { deletedCount: 0 };
-  }
-}
-
-export async function deleteSokolDemoData(): Promise<void> {
-  // Guard: Only run once per session to avoid reading all categories, brands, and products on every navigation
-  try {
-    if (sessionStorage.getItem('sat_sokol_cleaned') === 'true') {
-      return;
-    }
-  } catch (e) {}
-
-  console.log('Attempting to delete Sokol demo data (one-time check)...');
-  try {
-    const collections = ['categories', 'brands', 'products'];
-    for (const colName of collections) {
-      const colRef = collection(db, colName);
-      const snapshot = await getDocs(colRef);
-      for (const docSnap of snapshot.docs) {
-        const data = docSnap.data();
-        if (JSON.stringify(data).includes('Sokol')) {
-          console.log('Deleting Sokol data from', colName, ':', docSnap.id);
-          await deleteDoc(doc(db, colName, docSnap.id));
-        }
-      }
-    }
-    try {
-      sessionStorage.setItem('sat_sokol_cleaned', 'true');
-    } catch (e) {}
-    console.log('Finished deleting Sokol demo data.');
-  } catch (err) {
-    console.warn('deleteSokolDemoData notice:', err);
   }
 }
 
@@ -4053,4 +4030,520 @@ export async function getAuditLogs(): Promise<AuditLog[]> {
     return [];
   }
 }
+
+// ===========================================
+// ACCOUNTING & FINANCIAL EQUITY SERVICES
+// ===========================================
+
+// --- 1. Total Investment Tracker ---
+export async function getInvestments(): Promise<InvestmentEntry[]> {
+  try {
+    const colRef = collection(db, 'investments');
+    const q = query(colRef, orderBy('createdAt', 'desc'));
+    const snapshot = await getDocs(q);
+    const entries: InvestmentEntry[] = [];
+    snapshot.forEach(docSnap => {
+      entries.push({ id: docSnap.id, ...docSnap.data() } as InvestmentEntry);
+    });
+    return entries;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, 'investments');
+  }
+}
+
+export function subscribeToInvestments(callback: (entries: InvestmentEntry[]) => void): Unsubscribe {
+  const colRef = collection(db, 'investments');
+  const q = query(colRef, orderBy('createdAt', 'desc'));
+  return onSnapshot(q, (snapshot) => {
+    const entries: InvestmentEntry[] = [];
+    snapshot.forEach(docSnap => {
+      entries.push({ id: docSnap.id, ...docSnap.data() } as InvestmentEntry);
+    });
+    callback(entries);
+  }, (error) => {
+    console.warn('Investments subscription error:', error);
+  });
+}
+
+export async function addInvestment(data: Omit<InvestmentEntry, 'id'>): Promise<string> {
+  try {
+    const colRef = collection(db, 'investments');
+    const existing = await getDocs(colRef);
+    if (!existing.empty) {
+      throw new Error('ব্যবসায়িক মূলধন বিনিয়োগ একবারই অনুমোদিত (One-Time Capital Investment Only)। ইতিমধ্যে মূলধন বিনিয়োগ রেকর্ড বিদ্যমান এবং নতুন বিনিয়োগ যোগ করা লক করা আছে।');
+    }
+    const docRef = await addDoc(colRef, sanitizeData({
+      ...data,
+      isLocked: true,
+      createdAt: data.createdAt || Date.now()
+    }));
+    return docRef.id;
+  } catch (error) {
+    if (error instanceof Error && error.message.includes('One-Time Capital Investment Only')) {
+      throw error;
+    }
+    handleFirestoreError(error, OperationType.CREATE, 'investments');
+  }
+}
+
+export async function ensureInitialInvestmentIfEmpty(): Promise<void> {
+  try {
+    const colRef = collection(db, 'investments');
+    const existing = await getDocs(colRef);
+    if (existing.empty) {
+      await addDoc(colRef, {
+        amount: 39550,
+        date: new Date().toISOString().split('T')[0],
+        note: 'প্রারম্ভিক মূলধন (Initial Capital Investment)',
+        subBrand: '',
+        createdBy: 'Super Admin',
+        createdAt: Date.now(),
+        isLocked: true
+      });
+      console.log('Seeded one-time ৳39,550 capital investment.');
+    } else {
+      const firstDoc = existing.docs[0];
+      const data = firstDoc.data();
+      if (data.amount !== 39550) {
+        await updateDoc(doc(db, 'investments', firstDoc.id), { amount: 39550 });
+      }
+    }
+  } catch (e) {
+    console.warn('ensureInitialInvestmentIfEmpty warning:', e);
+  }
+}
+
+export async function updateInvestment(id: string, data: Partial<InvestmentEntry>): Promise<void> {
+  try {
+    const docRef = doc(db, 'investments', id);
+    await updateDoc(docRef, sanitizeData(data));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, `investments/${id}`);
+  }
+}
+
+export async function deleteInvestment(id: string): Promise<void> {
+  try {
+    const docRef = doc(db, 'investments', id);
+    await deleteDoc(docRef);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `investments/${id}`);
+  }
+}
+
+// --- 2. Company Purchases / Assets Tracker ---
+export async function getCompanyPurchases(): Promise<CompanyPurchase[]> {
+  try {
+    const colRef = collection(db, 'companyPurchases');
+    const q = query(colRef, orderBy('createdAt', 'desc'));
+    const snapshot = await getDocs(q);
+    const purchases: CompanyPurchase[] = [];
+    snapshot.forEach(docSnap => {
+      purchases.push({ id: docSnap.id, ...docSnap.data() } as CompanyPurchase);
+    });
+    return purchases;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, 'companyPurchases');
+  }
+}
+
+export function subscribeToCompanyPurchases(callback: (purchases: CompanyPurchase[]) => void): Unsubscribe {
+  const colRef = collection(db, 'companyPurchases');
+  const q = query(colRef, orderBy('createdAt', 'desc'));
+  return onSnapshot(q, (snapshot) => {
+    const purchases: CompanyPurchase[] = [];
+    snapshot.forEach(docSnap => {
+      purchases.push({ id: docSnap.id, ...docSnap.data() } as CompanyPurchase);
+    });
+    callback(purchases);
+  }, (error) => {
+    console.warn('Company purchases subscription error:', error);
+  });
+}
+
+export async function addCompanyPurchase(data: Omit<CompanyPurchase, 'id'>): Promise<string> {
+  try {
+    const colRef = collection(db, 'companyPurchases');
+    const docRef = await addDoc(colRef, sanitizeData({
+      ...data,
+      createdAt: data.createdAt || Date.now()
+    }));
+    return docRef.id;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, 'companyPurchases');
+  }
+}
+
+export async function updateCompanyPurchase(id: string, data: Partial<CompanyPurchase>): Promise<void> {
+  try {
+    const docRef = doc(db, 'companyPurchases', id);
+    await updateDoc(docRef, sanitizeData(data));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, `companyPurchases/${id}`);
+  }
+}
+
+export async function deleteCompanyPurchase(id: string): Promise<void> {
+  try {
+    const docRef = doc(db, 'companyPurchases', id);
+    await deleteDoc(docRef);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `companyPurchases/${id}`);
+  }
+}
+
+// --- 3. Company Losses Tracker ---
+export async function getCompanyLosses(): Promise<CompanyLoss[]> {
+  try {
+    const colRef = collection(db, 'companyLosses');
+    const q = query(colRef, orderBy('createdAt', 'desc'));
+    const snapshot = await getDocs(q);
+    const losses: CompanyLoss[] = [];
+    snapshot.forEach(docSnap => {
+      losses.push({ id: docSnap.id, ...docSnap.data() } as CompanyLoss);
+    });
+    return losses;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, 'companyLosses');
+  }
+}
+
+export function subscribeToCompanyLosses(callback: (losses: CompanyLoss[]) => void): Unsubscribe {
+  const colRef = collection(db, 'companyLosses');
+  const q = query(colRef, orderBy('createdAt', 'desc'));
+  return onSnapshot(q, (snapshot) => {
+    const losses: CompanyLoss[] = [];
+    snapshot.forEach(docSnap => {
+      losses.push({ id: docSnap.id, ...docSnap.data() } as CompanyLoss);
+    });
+    callback(losses);
+  }, (error) => {
+    console.warn('Company losses subscription error:', error);
+  });
+}
+
+export async function addCompanyLoss(data: Omit<CompanyLoss, 'id'>): Promise<string> {
+  try {
+    const colRef = collection(db, 'companyLosses');
+    const docRef = await addDoc(colRef, sanitizeData({
+      ...data,
+      createdAt: data.createdAt || Date.now()
+    }));
+    return docRef.id;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, 'companyLosses');
+  }
+}
+
+export async function updateCompanyLoss(id: string, data: Partial<CompanyLoss>): Promise<void> {
+  try {
+    const docRef = doc(db, 'companyLosses', id);
+    await updateDoc(docRef, sanitizeData(data));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, `companyLosses/${id}`);
+  }
+}
+
+export async function deleteCompanyLoss(id: string): Promise<void> {
+  try {
+    const docRef = doc(db, 'companyLosses', id);
+    await deleteDoc(docRef);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `companyLosses/${id}`);
+  }
+}
+
+// --- 4. Cash Balance Settings & Reconciliations ---
+export async function getCashBalanceSettings(): Promise<CashBalanceSettings | null> {
+  try {
+    const docRef = doc(db, 'settings', 'cashBalance');
+    const docSnap = await getDoc(docRef);
+    if (docSnap.exists()) {
+      return docSnap.data() as CashBalanceSettings;
+    }
+    return {
+      openingBalance: 0,
+      updatedAt: Date.now()
+    };
+  } catch (error) {
+    console.warn('Failed to get cash balance settings, returning default:', error);
+    return { openingBalance: 0, updatedAt: Date.now() };
+  }
+}
+
+export async function setCashBalanceSettings(settings: Partial<CashBalanceSettings>): Promise<void> {
+  try {
+    const docRef = doc(db, 'settings', 'cashBalance');
+    await setDoc(docRef, sanitizeData({
+      ...settings,
+      updatedAt: Date.now()
+    }), { merge: true });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, 'settings/cashBalance');
+  }
+}
+
+export async function getCashReconciliations(): Promise<CashReconciliation[]> {
+  try {
+    const colRef = collection(db, 'cashReconciliations');
+    const q = query(colRef, orderBy('createdAt', 'desc'), limit(50));
+    const snapshot = await getDocs(q);
+    const list: CashReconciliation[] = [];
+    snapshot.forEach(docSnap => {
+      list.push({ id: docSnap.id, ...docSnap.data() } as CashReconciliation);
+    });
+    return list;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, 'cashReconciliations');
+  }
+}
+
+export function subscribeToCashReconciliations(callback: (recs: CashReconciliation[]) => void): Unsubscribe {
+  const colRef = collection(db, 'cashReconciliations');
+  const q = query(colRef, orderBy('createdAt', 'desc'), limit(50));
+  return onSnapshot(q, (snapshot) => {
+    const list: CashReconciliation[] = [];
+    snapshot.forEach(docSnap => {
+      list.push({ id: docSnap.id, ...docSnap.data() } as CashReconciliation);
+    });
+    callback(list);
+  }, (error) => {
+    console.warn('Cash reconciliations subscription error:', error);
+  });
+}
+
+export async function addCashReconciliation(data: Omit<CashReconciliation, 'id'>): Promise<string> {
+  try {
+    const colRef = collection(db, 'cashReconciliations');
+    const docRef = await addDoc(colRef, sanitizeData({
+      ...data,
+      createdAt: data.createdAt || Date.now()
+    }));
+    return docRef.id;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, 'cashReconciliations');
+  }
+}
+
+// --- 5. Other Receivables Tracker ---
+export async function getOtherReceivables(): Promise<OtherReceivable[]> {
+  try {
+    const colRef = collection(db, 'otherReceivables');
+    const q = query(colRef, orderBy('createdAt', 'desc'));
+    const snapshot = await getDocs(q);
+    const list: OtherReceivable[] = [];
+    snapshot.forEach(docSnap => {
+      list.push({ id: docSnap.id, ...docSnap.data() } as OtherReceivable);
+    });
+    return list;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, 'otherReceivables');
+  }
+}
+
+export function subscribeToOtherReceivables(callback: (list: OtherReceivable[]) => void): Unsubscribe {
+  const colRef = collection(db, 'otherReceivables');
+  const q = query(colRef, orderBy('createdAt', 'desc'));
+  return onSnapshot(q, (snapshot) => {
+    const list: OtherReceivable[] = [];
+    snapshot.forEach(docSnap => {
+      list.push({ id: docSnap.id, ...docSnap.data() } as OtherReceivable);
+    });
+    callback(list);
+  }, (error) => {
+    console.warn('OtherReceivables subscription error:', error);
+  });
+}
+
+export async function addOtherReceivable(data: Omit<OtherReceivable, 'id'>): Promise<string> {
+  try {
+    const colRef = collection(db, 'otherReceivables');
+    const docRef = await addDoc(colRef, sanitizeData({
+      ...data,
+      createdAt: data.createdAt || Date.now()
+    }));
+    return docRef.id;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, 'otherReceivables');
+  }
+}
+
+export async function updateOtherReceivable(id: string, data: Partial<OtherReceivable>): Promise<void> {
+  try {
+    const docRef = doc(db, 'otherReceivables', id);
+    await updateDoc(docRef, sanitizeData(data));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, `otherReceivables/${id}`);
+  }
+}
+
+export async function deleteOtherReceivable(id: string): Promise<void> {
+  try {
+    const docRef = doc(db, 'otherReceivables', id);
+    await deleteDoc(docRef);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `otherReceivables/${id}`);
+  }
+}
+
+// --- 6. Payment Platform Balance Tracker ---
+export async function getPaymentPlatformLedger(): Promise<PaymentPlatformLedger[]> {
+  try {
+    const colRef = collection(db, 'paymentPlatformLedger');
+    const q = query(colRef, orderBy('createdAt', 'desc'));
+    const snapshot = await getDocs(q);
+    const list: PaymentPlatformLedger[] = [];
+    snapshot.forEach(docSnap => {
+      list.push({ id: docSnap.id, ...docSnap.data() } as PaymentPlatformLedger);
+    });
+    return list;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, 'paymentPlatformLedger');
+  }
+}
+
+export function subscribeToPaymentPlatformLedger(callback: (list: PaymentPlatformLedger[]) => void): Unsubscribe {
+  const colRef = collection(db, 'paymentPlatformLedger');
+  const q = query(colRef, orderBy('createdAt', 'desc'));
+  return onSnapshot(q, (snapshot) => {
+    const list: PaymentPlatformLedger[] = [];
+    snapshot.forEach(docSnap => {
+      list.push({ id: docSnap.id, ...docSnap.data() } as PaymentPlatformLedger);
+    });
+    callback(list);
+  }, (error) => {
+    console.warn('PaymentPlatformLedger subscription error:', error);
+  });
+}
+
+export async function addPaymentPlatformEntry(data: Omit<PaymentPlatformLedger, 'id'>): Promise<string> {
+  try {
+    const colRef = collection(db, 'paymentPlatformLedger');
+    const docRef = await addDoc(colRef, sanitizeData({
+      ...data,
+      createdAt: data.createdAt || Date.now()
+    }));
+    return docRef.id;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, 'paymentPlatformLedger');
+  }
+}
+
+export async function updatePaymentPlatformEntry(id: string, data: Partial<PaymentPlatformLedger>): Promise<void> {
+  try {
+    const docRef = doc(db, 'paymentPlatformLedger', id);
+    await updateDoc(docRef, sanitizeData(data));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, `paymentPlatformLedger/${id}`);
+  }
+}
+
+export async function deletePaymentPlatformEntry(id: string): Promise<void> {
+  try {
+    const docRef = doc(db, 'paymentPlatformLedger', id);
+    await deleteDoc(docRef);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `paymentPlatformLedger/${id}`);
+  }
+}
+
+// --- 7. Import / Shipping Costs Tracker ---
+export async function getImportShippingCosts(): Promise<ImportShippingCost[]> {
+  try {
+    const colRef = collection(db, 'importShippingCosts');
+    const q = query(colRef, orderBy('createdAt', 'desc'));
+    const snapshot = await getDocs(q);
+    const list: ImportShippingCost[] = [];
+    snapshot.forEach(docSnap => {
+      list.push({ id: docSnap.id, ...docSnap.data() } as ImportShippingCost);
+    });
+    return list;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, 'importShippingCosts');
+  }
+}
+
+export function subscribeToImportShippingCosts(callback: (list: ImportShippingCost[]) => void): Unsubscribe {
+  const colRef = collection(db, 'importShippingCosts');
+  const q = query(colRef, orderBy('createdAt', 'desc'));
+  return onSnapshot(q, (snapshot) => {
+    const list: ImportShippingCost[] = [];
+    snapshot.forEach(docSnap => {
+      list.push({ id: docSnap.id, ...docSnap.data() } as ImportShippingCost);
+    });
+    callback(list);
+  }, (error) => {
+    console.warn('ImportShippingCosts subscription error:', error);
+  });
+}
+
+export async function addImportShippingCost(data: Omit<ImportShippingCost, 'id'>): Promise<string> {
+  try {
+    const colRef = collection(db, 'importShippingCosts');
+    const docRef = await addDoc(colRef, sanitizeData({
+      ...data,
+      createdAt: data.createdAt || Date.now()
+    }));
+    return docRef.id;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, 'importShippingCosts');
+  }
+}
+
+export async function updateImportShippingCost(id: string, data: Partial<ImportShippingCost>): Promise<void> {
+  try {
+    const docRef = doc(db, 'importShippingCosts', id);
+    await updateDoc(docRef, sanitizeData(data));
+  } catch (error) {
+    handleFirestoreError(error, OperationType.UPDATE, `importShippingCosts/${id}`);
+  }
+}
+
+export async function deleteImportShippingCost(id: string): Promise<void> {
+  try {
+    const docRef = doc(db, 'importShippingCosts', id);
+    await deleteDoc(docRef);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `importShippingCosts/${id}`);
+  }
+}
+
+export async function clearAllAccountingData(includeExpenses: boolean = true): Promise<void> {
+  const collectionsToClear = [
+    'investments',
+    'companyPurchases',
+    'companyLosses',
+    'otherReceivables',
+    'paymentPlatformLedger',
+    'importShippingCosts',
+    'cashReconciliations'
+  ];
+
+  if (includeExpenses) {
+    collectionsToClear.push('expenses');
+  }
+
+  for (const colName of collectionsToClear) {
+    try {
+      const colRef = collection(db, colName);
+      const snapshot = await getDocs(colRef);
+      const deletePromises = snapshot.docs.map(docSnap => deleteDoc(doc(db, colName, docSnap.id)));
+      await Promise.all(deletePromises);
+    } catch (err) {
+      console.warn(`Error clearing collection ${colName}:`, err);
+    }
+  }
+
+  try {
+    await setCashBalanceSettings({
+      openingBalance: 0,
+      lastReconciledAmount: 0,
+      lastReconciledAt: undefined,
+      reconciledBy: undefined
+    });
+  } catch (err) {
+    console.warn('Error resetting cash balance settings:', err);
+  }
+}
+
 

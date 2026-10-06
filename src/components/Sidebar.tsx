@@ -17,7 +17,7 @@ import {
   DollarSign, 
   Truck, 
   BarChart3, 
-  Activity 
+  Activity
 } from 'lucide-react';
 import { UserProfile } from '../types';
 

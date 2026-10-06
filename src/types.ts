@@ -435,7 +435,6 @@ export type IncomeCategory =
   | 'Product Sale'
   | 'Delivery/Courier Income'
   | 'Digital Service / Top-up'
-  | 'XYZ Income'
   | 'Other Income'
   | 'Customer Refund Received'
   | 'Other Business Income';

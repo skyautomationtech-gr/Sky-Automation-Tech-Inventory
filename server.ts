@@ -1,29 +1,50 @@
 import express from "express";
 import path from "path";
+import fs from "fs";
 import { createServer as createViteServer } from "vite";
-import { initializeApp, cert } from "firebase-admin/app";
+import { initializeApp, getApps, getApp } from "firebase-admin/app";
 import { getAuth } from "firebase-admin/auth";
 import { getFirestore } from "firebase-admin/firestore";
 
-// Initialize Firebase Admin
-// We use the project ID from config. In AI Studio, this often works if 
-// the environment has ambient credentials or if we provide the project ID.
+// Initialize Firebase Admin safely
+let adminApp: any = null;
 try {
-  initializeApp({
-    projectId: "gen-lang-client-0634961568"
-  });
-  console.log("Firebase Admin initialized successfully.");
+  let projectId = process.env.FIREBASE_PROJECT_ID || "gen-lang-client-0634961568";
+  const configPath = path.join(process.cwd(), 'firebase-applet-config.json');
+  if (fs.existsSync(configPath)) {
+    try {
+      const parsed = JSON.parse(fs.readFileSync(configPath, 'utf8'));
+      if (parsed.projectId) {
+        projectId = parsed.projectId;
+      }
+    } catch (e) {
+      console.warn("Notice reading firebase-applet-config.json:", e);
+    }
+  }
+
+  if (getApps().length === 0) {
+    adminApp = initializeApp({ projectId });
+    console.log(`Firebase Admin initialized successfully for project ${projectId}.`);
+  } else {
+    adminApp = getApp();
+  }
 } catch (error) {
   console.warn("Firebase Admin initialization notice:", error);
 }
 
 const getDb = () => {
-  return getFirestore();
+  try {
+    if (!adminApp && getApps().length === 0) return null;
+    return getFirestore();
+  } catch (error) {
+    console.warn("getFirestore notice:", error);
+    return null;
+  }
 };
 
 async function startServer() {
   const app = express();
-  const PORT = 3000;
+  const PORT = process.env.PORT ? parseInt(process.env.PORT, 10) : 3000;
 
   app.use(express.json());
 

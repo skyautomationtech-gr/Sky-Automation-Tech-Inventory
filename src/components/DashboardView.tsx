@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   DollarSign, 
   Package, 
@@ -23,7 +23,10 @@ import {
   AlertCircle,
   Coins,
   Truck,
-  Percent
+  Percent,
+  Landmark,
+  Lock,
+  Wallet
 } from 'lucide-react';
 import { 
   ResponsiveContainer, 
@@ -48,7 +51,8 @@ import {
   getOrders, 
   getCustomers,
   getInvoices,
-  getAllUsers
+  getAllUsers,
+  getInvestments
 } from '../firebase/db';
 
 interface DashboardViewProps {
@@ -79,6 +83,7 @@ export default function DashboardView({
   const [allCustomers, setAllCustomers] = useState<Customer[]>([]);
   const [allInvoices, setAllInvoices] = useState<Invoice[]>([]);
   const [allUsers, setAllUsers] = useState<UserProfile[]>([]);
+  const [totalInvestmentAmount, setTotalInvestmentAmount] = useState<number>(39550);
   const [loadingData, setLoadingData] = useState(true);
   const [liveLoginCodes, setLiveLoginCodes] = useState<any[]>([]);
 
@@ -122,16 +127,23 @@ export default function DashboardView({
     const fetchDashboardData = async () => {
       setLoadingData(true);
       try {
-        const [orders, customers, invoices, users] = await Promise.all([
+        const [orders, customers, invoices, users, investments] = await Promise.all([
           getOrders(),
           getCustomers(),
           getInvoices(),
-          getAllUsers()
+          getAllUsers(),
+          getInvestments()
         ]);
         setAllOrders(orders || []);
         setAllCustomers(customers || []);
         setAllInvoices(invoices || []);
         setAllUsers(users || []);
+        if (investments && investments.length > 0) {
+          const sum = investments.reduce((s, i) => s + (i.amount || 0), 0);
+          setTotalInvestmentAmount(sum || 39550);
+        } else {
+          setTotalInvestmentAmount(39550);
+        }
       } catch (err) {
         console.error("Error fetching dashboard data", err);
       } finally {
@@ -390,12 +402,19 @@ export default function DashboardView({
     let steadfastPending = 0; // Shipped but not Delivered
     let carryBeeShipped = 0;
     let carryBeePending = 0; // Shipped but not Delivered
+    let paperflyShipped = 0;
+    let paperflyPending = 0;
+    let handToHandShipped = 0;
+    let handToHandPending = 0;
 
     const monthOrders = allOrders.filter(o => o.createdAt >= startOfThisMonth.getTime() && o.status !== 'Returned/Cancelled');
     
     monthOrders.forEach(o => {
-      const isSteadfast = o.courier?.toLowerCase().includes('steadfast');
-      const isCarryBee = o.courier?.toLowerCase().includes('carrybee');
+      const courierStr = (o.courier || '').toLowerCase();
+      const isSteadfast = courierStr.includes('steadfast');
+      const isCarryBee = courierStr.includes('carrybee');
+      const isPaperfly = courierStr.includes('paperfly');
+      const isHandToHand = courierStr.includes('hand to hand') || courierStr.includes('hand');
       
       if (isSteadfast) {
         steadfastShipped++;
@@ -403,6 +422,12 @@ export default function DashboardView({
       } else if (isCarryBee) {
         carryBeeShipped++;
         if (o.status === 'Shipped') carryBeePending++;
+      } else if (isPaperfly) {
+        paperflyShipped++;
+        if (o.status === 'Shipped') paperflyPending++;
+      } else if (isHandToHand) {
+        handToHandShipped++;
+        if (o.status === 'Shipped') handToHandPending++;
       }
     });
 
@@ -410,7 +435,11 @@ export default function DashboardView({
       steadfastShipped,
       steadfastPending,
       carryBeeShipped,
-      carryBeePending
+      carryBeePending,
+      paperflyShipped,
+      paperflyPending,
+      handToHandShipped,
+      handToHandPending
     };
   };
   const courierStats = getCourierStats();
@@ -503,12 +532,17 @@ export default function DashboardView({
     products.forEach(p => {
       if (p.archived || p.status !== 'approved') return;
       const cat = p.mainCategory || p.category || 'Uncategorized';
-      const stock = p.variants.reduce((sum, v) => sum + (v.stock || 0), 0);
+      const stock = p.variants && p.variants.length > 0 
+        ? p.variants.reduce((sum, v) => sum + (v.stock || 0), 0)
+        : (p.totalStock || 0);
       catMap[cat] = (catMap[cat] || 0) + stock;
     });
-    return Object.entries(catMap).map(([name, value]) => ({ name, value }));
+    return Object.entries(catMap)
+      .map(([name, value]) => ({ name, value }))
+      .sort((a, b) => b.value - a.value);
   };
   const categoryStockData = getCategoryStockData();
+  const totalCategoryStock = categoryStockData.reduce((acc, c) => acc + c.value, 0);
   const COLORS = ['#008080', '#D4AF37', '#f97316', '#6366f1', '#ec4899', '#8b5cf6', '#10b981'];
 
   // Recent Orders (5)
@@ -771,9 +805,36 @@ export default function DashboardView({
         )}
       </div>
 
-      {/* Top Metrics Grid (4 columns) */}
-      <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4 md:gap-6">
+      {/* Top Metrics Grid */}
+      <div className={`grid grid-cols-1 sm:grid-cols-2 ${user?.role === 'superadmin' ? 'lg:grid-cols-3 xl:grid-cols-5' : 'lg:grid-cols-4'} gap-4 md:gap-6`}>
         
+        {/* Stat: Total Capital Investment (Super Admin Only - Standard Card) */}
+        {user?.role === 'superadmin' && (
+          <div className="bg-gradient-to-br from-white via-amber-50/20 to-amber-100/40 border border-amber-200/90 rounded-2xl p-5 shadow-xs flex flex-col justify-between min-h-40 hover:shadow-md transition-all duration-300">
+            <div>
+              <div className="flex justify-between items-center gap-2">
+                <span className="text-xs font-bold text-amber-900 uppercase tracking-wide truncate">Total Investment</span>
+                <span className="text-[11px] font-mono font-bold bg-amber-100 text-amber-800 border border-amber-200 px-2 py-0.5 rounded-full flex items-center gap-1 whitespace-nowrap">
+                  <Lock size={10} className="text-amber-700" />
+                  Locked
+                </span>
+              </div>
+              <h3 className="text-2xl md:text-3xl font-black text-amber-950 font-mono tracking-tight mt-3">৳ {totalInvestmentAmount.toLocaleString()}</h3>
+              <p className="text-xs text-slate-500 mt-1">One-time initial capital</p>
+            </div>
+            <div className="border-t border-amber-200/70 pt-3 flex items-center justify-between text-xs mt-3">
+              <span className="text-slate-600 font-medium">Financials:</span>
+              <button
+                onClick={() => onNavigateToTab('financials')}
+                className="font-bold text-[#b58e1c] hover:underline flex items-center gap-1 cursor-pointer"
+              >
+                <span>Income & Expense</span>
+                <ArrowRight size={11} />
+              </button>
+            </div>
+          </div>
+        )}
+
         {/* Stat: Today's Sales */}
         <div className="bg-gradient-to-br from-white via-slate-50 to-slate-100/50 border border-slate-200/80 rounded-2xl p-5 shadow-xs flex flex-col justify-between min-h-40 hover:shadow-md transition-all duration-300">
           <div>
@@ -955,40 +1016,88 @@ export default function DashboardView({
               </div>
 
               {/* Category Stock Distribution */}
-              <div className="bg-slate-50 border border-slate-200 rounded-xl p-4">
-                <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wide mb-3 flex items-center justify-between">
-                  <span>📊 Category Stock Distribution</span>
-                  <span className="text-[10px] font-mono text-slate-400">Units</span>
-                </h4>
-                <div className="h-56 w-full flex items-center justify-center">
-                  {categoryStockData.length > 0 ? (
-                    <ResponsiveContainer width="100%" height="100%">
-                      <PieChart>
-                        <Pie
-                          data={categoryStockData}
-                          cx="50%"
-                          cy="50%"
-                          innerRadius={50}
-                          outerRadius={80}
-                          paddingAngle={3}
-                          dataKey="value"
-                          label={({ name, percent }) => `${name} (${(percent * 100).toFixed(0)}%)`}
-                          labelLine={false}
-                        >
-                          {categoryStockData.map((entry, index) => (
-                            <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                          ))}
-                        </Pie>
-                        <Tooltip 
-                          contentStyle={{ backgroundColor: '#0f172a', border: 'none', borderRadius: '8px', color: '#fff', fontSize: '12px' }}
-                          formatter={(val: any) => [`${val} units`, 'Stock']}
-                        />
-                      </PieChart>
-                    </ResponsiveContainer>
-                  ) : (
-                    <p className="text-xs text-slate-400 italic">No stock inventory data available</p>
-                  )}
+              <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 flex flex-col justify-between">
+                <div className="flex items-center justify-between mb-3">
+                  <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wide flex items-center gap-1.5">
+                    <span>📊 Category Stock Distribution</span>
+                  </h4>
+                  <span className="text-[10px] font-mono font-bold bg-slate-200/80 text-slate-600 px-2 py-0.5 rounded-full">
+                    {totalCategoryStock.toLocaleString()} Units
+                  </span>
                 </div>
+
+                {categoryStockData.length > 0 ? (
+                  <div className="flex flex-col sm:flex-row items-center gap-4">
+                    {/* Donut Chart with Center Total */}
+                    <div className="h-44 w-44 shrink-0 relative flex items-center justify-center">
+                      <ResponsiveContainer width="100%" height="100%">
+                        <PieChart>
+                          <Pie
+                            data={categoryStockData}
+                            cx="50%"
+                            cy="50%"
+                            innerRadius={46}
+                            outerRadius={68}
+                            paddingAngle={3}
+                            dataKey="value"
+                            stroke="#fff"
+                            strokeWidth={2}
+                          >
+                            {categoryStockData.map((entry, index) => (
+                              <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
+                            ))}
+                          </Pie>
+                          <Tooltip 
+                            contentStyle={{ backgroundColor: '#0f172a', border: 'none', borderRadius: '10px', color: '#fff', fontSize: '12px', boxShadow: '0 10px 15px -3px rgba(0,0,0,0.3)' }}
+                            formatter={(val: any, name: any) => [
+                              `${Number(val).toLocaleString()} units (${totalCategoryStock > 0 ? ((Number(val) / totalCategoryStock) * 100).toFixed(1) : 0}%)`,
+                              name
+                            ]}
+                          />
+                        </PieChart>
+                      </ResponsiveContainer>
+                      <div className="absolute inset-0 flex flex-col items-center justify-center pointer-events-none text-center">
+                        <span className="text-[9px] uppercase font-bold text-slate-400 tracking-wider">Total</span>
+                        <span className="text-base font-black font-mono text-slate-900 leading-tight">
+                          {totalCategoryStock.toLocaleString()}
+                        </span>
+                        <span className="text-[9px] text-slate-400">units</span>
+                      </div>
+                    </div>
+
+                    {/* Clean Category Legend Breakdown */}
+                    <div className="flex-1 w-full max-h-44 overflow-y-auto space-y-1.5 pr-1 divide-y divide-slate-200/50">
+                      {categoryStockData.map((item, idx) => {
+                        const pct = totalCategoryStock > 0 ? ((item.value / totalCategoryStock) * 100).toFixed(1) : '0';
+                        return (
+                          <div 
+                            key={item.name} 
+                            className="flex items-center justify-between gap-2 pt-1.5 first:pt-0 group hover:bg-white/80 p-1 rounded-md transition-colors"
+                            title={`${item.name}: ${item.value.toLocaleString()} units (${pct}%)`}
+                          >
+                            <div className="flex items-center gap-2 min-w-0">
+                              <span 
+                                className="w-2.5 h-2.5 rounded-full shrink-0 shadow-2xs" 
+                                style={{ backgroundColor: COLORS[idx % COLORS.length] }} 
+                              />
+                              <span className="text-xs font-semibold text-slate-700 truncate group-hover:text-slate-950">
+                                {item.name}
+                              </span>
+                            </div>
+                            <div className="flex items-center gap-1.5 font-mono text-[11px] shrink-0 text-right">
+                              <span className="font-bold text-slate-900">{item.value.toLocaleString()}</span>
+                              <span className="text-slate-400 font-medium">({pct}%)</span>
+                            </div>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  </div>
+                ) : (
+                  <div className="h-56 flex items-center justify-center">
+                    <p className="text-xs text-slate-400 italic">No stock inventory data available</p>
+                  </div>
+                )}
               </div>
             </div>
 
@@ -1309,16 +1418,26 @@ export default function DashboardView({
               <Truck size={16} className="text-slate-700" />
               Courier Desk Performance
             </h3>
-            <div className="grid grid-cols-2 gap-4 border-b border-slate-100 pb-4">
-              <div className="p-3 bg-slate-50 border border-slate-100 rounded-xl">
-                <p className="text-sm font-bold text-slate-400 uppercase tracking-wider">Steadfast</p>
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 border-b border-slate-100 pb-4">
+              <div className="p-3 bg-slate-50 border border-slate-100 rounded-xl hover:bg-slate-100/60 transition-colors">
+                <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Steadfast</p>
                 <h4 className="text-xl font-black text-slate-800 mt-1 font-mono">{courierStats.steadfastShipped}</h4>
                 <p className="text-[9px] text-red-500 mt-1 font-bold">{courierStats.steadfastPending} pending delivery</p>
               </div>
-              <div className="p-3 bg-slate-50 border border-slate-100 rounded-xl">
-                <p className="text-sm font-bold text-slate-400 uppercase tracking-wider">CarryBee</p>
+              <div className="p-3 bg-slate-50 border border-slate-100 rounded-xl hover:bg-slate-100/60 transition-colors">
+                <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">CarryBee</p>
                 <h4 className="text-xl font-black text-slate-800 mt-1 font-mono">{courierStats.carryBeeShipped}</h4>
                 <p className="text-[9px] text-red-500 mt-1 font-bold">{courierStats.carryBeePending} pending delivery</p>
+              </div>
+              <div className="p-3 bg-slate-50 border border-slate-100 rounded-xl hover:bg-slate-100/60 transition-colors">
+                <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Paperfly</p>
+                <h4 className="text-xl font-black text-slate-800 mt-1 font-mono">{courierStats.paperflyShipped}</h4>
+                <p className="text-[9px] text-red-500 mt-1 font-bold">{courierStats.paperflyPending} pending delivery</p>
+              </div>
+              <div className="p-3 bg-slate-50 border border-slate-100 rounded-xl hover:bg-slate-100/60 transition-colors">
+                <p className="text-xs font-bold text-slate-500 uppercase tracking-wider">Hand To Hand</p>
+                <h4 className="text-xl font-black text-slate-800 mt-1 font-mono">{courierStats.handToHandShipped}</h4>
+                <p className="text-[9px] text-red-500 mt-1 font-bold">{courierStats.handToHandPending} pending delivery</p>
               </div>
             </div>
             <p className="text-sm text-slate-400 text-center mt-3">Counts reflect active shipments processed this calendar month.</p>

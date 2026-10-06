@@ -1812,10 +1812,7 @@ export default function ProductManagement({
                   onChange={(e) => setFilterSubBrand(e.target.value)}
                   className="bg-white border border-slate-200 rounded-2xl py-2.5 px-3.5 text-sm text-slate-700 font-semibold focus:outline-hidden focus:ring-2 focus:ring-teal-500/20 focus:border-teal-600 shadow-2xs transition-all"
                 >
-                  <option value="">🏢 All Sub-Brands</option>
-                  <option value="SAT">SAT (Sky Auto)</option>
-                  <option value="GZ">GadgetZu</option>
-                  <option value="RTX">RTX Gadget</option>
+                  <option value="">🏢 Sky Automation Tech (SAT)</option>
                 </select>
 
                 {/* Stock Alert Filter */}
@@ -3946,9 +3943,7 @@ export default function ProductManagement({
                             onChange={(e) => setFormSubBrand(e.target.value as any)}
                             className="w-full bg-white border border-slate-200 rounded-xl py-2.5 px-3 text-sm text-slate-800 focus:outline-hidden focus:border-amber-400 focus:ring-4 focus:ring-amber-400/10 transition-all cursor-pointer"
                           >
-                            <option value="SAT">SAT (Sky Auto)</option>
-                            <option value="GZ">GadgetZu</option>
-                            <option value="RTX">RTX Gadget</option>
+                            <option value="SAT">Sky Automation Tech (SAT)</option>
                           </select>
                         </div>
 

@@ -888,11 +888,7 @@ export default function SupplierManagement({ user, rolePermissions }: SupplierMa
                     onChange={(e) => setFormData({ ...formData, subBrand: e.target.value as any })}
                     className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
                   >
-                    <option value="">All Sub-Brands / General</option>
-                    <option value="SAT">SAT (Sky Auto)</option>
-                    <option value="GZ">GZ (GadgetZu)</option>
-                    <option value="RTX">RTX (RTX Gadget)</option>
-                    <option value="ALL">ALL (Shared Supplier)</option>
+                    <option value="SAT">Sky Automation Tech (SAT)</option>
                   </select>
                 </div>
 
