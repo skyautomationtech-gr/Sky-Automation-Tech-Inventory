@@ -29,7 +29,7 @@ export const AccountingDesk: React.FC<AccountingDeskProps> = ({ user }) => {
   const [activeTab, setActiveTab] = useState<string>('overview');
 
   const tabs = [
-    { id: 'overview', label: 'সারসংক্ষেপ (Overview)', icon: BarChart3 },
+    { id: 'overview', label: 'ক্যাশ ও লাভ-খরচের সারসংক্ষেপ (Cash & P/L)', icon: BarChart3 },
     { id: 'investments', label: 'মূলধন ও বিনিয়োগ (Capital)', icon: Briefcase },
     { id: 'purchases', label: 'কোম্পানি সম্পদ ও কেনাকাটা (Purchases)', icon: Building },
     { id: 'losses', label: 'কোম্পানি ক্ষতি (Losses)', icon: AlertTriangle },
@@ -50,9 +50,14 @@ export const AccountingDesk: React.FC<AccountingDeskProps> = ({ user }) => {
               <Calculator size={24} />
             </div>
             <div>
-              <h1 className="text-xl font-black text-slate-900 tracking-tight">Accounting Desk</h1>
+              <div className="flex items-center gap-2">
+                <h1 className="text-xl font-black text-slate-900 tracking-tight">Accounting Desk</h1>
+                <span className="text-[10px] font-mono font-bold bg-emerald-100 text-emerald-800 px-2 py-0.5 rounded-full">
+                  হাতে ক্যাশ ৳২,২৫০ | বিনিয়োগ ৳৩৯,৫৫০
+                </span>
+              </div>
               <p className="text-xs text-slate-500 font-medium mt-0.5">
-                ব্যবসায়ের মূলধন, স্থায়ী সম্পদ, ক্ষতি, গেটওয়ে ব্যালেন্স, পাওনা ও খরচের পূর্ণাঙ্গ লেজার
+                ক্যাশ ব্যালেন্স, মোট বিনিয়োগ, আজকের ও চলতি মাসের লাভ-খরচের রিয়েলটাইম হিসাব (পূর্ববর্তী ডাটা বাদ দিয়ে)
               </p>
             </div>
           </div>

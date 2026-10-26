@@ -408,6 +408,7 @@ export type ExpenseCategory =
   | 'Courier/Delivery Charge'
   | 'Office Supplies'
   | 'Maintenance'
+  | 'Import / Shipping'
   | 'Other';
 
 export type ExpensePaymentMethod = 'Cash' | 'bKash' | 'Nagad' | 'Rocket' | 'Bank' | 'Upay' | 'Other';
@@ -524,6 +525,29 @@ export interface CashBalanceSettings {
   updatedAt: number;
 }
 
+export interface AccountingBaselineSettings {
+  baselineCash: number;
+  baselineInvestment: number;
+  cutoffDate: string;
+  cutoffTimestamp: number;
+  note?: string;
+  updatedAt: number;
+  updatedBy?: string;
+}
+
+export interface CashTransaction {
+  id: string;
+  type: 'cash_in' | 'cash_out' | 'deposit' | 'withdrawal' | 'adjustment';
+  amount: number;
+  reason: string;
+  date: string;
+  timestamp: number;
+  note?: string;
+  recordedBy?: string;
+  subBrand?: string;
+}
+
+
 export interface CashReconciliation {
   id: string;
   systemBalance: number;
@@ -615,4 +639,16 @@ export interface AccountingVoucher {
   createdAt: number;
 }
 
-
+// Accounting & Financial reporting type aliases
+export type Investment = InvestmentEntry;
+export type PaymentPlatformEntry = PaymentPlatformLedger & { type?: string; amount?: number };
+export type ImportShippingRecord = ImportShippingCost & { amount?: number };
+export interface StockPurchaseRecord {
+  id: string;
+  amount: number;
+  date?: string;
+  supplierId?: string;
+  supplierName?: string;
+  notes?: string;
+  createdAt?: number;
+}

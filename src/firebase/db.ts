@@ -49,6 +49,8 @@ import {
   CompanyLoss,
   CashReconciliation,
   CashBalanceSettings,
+  AccountingBaselineSettings,
+  CashTransaction,
   OtherReceivable,
   PaymentPlatformLedger,
   ImportShippingCost,
@@ -3129,6 +3131,10 @@ export async function recordOrderPayment(
         });
       }
     });
+
+    // Invalidate caches to ensure real-time accounting & dashboard sync
+    dbCache.orders = null;
+    dbCache.invoices = null;
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, `orders/${orderId}/recordPayment`);
   }
@@ -3206,6 +3212,8 @@ export async function deleteOrderPayment(
     if (updatedOrderResult) {
       localStore.set('orders', cached.map(o => o.id === orderId ? updatedOrderResult! : o));
     }
+    dbCache.orders = null;
+    dbCache.invoices = null;
 
     return updatedOrderResult!;
   } catch (error) {
@@ -4263,6 +4271,129 @@ export async function setCashBalanceSettings(settings: Partial<CashBalanceSettin
   }
 }
 
+// --- 4.1 Accounting Baseline Settings (Initial Cash 2,250 BDT, Investment 39,550 BDT) ---
+export const DEFAULT_ACCOUNTING_BASELINE: AccountingBaselineSettings = {
+  baselineCash: 2250,
+  baselineInvestment: 39550,
+  cutoffDate: new Date().toISOString().split('T')[0],
+  cutoffTimestamp: Date.now() - 3600000, // 1 hour ago default cutoff so user's current live session is counted
+  note: 'Accounting baseline reset: Cash 2,250 BDT, Investment 39,550 BDT. Past records excluded.',
+  updatedAt: Date.now(),
+  updatedBy: 'Admin'
+};
+
+export async function getAccountingBaselineSettings(): Promise<AccountingBaselineSettings> {
+  try {
+    const docRef = doc(db, 'settings', 'accountingBaseline');
+    const docSnap = await getDoc(docRef);
+    if (docSnap.exists()) {
+      return { ...DEFAULT_ACCOUNTING_BASELINE, ...docSnap.data() } as AccountingBaselineSettings;
+    }
+    const local = localStorage.getItem('sat_accounting_baseline');
+    if (local) {
+      try {
+        return { ...DEFAULT_ACCOUNTING_BASELINE, ...JSON.parse(local) };
+      } catch (e) {}
+    }
+    return DEFAULT_ACCOUNTING_BASELINE;
+  } catch (error) {
+    console.warn('Failed to get accounting baseline from Firestore, using default or local:', error);
+    try {
+      const local = localStorage.getItem('sat_accounting_baseline');
+      if (local) return { ...DEFAULT_ACCOUNTING_BASELINE, ...JSON.parse(local) };
+    } catch (e) {}
+    return DEFAULT_ACCOUNTING_BASELINE;
+  }
+}
+
+export function subscribeToAccountingBaselineSettings(callback: (settings: AccountingBaselineSettings) => void): Unsubscribe {
+  const docRef = doc(db, 'settings', 'accountingBaseline');
+  return onSnapshot(docRef, (docSnap) => {
+    if (docSnap.exists()) {
+      const data = { ...DEFAULT_ACCOUNTING_BASELINE, ...docSnap.data() } as AccountingBaselineSettings;
+      try { localStorage.setItem('sat_accounting_baseline', JSON.stringify(data)); } catch (e) {}
+      callback(data);
+    } else {
+      callback(DEFAULT_ACCOUNTING_BASELINE);
+    }
+  }, (error) => {
+    console.warn('Accounting baseline subscription warning:', error);
+    callback(DEFAULT_ACCOUNTING_BASELINE);
+  });
+}
+
+export async function saveAccountingBaselineSettings(settings: Partial<AccountingBaselineSettings>): Promise<void> {
+  const payload = {
+    ...DEFAULT_ACCOUNTING_BASELINE,
+    ...settings,
+    updatedAt: Date.now()
+  };
+  try {
+    localStorage.setItem('sat_accounting_baseline', JSON.stringify(payload));
+  } catch (e) {}
+
+  try {
+    const docRef = doc(db, 'settings', 'accountingBaseline');
+    await setDoc(docRef, sanitizeData(payload), { merge: true });
+  } catch (error) {
+    handleFirestoreError(error, OperationType.WRITE, 'settings/accountingBaseline');
+  }
+}
+
+// --- 4.2 Direct Cash In & Cash Out Transactions ---
+export async function getCashTransactions(): Promise<CashTransaction[]> {
+  try {
+    const colRef = collection(db, 'cashTransactions');
+    const q = query(colRef, orderBy('timestamp', 'desc'), limit(200));
+    const snapshot = await getDocs(q);
+    const list: CashTransaction[] = [];
+    snapshot.forEach(docSnap => {
+      list.push({ id: docSnap.id, ...docSnap.data() } as CashTransaction);
+    });
+    return list;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.LIST, 'cashTransactions');
+  }
+}
+
+export function subscribeToCashTransactions(callback: (list: CashTransaction[]) => void): Unsubscribe {
+  const colRef = collection(db, 'cashTransactions');
+  const q = query(colRef, orderBy('timestamp', 'desc'), limit(200));
+  return onSnapshot(q, (snapshot) => {
+    const list: CashTransaction[] = [];
+    snapshot.forEach(docSnap => {
+      list.push({ id: docSnap.id, ...docSnap.data() } as CashTransaction);
+    });
+    callback(list);
+  }, (error) => {
+    console.warn('CashTransactions subscription error:', error);
+    callback([]);
+  });
+}
+
+export async function addCashTransaction(data: Omit<CashTransaction, 'id'>): Promise<string> {
+  try {
+    const colRef = collection(db, 'cashTransactions');
+    const docRef = await addDoc(colRef, sanitizeData({
+      ...data,
+      timestamp: data.timestamp || Date.now()
+    }));
+    return docRef.id;
+  } catch (error) {
+    handleFirestoreError(error, OperationType.CREATE, 'cashTransactions');
+  }
+}
+
+export async function deleteCashTransaction(id: string): Promise<void> {
+  try {
+    const docRef = doc(db, 'cashTransactions', id);
+    await deleteDoc(docRef);
+  } catch (error) {
+    handleFirestoreError(error, OperationType.DELETE, `cashTransactions/${id}`);
+  }
+}
+
+
 export async function getCashReconciliations(): Promise<CashReconciliation[]> {
   try {
     const colRef = collection(db, 'cashReconciliations');
@@ -4435,11 +4566,35 @@ export async function getImportShippingCosts(): Promise<ImportShippingCost[]> {
     const snapshot = await getDocs(q);
     const list: ImportShippingCost[] = [];
     snapshot.forEach(docSnap => {
-      list.push({ id: docSnap.id, ...docSnap.data() } as ImportShippingCost);
+      const data = docSnap.data();
+      list.push({ 
+        id: docSnap.id, 
+        ...data,
+        amount: Number(data.totalCost) || Number(data.amount) || 0
+      } as unknown as ImportShippingCost);
     });
     return list;
   } catch (error) {
     handleFirestoreError(error, OperationType.LIST, 'importShippingCosts');
+  }
+}
+
+// Aliases for dashboard & accounting compatibility
+export const getImportShippingRecords = getImportShippingCosts;
+export const getPaymentPlatformEntries = getPaymentPlatformLedger;
+
+export async function getStockPurchases(): Promise<any[]> {
+  try {
+    const colRef = collection(db, 'stockPurchases');
+    const snapshot = await getDocs(colRef);
+    if (!snapshot.empty) {
+      const list: any[] = [];
+      snapshot.forEach(docSnap => list.push({ id: docSnap.id, ...docSnap.data() }));
+      return list;
+    }
+    return await getSupplierPayments();
+  } catch {
+    return await getSupplierPayments();
   }
 }
 

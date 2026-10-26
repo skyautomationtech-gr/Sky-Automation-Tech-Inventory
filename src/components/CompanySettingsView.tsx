@@ -26,8 +26,12 @@ import {
   Download,
   Info,
   ShieldCheck,
-  Check
+  Check,
+  Calculator,
+  Wallet,
+  Briefcase
 } from 'lucide-react';
+import { getAccountingBaselineSettings, saveAccountingBaselineSettings } from '../firebase/db';
 
 interface CompanySettingsViewProps {
   user: UserProfile | null;
@@ -46,8 +50,15 @@ export default function CompanySettingsView({
   const isPrivileged = isSuperAdmin || user?.role === 'admin';
 
   // Active Tab
-  const [activeTab, setActiveTab] = useState<'main' | 'subbrands' | 'invoice' | 'inventory' | 'integrations' | 'preview'>('main');
+  const [activeTab, setActiveTab] = useState<'main' | 'subbrands' | 'invoice' | 'inventory' | 'integrations' | 'preview' | 'accounting'>('main');
   const [selectedSubBrand, setSelectedSubBrand] = useState<'SAT' | 'GZ' | 'RTX'>('SAT');
+
+  // Accounting Baseline Form State
+  const [baselineCash, setBaselineCash] = useState<number>(2250);
+  const [baselineInvestment, setBaselineInvestment] = useState<number>(39550);
+  const [baselineCutoffDate, setBaselineCutoffDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [baselineNote, setBaselineNote] = useState<string>('Accounting baseline reset: Cash 2,250 BDT, Investment 39,550 BDT. Past records excluded.');
+  const [isSavingBaseline, setIsSavingBaseline] = useState(false);
 
   // Form State
   const [companyName, setCompanyName] = useState('');
@@ -183,6 +194,39 @@ export default function CompanySettingsView({
       }
     }
   }, [companySettings]);
+
+  // Load Accounting Baseline Settings
+  useEffect(() => {
+    getAccountingBaselineSettings().then(b => {
+      if (b) {
+        setBaselineCash(Number(b.baselineCash) || 2250);
+        setBaselineInvestment(Number(b.baselineInvestment) || 39550);
+        setBaselineCutoffDate(b.cutoffDate || new Date().toISOString().split('T')[0]);
+        setBaselineNote(b.note || '');
+      }
+    }).catch(e => console.warn(e));
+  }, []);
+
+  const handleSaveAccountingBaselineOnly = async () => {
+    setIsSavingBaseline(true);
+    try {
+      await saveAccountingBaselineSettings({
+        baselineCash: Number(baselineCash) || 2250,
+        baselineInvestment: Number(baselineInvestment) || 39550,
+        cutoffDate: baselineCutoffDate,
+        cutoffTimestamp: new Date(baselineCutoffDate).getTime() || Date.now(),
+        note: baselineNote.trim(),
+        updatedBy: user?.name || 'Admin'
+      });
+      setSuccessMsg('অ্যাকাউন্টিং বেসলাইন সফলভাবে সেভ করা হয়েছে (ক্যাশ ৳' + Number(baselineCash).toLocaleString() + ', বিনিয়োগ ৳' + Number(baselineInvestment).toLocaleString() + ')');
+      setTimeout(() => setSuccessMsg(''), 4000);
+    } catch (err: any) {
+      setErrorMsg('বেসলাইন সেভ করতে সমস্যা হয়েছে: ' + (err?.message || 'Error'));
+    } finally {
+      setIsSavingBaseline(false);
+    }
+  };
+
 
   // Handle Logo Upload for Main Brand
   const handleMainLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -478,6 +522,18 @@ export default function CompanySettingsView({
         >
           <Eye size={14} className="text-amber-600" />
           <span>6. Live Invoice Preview</span>
+        </button>
+
+        <button
+          onClick={() => setActiveTab('accounting')}
+          className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition shrink-0 ${
+            activeTab === 'accounting'
+              ? 'bg-amber-500 text-slate-950 shadow-2xs font-extrabold'
+              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
+          }`}
+        >
+          <Calculator size={14} className={activeTab === 'accounting' ? 'text-slate-950' : 'text-amber-600'} />
+          <span>7. Accounting Baseline & Cash</span>
         </button>
       </div>
 
@@ -1248,6 +1304,141 @@ export default function CompanySettingsView({
             </div>
           </div>
         )}
+
+        {/* ========================================================================= */}
+        {/* PART 7: ACCOUNTING BASELINE & CASH CONFIGURATION */}
+        {/* ========================================================================= */}
+        {activeTab === 'accounting' && (
+          <div className="bg-white p-5 sm:p-6 rounded-2xl border border-slate-200/80 shadow-xs space-y-6 animate-in fade-in duration-150">
+            <div className="border-b border-slate-100 pb-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+              <div>
+                <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
+                  <Calculator size={18} className="text-amber-500" />
+                  অ্যাকাউন্টিং বেসলাইন সেটিংস (Accounting Baseline & Cash Settings)
+                </h3>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  হাতে নগদ ক্যাশ, প্রারম্ভিক বিনিয়োগ এবং কাট-অফ তারিখ কনফিগারেশন
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <span className="text-[11px] font-mono font-bold bg-emerald-100 text-emerald-800 px-2.5 py-1 rounded-full">
+                  হাতে নগদ: ৳{Number(baselineCash).toLocaleString()}
+                </span>
+                <span className="text-[11px] font-mono font-bold bg-amber-100 text-amber-800 px-2.5 py-1 rounded-full">
+                  বিনিয়োগ: ৳{Number(baselineInvestment).toLocaleString()}
+                </span>
+              </div>
+            </div>
+
+            {/* Instruction Notice */}
+            <div className="p-4 bg-amber-50/70 border border-amber-200/80 rounded-2xl text-xs text-amber-900 space-y-1.5">
+              <p className="font-bold flex items-center gap-1.5 text-amber-950">
+                <ShieldCheck size={16} className="text-amber-600 shrink-0" />
+                পূর্ববর্তী হিসাব বাদ দেওয়ার নিয়ম (Baseline Cutoff Rule)
+              </p>
+              <p className="text-[11px] leading-relaxed text-amber-800">
+                ব্যবহারকারীর নির্দেশনা অনুযায়ী, কাট-অফ তারিখের পূর্ববর্তী কোনো পুরনো অর্ডার, খরচ বা লেনদেন নতুন ক্যাশ ও বিনিয়োগ হিসেবে অন্তর্ভুক্ত হবে না। নতুন সমস্ত দৈনন্দিন লাভ, খরচ ও ক্যাশ পরিবর্তন এই বেসলাইনের উপর ভিত্তি করে গণনা করা হবে।
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+              <div className="space-y-1.5 bg-slate-50 p-4 rounded-xl border border-slate-100">
+                <label className="block text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                  <Wallet size={14} className="text-emerald-600" />
+                  বর্তমান হাতে নগদ ক্যাশ (Baseline Cash in Hand) *
+                </label>
+                <div className="relative">
+                  <span className="absolute left-3 top-2.5 text-sm font-bold text-slate-400 font-mono">৳</span>
+                  <input
+                    type="number"
+                    step="any"
+                    value={baselineCash}
+                    onChange={(e) => setBaselineCash(parseFloat(e.target.value) || 0)}
+                    disabled={!isSuperAdmin}
+                    className="w-full bg-white border border-slate-200 rounded-xl py-2 pl-7 pr-3 text-sm font-mono font-bold text-slate-900 focus:ring-2 focus:ring-amber-500 focus:outline-hidden disabled:bg-slate-100"
+                    placeholder="2250"
+                  />
+                </div>
+                <p className="text-[11px] text-slate-500">
+                  বর্তমানে ক্যাশে নির্ধারিত টাকা: <strong>৳২,২৫০</strong>
+                </p>
+              </div>
+
+              <div className="space-y-1.5 bg-slate-50 p-4 rounded-xl border border-slate-100">
+                <label className="block text-xs font-bold text-slate-800 flex items-center gap-1.5">
+                  <Briefcase size={14} className="text-amber-600" />
+                  আমাদের মোট বিনিয়োগ (Total Investment Baseline) *
+                </label>
+                <div className="relative">
+                  <span className="absolute left-3 top-2.5 text-sm font-bold text-slate-400 font-mono">৳</span>
+                  <input
+                    type="number"
+                    step="any"
+                    value={baselineInvestment}
+                    onChange={(e) => setBaselineInvestment(parseFloat(e.target.value) || 0)}
+                    disabled={!isSuperAdmin}
+                    className="w-full bg-white border border-slate-200 rounded-xl py-2 pl-7 pr-3 text-sm font-mono font-bold text-slate-900 focus:ring-2 focus:ring-amber-500 focus:outline-hidden disabled:bg-slate-100"
+                    placeholder="39550"
+                  />
+                </div>
+                <p className="text-[11px] text-slate-500">
+                  বর্তমানে মোট বিনিয়োগ নির্ধারিত: <strong>৳৩৯,৫৫০</strong>
+                </p>
+              </div>
+
+              <div className="space-y-1.5 bg-slate-50 p-4 rounded-xl border border-slate-100">
+                <label className="block text-xs font-bold text-slate-800">
+                  কাট-অফ তারিখ (Cutoff Date) *
+                </label>
+                <input
+                  type="date"
+                  value={baselineCutoffDate}
+                  onChange={(e) => setBaselineCutoffDate(e.target.value)}
+                  disabled={!isSuperAdmin}
+                  className="w-full bg-white border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-900 focus:ring-2 focus:ring-amber-500 focus:outline-hidden disabled:bg-slate-100"
+                />
+                <p className="text-[11px] text-amber-700">
+                  এই তারিখের আগের কোনো লেনদেন বা অর্ডার হিসাবে আসবে না।
+                </p>
+              </div>
+
+              <div className="space-y-1.5 bg-slate-50 p-4 rounded-xl border border-slate-100">
+                <label className="block text-xs font-bold text-slate-800">
+                  বেসলাইন নোট / বিবরণ
+                </label>
+                <input
+                  type="text"
+                  value={baselineNote}
+                  onChange={(e) => setBaselineNote(e.target.value)}
+                  disabled={!isSuperAdmin}
+                  className="w-full bg-white border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-900 focus:ring-2 focus:ring-amber-500 focus:outline-hidden disabled:bg-slate-100"
+                  placeholder="যেমন: ক্যাশ ২,২৫০ টাকা ও বিনিয়োগ ৩৯,৫৫০ টাকা থেকে নতুন হিসাব চালু"
+                />
+                <p className="text-[11px] text-slate-500">
+                  অ্যাকাউন্টিং অডিটের জন্য বিবরণ
+                </p>
+              </div>
+            </div>
+
+            {isSuperAdmin && (
+              <div className="pt-2 flex items-center justify-between">
+                <span className="text-xs text-slate-500">
+                  এই পরিবর্তনটি সরাসরি লাইভ Accounting Desk এ প্রতিফলিত হবে।
+                </span>
+                <button
+                  type="button"
+                  onClick={handleSaveAccountingBaselineOnly}
+                  disabled={isSavingBaseline}
+                  className="py-2.5 px-5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold text-xs rounded-xl shadow-xs transition cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
+                >
+                  <Save size={14} />
+                  <span>{isSavingBaseline ? 'সংরক্ষণ হচ্ছে...' : 'বেসলাইন সেটিংস সংরক্ষণ করুন'}</span>
+                </button>
+              </div>
+            )}
+          </div>
+        )}
+
 
         {/* Global Floating Bottom Save Bar (Visible on all tabs for Super Admin) */}
         {isSuperAdmin && (
