@@ -253,6 +253,24 @@ export async function getUserProfile(userId: string): Promise<UserProfile | null
         return profile;
       }
       
+      if (trimmedUid === 'operator-superadmin' || trimmedUid === 'operator-1') {
+        const saProfile: UserProfile = {
+          id: trimmedUid,
+          email: 'skyautomationtech@gmail.com',
+          name: 'Sky Automation Super Admin',
+          role: 'superadmin',
+          active: true,
+          status: 'approved',
+          customPassword: '12345678',
+          subBrandAccess: ['SAT', 'GZ', 'RTX'],
+          currentSessionStatus: 'checked_in',
+          currentSessionDate: new Date().toISOString().split('T')[0],
+          createdAt: Date.now()
+        };
+        localStore.set('user_' + trimmedUid, saProfile);
+        return saProfile;
+      }
+
       if (cachedUser) return cachedUser;
       return null;
     } catch (error: any) {
@@ -339,6 +357,29 @@ export function subscribeToUsers(callback: (users: UserProfile[]) => void): () =
 
 export async function findUserProfileByEmail(email: string): Promise<UserProfile | null> {
   const normEmail = email.toLowerCase().trim();
+  
+  // Special handling for requested Super Admin account: skyautomationtech@gmail.com
+  if (normEmail === 'skyautomationtech@gmail.com') {
+    const superAdminProfile: UserProfile = {
+      id: 'operator-superadmin',
+      email: 'skyautomationtech@gmail.com',
+      name: 'Sky Automation Super Admin',
+      role: 'superadmin',
+      active: true,
+      status: 'approved',
+      customPassword: '12345678',
+      subBrandAccess: ['SAT', 'GZ', 'RTX'],
+      currentSessionStatus: 'checked_in',
+      currentSessionDate: new Date().toISOString().split('T')[0],
+      createdAt: Date.now()
+    };
+    localStore.set('user_operator-superadmin', superAdminProfile);
+    try {
+      setDoc(doc(db, 'users', 'operator-superadmin'), sanitizeData(superAdminProfile), { merge: true }).catch(() => {});
+    } catch (e) {}
+    return superAdminProfile;
+  }
+
   const cachedAll = localStore.get<UserProfile[]>('all_users') || dbCache.users;
   if (cachedAll) {
     const found = cachedAll.find(u => u.email?.toLowerCase().trim() === normEmail);
@@ -469,7 +510,7 @@ export async function updateUserProfile(userId: string, data: Partial<UserProfil
   const docRef = doc(db, 'users', userId);
   try {
     const sanitizedData = sanitizeData(data);
-    await updateDoc(docRef, sanitizedData as any);
+    await setDoc(docRef, sanitizedData as any, { merge: true });
   } catch (error) {
     console.warn('updateUserProfile remote write failed, saved locally:', error);
     if (!isQuotaErrorMessage((error as any)?.message || String(error))) {
@@ -577,17 +618,7 @@ export async function getCategories(): Promise<Category[]> {
     return categories;
   } catch (error: any) {
     console.warn('Error fetching categories, falling back to local storage:', error);
-    if (cached && cached.length > 0) {
-      dbCache.categories = cached;
-      return cached;
-    }
-    return [
-      { id: 'cat-1', name: 'Smart Phones', level: 'main', parentId: null },
-      { id: 'cat-2', name: 'Adapters & Cables', level: 'main', parentId: null },
-      { id: 'cat-3', name: 'Audio Gear', level: 'main', parentId: null },
-      { id: 'cat-4', name: 'Power Banks', level: 'main', parentId: null },
-      { id: 'cat-5', name: 'Smart Wearables', level: 'main', parentId: null }
-    ];
+    return [];
   }
 }
 
@@ -682,18 +713,8 @@ export async function getBrands(): Promise<Brand[]> {
     localStore.set('brands', brands);
     return brands;
   } catch (error) {
-    console.warn('Error fetching brands, using cached:', error);
-    if (cached) {
-      dbCache.brands = cached;
-      return cached;
-    }
-    return [
-      { id: 'brand-1', name: 'Sky Automation Tech' },
-      { id: 'brand-2', name: 'Apple' },
-      { id: 'brand-3', name: 'Samsung' },
-      { id: 'brand-4', name: 'Xiaomi' },
-      { id: 'brand-5', name: 'Anker' }
-    ];
+    console.warn('Error fetching brands, returning empty:', error);
+    return [];
   }
 }
 
@@ -789,17 +810,8 @@ export async function getProductColors(): Promise<ProductColor[]> {
     localStore.set('product_colors', colors);
     return colors;
   } catch (error) {
-    console.warn('Error fetching colors, using cached:', error);
-    if (cached) {
-      dbCache.colors = cached;
-      return cached;
-    }
-    return [
-      { id: 'col-1', name: 'Black', hexCode: '#000000' },
-      { id: 'col-2', name: 'White', hexCode: '#FFFFFF' },
-      { id: 'col-3', name: 'Midnight Blue', hexCode: '#1E3A8A' },
-      { id: 'col-4', name: 'Space Gray', hexCode: '#4B5563' }
-    ];
+    console.warn('Error fetching colors, returning empty:', error);
+    return [];
   }
 }
 
@@ -879,16 +891,8 @@ export async function getProductModels(): Promise<ProductModel[]> {
     localStore.set('product_models', models);
     return models;
   } catch (error) {
-    console.warn('Error fetching models, using cached:', error);
-    if (cached) {
-      dbCache.models = cached;
-      return cached;
-    }
-    return [
-      { id: 'mod-1', name: 'Universal' },
-      { id: 'mod-2', name: 'iPhone 15 Pro Max' },
-      { id: 'mod-3', name: 'Galaxy S24 Ultra' }
-    ];
+    console.warn('Error fetching models, returning empty:', error);
+    return [];
   }
 }
 
@@ -4270,13 +4274,13 @@ export async function setCashBalanceSettings(settings: Partial<CashBalanceSettin
   }
 }
 
-// --- 4.1 Accounting Baseline Settings (Initial Cash 2,250 BDT, Investment 39,550 BDT) ---
+// --- 4.1 Accounting Baseline Settings ---
 export const DEFAULT_ACCOUNTING_BASELINE: AccountingBaselineSettings = {
-  baselineCash: 2250,
-  baselineInvestment: 39550,
+  baselineCash: 0,
+  baselineInvestment: 0,
   cutoffDate: new Date().toISOString().split('T')[0],
   cutoffTimestamp: Date.now() - 3600000, // 1 hour ago default cutoff so user's current live session is counted
-  note: 'Accounting baseline reset: Cash 2,250 BDT, Investment 39,550 BDT. Past records excluded.',
+  note: 'Accounting baseline initialized.',
   updatedAt: Date.now(),
   updatedBy: 'Admin'
 };

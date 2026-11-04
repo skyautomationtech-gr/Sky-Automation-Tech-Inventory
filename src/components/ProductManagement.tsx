@@ -98,6 +98,7 @@ export default function ProductManagement({
 
   // Sub tabs
   const [activeSubTab, setActiveSubTab] = useState<'catalog' | 'categories' | 'brands' | 'attributes' | 'out_of_stock' | 'pending' | 'archive' | 'deletion_requests'>('catalog');
+  const [viewMode, setViewMode] = useState<'table' | 'grid'>('table');
 
   // List management states
   const [search, setSearch] = useState('');
@@ -1699,6 +1700,31 @@ export default function ProductManagement({
             )}
           </div>
 
+          <div className="flex bg-slate-100 p-1 rounded-xl border border-slate-200">
+            <button
+              type="button"
+              onClick={() => setViewMode('table')}
+              className={`px-3 py-1 text-xs font-bold rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${
+                viewMode === 'table' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'
+              }`}
+              title="Table View"
+            >
+              <FileSpreadsheet size={13} />
+              Table
+            </button>
+            <button
+              type="button"
+              onClick={() => setViewMode('grid')}
+              className={`px-3 py-1 text-xs font-bold rounded-lg transition-all cursor-pointer flex items-center gap-1.5 ${
+                viewMode === 'grid' ? 'bg-white text-slate-900 shadow-xs' : 'text-slate-600 hover:text-slate-900'
+              }`}
+              title="Grid View"
+            >
+              <Grid size={13} />
+              Grid
+            </button>
+          </div>
+
           <button
             onClick={() => setIsResellerSyncModalOpen(true)}
             className="flex items-center gap-1.5 py-1.5 px-3 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-xs font-bold text-indigo-700 rounded-xl cursor-pointer transition-colors"
@@ -1871,223 +1897,329 @@ export default function ProductManagement({
 
             {/* Products Table Card / Mobile Card View */}
             <div className="bg-white rounded-3xl shadow-sm border border-slate-200/80 overflow-hidden">
-              {/* Desktop Table View */}
-              <div className="hidden md:block overflow-x-auto">
-                <table className="w-full text-left border-collapse">
-                  <thead>
-                    <tr className="bg-slate-100/70 border-b border-slate-200 text-xs font-mono tracking-wider text-slate-500 uppercase">
-                      <th className="py-4 px-4 text-center font-black w-12">
-                        <input
-                          type="checkbox"
-                          className="rounded border-slate-300 text-teal-600 focus:ring-teal-500 cursor-pointer size-4"
-                          checked={sortedProducts.length > 0 && selectedProductIds.length === sortedProducts.length}
-                          onChange={(e) => {
-                            if (e.target.checked) {
-                              setSelectedProductIds(sortedProducts.map(p => p.id));
-                            } else {
-                              setSelectedProductIds([]);
-                            }
-                          }}
-                        />
-                      </th>
-                      <th className="py-4 px-4 font-black">Image</th>
-                      <th className="py-4 px-4 font-black cursor-pointer hover:text-slate-950" onClick={() => toggleSort('name')}>
-                        Product Info <ArrowUpDown size={12} className="inline ml-1 text-slate-400" />
-                      </th>
-                      <th className="py-4 px-4 font-black text-center">Division</th>
-                      <th className="py-4 px-4 font-black cursor-pointer hover:text-slate-950" onClick={() => toggleSort('stock')}>
-                        Stock Status <ArrowUpDown size={12} className="inline ml-1 text-slate-400" />
-                      </th>
-                      <th className="py-4 px-4 font-black cursor-pointer hover:text-slate-950 text-right" onClick={() => toggleSort('price')}>
-                        Pricing (৳) <ArrowUpDown size={12} className="inline ml-1 text-slate-400" />
-                      </th>
-                      <th className="py-4 px-4 text-center font-black">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100 text-sm text-slate-600">
-                    {sortedProducts.length === 0 ? (
-                      <tr>
-                        <td colSpan={7} className="py-10 text-center text-slate-400 italic">
-                          No active gadget catalog records found.
-                        </td>
+              {/* Desktop View (Table vs Grid depending on viewMode) */}
+              {viewMode === 'table' ? (
+                <div className="hidden md:block overflow-x-auto">
+                  <table className="w-full text-left border-collapse">
+                    <thead>
+                      <tr className="bg-slate-100/70 border-b border-slate-200 text-xs font-mono tracking-wider text-slate-500 uppercase">
+                        <th className="py-4 px-4 text-center font-black w-12">
+                          <input
+                            type="checkbox"
+                            className="rounded border-slate-300 text-teal-600 focus:ring-teal-500 cursor-pointer size-4"
+                            checked={sortedProducts.length > 0 && selectedProductIds.length === sortedProducts.length}
+                            onChange={(e) => {
+                              if (e.target.checked) {
+                                setSelectedProductIds(sortedProducts.map(p => p.id));
+                              } else {
+                                setSelectedProductIds([]);
+                              }
+                            }}
+                          />
+                        </th>
+                        <th className="py-4 px-4 font-black">Image</th>
+                        <th className="py-4 px-4 font-black cursor-pointer hover:text-slate-950" onClick={() => toggleSort('name')}>
+                          Product Info <ArrowUpDown size={12} className="inline ml-1 text-slate-400" />
+                        </th>
+                        <th className="py-4 px-4 font-black text-center">Division</th>
+                        <th className="py-4 px-4 font-black cursor-pointer hover:text-slate-950" onClick={() => toggleSort('stock')}>
+                          Stock Status <ArrowUpDown size={12} className="inline ml-1 text-slate-400" />
+                        </th>
+                        <th className="py-4 px-4 font-black cursor-pointer hover:text-slate-950 text-right" onClick={() => toggleSort('price')}>
+                          Pricing (৳) <ArrowUpDown size={12} className="inline ml-1 text-slate-400" />
+                        </th>
+                        <th className="py-4 px-4 text-center font-black">Actions</th>
                       </tr>
-                    ) : (
-                      sortedProducts.map((product) => {
-                        const totalQty = (product.variants || []).reduce((s, v) => s + (v.stock || 0), 0);
-                        const isLow = totalQty <= (product.reorderThreshold ?? 5);
-                        const defaultImg = product.images?.[0] || 'https://images.unsplash.com/photo-1546868871-7041f2a55e12?auto=format&fit=crop&q=80&w=150';
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 text-sm text-slate-600">
+                      {sortedProducts.length === 0 ? (
+                        <tr>
+                          <td colSpan={7} className="py-10 text-center text-slate-400 italic">
+                            No active gadget catalog records found.
+                          </td>
+                        </tr>
+                      ) : (
+                        sortedProducts.map((product) => {
+                          const totalQty = (product.variants || []).reduce((s, v) => s + (v.stock || 0), 0);
+                          const isLow = totalQty <= (product.reorderThreshold ?? 5);
+                          const defaultImg = product.images?.[0] || 'https://images.unsplash.com/photo-1546868871-7041f2a55e12?auto=format&fit=crop&q=80&w=150';
 
-                        return (
-                          <tr 
-                            key={product.id} 
-                            onClick={() => setSelectedProduct(product)}
-                            className={`hover:bg-slate-50/80 transition-colors cursor-pointer ${
-                              selectedProduct?.id === product.id ? 'bg-amber-50/40' : ''
-                            }`}
-                          >
-                            <td className="py-3 px-4 w-10 text-center" onClick={(e) => e.stopPropagation()}>
-                              <input
-                                type="checkbox"
-                                className="rounded border-slate-300 text-amber-500 focus:ring-amber-500 cursor-pointer size-3.5"
-                                checked={selectedProductIds.includes(product.id)}
-                                onChange={(e) => {
-                                  if (e.target.checked) {
-                                    setSelectedProductIds([...selectedProductIds, product.id]);
-                                  } else {
-                                    setSelectedProductIds(selectedProductIds.filter(id => id !== product.id));
-                                  }
-                                }}
-                              />
-                            </td>
-                            <td className="py-3 px-4">
+                          return (
+                            <tr 
+                              key={product.id} 
+                              onClick={() => setSelectedProduct(product)}
+                              className={`hover:bg-amber-500/5 transition-colors cursor-pointer ${
+                                selectedProduct?.id === product.id ? 'bg-amber-500/10' : ''
+                              }`}
+                            >
+                              <td className="py-3 px-4 w-10 text-center" onClick={(e) => e.stopPropagation()}>
+                                <input
+                                  type="checkbox"
+                                  className="rounded border-slate-300 text-amber-500 focus:ring-amber-500 cursor-pointer size-3.5"
+                                  checked={selectedProductIds.includes(product.id)}
+                                  onChange={(e) => {
+                                    if (e.target.checked) {
+                                      setSelectedProductIds([...selectedProductIds, product.id]);
+                                    } else {
+                                      setSelectedProductIds(selectedProductIds.filter(id => id !== product.id));
+                                    }
+                                  }}
+                                />
+                              </td>
+                              <td className="py-3 px-4">
+                                <img 
+                                  src={defaultImg} 
+                                  alt={product.name} 
+                                  referrerPolicy="no-referrer"
+                                  className="w-10 h-10 object-cover rounded-lg border border-slate-100 flex-shrink-0" 
+                                />
+                              </td>
+                              <td className="py-3 px-3 min-w-[150px]">
+                                <p className="font-bold text-slate-900 leading-tight">{product.name}</p>
+                                <p className="text-sm text-slate-400 font-mono mt-0.5">{product.sku}</p>
+                                <div className="flex flex-wrap gap-1.5 mt-1">
+                                  <span className="bg-slate-100 text-slate-500 text-[9px] font-mono font-bold px-1 rounded">
+                                    {product.brand}
+                                  </span>
+                                  <span className="bg-slate-100 text-slate-500 text-[9px] font-mono font-bold px-1 rounded">
+                                    {product.category}
+                                  </span>
+                                  {product.deletionStatus === 'pending_approval' && (
+                                    <span className="bg-rose-100 text-rose-700 text-[9px] font-mono font-bold px-1.5 py-0.5 rounded animate-pulse">
+                                      Deletion Pending
+                                    </span>
+                                  )}
+                                </div>
+                              </td>
+                              <td className="py-3 px-3 text-center">
+                                <span className={`inline-flex items-center gap-1.5 text-[9px] font-mono font-black px-2 py-0.5 rounded-full ${
+                                  product.subBrand === 'SAT' 
+                                    ? 'bg-slate-900 text-amber-400 border border-slate-800' 
+                                    : product.subBrand === 'GZ' 
+                                    ? 'bg-amber-100 text-amber-800 border border-amber-200' 
+                                    : 'bg-teal-50 text-teal-700 border border-teal-200'
+                                }`}>
+                                  <img src={getBrandLogo(product.subBrand)} alt={product.subBrand} className="w-3.5 h-3.5 object-contain rounded-xs" />
+                                  {product.subBrand}
+                                </span>
+                              </td>
+                              <td className="py-3 px-3">
+                                {inlineEditProductId === product.id ? (
+                                  <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
+                                    <input
+                                      type="number"
+                                      value={inlineStock}
+                                      onChange={(e) => setInlineStock(Number(e.target.value))}
+                                      className="w-16 bg-white border border-amber-400 rounded px-1 py-0.5 text-xs font-mono font-bold"
+                                      placeholder="Stock"
+                                    />
+                                    <span className="text-xs text-slate-500 font-mono">pcs</span>
+                                  </div>
+                                ) : (
+                                  <>
+                                    <span className={`inline-block font-mono font-black px-2 py-0.5 rounded-full ${
+                                      totalQty === 0 
+                                        ? 'bg-red-100 text-red-700' 
+                                        : isLow 
+                                        ? 'bg-amber-100 text-amber-800' 
+                                        : 'bg-teal-50 text-teal-700'
+                                    }`}>
+                                      {totalQty} pcs
+                                    </span>
+                                    {isLow && totalQty > 0 && (
+                                      <p className="text-[9px] text-amber-600 mt-1 font-sans italic font-medium">Reorder Alert</p>
+                                    )}
+                                  </>
+                                )}
+                              </td>
+                              <td className="py-3 px-3 text-right">
+                                {inlineEditProductId === product.id ? (
+                                  <div className="flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
+                                    <span className="text-xs font-mono text-slate-400">৳</span>
+                                    <input
+                                      type="number"
+                                      value={inlinePrice}
+                                      onChange={(e) => setInlinePrice(Number(e.target.value))}
+                                      className="w-24 bg-white border border-amber-400 rounded px-1.5 py-0.5 text-xs font-mono font-bold text-right"
+                                      placeholder="Price"
+                                    />
+                                  </div>
+                                ) : (
+                                  <>
+                                    <p className="font-bold text-slate-900">৳ {product.sellingPrice.toLocaleString()}</p>
+                                    {!isStaff && (
+                                      <p className="text-[9px] text-slate-400 font-mono">Cost: ৳{product.costPrice}</p>
+                                    )}
+                                  </>
+                                )}
+                              </td>
+                              <td className="py-3 px-4 text-center">
+                                <div className="flex gap-1.5 justify-center" onClick={(e) => e.stopPropagation()}>
+                                  {inlineEditProductId === product.id ? (
+                                    <>
+                                      <button
+                                        onClick={(e) => handleSaveInlineEdit(product, e)}
+                                        className="p-1.5 bg-emerald-600 text-white rounded hover:bg-emerald-700 cursor-pointer transition-colors shadow-xs"
+                                        title="Save Quick Edit"
+                                      >
+                                        <Check size={14} />
+                                      </button>
+                                      <button
+                                        onClick={() => setInlineEditProductId(null)}
+                                        className="p-1.5 bg-slate-200 text-slate-700 rounded hover:bg-slate-300 cursor-pointer transition-colors"
+                                        title="Cancel"
+                                      >
+                                        <X size={14} />
+                                      </button>
+                                    </>
+                                  ) : (
+                                    <>
+                                      <button
+                                        onClick={(e) => handleStartInlineEdit(product, e)}
+                                        className="p-1 text-teal-600 hover:text-teal-800 hover:bg-teal-50 rounded cursor-pointer transition-colors"
+                                        title="Quick Price & Stock Edit (Inline)"
+                                      >
+                                        <Coins size={14} />
+                                      </button>
+                                      <button
+                                        onClick={() => openEditDrawer(product)}
+                                        className="p-1 text-slate-400 hover:text-slate-900 hover:bg-slate-100 rounded cursor-pointer transition-colors"
+                                        title="Edit Product"
+                                      >
+                                        <Edit3 size={14} />
+                                      </button>
+                                      <button
+                                        onClick={() => handleArchiveProduct(product)}
+                                        className="p-1 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded cursor-pointer transition-colors"
+                                        title="Archive Product"
+                                      >
+                                        <Archive size={14} />
+                                      </button>
+                                      {(user?.role === 'admin' || user?.role === 'superadmin') && (
+                                        <button
+                                          onClick={() => handleDeleteClick(product)}
+                                          className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded cursor-pointer transition-colors"
+                                          title={user?.role === 'superadmin' ? "Permanently Delete Product" : "Submit Deletion Request"}
+                                        >
+                                          <Trash2 size={14} />
+                                        </button>
+                                      )}
+                                    </>
+                                  )}
+                                </div>
+                              </td>
+                            </tr>
+                          );
+                        })
+                      )}
+                    </tbody>
+                  </table>
+                </div>
+              ) : (
+                /* Desktop Grid View */
+                <div className="hidden md:grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 p-4">
+                  {sortedProducts.length === 0 ? (
+                    <div className="col-span-full py-10 text-center text-slate-400 italic text-xs">
+                      No active gadget catalog records found.
+                    </div>
+                  ) : (
+                    sortedProducts.map((product) => {
+                      const totalQty = (product.variants || []).reduce((s, v) => s + (v.stock || 0), 0);
+                      const isLow = totalQty <= (product.reorderThreshold ?? 5);
+                      const defaultImg = product.images?.[0] || 'https://images.unsplash.com/photo-1546868871-7041f2a55e12?auto=format&fit=crop&q=80&w=150';
+
+                      return (
+                        <div 
+                          key={product.id}
+                          className={`bg-white border border-slate-200 rounded-2xl p-3 flex flex-col justify-between shadow-xs hover:shadow-md hover:-translate-y-0.5 transition-all cursor-pointer ${
+                            selectedProduct?.id === product.id ? 'border-amber-400 ring-2 ring-amber-300' : ''
+                          }`}
+                          onClick={() => setSelectedProduct(product)}
+                        >
+                          <div>
+                            <div className="aspect-square w-full rounded-xl overflow-hidden bg-slate-50 relative flex items-center justify-center mb-3">
                               <img 
                                 src={defaultImg} 
                                 alt={product.name} 
                                 referrerPolicy="no-referrer"
-                                className="w-10 h-10 object-cover rounded-lg border border-slate-100 flex-shrink-0" 
+                                className="w-full h-full object-cover" 
                               />
-                            </td>
-                            <td className="py-3 px-3 min-w-[150px]">
-                              <p className="font-bold text-slate-900 leading-tight">{product.name}</p>
-                              <p className="text-sm text-slate-400 font-mono mt-0.5">{product.sku}</p>
-                              <div className="flex flex-wrap gap-1.5 mt-1">
-                                <span className="bg-slate-100 text-slate-500 text-[9px] font-mono font-bold px-1 rounded">
-                                  {product.brand}
-                                </span>
-                                <span className="bg-slate-100 text-slate-500 text-[9px] font-mono font-bold px-1 rounded">
-                                  {product.category}
-                                </span>
-                                {product.deletionStatus === 'pending_approval' && (
-                                  <span className="bg-rose-100 text-rose-700 text-[9px] font-mono font-bold px-1.5 py-0.5 rounded animate-pulse">
-                                    Deletion Pending
-                                  </span>
-                                )}
+                              <div className="absolute top-2 left-2" onClick={(e) => e.stopPropagation()}>
+                                <input
+                                  type="checkbox"
+                                  className="rounded border-slate-300 text-amber-500 focus:ring-amber-500 cursor-pointer size-4 bg-white/90"
+                                  checked={selectedProductIds.includes(product.id)}
+                                  onChange={(e) => {
+                                    if (e.target.checked) {
+                                      setSelectedProductIds([...selectedProductIds, product.id]);
+                                    } else {
+                                      setSelectedProductIds(selectedProductIds.filter(id => id !== product.id));
+                                    }
+                                  }}
+                                />
                               </div>
-                            </td>
-                            <td className="py-3 px-3 text-center">
-                              <span className={`inline-flex items-center gap-1.5 text-[9px] font-mono font-black px-2 py-0.5 rounded-full ${
-                                product.subBrand === 'SAT' 
-                                  ? 'bg-slate-900 text-amber-400 border border-slate-800' 
-                                  : product.subBrand === 'GZ' 
-                                  ? 'bg-amber-100 text-amber-800 border border-amber-200' 
-                                  : 'bg-teal-50 text-teal-700 border border-teal-200'
-                              }`}>
-                                <img src={getBrandLogo(product.subBrand)} alt={product.subBrand} className="w-3.5 h-3.5 object-contain rounded-xs" />
-                                {product.subBrand}
+                              <div className="absolute top-2 right-2">
+                                <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-md ${
+                                  product.subBrand === 'SAT' ? 'bg-slate-950 text-amber-400' : 'bg-amber-100 text-amber-900'
+                                }`}>
+                                  {product.subBrand}
+                                </span>
+                              </div>
+                              <div className="absolute bottom-2 left-2">
+                                <span className={`text-xs font-bold px-2 py-0.5 rounded-md shadow-xs ${
+                                  totalQty === 0 ? 'bg-rose-500 text-white' : isLow ? 'bg-amber-500 text-slate-950' : 'bg-emerald-600 text-white'
+                                }`}>
+                                  {totalQty === 0 ? 'Out of Stock' : `${totalQty} in stock`}
+                                </span>
+                              </div>
+                            </div>
+
+                            <div className="flex items-center justify-between text-xs text-slate-500 mb-1">
+                              <span className="truncate">{product.brand || product.category || 'Gadget'}</span>
+                              <span className="font-mono text-xs text-slate-400">{product.sku}</span>
+                            </div>
+
+                            <h4 
+                              className="text-sm font-bold text-slate-900 line-clamp-2 leading-tight mb-2 hover:text-amber-600 transition-colors min-h-[40px]"
+                              title={product.name}
+                            >
+                              {product.name}
+                            </h4>
+
+                            <div className="flex items-baseline justify-between mb-3">
+                              <span className="text-lg font-black text-amber-600 font-mono">
+                                ৳{product.sellingPrice.toLocaleString()}
                               </span>
-                            </td>
-                            <td className="py-3 px-3">
-                              {inlineEditProductId === product.id ? (
-                                <div className="flex items-center gap-1" onClick={(e) => e.stopPropagation()}>
-                                  <input
-                                    type="number"
-                                    value={inlineStock}
-                                    onChange={(e) => setInlineStock(Number(e.target.value))}
-                                    className="w-16 bg-white border border-amber-400 rounded px-1 py-0.5 text-xs font-mono font-bold"
-                                    placeholder="Stock"
-                                  />
-                                  <span className="text-xs text-slate-500 font-mono">pcs</span>
-                                </div>
-                              ) : (
-                                <>
-                                  <span className={`inline-block font-mono font-black px-2 py-0.5 rounded-full ${
-                                    totalQty === 0 
-                                      ? 'bg-red-100 text-red-700' 
-                                      : isLow 
-                                      ? 'bg-amber-100 text-amber-800' 
-                                      : 'bg-teal-50 text-teal-700'
-                                  }`}>
-                                    {totalQty} pcs
-                                  </span>
-                                  {isLow && totalQty > 0 && (
-                                    <p className="text-[9px] text-amber-600 mt-1 font-sans italic font-medium">Reorder Alert</p>
-                                  )}
-                                </>
+                              {!isStaff && (
+                                <span className="text-xs text-slate-400 font-mono">
+                                  Profit: ৳{(product.sellingPrice - product.costPrice).toLocaleString()}
+                                </span>
                               )}
-                            </td>
-                            <td className="py-3 px-3 text-right">
-                              {inlineEditProductId === product.id ? (
-                                <div className="flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
-                                  <span className="text-xs font-mono text-slate-400">৳</span>
-                                  <input
-                                    type="number"
-                                    value={inlinePrice}
-                                    onChange={(e) => setInlinePrice(Number(e.target.value))}
-                                    className="w-24 bg-white border border-amber-400 rounded px-1.5 py-0.5 text-xs font-mono font-bold text-right"
-                                    placeholder="Price"
-                                  />
-                                </div>
-                              ) : (
-                                <>
-                                  <p className="font-bold text-slate-900">৳ {product.sellingPrice.toLocaleString()}</p>
-                                  {!isStaff && (
-                                    <p className="text-[9px] text-slate-400 font-mono">Cost: ৳{product.costPrice}</p>
-                                  )}
-                                </>
-                              )}
-                            </td>
-                            <td className="py-3 px-4 text-center">
-                              <div className="flex gap-1.5 justify-center" onClick={(e) => e.stopPropagation()}>
-                                {inlineEditProductId === product.id ? (
-                                  <>
-                                    <button
-                                      onClick={(e) => handleSaveInlineEdit(product, e)}
-                                      className="p-1.5 bg-emerald-600 text-white rounded hover:bg-emerald-700 cursor-pointer transition-colors shadow-xs"
-                                      title="Save Quick Edit"
-                                    >
-                                      <Check size={14} />
-                                    </button>
-                                    <button
-                                      onClick={() => setInlineEditProductId(null)}
-                                      className="p-1.5 bg-slate-200 text-slate-700 rounded hover:bg-slate-300 cursor-pointer transition-colors"
-                                      title="Cancel"
-                                    >
-                                      <X size={14} />
-                                    </button>
-                                  </>
-                                ) : (
-                                  <>
-                                    <button
-                                      onClick={(e) => handleStartInlineEdit(product, e)}
-                                      className="p-1 text-teal-600 hover:text-teal-800 hover:bg-teal-50 rounded cursor-pointer transition-colors"
-                                      title="Quick Price & Stock Edit (Inline)"
-                                    >
-                                      <Coins size={14} />
-                                    </button>
-                                    <button
-                                      onClick={() => openEditDrawer(product)}
-                                      className="p-1 text-slate-400 hover:text-slate-900 hover:bg-slate-100 rounded cursor-pointer transition-colors"
-                                      title="Edit Product"
-                                    >
-                                      <Edit3 size={14} />
-                                    </button>
-                                    <button
-                                      onClick={() => handleArchiveProduct(product)}
-                                      className="p-1 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded cursor-pointer transition-colors"
-                                      title="Archive Product"
-                                    >
-                                      <Archive size={14} />
-                                    </button>
-                                    {(user?.role === 'admin' || user?.role === 'superadmin') && (
-                                      <button
-                                        onClick={() => handleDeleteClick(product)}
-                                        className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded cursor-pointer transition-colors"
-                                        title={user?.role === 'superadmin' ? "Permanently Delete Product" : "Submit Deletion Request"}
-                                      >
-                                        <Trash2 size={14} />
-                                      </button>
-                                    )}
-                                  </>
-                                )}
-                              </div>
-                            </td>
-                          </tr>
-                        );
-                      })
-                    )}
-                  </tbody>
-                </table>
-              </div>
+                            </div>
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-2 pt-2 border-t border-slate-100" onClick={(e) => e.stopPropagation()}>
+                            <button
+                              type="button"
+                              onClick={() => openEditDrawer(product)}
+                              className="py-1.5 px-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-bold transition flex items-center justify-center gap-1 cursor-pointer"
+                            >
+                              <Edit3 size={13} /> Edit
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => setSelectedProduct(product)}
+                              className="py-1.5 px-2 bg-slate-950 hover:bg-slate-900 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-1 cursor-pointer"
+                            >
+                              Overview
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              )}
 
               {/* Mobile Compact 2-Column Card Grid (8-10px gaps, 8px padding, 1:1 square cover image, 34-36px buttons) */}
               <div className="md:hidden grid grid-cols-2 gap-2 p-2">

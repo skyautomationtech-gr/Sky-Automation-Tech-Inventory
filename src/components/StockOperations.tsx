@@ -428,10 +428,10 @@ export default function StockOperations({
         </div>
       ) : (
         /* TRANSACTION FORMS */
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 items-start">
+        <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
           
           {/* Main Entry form card */}
-          <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm space-y-5">
+          <div className="lg:col-span-7 bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm space-y-5">
             <h3 className="text-sm font-bold text-slate-950 font-sans uppercase tracking-wider flex items-center gap-2">
               {activeAction === 'in' && <ArrowUpRight className="text-teal-500" />}
               {activeAction === 'out' && <ArrowDownRight className="text-red-500" />}
@@ -626,7 +626,7 @@ export default function StockOperations({
           </div>
 
           {/* Interactive Info card column */}
-          <div className="bg-white p-6 rounded-2xl border border-slate-100 shadow-sm space-y-4">
+          <div className="lg:col-span-5 bg-white dark:bg-slate-900 p-6 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm space-y-4 sticky top-4">
             <h4 className="text-sm font-bold uppercase tracking-wider text-slate-400 flex items-center gap-1.5">
               <Clock size={14} className="text-amber-500" />
               Dynamic Context Check

@@ -18,10 +18,10 @@ import {
   Activity,
   Calculator,
   Sparkles,
-  PanelLeftClose,
-  PanelLeftOpen,
   ChevronRight,
-  ExternalLink
+  ExternalLink,
+  PanelLeftClose,
+  PanelLeftOpen
 } from 'lucide-react';
 import { UserProfile } from '../types';
 
@@ -133,47 +133,79 @@ export default function Sidebar({
           fixed inset-y-0 left-0 z-40 bg-slate-950 text-slate-100 flex flex-col justify-between
           border-r border-slate-800/80 shadow-2xl transition-all duration-300 ease-in-out
           ${isOpen ? 'translate-x-0 w-64' : '-translate-x-full lg:translate-x-0'}
-          ${isCollapsed ? 'lg:w-20' : 'lg:w-64'}
+          ${isCollapsed ? 'lg:w-[76px]' : 'lg:w-[260px]'}
           lg:static lg:top-0 lg:h-screen lg:shrink-0 lg:flex-none
         `}
       >
-        {/* Brand Header */}
-        <div className="h-16 px-4 border-b border-slate-800/80 flex items-center justify-between shrink-0 bg-slate-950/80 backdrop-blur-md">
-          <div className="flex items-center gap-3 min-w-0">
-            <div className="w-9 h-9 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-center p-1 shrink-0 shadow-xs">
-              <img 
-                src={logoUrl || "/sat_logo.jpg"} 
-                alt="Sky Automation Tech" 
-                className="w-full h-full rounded-lg object-contain bg-white p-0.5" 
-                onError={(e) => {
-                  e.currentTarget.onerror = null;
-                  e.currentTarget.src = "/sat_logo.jpg";
-                }}
-              />
-            </div>
-            
-            {!isCollapsed && (
-              <div className="min-w-0">
-                <h1 className="text-white font-extrabold tracking-tight text-xs uppercase truncate leading-tight font-sans">
-                  {companyName || 'Sky Automation Tech'}
-                </h1>
-                <p className="text-[9px] text-[#D4AF37] font-mono tracking-widest uppercase">
-                  Enterprise Platform
-                </p>
+        {/* Brand Header (Height 64px to align with top bar) */}
+        <div className="h-16 px-3 border-b border-slate-800/80 flex items-center justify-between shrink-0 bg-slate-950/80 backdrop-blur-md">
+          {!isCollapsed ? (
+            <>
+              <div 
+                onClick={() => setIsCollapsed && setIsCollapsed(!isCollapsed)}
+                className="flex items-center gap-3 min-w-0 cursor-pointer flex-1"
+                title="Collapse sidebar"
+              >
+                <div className="w-9 h-9 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-center p-1 shrink-0 shadow-xs">
+                  <img 
+                    src={logoUrl || "/sat_logo.jpg"} 
+                    alt="Sky Automation Tech" 
+                    className="w-full h-full rounded-lg object-contain bg-white p-0.5" 
+                    onError={(e) => {
+                      e.currentTarget.onerror = null;
+                      e.currentTarget.src = "/sat_logo.jpg";
+                    }}
+                  />
+                </div>
+                <div className="min-w-0 flex-1">
+                  <h1 className="text-white font-extrabold tracking-tight text-xs uppercase truncate leading-tight font-sans">
+                    {companyName || 'Sky Automation Tech'}
+                  </h1>
+                  <p className="text-[9px] text-[#D4AF37] font-mono tracking-widest uppercase">
+                    Enterprise Platform
+                  </p>
+                </div>
               </div>
-            )}
-          </div>
 
-          {/* Desktop collapse button in header */}
-          {setIsCollapsed && (
-            <button
-              type="button"
-              onClick={() => setIsCollapsed(!isCollapsed)}
-              className="hidden lg:flex p-1.5 rounded-lg text-slate-500 hover:text-white hover:bg-slate-900 transition-colors cursor-pointer"
-              title={isCollapsed ? 'Expand sidebar' : 'Collapse sidebar'}
-            >
-              {isCollapsed ? <PanelLeftOpen size={16} /> : <PanelLeftClose size={16} />}
-            </button>
+              {setIsCollapsed && (
+                <button
+                  type="button"
+                  onClick={() => setIsCollapsed(!isCollapsed)}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-900 transition-colors cursor-pointer shrink-0 ml-1"
+                  title="Collapse sidebar"
+                >
+                  <PanelLeftClose size={18} />
+                </button>
+              )}
+            </>
+          ) : (
+            <div className="w-full flex items-center justify-center relative group">
+              <div 
+                onClick={() => setIsCollapsed && setIsCollapsed(!isCollapsed)}
+                className="w-10 h-10 rounded-xl bg-slate-900 border border-slate-800 flex items-center justify-center p-1 cursor-pointer shadow-xs hover:border-[#D4AF37] transition-all"
+                title="Expand sidebar"
+              >
+                <img 
+                  src={logoUrl || "/sat_logo.jpg"} 
+                  alt="Sky Automation Tech" 
+                  className="w-full h-full rounded-lg object-contain bg-white p-0.5" 
+                  onError={(e) => {
+                    e.currentTarget.onerror = null;
+                    e.currentTarget.src = "/sat_logo.jpg";
+                  }}
+                />
+              </div>
+              {setIsCollapsed && (
+                <button
+                  type="button"
+                  onClick={() => setIsCollapsed(!isCollapsed)}
+                  className="absolute -right-1 -bottom-1 w-5 h-5 rounded-full bg-[#D4AF37] text-slate-950 flex items-center justify-center shadow-md opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"
+                  title="Expand sidebar"
+                >
+                  <PanelLeftOpen size={12} />
+                </button>
+              )}
+            </div>
           )}
         </div>
 
@@ -203,42 +235,30 @@ export default function Sidebar({
                         type="button"
                         onClick={() => {
                           setCurrentTab(item.id);
-                          setIsOpen(false);
+                          setIsOpen(false); // Close mobile menu on select
                         }}
-                        title={isCollapsed ? `${item.name} (${group.title})` : item.name}
                         className={`
-                          w-full flex items-center gap-3 px-3 py-2 rounded-xl transition-all text-xs font-semibold cursor-pointer relative group
-                          ${isCollapsed ? 'justify-center px-0' : 'justify-between'}
-                          ${
-                            isActive 
-                              ? 'bg-slate-900/95 text-[#D4AF37] font-bold shadow-2xs border-l-2 border-[#D4AF37]' 
-                              : 'text-slate-400 hover:bg-slate-900/60 hover:text-slate-100 border-l-2 border-transparent'
+                          w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer group relative
+                          ${isActive 
+                            ? 'bg-[#D4AF37] text-slate-950 shadow-md font-extrabold' 
+                            : 'text-slate-400 hover:text-white hover:bg-slate-900/80'
                           }
+                          ${isCollapsed ? 'justify-center px-0' : ''}
                         `}
+                        title={isCollapsed ? item.name : undefined}
                       >
-                        <div className="flex items-center gap-3 min-w-0">
-                          <Icon 
-                            size={18} 
-                            className={`shrink-0 transition-colors ${
-                              isActive ? 'text-[#D4AF37]' : 'text-slate-400 group-hover:text-slate-200'
-                            }`} 
-                          />
-                          {!isCollapsed && (
-                            <span className="truncate">{item.name}</span>
-                          )}
-                        </div>
-
-                        {!isCollapsed && item.badge && (
-                          <span className="px-1.5 py-0.5 text-[9px] font-mono font-bold bg-[#D4AF37]/20 text-[#D4AF37] rounded-md border border-[#D4AF37]/30">
-                            {item.badge}
+                        <Icon size={18} className={`shrink-0 ${isActive ? 'text-slate-950' : 'text-slate-400 group-hover:text-[#D4AF37]'}`} />
+                        
+                        {!isCollapsed && (
+                          <span className="truncate flex-1 text-left">
+                            {item.name}
                           </span>
                         )}
 
-                        {/* Hover Tooltip when collapsed */}
-                        {isCollapsed && (
-                          <div className="absolute left-full ml-2 px-2.5 py-1 bg-slate-900 text-white text-xs rounded-lg shadow-xl border border-slate-700 whitespace-nowrap opacity-0 group-hover:opacity-100 pointer-events-none transition-opacity z-50">
-                            {item.name}
-                          </div>
+                        {!isCollapsed && item.badge && (
+                          <span className="px-1.5 py-0.5 text-[9px] font-mono rounded bg-slate-800 text-amber-400 border border-slate-700">
+                            {item.badge}
+                          </span>
                         )}
                       </button>
                     );
@@ -247,62 +267,47 @@ export default function Sidebar({
               </div>
             );
           })}
-
-          {/* Issue Reporter Link */}
-          <div className="pt-2 border-t border-slate-800/80">
-            <a
-              href="https://forms.gle/TH5uGex3LobzAyAu7"
-              target="_blank"
-              rel="noopener noreferrer"
-              className={`
-                w-full flex items-center gap-3 px-3 py-2 rounded-xl transition-all text-xs text-slate-400 hover:bg-slate-900 hover:text-[#D4AF37]
-                ${isCollapsed ? 'justify-center px-0' : 'justify-start'}
-              `}
-              title="সমস্যা জানান (Report Issue)"
-            >
-              <MessageSquare size={16} className="shrink-0 text-slate-400" />
-              {!isCollapsed && <span className="truncate font-sans">সমস্যা জানান</span>}
-            </a>
-          </div>
-
-          {/* Sub-brands indicator */}
-          {!isCollapsed && (
-            <div className="pt-2 border-t border-slate-800/80">
-              <div className="text-[10px] font-mono font-bold uppercase tracking-wider text-slate-500 px-3 mb-1.5">
-                Sub-Brands
-              </div>
-              <div className="grid grid-cols-3 gap-1.5 px-2">
-                <div className="flex flex-col items-center p-1.5 rounded-lg bg-slate-900/60 border border-slate-800/80 text-center">
-                  <span className="w-2 h-2 rounded-full bg-[#008080] mb-0.5"></span>
-                  <span className="text-[9px] font-mono text-slate-400">GZ</span>
-                </div>
-                <div className="flex flex-col items-center p-1.5 rounded-lg bg-slate-900/60 border border-slate-800/80 text-center">
-                  <span className="w-2 h-2 rounded-full bg-orange-500 mb-0.5"></span>
-                  <span className="text-[9px] font-mono text-slate-400">RTX</span>
-                </div>
-                <div className="flex flex-col items-center p-1.5 rounded-lg bg-slate-900/60 border border-slate-800/80 text-center">
-                  <span className="w-2 h-2 rounded-full bg-[#D4AF37] mb-0.5"></span>
-                  <span className="text-[9px] font-mono text-slate-400">SAT</span>
-                </div>
-              </div>
-            </div>
-          )}
         </div>
 
-        {/* Bottom User Action */}
-        <div className="p-3 border-t border-slate-800/80 bg-slate-950/90 shrink-0">
-          <button
-            type="button"
-            onClick={onLogout}
-            title="Sign Out of Console"
-            className={`
-              w-full flex items-center gap-2.5 p-2 rounded-xl border border-slate-800 hover:border-red-500/30 text-slate-400 hover:text-red-400 hover:bg-red-500/10 transition-all text-xs cursor-pointer font-bold
-              ${isCollapsed ? 'justify-center' : 'justify-start'}
-            `}
-          >
-            <LogOut size={16} className="shrink-0" />
-            {!isCollapsed && <span>Sign Out</span>}
-          </button>
+        {/* Sidebar Footer / User Mini Profile */}
+        <div className="p-3 border-t border-slate-800/80 bg-slate-950/60 shrink-0">
+          {!isCollapsed ? (
+            <div className="flex items-center justify-between gap-3">
+              <div className="flex items-center gap-2.5 min-w-0">
+                <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-amber-600 to-amber-400 text-slate-950 font-black text-xs flex items-center justify-center uppercase shrink-0 shadow-xs">
+                  {user?.name ? user.name.charAt(0) : 'U'}
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs font-bold text-white truncate">
+                    {user?.name || 'Operator'}
+                  </p>
+                  <p className="text-[10px] text-slate-400 font-mono capitalize truncate">
+                    {user?.role || 'Staff'}
+                  </p>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={onLogout}
+                className="p-2 rounded-xl text-slate-400 hover:text-red-400 hover:bg-red-500/10 transition-colors cursor-pointer shrink-0"
+                title="Sign Out"
+              >
+                <LogOut size={16} />
+              </button>
+            </div>
+          ) : (
+            <div className="flex justify-center">
+              <button
+                type="button"
+                onClick={onLogout}
+                className="p-2.5 rounded-xl text-slate-400 hover:text-red-400 hover:bg-red-500/10 transition-colors cursor-pointer"
+                title="Sign Out"
+              >
+                <LogOut size={18} />
+              </button>
+            </div>
+          )}
         </div>
       </aside>
     </>

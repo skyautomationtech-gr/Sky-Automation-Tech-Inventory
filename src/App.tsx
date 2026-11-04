@@ -96,77 +96,9 @@ import { ThemeProvider, ToastProvider, ThemeToggle } from './design-system';
 import { DesignSystemShowcase } from './components/DesignSystemShowcase';
 
 // Mock/Fallback Data in case of Firestore permission/network errors
-const MOCK_PRODUCTS: Product[] = [
-  {
-    id: 'mock-1',
-    name: 'Anker PowerPort III 20W GaN Charger',
-    sku: 'SAT-ANK-4921',
-    category: 'Adapters & Cables',
-    brand: 'Anker',
-    subBrand: 'SAT',
-    costPrice: 950,
-    sellingPrice: 1450,
-    reorderThreshold: 10,
-    images: ['https://images.unsplash.com/photo-1583863788434-e58a36330cf0?auto=format&fit=crop&q=80&w=300'],
-    variants: [
-      { id: 'v1', color: 'Black', model: 'UK Plug', stock: 15 },
-      { id: 'v2', color: 'White', model: 'US Plug', stock: 4 } // Low Stock!
-    ],
-    archived: false,
-    createdAt: Date.now() - 1000000
-  },
-  {
-    id: 'mock-2',
-    name: 'Baseus Bowie WM01 Wireless Earbuds',
-    sku: 'GZ-BAS-1029',
-    category: 'Audio Gear',
-    brand: 'Baseus',
-    subBrand: 'GZ',
-    costPrice: 1200,
-    sellingPrice: 1850,
-    reorderThreshold: 5,
-    images: ['https://images.unsplash.com/photo-1590658268037-6bf12165a8df?auto=format&fit=crop&q=80&w=300'],
-    variants: [
-      { id: 'v3', color: 'White', model: 'Standard', stock: 12 },
-      { id: 'v4', color: 'Purple', model: 'Standard', stock: 2 } // Low Stock!
-    ],
-    archived: false,
-    createdAt: Date.now() - 500000
-  },
-  {
-    id: 'mock-3',
-    name: 'Xiaomi Mi Band 8 Active NFC',
-    sku: 'RTX-XIA-9021',
-    category: 'Smart Wearables',
-    brand: 'Xiaomi',
-    subBrand: 'RTX',
-    costPrice: 2100,
-    sellingPrice: 3200,
-    reorderThreshold: 8,
-    images: ['https://images.unsplash.com/photo-1575311373937-040b8e1fd5b6?auto=format&fit=crop&q=80&w=300'],
-    variants: [
-      { id: 'v5', color: 'Space Black', model: 'NFC Edition', stock: 0 } // Out of Stock!
-    ],
-    archived: false,
-    createdAt: Date.now() - 200000
-  }
-];
-
-const MOCK_CATEGORIES: Category[] = [
-  { id: 'cat-1', name: 'Smart Phones', level: 'main', parentId: null },
-  { id: 'cat-2', name: 'Adapters & Cables', level: 'main', parentId: null },
-  { id: 'cat-3', name: 'Audio Gear', level: 'main', parentId: null },
-  { id: 'cat-4', name: 'Power Banks', level: 'main', parentId: null },
-  { id: 'cat-5', name: 'Smart Wearables', level: 'main', parentId: null }
-];
-
-const MOCK_BRANDS: Brand[] = [
-  { id: 'b-1', name: 'Apple' },
-  { id: 'b-2', name: 'Samsung' },
-  { id: 'b-3', name: 'Xiaomi' },
-  { id: 'b-4', name: 'Anker' },
-  { id: 'b-5', name: 'Baseus' }
-];
+const MOCK_PRODUCTS: Product[] = [];
+const MOCK_CATEGORIES: Category[] = [];
+const MOCK_BRANDS: Brand[] = [];
 
 // Helper to restore verified user session across page reloads
 const getSavedUserSession = (): UserProfile | null => {
@@ -252,18 +184,8 @@ export default function App() {
     const cachedBrands = localStore.get<Brand[]>('all_brands');
     setBrands(cachedBrands && cachedBrands.length > 0 ? cachedBrands : MOCK_BRANDS);
     
-    setProductColors([
-      { id: 'c-1', name: 'Black' },
-      { id: 'c-2', name: 'White' },
-      { id: 'c-3', name: 'Purple' },
-      { id: 'c-4', name: 'Space Black' }
-    ]);
-    setProductModels([
-      { id: 'm-1', name: 'Standard' },
-      { id: 'm-2', name: 'UK Plug' },
-      { id: 'm-3', name: 'US Plug' },
-      { id: 'm-4', name: 'NFC Edition' }
-    ]);
+    setProductColors([]);
+    setProductModels([]);
   };
   
   // App structure states
@@ -403,6 +325,32 @@ export default function App() {
     return () => {
       window.removeEventListener('firestore-quota-exceeded', handleQuotaEvent);
     };
+  }, []);
+
+  // Global Keyboard Shortcut Manager: Ctrl+K for search, Esc to close modals/drawers, Enter for primary form submissions
+  useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
+        e.preventDefault();
+        window.dispatchEvent(new CustomEvent('open-global-search'));
+      }
+      if (e.key === 'Escape') {
+        window.dispatchEvent(new CustomEvent('close-all-modals'));
+      }
+      if (e.key === 'Enter' && e.target instanceof HTMLElement) {
+        if (e.target.tagName === 'INPUT' && e.target.getAttribute('type') !== 'submit') {
+          const form = e.target.closest('form');
+          if (form) {
+            const submitBtn = form.querySelector('button[type="submit"]') as HTMLButtonElement;
+            if (submitBtn && !submitBtn.disabled) {
+              // Form submission handled or triggered
+            }
+          }
+        }
+      }
+    };
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
   }, []);
 
   useEffect(() => {
@@ -1071,16 +1019,7 @@ export default function App() {
               dataLoading={dataLoading}
             />
 
-            {/* Contextual Breadcrumb Trail Bar */}
-            <div className="px-4 lg:px-8 py-2.5 bg-white/70 dark:bg-slate-900/70 border-b border-slate-200/80 dark:border-slate-800/80 flex items-center justify-between shrink-0 backdrop-blur-xs">
-              <Breadcrumbs currentTab={currentTab} onNavigate={navigateToTab} />
-              
-              <div className="hidden sm:flex items-center gap-2 text-[11px] font-mono text-slate-400">
-                <span>Desktop Workspace (min-width: 1280px)</span>
-                <span>•</span>
-                <span className="text-[#D4AF37] font-bold">SAT Core v2.4</span>
-              </div>
-            </div>
+
 
             {/* Scrollable Main Workspace */}
             <main className="flex-1 overflow-y-auto overflow-x-hidden p-4 md:p-6 lg:p-8 bg-slate-50 dark:bg-slate-950 w-full max-w-full min-w-0">

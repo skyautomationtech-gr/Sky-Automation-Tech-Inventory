@@ -15,7 +15,8 @@ import {
   Trash2, 
   AlertCircle,
   CheckCircle2,
-  Building2
+  Building2,
+  Filter
 } from 'lucide-react';
 import { Supplier, SupplierPayment, StockLog, UserProfile } from '../types';
 import { 
@@ -47,7 +48,7 @@ export default function SupplierManagement({ user, rolePermissions }: SupplierMa
   const [loadingDetail, setLoadingDetail] = useState(false);
   const [detailTab, setDetailTab] = useState<'purchases' | 'payments'>('purchases');
 
-  // Modals
+  // Modals / Drawers
   const [isAddModalOpen, setIsAddModalOpen] = useState(false);
   const [editingSupplier, setEditingSupplier] = useState<Supplier | null>(null);
   const [isPaymentModalOpen, setIsPaymentModalOpen] = useState(false);
@@ -78,24 +79,19 @@ export default function SupplierManagement({ user, rolePermissions }: SupplierMa
   });
 
   const [statusFilter, setStatusFilter] = useState<string>('all');
-
-  // Payment Form State
   const [paymentData, setPaymentData] = useState({
     amount: '',
-    paymentMethod: 'Cash' as 'Cash' | 'bKash' | 'Nagad' | 'Bank Transfer',
+    paymentMethod: 'Cash' as string,
     referenceNo: '',
     notes: '',
     date: new Date().toISOString().split('T')[0]
   });
 
-  const [formError, setFormError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
 
   const isSuperAdmin = user?.role === 'superadmin';
-  const hasManagePermission = isSuperAdmin || 
-    (user?.permissionOverrides?.manageCategories !== undefined 
-      ? user.permissionOverrides.manageCategories 
-      : rolePermissions?.[user?.role || 'staff']?.manageCategories);
+  const hasManagePermission = isSuperAdmin || (rolePermissions && (rolePermissions.canManageSuppliers || rolePermissions.all));
 
   useEffect(() => {
     setLoading(true);
@@ -110,7 +106,7 @@ export default function SupplierManagement({ user, rolePermissions }: SupplierMa
     setLoading(true);
     try {
       const list = await getSuppliers();
-      setSuppliers(list);
+      setSuppliers(list || []);
     } catch (error) {
       console.error('Failed to fetch suppliers:', error);
     } finally {
@@ -126,9 +122,8 @@ export default function SupplierManagement({ user, rolePermissions }: SupplierMa
         getSupplierPayments(supplier.id),
         getStockLogs()
       ]);
-      setSupplierPayments(payments);
-      // Filter stock logs for this supplier
-      const filteredLogs = logs.filter(l => 
+      setSupplierPayments(payments || []);
+      const filteredLogs = (logs || []).filter(l => 
         l.supplierName?.toLowerCase() === supplier.name.toLowerCase() ||
         l.reason?.toLowerCase().includes('supplier') ||
         l.reason?.toLowerCase().includes(supplier.name.toLowerCase())
@@ -304,9 +299,9 @@ export default function SupplierManagement({ user, rolePermissions }: SupplierMa
   const handleSubmitPayment = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!selectedSupplier) return;
-    const amountNum = parseFloat(paymentData.amount);
-    if (isNaN(amountNum) || amountNum <= 0) {
-      setFormError('Please enter a valid payment amount.');
+    const pAmt = parseFloat(paymentData.amount);
+    if (isNaN(pAmt) || pAmt <= 0) {
+      setFormError('Please specify a valid payment amount.');
       return;
     }
 
@@ -315,23 +310,17 @@ export default function SupplierManagement({ user, rolePermissions }: SupplierMa
     try {
       await addSupplierPayment({
         supplierId: selectedSupplier.id,
-        amount: amountNum,
+        amount: pAmt,
         paymentMethod: paymentData.paymentMethod,
         referenceNo: paymentData.referenceNo.trim(),
         notes: paymentData.notes.trim(),
         date: paymentData.date,
-        recordedBy: user?.name || 'Staff'
+        recordedBy: user?.name || user?.email || 'Operator'
       });
 
       setIsPaymentModalOpen(false);
-      // Refresh suppliers & selected supplier
-      const updatedList = await getSuppliers();
-      setSuppliers(updatedList);
-      const updatedSelected = updatedList.find(s => s.id === selectedSupplier.id);
-      if (updatedSelected) {
-        setSelectedSupplier(updatedSelected);
-        handleOpenDetail(updatedSelected);
-      }
+      handleOpenDetail(selectedSupplier);
+      fetchSuppliers();
     } catch (err: any) {
       setFormError(err.message || 'Failed to record supplier payment.');
     } finally {
@@ -339,353 +328,283 @@ export default function SupplierManagement({ user, rolePermissions }: SupplierMa
     }
   };
 
-  // Filtered Suppliers
+  // Filtered suppliers
   const filteredSuppliers = suppliers.filter(s => {
-    const queryLower = searchQuery.toLowerCase();
-    const matchesSearch = s.name.toLowerCase().includes(queryLower) || 
-                          s.phone.includes(queryLower) ||
-                          (s.address && s.address.toLowerCase().includes(queryLower));
-    const matchesSubBrand = !subBrandFilter || s.subBrand === subBrandFilter || s.subBrand === 'ALL';
-    return matchesSearch && matchesSubBrand;
+    const q = searchQuery.toLowerCase().trim();
+    const matchQ = !q || 
+      s.name.toLowerCase().includes(q) || 
+      (s.companyName || '').toLowerCase().includes(q) ||
+      s.phone.includes(q) ||
+      (s.address || '').toLowerCase().includes(q);
+
+    const matchSubBrand = !subBrandFilter || s.subBrand === subBrandFilter || s.subBrand === 'ALL';
+    const matchStatus = statusFilter === 'all' || s.status === statusFilter;
+
+    return matchQ && matchSubBrand && matchStatus;
   });
 
-  // Calculate Aggregates
-  const totalPurchasesSum = suppliers.reduce((sum, s) => sum + (s.totalPurchases || 0), 0);
-  const totalPaidSum = suppliers.reduce((sum, s) => sum + (s.totalPaid || 0), 0);
-  const totalOutstandingDueSum = suppliers.reduce((sum, s) => sum + (s.outstandingDue || 0), 0);
+  const totalPurchasesSum = suppliers.reduce((s, sup) => s + (sup.totalPurchases || 0), 0);
+  const totalOutstandingDueSum = suppliers.reduce((s, sup) => s + (sup.outstandingDue || 0), 0);
 
   return (
-    <div className="space-y-6">
-      {/* Header Bar */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white p-6 rounded-2xl border border-slate-200/80 shadow-xs">
+    <div className="space-y-6 w-full max-w-[1920px] mx-auto pb-10">
+      
+      {/* Page Header */}
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm">
         <div>
-          <div className="flex items-center gap-2">
-            <div className="p-2 bg-amber-500/10 rounded-xl text-amber-600">
-              <Truck size={24} />
-            </div>
-            <h1 className="text-2xl font-black text-slate-900 tracking-tight">Supplier Directory</h1>
-          </div>
-          <p className="text-sm text-slate-500 mt-1">Manage vendor contacts, track stock purchases, and record supplier payments.</p>
+          <h1 className="text-xl font-bold text-slate-900 dark:text-white tracking-tight flex items-center gap-2">
+            <Truck size={22} className="text-gold-500" />
+            Supplier Directory & Vendor Ledger
+          </h1>
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+            Manage wholesale product suppliers, track purchase stock-ins, and settle vendor balances.
+          </p>
         </div>
 
         {hasManagePermission && (
           <button
             onClick={handleOpenAddModal}
-            className="flex items-center gap-2 px-5 py-2.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl transition-all cursor-pointer shadow-xs self-start md:self-auto"
+            className="flex items-center gap-2 px-4 py-2 bg-gold-400 hover:bg-gold-500 text-slate-950 text-xs font-bold rounded-xl shadow-xs transition-colors cursor-pointer"
           >
-            <Plus size={18} />
-            <span>Add New Supplier</span>
+            <Plus size={15} />
+            Add New Supplier
           </button>
         )}
       </div>
 
-      {/* Overview Stat Cards */}
+      {/* KPI Cards */}
       <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs flex items-center gap-4">
-          <div className="w-12 h-12 rounded-xl bg-slate-100 flex items-center justify-center text-slate-700 font-bold shrink-0">
-            <Building2 size={24} />
-          </div>
-          <div>
-            <div className="text-xs font-bold text-slate-400 uppercase tracking-wider">Total Suppliers</div>
-            <div className="text-2xl font-black text-slate-900 mt-0.5">{suppliers.length}</div>
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm">
+          <span className="text-xs font-medium text-slate-500 dark:text-slate-400">Total Registered Vendors</span>
+          <div className="text-2xl font-black text-slate-900 dark:text-white mt-1 font-mono tabular-nums">
+            {suppliers.length}
           </div>
         </div>
 
         {isSuperAdmin ? (
           <>
-            <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs flex items-center gap-4">
-              <div className="w-12 h-12 rounded-xl bg-blue-50 flex items-center justify-center text-blue-600 font-bold shrink-0">
-                <DollarSign size={24} />
-              </div>
-              <div>
-                <div className="text-xs font-bold text-slate-400 uppercase tracking-wider">Total Purchases</div>
-                <div className="text-2xl font-black text-blue-900 mt-0.5">৳{totalPurchasesSum.toLocaleString('en-BD')}</div>
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm">
+              <span className="text-xs font-medium text-slate-500 dark:text-slate-400">Total Volume Purchased</span>
+              <div className="text-2xl font-black text-slate-900 dark:text-white mt-1 font-mono tabular-nums">
+                ৳ {totalPurchasesSum.toLocaleString('en-BD')}
               </div>
             </div>
 
-            <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs flex items-center gap-4">
-              <div className="w-12 h-12 rounded-xl bg-rose-50 flex items-center justify-center text-rose-600 font-bold shrink-0">
-                <AlertCircle size={24} />
-              </div>
-              <div>
-                <div className="text-xs font-bold text-slate-400 uppercase tracking-wider">Total Outstanding Owed</div>
-                <div className="text-2xl font-black text-rose-600 mt-0.5">৳{totalOutstandingDueSum.toLocaleString('en-BD')}</div>
+            <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm">
+              <span className="text-xs font-medium text-rose-600 dark:text-rose-400">Total Vendor Dues Owed</span>
+              <div className="text-2xl font-black text-rose-600 dark:text-rose-400 mt-1 font-mono tabular-nums">
+                ৳ {totalOutstandingDueSum.toLocaleString('en-BD')}
               </div>
             </div>
           </>
         ) : (
-          <div className="col-span-2 bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs flex items-center gap-4 text-xs text-slate-500 font-medium">
-            <AlertCircle size={20} className="text-amber-500 shrink-0" />
-            <span>Supplier financial summaries and aggregates are restricted to Super Admin only.</span>
+          <div className="md:col-span-2 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm text-xs text-slate-500 dark:text-slate-400 italic flex items-center">
+            Financial ledger summaries are restricted to Super Admin role only.
           </div>
         )}
       </div>
 
-      {/* Filter and Search Bar */}
-      <div className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-xs flex flex-col sm:flex-row gap-3">
-        <div className="relative flex-1">
-          <Search size={18} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
-          <input
-            type="text"
-            placeholder="Search suppliers by name, phone, or address..."
-            value={searchQuery}
-            onChange={(e) => setSearchQuery(e.target.value)}
-            className="w-full pl-10 pr-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
-          />
+      {/* Table & Filter Container */}
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 shadow-sm min-h-[500px]">
+        
+        {/* Search & Filter Controls */}
+        <div className="flex flex-col md:flex-row items-center justify-between gap-4 mb-6">
+          <div className="relative w-full md:w-80">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={15} />
+            <input
+              type="text"
+              placeholder="Search by vendor name, company, phone..."
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              className="w-full pl-9 pr-4 py-2 text-xs rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none"
+            />
+          </div>
+
+          <div className="flex items-center gap-3 w-full md:w-auto">
+            <select
+              value={subBrandFilter}
+              onChange={(e) => setSubBrandFilter(e.target.value)}
+              className="px-3 py-2 text-xs font-semibold rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none cursor-pointer"
+            >
+              <option value="">All Sub-Brands</option>
+              <option value="SAT">SAT (Sky Auto)</option>
+              <option value="GZ">GZ (GadgetZu)</option>
+              <option value="RTX">RTX (RTX Gadget)</option>
+            </select>
+          </div>
         </div>
 
-        <select
-          value={subBrandFilter}
-          onChange={(e) => setSubBrandFilter(e.target.value)}
-          className="px-4 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-sm font-medium focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
-        >
-          <option value="">All Sub-Brands</option>
-          <option value="SAT">SAT (Sky Auto)</option>
-          <option value="GZ">GZ (GadgetZu)</option>
-          <option value="RTX">RTX (RTX Gadget)</option>
-        </select>
+        {/* Wide Desktop Data Table */}
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs">
+            <thead>
+              <tr className="border-b border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400 font-semibold">
+                <th className="pb-3 pl-2">Vendor Name</th>
+                <th className="pb-3">Company / Contact</th>
+                <th className="pb-3">Mobile Number</th>
+                <th className="pb-3">Sub-Brand</th>
+                {isSuperAdmin && <th className="pb-3 text-right">Total Purchases</th>}
+                {isSuperAdmin && <th className="pb-3 text-right">Balance Due</th>}
+                <th className="pb-3 text-center">Actions</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+              {loading ? (
+                <tr>
+                  <td colSpan={7} className="py-12 text-center text-slate-400">Loading supplier records...</td>
+                </tr>
+              ) : filteredSuppliers.length > 0 ? (
+                filteredSuppliers.map(supplier => (
+                  <tr 
+                    key={supplier.id}
+                    onClick={() => handleOpenDetail(supplier)}
+                    className="hover:bg-slate-50 dark:hover:bg-slate-800/40 cursor-pointer transition-colors"
+                  >
+                    <td className="py-3 pl-2 font-bold text-slate-900 dark:text-white">
+                      {supplier.name}
+                    </td>
+                    <td className="py-3 text-slate-700 dark:text-slate-300">
+                      {supplier.companyName || supplier.contactPerson || 'N/A'}
+                    </td>
+                    <td className="py-3 font-mono text-slate-600 dark:text-slate-400">
+                      {supplier.phone}
+                    </td>
+                    <td className="py-3">
+                      <span className="px-2 py-0.5 font-bold rounded text-[10px] bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
+                        {supplier.subBrand || 'ALL'}
+                      </span>
+                    </td>
+                    {isSuperAdmin && (
+                      <td className="py-3 text-right font-bold text-slate-900 dark:text-white font-mono tabular-nums">
+                        ৳ {(supplier.totalPurchases || 0).toLocaleString('en-BD')}
+                      </td>
+                    )}
+                    {isSuperAdmin && (
+                      <td className={`py-3 text-right font-black font-mono tabular-nums ${(supplier.outstandingDue || 0) > 0 ? 'text-rose-600 dark:text-rose-400' : 'text-emerald-600 dark:text-emerald-400'}`}>
+                        ৳ {(supplier.outstandingDue || 0).toLocaleString('en-BD')}
+                      </td>
+                    )}
+                    <td className="py-3 text-center">
+                      <div className="flex items-center justify-center gap-2" onClick={(e) => e.stopPropagation()}>
+                        <button
+                          onClick={(e) => handleOpenEditModal(supplier, e)}
+                          className="p-1 text-slate-400 hover:text-gold-500 cursor-pointer"
+                        >
+                          <Edit3 size={15} />
+                        </button>
+                        <button
+                          onClick={(e) => handleDeleteSupplier(supplier.id, supplier.name, e)}
+                          className="p-1 text-slate-400 hover:text-rose-500 cursor-pointer"
+                        >
+                          <Trash2 size={15} />
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))
+              ) : (
+                <tr>
+                  <td colSpan={7} className="py-12 text-center text-slate-400 italic">No suppliers found</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
       </div>
 
-      {/* Supplier List */}
-      {loading ? (
-        <div className="bg-white p-12 rounded-2xl border border-slate-200/80 text-center">
-          <div className="w-8 h-8 border-4 border-amber-500 border-t-transparent rounded-full animate-spin mx-auto mb-3"></div>
-          <p className="text-sm font-medium text-slate-500">Loading supplier directory...</p>
-        </div>
-      ) : filteredSuppliers.length === 0 ? (
-        <div className="bg-white p-12 rounded-2xl border border-slate-200/80 text-center">
-          <Truck size={40} className="mx-auto text-slate-300 mb-3" />
-          <h3 className="text-base font-bold text-slate-800">No suppliers found</h3>
-          <p className="text-sm text-slate-500 mt-1 max-w-sm mx-auto">
-            {searchQuery || subBrandFilter ? 'Try adjusting your search criteria or filter.' : 'Click "Add New Supplier" above to create your first vendor record.'}
-          </p>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-          {filteredSuppliers.map((supplier) => (
-            <div
-              key={supplier.id}
-              onClick={() => handleOpenDetail(supplier)}
-              className="bg-white p-5 rounded-2xl border border-slate-200/80 hover:border-amber-400/80 transition-all cursor-pointer shadow-xs hover:shadow-md group flex flex-col justify-between"
-            >
-              <div>
-                <div className="flex items-start justify-between gap-2 mb-3">
-                  <div>
-                    <h3 className="text-base font-bold text-slate-900 group-hover:text-amber-600 transition-colors">
-                      {supplier.name}
-                    </h3>
-                    {supplier.subBrand && (
-                      <span className="inline-block mt-1 text-[10px] font-mono font-bold px-2 py-0.5 rounded bg-slate-100 text-slate-700 border border-slate-200">
-                        {supplier.subBrand === 'ALL' ? 'All Sub-Brands' : supplier.subBrand}
-                      </span>
-                    )}
-                  </div>
-                  {hasManagePermission && (
-                    <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <button
-                        onClick={(e) => handleOpenEditModal(supplier, e)}
-                        title="Edit Supplier"
-                        className="p-1.5 text-slate-400 hover:text-amber-600 hover:bg-amber-50 rounded-lg transition-colors"
-                      >
-                        <Edit3 size={16} />
-                      </button>
-                      <button
-                        onClick={(e) => handleDeleteSupplier(supplier.id, supplier.name, e)}
-                        title="Delete Supplier"
-                        className="p-1.5 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-lg transition-colors"
-                      >
-                        <Trash2 size={16} />
-                      </button>
-                    </div>
-                  )}
+      {/* Supplier Detail Slide-Over Drawer */}
+      {selectedSupplier && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex justify-end">
+          <div className="bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-800 w-full max-w-xl h-full p-6 overflow-y-auto shadow-2xl flex flex-col justify-between">
+            <div>
+              <div className="flex items-center justify-between pb-4 border-b border-slate-100 dark:border-slate-800">
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 dark:text-white">{selectedSupplier.name}</h3>
+                  <p className="text-xs text-slate-400 font-mono mt-0.5">{selectedSupplier.phone} | {selectedSupplier.subBrand || 'ALL'}</p>
                 </div>
-
-                <div className="space-y-1.5 text-xs text-slate-600 mb-4">
-                  <div className="flex items-center gap-2">
-                    <Phone size={14} className="text-slate-400" />
-                    <span className="font-mono">{supplier.phone}</span>
-                  </div>
-                  {supplier.address && (
-                    <div className="flex items-center gap-2">
-                      <MapPin size={14} className="text-slate-400 shrink-0" />
-                      <span className="truncate">{supplier.address}</span>
-                    </div>
-                  )}
-                </div>
+                <button onClick={() => setSelectedSupplier(null)} className="text-slate-400 hover:text-slate-600">
+                  <X size={18} />
+                </button>
               </div>
 
-              {isSuperAdmin ? (
-                <div className="pt-3 border-t border-slate-100 grid grid-cols-2 gap-2 text-xs">
+              {/* Financial Balance Summary */}
+              {isSuperAdmin && (
+                <div className="mt-4 grid grid-cols-3 gap-3 p-3 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/60 dark:border-slate-700 text-center text-xs">
                   <div>
-                    <div className="text-[10px] uppercase font-bold text-slate-400">Total Purchases</div>
-                    <div className="font-bold text-slate-800">৳{(supplier.totalPurchases || 0).toLocaleString('en-BD')}</div>
+                    <span className="text-slate-400 block text-[10px]">Purchased</span>
+                    <span className="font-bold text-slate-900 dark:text-white font-mono">৳{(selectedSupplier.totalPurchases || 0).toLocaleString()}</span>
                   </div>
                   <div>
-                    <div className="text-[10px] uppercase font-bold text-slate-400">Balance Due</div>
-                    <div className={`font-bold ${(supplier.outstandingDue || 0) > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
-                      ৳{(supplier.outstandingDue || 0).toLocaleString('en-BD')}
-                    </div>
+                    <span className="text-slate-400 block text-[10px]">Total Paid</span>
+                    <span className="font-bold text-emerald-600 dark:text-emerald-400 font-mono">৳{(selectedSupplier.totalPaid || 0).toLocaleString()}</span>
                   </div>
-                </div>
-              ) : (
-                <div className="pt-3 border-t border-slate-100 text-[11px] text-slate-400 italic">
-                  Financial figures (Super Admin only)
+                  <div>
+                    <span className="text-slate-400 block text-[10px]">Balance Due</span>
+                    <span className="font-black text-rose-600 dark:text-rose-400 font-mono">৳{(selectedSupplier.outstandingDue || 0).toLocaleString()}</span>
+                  </div>
                 </div>
               )}
-            </div>
-          ))}
-        </div>
-      )}
 
-      {/* Supplier Detail Drawer / Modal */}
-      {selectedSupplier && (
-        <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-end backdrop-blur-xs">
-          <div className="bg-white w-full max-w-2xl h-full shadow-2xl flex flex-col animate-in slide-in-from-right duration-200">
-            {/* Header */}
-            <div className="p-6 border-b border-slate-200 flex items-center justify-between bg-slate-900 text-white">
-              <div>
-                <div className="flex items-center gap-2">
-                  <Truck size={20} className="text-amber-400" />
-                  <h2 className="text-xl font-black">{selectedSupplier.name}</h2>
-                </div>
-                <p className="text-xs text-slate-400 mt-1 font-mono">
-                  Phone: {selectedSupplier.phone} {selectedSupplier.subBrand ? `| ${selectedSupplier.subBrand}` : ''}
-                </p>
-              </div>
-
-              <button
-                onClick={() => setSelectedSupplier(null)}
-                className="p-2 text-slate-400 hover:text-white rounded-xl hover:bg-slate-800 transition-colors cursor-pointer"
-              >
-                <X size={20} />
-              </button>
-            </div>
-
-            {/* Content Body */}
-            <div className="flex-1 overflow-y-auto p-6 space-y-6">
-              {/* Financial Balance Overview */}
-              <div className="bg-slate-50 p-5 rounded-2xl border border-slate-200 space-y-4">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-sm font-bold text-slate-800">Running Balance & Due Status</h3>
-                  {isSuperAdmin && hasManagePermission && (
-                    <button
-                      onClick={handleOpenPaymentModal}
-                      className="flex items-center gap-1.5 px-3.5 py-1.5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold text-xs rounded-xl cursor-pointer shadow-xs transition-colors"
-                    >
-                      <CreditCard size={14} />
-                      <span>Record Payment</span>
-                    </button>
-                  )}
-                </div>
-
-                {isSuperAdmin ? (
-                  <div className="grid grid-cols-3 gap-3">
-                    <div className="bg-white p-3 rounded-xl border border-slate-200 text-center">
-                      <div className="text-[10px] uppercase font-bold text-slate-400">Total Purchased</div>
-                      <div className="text-base font-black text-slate-900 mt-0.5">৳{(selectedSupplier.totalPurchases || 0).toLocaleString('en-BD')}</div>
-                    </div>
-
-                    <div className="bg-white p-3 rounded-xl border border-slate-200 text-center">
-                      <div className="text-[10px] uppercase font-bold text-slate-400">Total Paid</div>
-                      <div className="text-base font-black text-emerald-600 mt-0.5">৳{(selectedSupplier.totalPaid || 0).toLocaleString('en-BD')}</div>
-                    </div>
-
-                    <div className="bg-white p-3 rounded-xl border border-slate-200 text-center">
-                      <div className="text-[10px] uppercase font-bold text-slate-400">Outstanding Due</div>
-                      <div className={`text-base font-black mt-0.5 ${(selectedSupplier.outstandingDue || 0) > 0 ? 'text-rose-600' : 'text-emerald-600'}`}>
-                        ৳{(selectedSupplier.outstandingDue || 0).toLocaleString('en-BD')}
-                      </div>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="bg-white p-4 rounded-xl border border-slate-200 text-xs text-slate-500 italic">
-                    Running balances, payment records, and financial amounts are restricted to Super Admin only.
-                  </div>
-                )}
-
-                {selectedSupplier.notes && (
-                  <div className="text-xs text-slate-600 bg-white p-3 rounded-xl border border-slate-200">
-                    <span className="font-bold text-slate-700">Vendor Notes:</span> {selectedSupplier.notes}
-                  </div>
-                )}
-              </div>
+              {/* Action Button */}
+              {isSuperAdmin && hasManagePermission && (
+                <button
+                  onClick={handleOpenPaymentModal}
+                  className="w-full mt-4 py-2 bg-gold-400 hover:bg-gold-500 text-slate-950 font-bold text-xs rounded-xl shadow-xs transition-colors cursor-pointer"
+                >
+                  + Record Supplier Payment
+                </button>
+              )}
 
               {/* Detail Tabs */}
-              <div className="border-b border-slate-200 flex gap-4">
+              <div className="mt-6 flex border-b border-slate-200 dark:border-slate-800 gap-4 text-xs">
                 <button
                   onClick={() => setDetailTab('purchases')}
-                  className={`pb-3 text-sm font-bold border-b-2 transition-colors cursor-pointer ${
-                    detailTab === 'purchases' ? 'border-amber-500 text-amber-600' : 'border-transparent text-slate-500 hover:text-slate-800'
+                  className={`pb-2 font-bold border-b-2 transition-colors cursor-pointer ${
+                    detailTab === 'purchases' ? 'border-gold-500 text-gold-600 dark:text-gold-400' : 'border-transparent text-slate-500'
                   }`}
                 >
-                  Purchase & Stock In History ({supplierStockLogs.length})
+                  Stock In History ({supplierStockLogs.length})
                 </button>
                 <button
                   onClick={() => setDetailTab('payments')}
-                  className={`pb-3 text-sm font-bold border-b-2 transition-colors cursor-pointer ${
-                    detailTab === 'payments' ? 'border-amber-500 text-amber-600' : 'border-transparent text-slate-500 hover:text-slate-800'
+                  className={`pb-2 font-bold border-b-2 transition-colors cursor-pointer ${
+                    detailTab === 'payments' ? 'border-gold-500 text-gold-600 dark:text-gold-400' : 'border-transparent text-slate-500'
                   }`}
                 >
-                  Payment Records ({supplierPayments.length})
+                  Payments ({supplierPayments.length})
                 </button>
               </div>
 
-              {/* Tab Contents */}
-              {loadingDetail ? (
-                <div className="text-center py-8">
-                  <div className="w-6 h-6 border-3 border-amber-500 border-t-transparent rounded-full animate-spin mx-auto mb-2"></div>
-                  <p className="text-xs text-slate-500">Loading records...</p>
-                </div>
-              ) : detailTab === 'purchases' ? (
-                supplierStockLogs.length === 0 ? (
-                  <div className="text-center py-8 text-xs text-slate-400">
-                    No stock-in or purchase logs found for this supplier yet.
-                  </div>
-                ) : (
-                  <div className="space-y-2">
-                    {supplierStockLogs.map((log) => (
-                      <div key={log.id} className="bg-white p-3.5 rounded-xl border border-slate-200 text-xs flex justify-between items-center">
-                        <div>
-                          <div className="font-bold text-slate-900">{log.productName}</div>
-                          <div className="text-slate-500 mt-0.5 font-mono">
-                            {new Date(log.timestamp).toLocaleDateString()} | Qty: +{log.qty} | Reason: {log.reason}
-                          </div>
-                        </div>
-                        {log.purchasePrice && (
-                          <div className="text-right font-bold text-slate-900">
-                            ৳{(log.purchasePrice * log.qty).toLocaleString('en-BD')}
-                          </div>
-                        )}
+              {/* Tab Data */}
+              <div className="mt-4 space-y-2 text-xs">
+                {detailTab === 'purchases' ? (
+                  supplierStockLogs.map(log => (
+                    <div key={log.id} className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/50 dark:border-slate-800 flex justify-between">
+                      <div>
+                        <div className="font-bold text-slate-900 dark:text-white">{log.productName}</div>
+                        <div className="text-[10px] text-slate-400 mt-0.5">{new Date(log.timestamp).toLocaleDateString()} | Qty: +{log.qty}</div>
                       </div>
-                    ))}
-                  </div>
-                )
-              ) : (
-                supplierPayments.length === 0 ? (
-                  <div className="text-center py-8 text-xs text-slate-400">
-                    No payment logs recorded for this supplier yet.
-                  </div>
+                      {log.purchasePrice && (
+                        <div className="font-mono font-bold text-slate-900 dark:text-white">
+                          ৳{(log.purchasePrice * log.qty).toLocaleString()}
+                        </div>
+                      )}
+                    </div>
+                  ))
                 ) : (
-                  <div className="space-y-2">
-                    {supplierPayments.map((pmt) => (
-                      <div key={pmt.id} className="bg-white p-3.5 rounded-xl border border-slate-200 text-xs flex justify-between items-center">
-                        <div>
-                          <div className="font-bold text-slate-900">
-                            ৳{pmt.amount.toLocaleString('en-BD')} via <span className="text-amber-600">{pmt.paymentMethod}</span>
-                          </div>
-                          <div className="text-slate-500 mt-0.5 font-mono">
-                            Date: {pmt.date} {pmt.referenceNo ? `| Ref: ${pmt.referenceNo}` : ''} | By: {pmt.recordedBy}
-                          </div>
-                          {pmt.notes && <div className="text-slate-600 italic mt-1">{pmt.notes}</div>}
-                        </div>
-                        <div className="text-emerald-600 font-bold bg-emerald-50 px-2 py-1 rounded border border-emerald-200 text-[11px]">
-                          Paid
-                        </div>
+                  supplierPayments.map(pmt => (
+                    <div key={pmt.id} className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/50 dark:border-slate-800 flex justify-between">
+                      <div>
+                        <div className="font-bold text-slate-900 dark:text-white">৳{pmt.amount.toLocaleString()} ({pmt.paymentMethod})</div>
+                        <div className="text-[10px] text-slate-400 mt-0.5">{pmt.date} | By: {pmt.recordedBy}</div>
                       </div>
-                    ))}
-                  </div>
-                )
-              )}
+                      <span className="text-emerald-600 font-bold text-[10px]">Paid</span>
+                    </div>
+                  ))
+                )}
+              </div>
+
             </div>
           </div>
         </div>
@@ -693,317 +612,96 @@ export default function SupplierManagement({ user, rolePermissions }: SupplierMa
 
       {/* Add / Edit Supplier Modal */}
       {isAddModalOpen && (
-        <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4 backdrop-blur-xs overflow-y-auto">
-          <div className="bg-white rounded-2xl max-w-2xl w-full p-6 shadow-2xl space-y-5 my-8 max-h-[90vh] overflow-y-auto animate-in fade-in zoom-in-95 duration-150">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-4 sticky top-0 bg-white z-10">
-              <div>
-                <h3 className="text-lg font-black text-slate-900">
-                  {editingSupplier ? 'Edit Supplier Details' : 'Add New Vendor / Supplier'}
-                </h3>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  {editingSupplier ? `Supplier Code: ${editingSupplier.supplierCode || 'SUP-XXXX'}` : 'Supplier Code: Auto-generated (e.g. SUP-0001)'}
-                </p>
-              </div>
-              <button
-                onClick={() => setIsAddModalOpen(false)}
-                className="p-1 text-slate-400 hover:text-slate-700 rounded-lg cursor-pointer"
-              >
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-4 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
+              <h3 className="text-base font-bold text-slate-900 dark:text-white">
+                {editingSupplier ? 'Edit Supplier Record' : 'Register New Vendor / Supplier'}
+              </h3>
+              <button onClick={() => setIsAddModalOpen(false)} className="text-slate-400 hover:text-slate-600">
                 <X size={18} />
               </button>
             </div>
 
             {formError && (
-              <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 rounded-xl text-xs font-semibold flex items-center gap-2">
-                <AlertCircle size={16} />
-                <span>{formError}</span>
+              <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-600 dark:text-rose-400 text-xs font-semibold">
+                {formError}
               </div>
             )}
 
-            <form onSubmit={handleSubmitSupplier} className="space-y-4 text-xs">
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block font-bold text-slate-700 mb-1">Supplier Name *</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="e.g. Anker Global Distribution"
-                    value={formData.name}
-                    onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="block font-bold text-slate-700 mb-1">Company Name (Optional)</label>
-                  <input
-                    type="text"
-                    placeholder="e.g. Anker Innovations Ltd."
-                    value={formData.companyName}
-                    onChange={(e) => setFormData({ ...formData, companyName: e.target.value })}
-                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block font-bold text-slate-700 mb-1">Mobile Number * (BD Format)</label>
-                  <input
-                    type="text"
-                    required
-                    placeholder="e.g. 01700000000"
-                    value={formData.phone}
-                    onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
-                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 font-mono"
-                  />
-                </div>
-
-                <div>
-                  <label className="block font-bold text-slate-700 mb-1">Contact Person (Optional)</label>
-                  <input
-                    type="text"
-                    placeholder="e.g. Mr. Rahim"
-                    value={formData.contactPerson}
-                    onChange={(e) => setFormData({ ...formData, contactPerson: e.target.value })}
-                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block font-bold text-slate-700 mb-1">Email Address (Optional)</label>
-                  <input
-                    type="email"
-                    placeholder="e.g. supplier@domain.com"
-                    value={formData.email}
-                    onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
-                  />
-                </div>
-
-                <div>
-                  <label className="block font-bold text-slate-700 mb-1">Supplier Type</label>
-                  <select
-                    value={formData.supplierType}
-                    onChange={(e) => setFormData({ ...formData, supplierType: e.target.value })}
-                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
-                  >
-                    <option value="Manufacturer">Manufacturer</option>
-                    <option value="Distributor">Distributor</option>
-                    <option value="Wholesaler">Wholesaler</option>
-                    <option value="Local Market">Local Market</option>
-                    <option value="Importer">Importer</option>
-                    <option value="Other">Other</option>
-                  </select>
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block font-bold text-slate-700 mb-1">Product Category</label>
-                  <select
-                    value={formData.productCategory}
-                    onChange={(e) => setFormData({ ...formData, productCategory: e.target.value })}
-                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
-                  >
-                    <option value="Mobile Accessories">Mobile Accessories</option>
-                    <option value="Audio">Audio</option>
-                    <option value="Power & Charging">Power & Charging</option>
-                    <option value="Smart Gadgets">Smart Gadgets</option>
-                    <option value="Cables & Adapters">Cables & Adapters</option>
-                    <option value="General">General</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block font-bold text-slate-700 mb-1">Payment Method</label>
-                  <select
-                    value={formData.paymentMethod}
-                    onChange={(e) => setFormData({ ...formData, paymentMethod: e.target.value })}
-                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
-                  >
-                    <option value="Cash">Cash</option>
-                    <option value="bKash">bKash</option>
-                    <option value="Nagad">Nagad</option>
-                    <option value="Bank Transfer">Bank Transfer</option>
-                    <option value="Multiple">Multiple</option>
-                  </select>
-                </div>
-              </div>
-
+            <form onSubmit={handleSubmitSupplier} className="space-y-3 text-xs">
               <div>
-                <label className="block font-bold text-slate-700 mb-1">Warehouse / Shop Address</label>
+                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">Supplier / Vendor Name *</label>
                 <input
                   type="text"
-                  placeholder="e.g. Shop 12, Level 4, Multiplan Center, Dhaka"
-                  value={formData.address}
-                  onChange={(e) => setFormData({ ...formData, address: e.target.value })}
-                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
+                  value={formData.name}
+                  onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                  className="w-full px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none"
+                  required
                 />
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-                <div>
-                  <label className="block font-bold text-slate-700 mb-1">Opening Due / Balance (৳)</label>
-                  <input
-                    type="number"
-                    step="any"
-                    placeholder="0"
-                    value={formData.openingBalance}
-                    onChange={(e) => setFormData({ ...formData, openingBalance: e.target.value })}
-                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 font-mono font-bold"
-                  />
-                </div>
-
-                <div>
-                  <label className="block font-bold text-slate-700 mb-1">Credit Limit (৳)</label>
-                  <input
-                    type="number"
-                    step="any"
-                    placeholder="e.g. 100000"
-                    value={formData.creditLimit}
-                    onChange={(e) => setFormData({ ...formData, creditLimit: e.target.value })}
-                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 font-mono"
-                  />
-                </div>
-
-                <div>
-                  <label className="block font-bold text-slate-700 mb-1">Credit Days (Terms)</label>
-                  <input
-                    type="number"
-                    placeholder="30"
-                    value={formData.creditDays}
-                    onChange={(e) => setFormData({ ...formData, creditDays: e.target.value })}
-                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 font-mono"
-                  />
-                </div>
-              </div>
-
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div>
-                  <label className="block font-bold text-slate-700 mb-1">Sub-Brand Association</label>
-                  <select
-                    value={formData.subBrand}
-                    onChange={(e) => setFormData({ ...formData, subBrand: e.target.value as any })}
-                    className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
-                  >
-                    <option value="SAT">Sky Automation Tech (SAT)</option>
-                  </select>
-                </div>
-
-                <div>
-                  <label className="block font-bold text-slate-700 mb-1">Supplier Status</label>
-                  <div className="flex items-center gap-4 mt-2">
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="radio"
-                        name="supplier-status"
-                        checked={formData.status === 'active'}
-                        onChange={() => setFormData({ ...formData, status: 'active' })}
-                        className="text-amber-500 focus:ring-amber-500"
-                      />
-                      <span className="font-bold text-emerald-700">Active</span>
-                    </label>
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="radio"
-                        name="supplier-status"
-                        checked={formData.status === 'inactive'}
-                        onChange={() => setFormData({ ...formData, status: 'inactive' })}
-                        className="text-amber-500 focus:ring-amber-500"
-                      />
-                      <span className="font-bold text-slate-500">Inactive</span>
-                    </label>
-                  </div>
-                </div>
-              </div>
-
-              {/* Collapsible Bank Info */}
-              <div className="border border-slate-200 rounded-xl p-3 bg-slate-50/50">
-                <button
-                  type="button"
-                  onClick={() => setFormData({ ...formData, showBankInfo: !formData.showBankInfo })}
-                  className="flex items-center justify-between w-full font-bold text-slate-800 text-xs cursor-pointer"
-                >
-                  <span className="flex items-center gap-2">
-                    <CreditCard size={14} className="text-amber-600" />
-                    <span>Bank Information (Optional)</span>
-                  </span>
-                  <span className="text-slate-400">{formData.showBankInfo ? '▲ Hide' : '▼ Add Bank Details'}</span>
-                </button>
-
-                {formData.showBankInfo && (
-                  <div className="mt-3 space-y-3 pt-3 border-t border-slate-200 grid grid-cols-1 md:grid-cols-2 gap-3">
-                    <div>
-                      <label className="block font-bold text-slate-600 mb-1">Bank Name</label>
-                      <input
-                        type="text"
-                        placeholder="e.g. BRAC Bank / EBL"
-                        value={formData.bankName}
-                        onChange={(e) => setFormData({ ...formData, bankName: e.target.value })}
-                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs"
-                      />
-                    </div>
-                    <div>
-                      <label className="block font-bold text-slate-600 mb-1">Account Number</label>
-                      <input
-                        type="text"
-                        placeholder="e.g. 1501234567890"
-                        value={formData.accountNumber}
-                        onChange={(e) => setFormData({ ...formData, accountNumber: e.target.value })}
-                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs font-mono"
-                      />
-                    </div>
-                    <div>
-                      <label className="block font-bold text-slate-600 mb-1">Account Holder Name</label>
-                      <input
-                        type="text"
-                        placeholder="e.g. M/S Supplier Traders"
-                        value={formData.accountName}
-                        onChange={(e) => setFormData({ ...formData, accountName: e.target.value })}
-                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs"
-                      />
-                    </div>
-                    <div>
-                      <label className="block font-bold text-slate-600 mb-1">Branch Name</label>
-                      <input
-                        type="text"
-                        placeholder="e.g. Gulshan Branch"
-                        value={formData.branch}
-                        onChange={(e) => setFormData({ ...formData, branch: e.target.value })}
-                        className="w-full px-3 py-2 bg-white border border-slate-200 rounded-lg text-xs"
-                      />
-                    </div>
-                  </div>
-                )}
               </div>
 
               <div>
-                <label className="block font-bold text-slate-700 mb-1">Vendor Notes / Special Terms</label>
-                <textarea
-                  rows={2}
-                  placeholder="e.g. Credit period 30 days, minimum order quantity 50 pcs..."
-                  value={formData.notes}
-                  onChange={(e) => setFormData({ ...formData, notes: e.target.value })}
-                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
+                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">Mobile Phone Number *</label>
+                <input
+                  type="text"
+                  placeholder="01XXXXXXXXX"
+                  value={formData.phone}
+                  onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
+                  className="w-full px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none"
+                  required
                 />
               </div>
 
-              <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">Company / Store</label>
+                  <input
+                    type="text"
+                    value={formData.companyName}
+                    onChange={(e) => setFormData({ ...formData, companyName: e.target.value })}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none"
+                  />
+                </div>
+                <div>
+                  <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">Sub-Brand Access</label>
+                  <select
+                    value={formData.subBrand}
+                    onChange={(e: any) => setFormData({ ...formData, subBrand: e.target.value })}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none cursor-pointer"
+                  >
+                    <option value="">ALL Sub-Brands</option>
+                    <option value="SAT">Sky Auto (SAT)</option>
+                    <option value="GZ">GadgetZu (GZ)</option>
+                    <option value="RTX">RTX Gadget (RTX)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div>
+                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">Address</label>
+                <input
+                  type="text"
+                  value={formData.address}
+                  onChange={(e) => setFormData({ ...formData, address: e.target.value })}
+                  className="w-full px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none"
+                />
+              </div>
+
+              <div className="pt-3 flex justify-end gap-2">
                 <button
                   type="button"
                   onClick={() => setIsAddModalOpen(false)}
-                  className="px-4 py-2 border border-slate-200 text-slate-600 font-bold rounded-xl hover:bg-slate-50 cursor-pointer"
+                  className="px-4 py-2 rounded-xl font-bold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={submitting}
-                  className="px-5 py-2 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold rounded-xl cursor-pointer disabled:opacity-50"
+                  className="px-4 py-2 rounded-xl font-bold bg-gold-400 hover:bg-gold-500 text-slate-950"
                 >
-                  {submitting ? 'Saving...' : editingSupplier ? 'Update Supplier' : 'Save Supplier'}
+                  {submitting ? 'Saving...' : 'Save Vendor'}
                 </button>
               </div>
             </form>
@@ -1011,102 +709,62 @@ export default function SupplierManagement({ user, rolePermissions }: SupplierMa
         </div>
       )}
 
-      {/* Record Payment to Supplier Modal */}
+      {/* Record Payment Modal */}
       {isPaymentModalOpen && selectedSupplier && (
-        <div className="fixed inset-0 bg-slate-900/60 z-50 flex items-center justify-center p-4 backdrop-blur-xs">
-          <div className="bg-white rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-5 animate-in fade-in zoom-in-95 duration-150">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-4">
-              <div>
-                <h3 className="text-lg font-black text-slate-900">Record Payment to Supplier</h3>
-                <p className="text-xs text-slate-500 mt-0.5">{selectedSupplier.name}</p>
-              </div>
-              <button
-                onClick={() => setIsPaymentModalOpen(false)}
-                className="p-1 text-slate-400 hover:text-slate-700 rounded-lg"
-              >
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-md w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
+              <h3 className="text-base font-bold text-slate-900 dark:text-white">Record Vendor Payment</h3>
+              <button onClick={() => setIsPaymentModalOpen(false)} className="text-slate-400 hover:text-slate-600">
                 <X size={18} />
               </button>
             </div>
 
             {formError && (
-              <div className="p-3 bg-rose-50 border border-rose-200 text-rose-700 rounded-xl text-xs font-semibold flex items-center gap-2">
-                <AlertCircle size={16} />
-                <span>{formError}</span>
+              <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/20 text-rose-600 dark:text-rose-400 text-xs font-semibold">
+                {formError}
               </div>
             )}
 
-            <form onSubmit={handleSubmitPayment} className="space-y-4 text-xs">
+            <form onSubmit={handleSubmitPayment} className="space-y-3 text-xs">
               <div>
-                <label className="block font-bold text-slate-700 mb-1">Payment Amount (৳) *</label>
+                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">Payment Amount (BDT) *</label>
                 <input
                   type="number"
-                  step="any"
-                  required
-                  placeholder="e.g. 5000"
+                  placeholder="0.00"
                   value={paymentData.amount}
                   onChange={(e) => setPaymentData({ ...paymentData, amount: e.target.value })}
-                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 font-mono font-bold text-base"
+                  className="w-full px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none"
+                  required
                 />
               </div>
 
               <div>
-                <label className="block font-bold text-slate-700 mb-1">Payment Method</label>
+                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">Payment Method</label>
                 <select
                   value={paymentData.paymentMethod}
-                  onChange={(e) => setPaymentData({ ...paymentData, paymentMethod: e.target.value as any })}
-                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
+                  onChange={(e: any) => setPaymentData({ ...paymentData, paymentMethod: e.target.value })}
+                  className="w-full px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none cursor-pointer"
                 >
                   <option value="Cash">Cash</option>
                   <option value="bKash">bKash</option>
                   <option value="Nagad">Nagad</option>
-                  <option value="Bank Transfer">Bank Transfer</option>
+                  <option value="Bank">Bank Transfer</option>
                 </select>
               </div>
 
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">Payment Date</label>
-                <input
-                  type="date"
-                  value={paymentData.date}
-                  onChange={(e) => setPaymentData({ ...paymentData, date: e.target.value })}
-                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
-                />
-              </div>
-
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">Reference / Cheque / Txn No.</label>
-                <input
-                  type="text"
-                  placeholder="e.g. TRX-98124 / Cheque #00123"
-                  value={paymentData.referenceNo}
-                  onChange={(e) => setPaymentData({ ...paymentData, referenceNo: e.target.value })}
-                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500 font-mono"
-                />
-              </div>
-
-              <div>
-                <label className="block font-bold text-slate-700 mb-1">Payment Notes</label>
-                <textarea
-                  rows={2}
-                  placeholder="e.g. Partial payment for Invoice #882"
-                  value={paymentData.notes}
-                  onChange={(e) => setPaymentData({ ...paymentData, notes: e.target.value })}
-                  className="w-full px-3.5 py-2.5 bg-slate-50 border border-slate-200 rounded-xl text-xs focus:outline-none focus:ring-2 focus:ring-amber-500/20 focus:border-amber-500"
-                />
-              </div>
-
-              <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-100">
+              <div className="pt-3 flex justify-end gap-2">
                 <button
                   type="button"
                   onClick={() => setIsPaymentModalOpen(false)}
-                  className="px-4 py-2 border border-slate-200 text-slate-600 font-bold rounded-xl hover:bg-slate-50 cursor-pointer"
+                  className="px-4 py-2 rounded-xl font-bold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300"
                 >
                   Cancel
                 </button>
                 <button
                   type="submit"
                   disabled={submitting}
-                  className="px-5 py-2 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl cursor-pointer disabled:opacity-50"
+                  className="px-4 py-2 rounded-xl font-bold bg-gold-400 hover:bg-gold-500 text-slate-950"
                 >
                   {submitting ? 'Recording...' : 'Record Payment'}
                 </button>
@@ -1115,6 +773,7 @@ export default function SupplierManagement({ user, rolePermissions }: SupplierMa
           </div>
         </div>
       )}
+
     </div>
   );
 }

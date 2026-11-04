@@ -14,7 +14,11 @@ import {
   Clock, 
   UserCircle,
   Trash2,
-  AlertCircle
+  AlertCircle,
+  Filter,
+  CheckCircle2,
+  ChevronRight,
+  ShieldAlert
 } from 'lucide-react';
 import { Order, UserProfile } from '../types';
 import { getOrders, recordOrderPayment, deleteOrderPayment, subscribeToOrders } from '../firebase/db';
@@ -34,9 +38,9 @@ export default function DuePayments({ user, requireCheckIn }: DuePaymentsProps) 
   const [activeTab, setActiveTab] = useState<'still_due' | 'recently_settled'>('still_due');
   const [searchQuery, setSearchQuery] = useState('');
   const [subBrandFilter, setSubBrandFilter] = useState('');
-  const [paymentStatusFilter, setPaymentStatusFilter] = useState(''); // Due, Partial
+  const [paymentStatusFilter, setPaymentStatusFilter] = useState('');
 
-  // Modal / Interaction states
+  // Modal / Drawer Interaction states
   const [selectedOrderForPayment, setSelectedOrderForPayment] = useState<Order | null>(null);
   const [selectedOrderForDetails, setSelectedOrderForDetails] = useState<Order | null>(null);
   
@@ -72,9 +76,6 @@ export default function DuePayments({ user, requireCheckIn }: DuePaymentsProps) 
     setError('');
     try {
       const data = await getOrders();
-      // Filter orders that are relevant to this screen:
-      // 1. Still Due (amountDue > 0)
-      // 2. Recently Settled (amountDue === 0, but has payment history indicating it was paid off)
       const relevantOrders = (data || []).filter(o => 
         o.amountDue > 0 || (o.amountDue === 0 && o.paymentHistory && o.paymentHistory.length > 0)
       );
@@ -91,16 +92,6 @@ export default function DuePayments({ user, requireCheckIn }: DuePaymentsProps) 
     const diffTime = Date.now() - timestamp;
     const diffDays = Math.floor(diffTime / (1000 * 60 * 60 * 24));
     return diffDays >= 0 ? diffDays : 0;
-  };
-
-  const getOverdueBadgeClass = (days: number) => {
-    if (days >= 14) {
-      return 'bg-red-50 text-red-700 border border-red-200';
-    } else if (days >= 7) {
-      return 'bg-amber-50 text-amber-700 border border-amber-200';
-    } else {
-      return 'bg-slate-50 text-slate-600 border border-slate-200';
-    }
   };
 
   const handleRecordPaymentSubmit = async (e: React.FormEvent) => {
@@ -134,7 +125,6 @@ export default function DuePayments({ user, requireCheckIn }: DuePaymentsProps) 
       setSelectedOrderForPayment(null);
       setPaymentAmount('');
       
-      // Refresh list
       await fetchData();
     } catch (err: any) {
       console.error('Failed to record payment:', err);
@@ -200,544 +190,359 @@ export default function DuePayments({ user, requireCheckIn }: DuePaymentsProps) 
   const stillDueOrders = orders.filter(o => o.amountDue > 0);
   const totalReceivable = stillDueOrders.reduce((sum, o) => sum + o.amountDue, 0);
   const totalCollected = stillDueOrders.reduce((sum, o) => sum + o.amountPaid, 0);
-  const agingOver14DaysCount = stillDueOrders.filter(o => getDaysSinceOrder(o.createdAt) >= 14).length;
+
+  // Aging Buckets
+  const aging0to30 = stillDueOrders.filter(o => getDaysSinceOrder(o.createdAt) <= 30);
+  const aging30to60 = stillDueOrders.filter(o => getDaysSinceOrder(o.createdAt) > 30 && getDaysSinceOrder(o.createdAt) <= 60);
+  const aging60Plus = stillDueOrders.filter(o => getDaysSinceOrder(o.createdAt) > 60);
+
+  const due0to30Amt = aging0to30.reduce((s, o) => s + o.amountDue, 0);
+  const due30to60Amt = aging30to60.reduce((s, o) => s + o.amountDue, 0);
+  const due60PlusAmt = aging60Plus.reduce((s, o) => s + o.amountDue, 0);
 
   return (
-    <div className="space-y-6">
-      {/* Notifications */}
+    <div className="space-y-6 w-full max-w-[1920px] mx-auto pb-10">
+      
+      {/* Toast Notifications */}
       {error && (
-        <div className="flex items-center gap-3 bg-red-50 text-red-700 p-4 rounded-2xl border border-red-100 animate-fade-in text-sm font-semibold">
-          <AlertTriangle size={16} className="flex-shrink-0" />
+        <div className="flex items-center gap-3 bg-rose-500/10 text-rose-600 dark:text-rose-400 p-4 rounded-2xl border border-rose-500/20 text-xs font-semibold">
+          <AlertTriangle size={16} className="shrink-0" />
           <p className="flex-1">{error}</p>
           <button onClick={() => setError('')} className="hover:opacity-70"><X size={14} /></button>
         </div>
       )}
       {success && (
-        <div className="flex items-center gap-3 bg-emerald-50 text-emerald-700 p-4 rounded-2xl border border-emerald-100 animate-fade-in text-sm font-semibold">
-          <CheckCircle size={16} className="flex-shrink-0" />
+        <div className="flex items-center gap-3 bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 p-4 rounded-2xl border border-emerald-500/20 text-xs font-semibold">
+          <CheckCircle size={16} className="shrink-0" />
           <p className="flex-1">{success}</p>
           <button onClick={() => setSuccess('')} className="hover:opacity-70"><X size={14} /></button>
         </div>
       )}
 
-      {/* Header Info */}
-      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+      {/* Page Header */}
+      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm">
         <div>
-          <span className="text-sm font-mono font-bold text-amber-500 uppercase tracking-widest">Accounts Receivable</span>
-          <h1 className="text-2xl font-black text-slate-900 mt-1 flex items-center gap-2">
-            <Coins className="text-slate-900" size={24} />
-            Due Payments
+          <h1 className="text-xl font-bold text-slate-900 dark:text-white tracking-tight flex items-center gap-2">
+            <Coins size={22} className="text-gold-500" />
+            Due Payments & Accounts Receivable
           </h1>
-          <p className="text-sm text-slate-400 mt-1 leading-relaxed">
-            Monitor outstanding sales dues and partial customer balances. Record manual partial payments and track collection age.
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+            Track customer outstanding balances, record payment settlements, and analyze aging receivables.
           </p>
         </div>
-      </div>
 
-      {/* Bento Stats Grid */}
-      <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-        <div className="bg-white p-5 rounded-3xl border border-slate-100 shadow-xs flex items-center gap-4">
-          <div className="p-3 bg-amber-50 rounded-2xl text-[#D4AF37]">
-            <Coins size={22} />
-          </div>
-          <div>
-            <span className="text-sm uppercase font-bold text-slate-400 tracking-wider">Total Outstanding Due</span>
-            <h3 className="text-xl font-black text-slate-900 mt-0.5 font-mono">৳{totalReceivable.toLocaleString()}</h3>
-          </div>
-        </div>
-
-        <div className="bg-white p-5 rounded-3xl border border-slate-100 shadow-xs flex items-center gap-4">
-          <div className="p-3 bg-emerald-50 rounded-2xl text-emerald-600">
-            <TrendingUp size={22} />
-          </div>
-          <div>
-            <span className="text-sm uppercase font-bold text-slate-400 tracking-wider">Partially Collected</span>
-            <h3 className="text-xl font-black text-slate-900 mt-0.5 font-mono">৳{totalCollected.toLocaleString()}</h3>
-          </div>
-        </div>
-
-        <div className="bg-white p-5 rounded-3xl border border-slate-100 shadow-xs flex items-center gap-4">
-          <div className="p-3 bg-red-50 rounded-2xl text-red-600">
-            <Clock size={22} />
-          </div>
-          <div>
-            <span className="text-sm uppercase font-bold text-slate-400 tracking-wider">Aged Receivables (14d+)</span>
-            <h3 className="text-xl font-black text-slate-900 mt-0.5 font-mono">{agingOver14DaysCount} Orders</h3>
-          </div>
+        {/* Segmented Tab Bar */}
+        <div className="flex items-center gap-1 bg-slate-100 dark:bg-slate-800/80 p-1 rounded-xl border border-slate-200 dark:border-slate-700">
+          <button
+            onClick={() => setActiveTab('still_due')}
+            className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+              activeTab === 'still_due'
+                ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+            }`}
+          >
+            Still Due ({stillDueOrders.length})
+          </button>
+          <button
+            onClick={() => setActiveTab('recently_settled')}
+            className={`px-4 py-1.5 rounded-lg text-xs font-bold transition-all cursor-pointer ${
+              activeTab === 'recently_settled'
+                ? 'bg-white dark:bg-slate-900 text-slate-900 dark:text-white shadow-xs'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+            }`}
+          >
+            Recently Settled
+          </button>
         </div>
       </div>
 
-      {/* Advanced Filters */}
-      <div className="bg-white p-4 rounded-3xl shadow-sm border border-slate-100 space-y-3">
-        <div className="flex flex-col md:flex-row items-center gap-3">
-          {/* Search Box */}
-          <div className="w-full md:flex-1 relative">
-            <Search className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" size={16} />
-            <input 
+      {/* Aging Summary Cards Grid */}
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm">
+          <span className="text-xs font-medium text-slate-500 dark:text-slate-400">Total Outstanding Due</span>
+          <div className="text-2xl font-black text-slate-900 dark:text-white mt-1 tabular-nums font-mono">
+            ৳ {totalReceivable.toLocaleString()}
+          </div>
+          <div className="text-[11px] text-slate-400 mt-1">Across {stillDueOrders.length} active orders</div>
+        </div>
+
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm">
+          <span className="text-xs font-medium text-emerald-600 dark:text-emerald-400">0 - 30 Days Current</span>
+          <div className="text-2xl font-black text-slate-900 dark:text-white mt-1 tabular-nums font-mono">
+            ৳ {due0to30Amt.toLocaleString()}
+          </div>
+          <div className="text-[11px] text-slate-400 mt-1">{aging0to30.length} orders</div>
+        </div>
+
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm">
+          <span className="text-xs font-medium text-amber-600 dark:text-amber-400">30 - 60 Days Aging</span>
+          <div className="text-2xl font-black text-slate-900 dark:text-white mt-1 tabular-nums font-mono">
+            ৳ {due30to60Amt.toLocaleString()}
+          </div>
+          <div className="text-[11px] text-slate-400 mt-1">{aging30to60.length} orders</div>
+        </div>
+
+        <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm">
+          <span className="text-xs font-medium text-rose-600 dark:text-rose-400">60+ Days Critical</span>
+          <div className="text-2xl font-black text-slate-900 dark:text-white mt-1 tabular-nums font-mono">
+            ৳ {due60PlusAmt.toLocaleString()}
+          </div>
+          <div className="text-[11px] text-slate-400 mt-1">{aging60Plus.length} orders overdue</div>
+        </div>
+      </div>
+
+      {/* Filter & Table Container */}
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 shadow-sm min-h-[500px]">
+        
+        {/* Search & Filter Bar */}
+        <div className="flex flex-col md:flex-row items-center justify-between gap-4 mb-6">
+          <div className="relative w-full md:w-80">
+            <Search className="absolute left-3 top-1/2 -translate-y-1/2 text-slate-400" size={15} />
+            <input
               type="text"
-              placeholder="Search by customer name, phone, or order ID..."
+              placeholder="Search by customer, phone, order ID..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
-              className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-2.5 pl-10 pr-4 text-sm text-slate-800 placeholder-slate-400 focus:outline-hidden focus:border-amber-400"
+              className="w-full pl-9 pr-4 py-2 text-xs rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none"
             />
           </div>
 
-          {/* Sub brand filter */}
-          <div className="w-full md:w-56">
+          <div className="flex items-center gap-3 w-full md:w-auto">
             <select
               value={subBrandFilter}
               onChange={(e) => setSubBrandFilter(e.target.value)}
-              className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-2.5 px-3 text-sm text-slate-700 focus:outline-hidden focus:border-amber-400"
+              className="px-3 py-2 text-xs font-semibold rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none cursor-pointer"
             >
               <option value="">All Sub-Brands</option>
-              <option value="SAT">Sky Auto (SAT)</option>
-              <option value="GZ">GadgetZu (GZ)</option>
-              <option value="RTX">RTX Gadget (RTX)</option>
-            </select>
-          </div>
-
-          {/* Payment Status Filter */}
-          <div className="w-full md:w-56">
-            <select
-              value={paymentStatusFilter}
-              onChange={(e) => setPaymentStatusFilter(e.target.value)}
-              className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-2.5 px-3 text-sm text-slate-700 focus:outline-hidden focus:border-amber-400"
-            >
-              <option value="">All Outstanding States</option>
-              <option value="Due">Unpaid (Due)</option>
-              <option value="Partial">Partially Paid</option>
+              <option value="SAT">Sky Auto</option>
+              <option value="GZ">GadgetZu</option>
+              <option value="RTX">RTX Gadget</option>
             </select>
           </div>
         </div>
-      </div>
 
-      {/* Tabs */}
-      <div className="flex border-b border-slate-200">
-        <button
-          onClick={() => setActiveTab('still_due')}
-          className={`px-4 py-3 text-sm font-bold border-b-2 transition-colors ${
-            activeTab === 'still_due'
-              ? 'border-amber-400 text-slate-900'
-              : 'border-transparent text-slate-400 hover:text-slate-600'
-          }`}
-        >
-          Still Due
-          {orders.filter(o => o.amountDue > 0).length > 0 && (
-            <span className="ml-2 px-1.5 py-0.5 bg-rose-500 text-white text-[10px] font-black rounded-full">
-              {orders.filter(o => o.amountDue > 0).length}
-            </span>
-          )}
-        </button>
-        <button
-          onClick={() => setActiveTab('recently_settled')}
-          className={`px-4 py-3 text-sm font-bold border-b-2 transition-colors ${
-            activeTab === 'recently_settled'
-              ? 'border-emerald-500 text-slate-900'
-              : 'border-transparent text-slate-400 hover:text-slate-600'
-          }`}
-        >
-          Recently Settled
-        </button>
-      </div>
-
-      {/* Receivables Table */}
-      <div className="bg-white rounded-3xl shadow-sm border border-slate-100 overflow-hidden">
-        {loading && orders.length === 0 ? (
-          <div className="p-12 text-center text-sm text-slate-400 font-mono">
-            Scanning ledger books for unpaid receivables...
-          </div>
-        ) : filteredOrders.length === 0 ? (
-          <div className="p-12 text-center text-slate-400">
-            <CheckCircle size={32} className="mx-auto text-emerald-200 mb-2" />
-            <p className="text-sm font-semibold text-slate-500">Perfect sheet! No outstanding dues found.</p>
-          </div>
-        ) : (
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="bg-slate-50 border-b border-slate-100">
-                  <th className="py-4 px-6 text-sm font-bold text-slate-400 uppercase tracking-wider">Customer Contact</th>
-                  <th className="py-4 px-6 text-sm font-bold text-slate-400 uppercase tracking-wider">Sub-Brand</th>
-                  {activeTab === 'still_due' ? (
-                    <>
-                      <th className="py-4 px-6 text-sm font-bold text-slate-400 uppercase tracking-wider">Order Date</th>
-                      <th className="py-4 px-6 text-sm font-bold text-slate-400 uppercase tracking-wider">Aging</th>
-                      <th className="py-4 px-6 text-sm font-bold text-slate-400 uppercase tracking-wider">Invoice / Ref #</th>
-                      <th className="py-4 px-6 text-sm font-bold text-slate-400 uppercase tracking-wider">Total Amt</th>
-                      <th className="py-4 px-6 text-sm font-bold text-slate-400 uppercase tracking-wider">Paid So Far</th>
-                      <th className="py-4 px-6 text-sm font-bold text-slate-400 uppercase tracking-wider">Amount Due</th>
-                      <th className="py-4 px-6 text-right text-sm font-bold text-slate-400 uppercase tracking-wider">Record</th>
-                    </>
-                  ) : (
-                    <>
-                      <th className="py-4 px-6 text-sm font-bold text-slate-400 uppercase tracking-wider">Invoice / Ref #</th>
-                      <th className="py-4 px-6 text-sm font-bold text-slate-400 uppercase tracking-wider">Total Amt</th>
-                      <th className="py-4 px-6 text-sm font-bold text-slate-400 uppercase tracking-wider">Status</th>
-                      <th className="py-4 px-6 text-sm font-bold text-slate-400 uppercase tracking-wider text-right">Details</th>
-                    </>
-                  )}
+        {/* Wide Desktop Data Table */}
+        <div className="overflow-x-auto">
+          <table className="w-full text-left text-xs">
+            <thead>
+              <tr className="border-b border-slate-200 dark:border-slate-800 text-slate-500 dark:text-slate-400 font-semibold">
+                <th className="pb-3 pl-2">Order ID</th>
+                <th className="pb-3">Customer</th>
+                <th className="pb-3">Age (Days)</th>
+                <th className="pb-3 text-right">Total Order</th>
+                <th className="pb-3 text-right">Amount Paid</th>
+                <th className="pb-3 text-right">Amount Due</th>
+                <th className="pb-3 text-center">Action</th>
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+              {loading ? (
+                <tr>
+                  <td colSpan={7} className="py-12 text-center text-slate-400">Loading receivable registers...</td>
                 </tr>
-              </thead>
-              <tbody className="divide-y divide-slate-50 text-sm">
-                {filteredOrders.map((ord) => {
-                  const daysOld = getDaysSinceOrder(ord.createdAt);
-                  const lastPaymentDate = ord.paymentHistory && ord.paymentHistory.length > 0 
-                    ? ord.paymentHistory[ord.paymentHistory.length - 1].date 
-                    : ord.createdAt;
-
+              ) : filteredOrders.length > 0 ? (
+                filteredOrders.map(order => {
+                  const days = getDaysSinceOrder(order.createdAt);
                   return (
-                    <tr key={ord.id} className="hover:bg-slate-50/50 transition-colors">
-                      <td className="py-3.5 px-6 font-semibold text-slate-700">
-                        <div>{ord.customerName}</div>
-                        <div className="text-sm text-slate-400 font-mono">{ord.customerPhone}</div>
+                    <tr key={order.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors">
+                      <td className="py-3 pl-2 font-mono font-bold text-slate-900 dark:text-white">
+                        #{order.id.slice(-6).toUpperCase()}
                       </td>
-                      <td className="py-3.5 px-6">
-                        <span className={`inline-block text-[9px] font-mono uppercase px-2 py-0.5 rounded-full font-bold ${
-                          ord.subBrand === 'SAT' 
-                            ? 'bg-amber-100 text-amber-800' 
-                            : ord.subBrand === 'GZ' 
-                              ? 'bg-teal-100 text-teal-800' 
-                              : 'bg-orange-100 text-orange-800'
+                      <td className="py-3">
+                        <div className="font-bold text-slate-900 dark:text-white">{order.customerName}</div>
+                        <div className="text-[10px] text-slate-400">{order.customerPhone}</div>
+                      </td>
+                      <td className="py-3">
+                        <span className={`px-2 py-0.5 text-[10px] font-bold rounded-full ${
+                          days >= 60 ? 'bg-rose-500/10 text-rose-600 dark:text-rose-400' :
+                          days >= 30 ? 'bg-amber-500/10 text-amber-600 dark:text-amber-400' :
+                          'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400'
                         }`}>
-                          {ord.subBrand}
+                          {days} days
                         </span>
                       </td>
-                      
-                      {activeTab === 'still_due' ? (
-                        <>
-                          <td className="py-3.5 px-6 font-mono text-slate-400">
-                            {new Date(ord.createdAt).toLocaleDateString('en-GB')}
-                          </td>
-                          <td className="py-3.5 px-6">
-                            <span className={`inline-block text-sm font-mono font-bold px-2 py-1 rounded-lg ${getOverdueBadgeClass(daysOld)}`}>
-                              {daysOld === 0 ? 'Today' : `${daysOld} days`}
-                            </span>
-                          </td>
-                          <td className="py-3.5 px-6">
+                      <td className="py-3 text-right font-semibold text-slate-700 dark:text-slate-300 tabular-nums font-mono">
+                        ৳ {order.totalAmount.toLocaleString()}
+                      </td>
+                      <td className="py-3 text-right font-semibold text-emerald-600 dark:text-emerald-400 tabular-nums font-mono">
+                        ৳ {order.amountPaid.toLocaleString()}
+                      </td>
+                      <td className="py-3 text-right font-black text-rose-600 dark:text-rose-400 tabular-nums font-mono">
+                        ৳ {order.amountDue.toLocaleString()}
+                      </td>
+                      <td className="py-3 text-center">
+                        <div className="flex items-center justify-center gap-2">
+                          {order.amountDue > 0 && (
                             <button
-                              onClick={() => setSelectedOrderForDetails(ord)}
-                              className="font-mono text-sm text-[#D4AF37] hover:underline font-bold tracking-tight text-left cursor-pointer"
+                              onClick={() => setSelectedOrderForPayment(order)}
+                              className="px-3 py-1 bg-gold-400 hover:bg-gold-500 text-slate-950 text-xs font-bold rounded-lg cursor-pointer transition-colors"
                             >
-                              {ord.invoiceId ? 'Linked Invoice' : `Order #${ord.id.substring(0, 8).toUpperCase()}`}
+                              Settle Payment
                             </button>
-                          </td>
-                          <td className="py-3.5 px-6 font-mono font-bold text-slate-600">
-                            ৳{ord.totalAmount.toLocaleString()}
-                          </td>
-                          <td className="py-3.5 px-6 font-mono text-emerald-600 font-semibold">
-                            ৳{ord.amountPaid.toLocaleString()}
-                          </td>
-                          <td className="py-3.5 px-6 font-mono font-black text-red-600">
-                            ৳{ord.amountDue.toLocaleString()}
-                          </td>
-                          <td className="py-3.5 px-6 text-right">
-                            <div className="flex justify-end gap-1.5">
-                              <button
-                                onClick={() => setSelectedOrderForPayment(ord)}
-                                className="bg-slate-900 hover:bg-slate-800 text-[#D4AF37] hover:text-white text-sm font-bold py-1.5 px-3.5 rounded-xl transition-all cursor-pointer flex items-center gap-1"
-                              >
-                                <Plus size={11} />
-                                Record
-                              </button>
-                            </div>
-                          </td>
-                        </>
-                      ) : (
-                        <>
-                          <td className="py-3.5 px-6">
-                            <button
-                              onClick={() => setSelectedOrderForDetails(ord)}
-                              className="font-mono text-sm text-[#D4AF37] hover:underline font-bold tracking-tight text-left cursor-pointer"
-                            >
-                              {ord.invoiceId ? 'Linked Invoice' : `Order #${ord.id.substring(0, 8).toUpperCase()}`}
-                            </button>
-                          </td>
-                          <td className="py-3.5 px-6 font-mono font-bold text-slate-600">
-                            ৳{ord.totalAmount.toLocaleString()}
-                          </td>
-                          <td className="py-3.5 px-6">
-                            <div className="flex items-center gap-1.5">
-                              <CheckCircle size={14} className="text-emerald-500" />
-                              <span className="text-sm font-bold text-emerald-600">
-                                Settled on {new Date(lastPaymentDate).toLocaleDateString('en-GB')}
-                              </span>
-                            </div>
-                          </td>
-                          <td className="py-3.5 px-6 text-right">
-                             <button
-                                onClick={() => setSelectedOrderForDetails(ord)}
-                                className="text-sm font-bold text-slate-500 hover:text-slate-800 cursor-pointer underline"
-                              >
-                                View Log
-                              </button>
-                          </td>
-                        </>
-                      )}
+                          )}
+                          <button
+                            onClick={() => setSelectedOrderForDetails(order)}
+                            className="px-3 py-1 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 text-xs font-semibold rounded-lg hover:bg-slate-200 dark:hover:bg-slate-700 cursor-pointer"
+                          >
+                            Details
+                          </button>
+                        </div>
+                      </td>
                     </tr>
                   );
-                })}
-              </tbody>
-            </table>
-          </div>
-        )}
+                })
+              ) : (
+                <tr>
+                  <td colSpan={7} className="py-12 text-center text-slate-400 italic">No matching due payment records found</td>
+                </tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+
       </div>
 
-      {/* Record Payment Dialog Modal */}
+      {/* Record Payment Slide-Over Right Drawer */}
       {selectedOrderForPayment && (
-        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl w-full max-w-md p-6 shadow-2xl border border-slate-100 space-y-4">
-            <div className="flex justify-between items-center pb-3 border-b border-slate-100">
-              <h3 className="text-sm font-bold text-slate-900 uppercase tracking-tight flex items-center gap-1.5">
-                <Coins size={16} className="text-[#D4AF37]" />
-                Record Cash Collection
-              </h3>
-              <button 
-                onClick={() => {
-                  setSelectedOrderForPayment(null);
-                  setPaymentAmount('');
-                }} 
-                className="text-slate-400 hover:text-slate-600 cursor-pointer"
-              >
-                <X size={16} />
-              </button>
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex justify-end">
+          <div className="bg-white dark:bg-slate-900 border-l border-slate-200 dark:border-slate-800 w-full max-w-md h-full p-6 overflow-y-auto shadow-2xl flex flex-col justify-between">
+            <div>
+              <div className="flex items-center justify-between pb-4 border-b border-slate-100 dark:border-slate-800">
+                <h3 className="text-base font-bold text-slate-900 dark:text-white">Record Settlement Payment</h3>
+                <button onClick={() => setSelectedOrderForPayment(null)} className="text-slate-400 hover:text-slate-600">
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div className="mt-4 p-4 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/60 dark:border-slate-700 space-y-2 text-xs">
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Customer:</span>
+                  <span className="font-bold text-slate-900 dark:text-white">{selectedOrderForPayment.customerName}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Order ID:</span>
+                  <span className="font-mono font-bold text-slate-900 dark:text-white">#{selectedOrderForPayment.id.slice(-6).toUpperCase()}</span>
+                </div>
+                <div className="flex justify-between">
+                  <span className="text-slate-500">Outstanding Due:</span>
+                  <span className="font-black text-rose-600 dark:text-rose-400 font-mono">৳ {selectedOrderForPayment.amountDue.toLocaleString()}</span>
+                </div>
+              </div>
+
+              <form onSubmit={handleRecordPaymentSubmit} className="mt-6 space-y-4 text-xs">
+                <div>
+                  <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">Payment Amount (BDT)</label>
+                  <input
+                    type="number"
+                    placeholder={`Max ৳${selectedOrderForPayment.amountDue}`}
+                    value={paymentAmount}
+                    onChange={(e) => setPaymentAmount(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none"
+                    required
+                  />
+                </div>
+
+                <div>
+                  <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">Payment Method</label>
+                  <select
+                    value={paymentMethod}
+                    onChange={(e: any) => setPaymentMethod(e.target.value)}
+                    className="w-full px-3 py-2 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-900 dark:text-white focus:outline-none cursor-pointer"
+                  >
+                    <option value="Cash">Cash</option>
+                    <option value="bKash">bKash</option>
+                    <option value="Nagad">Nagad</option>
+                    <option value="Bank">Bank Transfer</option>
+                  </select>
+                </div>
+
+                <div className="pt-4 flex justify-end gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setSelectedOrderForPayment(null)}
+                    className="px-4 py-2 rounded-xl font-bold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-4 py-2 rounded-xl font-bold bg-gold-400 hover:bg-gold-500 text-slate-950"
+                  >
+                    Save Settlement
+                  </button>
+                </div>
+              </form>
             </div>
-
-            <form onSubmit={handleRecordPaymentSubmit} className="space-y-4">
-              {/* Payment Summary */}
-              <div className="bg-slate-50 p-4 rounded-2xl space-y-1.5 text-sm text-slate-600 border border-slate-100">
-                <div className="flex justify-between">
-                  <span>Customer:</span>
-                  <strong className="text-slate-800">{selectedOrderForPayment.customerName}</strong>
-                </div>
-                <div className="flex justify-between">
-                  <span>Outstanding Due:</span>
-                  <strong className="text-red-600 font-mono">৳{selectedOrderForPayment.amountDue.toLocaleString()}</strong>
-                </div>
-              </div>
-
-              {/* Amount input */}
-              <div className="space-y-1.5">
-                <label className="block text-sm font-semibold text-slate-600">Collection Amount (৳) *</label>
-                <input
-                  type="number"
-                  step="any"
-                  required
-                  value={paymentAmount}
-                  onChange={(e) => setPaymentAmount(e.target.value)}
-                  max={selectedOrderForPayment.amountDue}
-                  min="1"
-                  placeholder={`Max ৳${selectedOrderForPayment.amountDue}`}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-sm focus:outline-hidden focus:border-amber-400 text-slate-800 font-mono font-bold"
-                />
-              </div>
-
-              {/* Payment Method Select */}
-              <div className="space-y-1.5">
-                <label className="block text-sm font-semibold text-slate-600">Payment Gateway / Method *</label>
-                <select
-                  value={paymentMethod}
-                  onChange={(e) => setPaymentMethod(e.target.value as any)}
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-sm focus:outline-hidden focus:border-amber-400 text-slate-700 font-semibold"
-                >
-                  <option value="Cash">Cash</option>
-                  <option value="bKash">bKash (MFS)</option>
-                  <option value="Nagad">Nagad (MFS)</option>
-                  <option value="Bank">Direct Bank Transfer</option>
-                </select>
-              </div>
-
-              <div className="flex gap-2 justify-end pt-2">
-                <button
-                  type="button"
-                  onClick={() => {
-                    setSelectedOrderForPayment(null);
-                    setPaymentAmount('');
-                  }}
-                  className="py-2.5 px-4 bg-slate-50 hover:bg-slate-100 border border-slate-200 text-slate-600 text-sm font-bold rounded-xl cursor-pointer"
-                >
-                  Cancel
-                </button>
-                <button
-                  type="submit"
-                  className="py-2.5 px-5 bg-slate-900 hover:bg-slate-800 text-[#D4AF37] hover:text-white text-sm font-bold rounded-xl shadow-md cursor-pointer flex items-center gap-1.5"
-                >
-                  Submit Payment
-                  <ArrowRight size={13} />
-                </button>
-              </div>
-            </form>
           </div>
         </div>
       )}
 
-      {/* Order Collection History slide-out / Detail Modal */}
+      {/* Payment Details Modal */}
       {selectedOrderForDetails && (
         <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl w-full max-w-2xl p-6 shadow-2xl border border-slate-100 space-y-4">
-            <div className="flex justify-between items-center pb-3 border-b border-slate-100">
-              <div>
-                <h3 className="text-base font-bold text-slate-900 uppercase tracking-tight">Payment Ledger Card</h3>
-                <p className="text-xs text-slate-400 mt-0.5">Reference ID: #{selectedOrderForDetails.id.substring(0, 8).toUpperCase()}</p>
-              </div>
-              <button onClick={() => setSelectedOrderForDetails(null)} className="p-2 text-slate-400 hover:text-slate-600 hover:bg-slate-100 rounded-xl cursor-pointer transition-colors"><X size={18} /></button>
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-lg w-full p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between pb-3 border-b border-slate-100 dark:border-slate-800">
+              <h3 className="text-base font-bold text-slate-900 dark:text-white">Payment History Details</h3>
+              <button onClick={() => setSelectedOrderForDetails(null)} className="text-slate-400 hover:text-slate-600">
+                <X size={18} />
+              </button>
             </div>
 
-            {/* Customer Details */}
-            <div className="space-y-4">
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 text-sm border border-slate-100 p-3 rounded-2xl bg-slate-50/50">
-                <div>
-                  <span className="text-xs uppercase font-bold text-slate-400">Customer Name</span>
-                  <p className="font-bold text-slate-700 mt-0.5">{selectedOrderForDetails.customerName}</p>
-                </div>
-                <div>
-                  <span className="text-xs uppercase font-bold text-slate-400">Phone Contact</span>
-                  <p className="font-mono font-semibold text-slate-700 mt-0.5">{selectedOrderForDetails.customerPhone}</p>
-                </div>
-              </div>
-
-              {/* Items breakdown list */}
-              <div>
-                <h4 className="text-xs uppercase font-bold text-slate-400 tracking-wider mb-1.5">Ordered Items Breakdown</h4>
-                <div className="space-y-1.5 max-h-28 overflow-y-auto">
-                  {selectedOrderForDetails.items.map((it, idx) => (
-                    <div key={idx} className="flex justify-between text-xs py-1.5 px-3 bg-slate-50 border border-slate-100 rounded-xl">
-                      <span>{it.productName} <span className="text-slate-400">({it.variantLabel})</span></span>
-                      <strong className="font-mono">Qty: {it.qty}</strong>
+            <div className="text-xs space-y-3">
+              <div className="font-bold text-slate-900 dark:text-white">{selectedOrderForDetails.customerName}</div>
+              <div className="space-y-1">
+                {selectedOrderForDetails.paymentHistory && selectedOrderForDetails.paymentHistory.length > 0 ? (
+                  selectedOrderForDetails.paymentHistory.map((ph, idx) => (
+                    <div key={idx} className="flex items-center justify-between p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/50 dark:border-slate-700">
+                      <div>
+                        <div className="font-bold text-slate-900 dark:text-white">৳ {ph.amount.toLocaleString()} ({ph.method})</div>
+                        <div className="text-[10px] text-slate-400">{new Date(ph.date).toLocaleString()} by {ph.recordedBy || 'Operator'}</div>
+                      </div>
+                      <button
+                        onClick={() => setDeletePaymentConfirm({
+                          isOpen: true,
+                          orderId: selectedOrderForDetails.id,
+                          paymentIndex: idx,
+                          amount: ph.amount,
+                          method: ph.method,
+                          date: ph.date
+                        })}
+                        className="p-1 text-rose-500 hover:text-rose-700 cursor-pointer"
+                      >
+                        <Trash2 size={15} />
+                      </button>
                     </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Payment History Log Table */}
-              <div>
-                <div className="flex items-center justify-between mb-2">
-                  <h4 className="text-xs uppercase font-bold text-slate-500 tracking-wider">Payment Collections History Log</h4>
-                  <span className="text-[11px] font-bold text-slate-500 bg-slate-100 px-2 py-0.5 rounded-md">
-                    Total Entries: {selectedOrderForDetails.paymentHistory?.length || 0}
-                  </span>
-                </div>
-                {!selectedOrderForDetails.paymentHistory || selectedOrderForDetails.paymentHistory.length === 0 ? (
-                  <p className="text-xs text-slate-400 italic bg-amber-50/30 border border-amber-100/50 p-3 rounded-xl text-center">
-                    No payment collection entries recorded yet. Outstanding due is fully unpaid.
-                  </p>
+                  ))
                 ) : (
-                  <div className="border border-slate-200 rounded-2xl overflow-x-auto text-xs max-h-56 overflow-y-auto shadow-2xs">
-                    <table className="w-full text-left min-w-[520px]">
-                      <thead>
-                        <tr className="bg-slate-100/80 border-b border-slate-200 text-[10px] uppercase font-black text-slate-600 sticky top-0 z-10 backdrop-blur-xs">
-                          <th className="py-2.5 px-3.5">Date</th>
-                          <th className="py-2.5 px-3.5">Method</th>
-                          <th className="py-2.5 px-3.5">Collected By</th>
-                          <th className="py-2.5 px-3.5 text-right">Amount</th>
-                          <th className="py-2.5 px-3.5 text-center w-24">Action</th>
-                        </tr>
-                      </thead>
-                      <tbody className="divide-y divide-slate-100 bg-white">
-                        {selectedOrderForDetails.paymentHistory.map((ph, idx) => (
-                          <tr key={idx} className="hover:bg-slate-50/70 transition-colors">
-                            <td className="py-2.5 px-3.5 font-mono text-slate-500 font-semibold whitespace-nowrap">
-                              {new Date(ph.date).toLocaleDateString('en-GB')}
-                            </td>
-                            <td className="py-2.5 px-3.5 whitespace-nowrap">
-                              <span className="px-2.5 py-1 bg-slate-100 text-slate-700 rounded-lg text-xs font-bold border border-slate-200/60">
-                                {ph.method}
-                              </span>
-                            </td>
-                            <td className="py-2.5 px-3.5 text-slate-600 font-medium whitespace-nowrap">{ph.recordedBy}</td>
-                            <td className="py-2.5 px-3.5 text-right font-mono font-black text-slate-900 text-sm whitespace-nowrap">
-                              ৳{ph.amount.toLocaleString()}
-                            </td>
-                            <td className="py-2.5 px-3.5 text-center whitespace-nowrap">
-                              <button
-                                type="button"
-                                onClick={() => setDeletePaymentConfirm({
-                                  isOpen: true,
-                                  orderId: selectedOrderForDetails.id,
-                                  paymentIndex: idx,
-                                  amount: ph.amount,
-                                  method: ph.method,
-                                  date: ph.date
-                                })}
-                                title="Delete this payment record"
-                                className="inline-flex items-center gap-1 px-2 py-1 bg-rose-50 hover:bg-rose-100 text-rose-600 hover:text-rose-700 rounded-lg text-[11px] font-bold border border-rose-200 transition-all cursor-pointer shadow-2xs hover:scale-105 active:scale-95"
-                              >
-                                <Trash2 size={12} />
-                                <span>Delete</span>
-                              </button>
-                            </td>
-                          </tr>
-                        ))}
-                        <tr className="bg-slate-50/80 font-bold border-t border-slate-200">
-                          <td colSpan={5} className="py-3 px-4 text-right">
-                            {selectedOrderForDetails.amountDue === 0 ? (
-                              <div className="flex items-center justify-end gap-1.5 text-emerald-600">
-                                <CheckCircle size={15} />
-                                <span className="font-bold text-xs">Fully Settled</span>
-                              </div>
-                            ) : (
-                              <span className="font-bold text-xs text-red-600 font-mono">
-                                Remaining Due: ৳{selectedOrderForDetails.amountDue.toLocaleString()}
-                              </span>
-                            )}
-                          </td>
-                        </tr>
-                      </tbody>
-                    </table>
-                  </div>
+                  <div className="text-slate-400 italic">No partial payments recorded yet</div>
                 )}
               </div>
             </div>
-
-            <div className="flex justify-end pt-2 border-t border-slate-100">
-              <button
-                onClick={() => setSelectedOrderForDetails(null)}
-                className="py-2.5 px-6 bg-slate-900 hover:bg-slate-800 text-[#D4AF37] hover:text-white text-xs font-bold rounded-xl cursor-pointer shadow-xs transition-colors"
-              >
-                Close Ledger
-              </button>
-            </div>
           </div>
         </div>
       )}
 
-      {/* DELETE PAYMENT CONFIRMATION MODAL */}
-      {deletePaymentConfirm && deletePaymentConfirm.isOpen && (
-        <div className="fixed inset-0 z-60 bg-slate-900/60 backdrop-blur-xs flex items-center justify-center p-4">
-          <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl border border-slate-200 animate-in fade-in zoom-in-95 duration-150">
-            <div className="flex items-start gap-4 mb-4">
-              <div className="p-3 rounded-2xl bg-rose-50 text-rose-600 border border-rose-100 shrink-0">
-                <AlertCircle size={24} />
-              </div>
-              <div className="flex-1 min-w-0">
-                <h3 className="text-base font-black text-slate-900">
-                  Delete Payment Collection (পেমেন্ট রেকর্ড মুছুন)
-                </h3>
-                <p className="text-xs text-slate-600 mt-1.5 leading-relaxed">
-                  Are you sure you want to delete this payment record of <strong className="text-slate-900 font-mono">৳{deletePaymentConfirm.amount.toLocaleString()}</strong> ({deletePaymentConfirm.method}) recorded on <strong className="text-slate-900">{new Date(deletePaymentConfirm.date).toLocaleDateString('en-GB')}</strong>?
-                </p>
-                <div className="mt-3 p-3 bg-amber-50 rounded-xl border border-amber-200/60 text-[11px] text-amber-800">
-                  ⚠️ Deleting this entry will reduce the recorded paid amount and automatically restore the customer's outstanding due balance.
-                </div>
-              </div>
-            </div>
-
-            <div className="flex items-center justify-end gap-2.5 mt-5 pt-3 border-t border-slate-100">
+      {/* Delete Payment Confirm */}
+      {deletePaymentConfirm && (
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+          <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-sm w-full p-6 shadow-2xl space-y-4">
+            <h3 className="text-base font-bold text-slate-900 dark:text-white">Confirm Delete Payment</h3>
+            <p className="text-xs text-slate-500 dark:text-slate-400">
+              Delete payment of ৳{deletePaymentConfirm.amount.toLocaleString()} ({deletePaymentConfirm.method})? The due balance will be restored.
+            </p>
+            <div className="flex justify-end gap-2 pt-2">
               <button
-                type="button"
-                disabled={deletingPayment}
                 onClick={() => setDeletePaymentConfirm(null)}
-                className="px-4 py-2.5 rounded-xl border border-slate-200 text-slate-700 text-xs font-bold hover:bg-slate-100 transition-colors cursor-pointer"
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300"
               >
                 Cancel
               </button>
               <button
-                type="button"
-                disabled={deletingPayment}
                 onClick={handleConfirmDeletePayment}
-                className="px-5 py-2.5 rounded-xl text-white text-xs font-black shadow-md bg-rose-600 hover:bg-rose-700 active:scale-95 transition-all cursor-pointer flex items-center gap-1.5"
+                disabled={deletingPayment}
+                className="px-4 py-2 rounded-xl text-xs font-bold bg-rose-600 text-white"
               >
-                <Trash2 size={13} />
-                <span>{deletingPayment ? 'Deleting...' : 'Delete Payment Entry'}</span>
+                {deletingPayment ? 'Deleting...' : 'Delete Payment'}
               </button>
             </div>
           </div>

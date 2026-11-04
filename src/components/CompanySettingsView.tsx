@@ -54,10 +54,10 @@ export default function CompanySettingsView({
   const [selectedSubBrand, setSelectedSubBrand] = useState<'SAT' | 'GZ' | 'RTX'>('SAT');
 
   // Accounting Baseline Form State
-  const [baselineCash, setBaselineCash] = useState<number>(2250);
-  const [baselineInvestment, setBaselineInvestment] = useState<number>(39550);
+  const [baselineCash, setBaselineCash] = useState<number>(0);
+  const [baselineInvestment, setBaselineInvestment] = useState<number>(0);
   const [baselineCutoffDate, setBaselineCutoffDate] = useState<string>(new Date().toISOString().split('T')[0]);
-  const [baselineNote, setBaselineNote] = useState<string>('Accounting baseline reset: Cash 2,250 BDT, Investment 39,550 BDT. Past records excluded.');
+  const [baselineNote, setBaselineNote] = useState<string>('Accounting baseline initialized.');
   const [isSavingBaseline, setIsSavingBaseline] = useState(false);
 
   // Form State
@@ -450,100 +450,136 @@ export default function CompanySettingsView({
         </div>
       )}
 
-      {/* Navigation Part-by-Part Tabs */}
-      <div className="flex items-center gap-1 bg-white p-1.5 rounded-2xl border border-slate-200/80 shadow-xs overflow-x-auto">
-        <button
-          onClick={() => setActiveTab('main')}
-          className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition shrink-0 ${
-            activeTab === 'main'
-              ? 'bg-slate-900 text-amber-400 shadow-2xs'
-              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
-          }`}
-        >
-          <Building2 size={14} />
-          <span>1. Main Company & Logo</span>
-        </button>
+      {/* Desktop Left-Nav Settings Layout */}
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+        {/* Left Navigation Sidebar */}
+        <div className="lg:col-span-3 bg-white dark:bg-slate-900 p-3 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs space-y-1.5 sticky top-4">
+          <div className="px-3 py-2 border-b border-slate-100 dark:border-slate-800 mb-1">
+            <span className="text-[10px] font-mono font-bold text-amber-500 uppercase tracking-widest block">SETTINGS NAV</span>
+            <h3 className="text-xs font-bold text-slate-900 dark:text-slate-100">Configuration Modules</h3>
+          </div>
 
-        <button
-          onClick={() => setActiveTab('subbrands')}
-          className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition shrink-0 ${
-            activeTab === 'subbrands'
-              ? 'bg-slate-900 text-amber-400 shadow-2xs'
-              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
-          }`}
-        >
-          <Tag size={14} />
-          <span>2. Sub-Brand Profiles</span>
-        </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('main')}
+            className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+              activeTab === 'main'
+                ? 'bg-slate-900 dark:bg-slate-800 text-amber-400 shadow-2xs'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-50 dark:hover:bg-slate-800/50'
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <Building2 size={15} className={activeTab === 'main' ? 'text-amber-400' : 'text-slate-400'} />
+              <span>General & Logo</span>
+            </div>
+            <span className="text-[10px] font-mono opacity-60">01</span>
+          </button>
 
-        <button
-          onClick={() => setActiveTab('invoice')}
-          className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition shrink-0 ${
-            activeTab === 'invoice'
-              ? 'bg-slate-900 text-amber-400 shadow-2xs'
-              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
-          }`}
-        >
-          <Receipt size={14} />
-          <span>3. Invoice & Payment Setup</span>
-        </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('subbrands')}
+            className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+              activeTab === 'subbrands'
+                ? 'bg-slate-900 dark:bg-slate-800 text-amber-400 shadow-2xs'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-50 dark:hover:bg-slate-800/50'
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <Tag size={15} className={activeTab === 'subbrands' ? 'text-amber-400' : 'text-slate-400'} />
+              <span>Sub-Brand Profiles</span>
+            </div>
+            <span className="text-[10px] font-mono opacity-60">02</span>
+          </button>
 
-        <button
-          onClick={() => setActiveTab('inventory')}
-          className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition shrink-0 ${
-            activeTab === 'inventory'
-              ? 'bg-slate-900 text-amber-400 shadow-2xs'
-              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
-          }`}
-        >
-          <Sliders size={14} />
-          <span>4. Inventory & Alerts</span>
-        </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('invoice')}
+            className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+              activeTab === 'invoice'
+                ? 'bg-slate-900 dark:bg-slate-800 text-amber-400 shadow-2xs'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-50 dark:hover:bg-slate-800/50'
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <Receipt size={15} className={activeTab === 'invoice' ? 'text-amber-400' : 'text-slate-400'} />
+              <span>Invoice & Payment</span>
+            </div>
+            <span className="text-[10px] font-mono opacity-60">03</span>
+          </button>
 
-        <button
-          onClick={() => setActiveTab('integrations')}
-          className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition shrink-0 ${
-            activeTab === 'integrations'
-              ? 'bg-slate-900 text-amber-400 shadow-2xs'
-              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
-          }`}
-        >
-          <Bell size={14} />
-          <span>5. EmailJS Integrations</span>
-        </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('inventory')}
+            className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+              activeTab === 'inventory'
+                ? 'bg-slate-900 dark:bg-slate-800 text-amber-400 shadow-2xs'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-50 dark:hover:bg-slate-800/50'
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <Sliders size={15} className={activeTab === 'inventory' ? 'text-amber-400' : 'text-slate-400'} />
+              <span>Inventory Thresholds</span>
+            </div>
+            <span className="text-[10px] font-mono opacity-60">04</span>
+          </button>
 
-        <button
-          onClick={() => setActiveTab('preview')}
-          className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition shrink-0 ${
-            activeTab === 'preview'
-              ? 'bg-amber-100 text-amber-900 font-mono shadow-2xs'
-              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
-          }`}
-        >
-          <Eye size={14} className="text-amber-600" />
-          <span>6. Live Invoice Preview</span>
-        </button>
+          <button
+            type="button"
+            onClick={() => setActiveTab('integrations')}
+            className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+              activeTab === 'integrations'
+                ? 'bg-slate-900 dark:bg-slate-800 text-amber-400 shadow-2xs'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-50 dark:hover:bg-slate-800/50'
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <Bell size={15} className={activeTab === 'integrations' ? 'text-amber-400' : 'text-slate-400'} />
+              <span>EmailJS Notifications</span>
+            </div>
+            <span className="text-[10px] font-mono opacity-60">05</span>
+          </button>
 
-        <button
-          onClick={() => setActiveTab('accounting')}
-          className={`flex items-center gap-1.5 px-3 py-2 rounded-xl text-xs font-bold transition shrink-0 ${
-            activeTab === 'accounting'
-              ? 'bg-amber-500 text-slate-950 shadow-2xs font-extrabold'
-              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-50'
-          }`}
-        >
-          <Calculator size={14} className={activeTab === 'accounting' ? 'text-slate-950' : 'text-amber-600'} />
-          <span>7. Accounting Baseline & Cash</span>
-        </button>
-      </div>
+          <button
+            type="button"
+            onClick={() => setActiveTab('accounting')}
+            className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+              activeTab === 'accounting'
+                ? 'bg-amber-500 text-slate-950 shadow-2xs'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-50 dark:hover:bg-slate-800/50'
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <Calculator size={15} className={activeTab === 'accounting' ? 'text-slate-950' : 'text-amber-500'} />
+              <span>Accounting Baseline</span>
+            </div>
+            <span className="text-[10px] font-mono opacity-60">06</span>
+          </button>
 
-      {/* Main Settings Form Container */}
-      <form onSubmit={(e) => { e.preventDefault(); handleSaveAll(); }}>
-        {/* ========================================================================= */}
-        {/* PART 1: MAIN COMPANY & BRANDING */}
-        {/* ========================================================================= */}
-        {activeTab === 'main' && (
-          <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs space-y-5 animate-in fade-in duration-150">
+          <button
+            type="button"
+            onClick={() => setActiveTab('preview')}
+            className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+              activeTab === 'preview'
+                ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-900 dark:text-amber-300 font-mono shadow-2xs'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-50 dark:hover:bg-slate-800/50'
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <Eye size={15} className="text-amber-600 dark:text-amber-400" />
+              <span>Live Invoice Preview</span>
+            </div>
+            <span className="text-[10px] font-mono opacity-60">07</span>
+          </button>
+        </div>
+
+        {/* Right Active Module Form Container */}
+        <div className="lg:col-span-9 space-y-4 min-w-0">
+          <form onSubmit={(e) => { e.preventDefault(); handleSaveAll(); }}>
+            {/* ========================================================================= */}
+            {/* PART 1: MAIN COMPANY & BRANDING */}
+            {/* ========================================================================= */}
+            {activeTab === 'main' && (
+              <div className="bg-white dark:bg-slate-900 p-5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs space-y-5 animate-in fade-in duration-150">
             <div className="border-b border-slate-100 pb-3">
               <span className="text-[10px] font-mono font-bold text-amber-600 uppercase tracking-widest block">
                 SECTION 1
@@ -1459,6 +1495,35 @@ export default function CompanySettingsView({
           </div>
         )}
       </form>
+
+      {/* Keyboard Shortcuts Help Footer */}
+      <div className="mt-8 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm">
+        <div className="flex items-center gap-3 mb-3">
+          <div className="w-8 h-8 rounded-lg bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-500 shrink-0">
+            <Sparkles size={16} />
+          </div>
+          <div>
+            <h3 className="text-sm font-bold text-slate-900 dark:text-white">Keyboard Shortcuts & Hotkeys</h3>
+            <p className="text-xs text-slate-500 dark:text-slate-400">Global shortcuts enabled across the platform</p>
+          </div>
+        </div>
+        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+          <div className="p-3 bg-slate-50 dark:bg-slate-800/50 rounded-xl border border-slate-200/60 dark:border-slate-800 flex items-center justify-between">
+            <span className="text-slate-600 dark:text-slate-300 font-medium">Focus Search / Command Palette</span>
+            <kbd className="px-2 py-1 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 font-mono text-[11px] font-bold rounded border border-slate-200 dark:border-slate-700 shadow-2xs">Ctrl + K / ⌘K</kbd>
+          </div>
+          <div className="p-3 bg-slate-50 dark:bg-slate-800/50 rounded-xl border border-slate-200/60 dark:border-slate-800 flex items-center justify-between">
+            <span className="text-slate-600 dark:text-slate-300 font-medium">Close Modals & Drawers</span>
+            <kbd className="px-2 py-1 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 font-mono text-[11px] font-bold rounded border border-slate-200 dark:border-slate-700 shadow-2xs">Esc</kbd>
+          </div>
+          <div className="p-3 bg-slate-50 dark:bg-slate-800/50 rounded-xl border border-slate-200/60 dark:border-slate-800 flex items-center justify-between">
+            <span className="text-slate-600 dark:text-slate-300 font-medium">Primary Form Submission</span>
+            <kbd className="px-2 py-1 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 font-mono text-[11px] font-bold rounded border border-slate-200 dark:border-slate-700 shadow-2xs">Enter</kbd>
+          </div>
+        </div>
+      </div>
+        </div>
+      </div>
     </div>
   );
 }
