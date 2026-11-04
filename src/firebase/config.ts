@@ -14,20 +14,33 @@ import {
 import { getStorage } from 'firebase/storage';
 import appletConfig from '../../firebase-applet-config.json';
 
+export const isFirebaseConfigured = Boolean(
+  appletConfig.apiKey && 
+  appletConfig.projectId && 
+  appletConfig.projectId !== 'remixed-project-id'
+);
+
 // Configuration keys for Firebase
 // Sourced dynamically from environment variables and firebase-applet-config.json
 export const firebaseConfig = {
-  apiKey: appletConfig.apiKey,
-  authDomain: appletConfig.authDomain,
-  projectId: appletConfig.projectId,
-  storageBucket: appletConfig.storageBucket,
-  messagingSenderId: appletConfig.messagingSenderId,
-  appId: appletConfig.appId
+  apiKey: appletConfig.apiKey || "AIzaSyDummyKeyForLocalSandbox123456",
+  authDomain: appletConfig.authDomain || "local-sandbox.firebaseapp.com",
+  projectId: appletConfig.projectId || "local-sandbox",
+  storageBucket: appletConfig.storageBucket || "local-sandbox.appspot.com",
+  messagingSenderId: appletConfig.messagingSenderId || "1234567890",
+  appId: appletConfig.appId || "1:1234567890:web:local-sandbox"
 };
 
-// Initialize Firebase
-const app = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
-export const auth = getAuth(app);
+// Initialize Firebase safely
+let appInstance: any;
+try {
+  appInstance = getApps().length === 0 ? initializeApp(firebaseConfig) : getApp();
+} catch (initErr) {
+  console.warn("Firebase initializeApp caught fallback:", initErr);
+  appInstance = getApps()[0] || null;
+}
+const app = appInstance;
+export const auth = app ? getAuth(app) : ({} as any);
 
 // Explicitly ensure robust local session persistence across reloads & iframes
 try {

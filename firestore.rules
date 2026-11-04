@@ -2,49 +2,83 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
     
-    function isSuperAdmin() {
-      return request.auth != null && (
-        request.auth.token.email == 'skyautomationtech@gmail.com' ||
-        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
-         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'superadmin')
-      );
+    // Explicit operational collections for app features
+    match /notifications/{id} {
+      allow read, write: if true;
+    }
+    match /products/{id} {
+      allow read, write: if true;
+    }
+    match /orders/{id} {
+      allow read, write: if true;
+    }
+    match /customers/{id} {
+      allow read, write: if true;
+    }
+    match /users/{id} {
+      allow read, write: if true;
+    }
+    match /suppliers/{id} {
+      allow read, write: if true;
+    }
+    match /expenses/{id} {
+      allow read, write: if true;
+    }
+    match /incomes/{id} {
+      allow read, write: if true;
+    }
+    match /branches/{id} {
+      allow read, write: if true;
+    }
+    match /categories/{id} {
+      allow read, write: if true;
+    }
+    match /brands/{id} {
+      allow read, write: if true;
+    }
+    match /colors/{id} {
+      allow read, write: if true;
+    }
+    match /models/{id} {
+      allow read, write: if true;
+    }
+    match /settings/{id} {
+      allow read, write: if true;
     }
 
-    // Super Admin only collections for Accounting & Financial Health
-    match /investments/{investmentId} {
-      allow read, write: if isSuperAdmin();
+    // Accounting & Financial Health collections
+    match /investments/{id} {
+      allow read, write: if true;
     }
-    match /companyPurchases/{purchaseId} {
-      allow read, write: if isSuperAdmin();
+    match /companyPurchases/{id} {
+      allow read, write: if true;
     }
-    match /companyLosses/{lossId} {
-      allow read, write: if isSuperAdmin();
+    match /companyLosses/{id} {
+      allow read, write: if true;
     }
-    match /cashReconciliations/{reconciliationId} {
-      allow read, write: if isSuperAdmin();
+    match /cashReconciliations/{id} {
+      allow read, write: if true;
     }
-    match /otherReceivables/{entryId} {
-      allow read, write: if isSuperAdmin();
+    match /otherReceivables/{id} {
+      allow read, write: if true;
     }
-    match /paymentPlatformLedger/{entryId} {
-      allow read, write: if isSuperAdmin();
+    match /paymentPlatformLedger/{id} {
+      allow read, write: if true;
     }
-    match /importShippingCosts/{entryId} {
-      allow read, write: if isSuperAdmin();
+    match /importShippingCosts/{id} {
+      allow read, write: if true;
     }
-    match /settings/cashBalance {
-      allow read, write: if isSuperAdmin();
+    match /chartOfAccounts/{id} {
+      allow read, write: if true;
     }
-    match /chartOfAccounts/{accountId} {
-      allow read, write: if isSuperAdmin();
-    }
-    match /accountingVouchers/{voucherId} {
-      allow read, write: if isSuperAdmin();
+    match /accountingVouchers/{id} {
+      allow read, write: if true;
     }
 
-    // App operational data collections
+    // Catch-all fallback for any other collections or nested documents
     match /{document=**} {
       allow read, write: if true;
     }
   }
 }
+

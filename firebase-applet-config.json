@@ -1,12 +1,12 @@
 {
-  "projectId": "gen-lang-client-0634961568",
-  "appId": "1:1012947381625:web:621c645c6e6de3f37ed3a8",
-  "apiKey": "AIzaSyC6-JTG8zI6cwBsJC9sT5BJHCtafBPNPpA",
-  "authDomain": "gen-lang-client-0634961568.firebaseapp.com",
+  "projectId": "sky-inventory-pro",
+  "appId": "1:461281167942:web:817fbd9d3785596b801847",
+  "apiKey": "AIzaSyAADG_aB1F593sQReKaGyk2InRl5Twc5GA",
+  "authDomain": "sky-inventory-pro.firebaseapp.com",
   "firestoreDatabaseId": "ai-studio-6630a5d3-18da-424e-ba5b-db65e1dcfa41",
-  "storageBucket": "gen-lang-client-0634961568.firebasestorage.app",
-  "messagingSenderId": "1012947381625",
+  "storageBucket": "sky-inventory-pro.firebasestorage.app",
+  "messagingSenderId": "461281167942",
   "measurementId": "",
-  "oAuthClientId": "1012947381625-p5ht650ms89kcuu8qfshorihc3r0ju6t.apps.googleusercontent.com",
+  "oAuthClientId": "461281167942-qib9r9irk6kesnk7lb37gai7osh52cq2.apps.googleusercontent.com",
   "recaptchaSiteKey": ""
 }

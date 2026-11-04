@@ -62,6 +62,9 @@ export interface UserProfile {
   currentSessionStatus?: 'checked_in' | 'checked_out';
   currentSessionId?: string | null;
   currentSessionDate?: string | null;
+
+  // Theme Preference
+  themePreference?: 'light' | 'dark' | 'system';
 }
 
 export interface PrivateEmploymentInfo {

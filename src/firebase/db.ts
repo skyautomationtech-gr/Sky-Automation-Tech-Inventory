@@ -3817,10 +3817,9 @@ export async function getNotifications(): Promise<AppNotification[]> {
     snapshot.forEach(docSnap => {
       list.push({ id: docSnap.id, ...docSnap.data() } as AppNotification);
     });
-    dbCache.invoices = list;
     return list;
   } catch (error) {
-    handleFirestoreError(error, OperationType.LIST, 'notifications');
+    console.warn('Unable to fetch remote notifications, returning empty array:', error);
     return [];
   }
 }

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { onAuthStateChanged, signOut, EmailAuthProvider, reauthenticateWithCredential } from 'firebase/auth';
-import { auth } from './firebase/config';
+import { auth, isFirebaseConfigured } from './firebase/config';
 import { 
   getUserProfile, 
   findUserProfileByEmail,
@@ -25,7 +25,8 @@ import {
   migrateProductBarcodes,
   migrateExistingCustomerIds,
   migrateExistingInvoices,
-  exportAllData
+  exportAllData,
+  localStore
 } from './firebase/db';
 import {
   exportProductsToCSV,
@@ -88,6 +89,11 @@ import { PublicInvoiceVerification } from './components/PublicInvoiceVerificatio
 import ErrorBoundary from './components/ErrorBoundary';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { LiveClockWidget } from './components/LiveClockWidget';
+import { TopBar } from './components/TopBar';
+import { Breadcrumbs } from './components/Breadcrumbs';
+import { WelcomeTour } from './components/WelcomeTour';
+import { ThemeProvider, ToastProvider, ThemeToggle } from './design-system';
+import { DesignSystemShowcase } from './components/DesignSystemShowcase';
 
 // Mock/Fallback Data in case of Firestore permission/network errors
 const MOCK_PRODUCTS: Product[] = [
@@ -208,30 +214,44 @@ export default function App() {
     setIsOfflineDemoMode(true);
     setIsQuotaExceeded(false);
     
-    setUser({
-      id: 'offline-operator',
-      email: 'offline@demo.com',
-      name: 'Offline Demo Operator',
-      role: 'superadmin',
-      pin: '0000',
-      active: true,
-      currentSessionStatus: 'checked_in',
-      currentSessionDate: new Date().toISOString().split('T')[0],
-      currentSessionId: 'offline-sess',
-    });
+    // Check if we already have a saved user session
+    const existing = getSavedUserSession();
+    if (existing) {
+      setUser(existing);
+    } else {
+      setUser({
+        id: 'operator-1',
+        email: 'skyautomationtech@gmail.com',
+        name: 'Sky Automation Operator',
+        role: 'superadmin',
+        active: true,
+        currentSessionStatus: 'checked_in',
+        currentSessionDate: new Date().toISOString().split('T')[0],
+        currentSessionId: 'offline-sess',
+        subBrandAccess: ['SAT', 'GZ', 'RTX']
+      });
+    }
     
-    setCompanySettings({
-      companyName: 'Sky Automation Demo Workspace',
-      address: '123 Demo Street, Suite 101',
-      phone: '555-0199',
+    const cachedSettings = localStore.get<CompanySettings>('company_settings');
+    setCompanySettings(cachedSettings || {
+      companyName: 'Sky Automation Tech',
+      address: 'Dhaka, Bangladesh',
+      phone: '01XXXXXXXXX',
+      subBrands: ['SAT', 'GZ', 'RTX'],
       onboarded: true,
     });
     
     setIsOnboarding(false);
     
-    setProducts(MOCK_PRODUCTS);
-    setCategories(MOCK_CATEGORIES);
-    setBrands(MOCK_BRANDS);
+    const cachedProds = localStore.get<Product[]>('all_products');
+    setProducts(cachedProds && cachedProds.length > 0 ? cachedProds : MOCK_PRODUCTS);
+    
+    const cachedCats = localStore.get<Category[]>('all_categories');
+    setCategories(cachedCats && cachedCats.length > 0 ? cachedCats : MOCK_CATEGORIES);
+    
+    const cachedBrands = localStore.get<Brand[]>('all_brands');
+    setBrands(cachedBrands && cachedBrands.length > 0 ? cachedBrands : MOCK_BRANDS);
+    
     setProductColors([
       { id: 'c-1', name: 'Black' },
       { id: 'c-2', name: 'White' },
@@ -251,6 +271,20 @@ export default function App() {
   const [isOnboarding, setIsOnboarding] = useState(false);
   const [currentTab, setCurrentTab] = useState('dashboard');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
+  const [isSidebarCollapsed, setIsSidebarCollapsed] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('sat_sidebar_collapsed') === 'true';
+    } catch {
+      return false;
+    }
+  });
+  const [showWelcomeTour, setShowWelcomeTour] = useState<boolean>(() => {
+    try {
+      return localStorage.getItem('sat_welcome_tour_dismissed') !== 'true';
+    } catch {
+      return false;
+    }
+  });
 
   // Applet Data States
   const [products, setProducts] = useState<Product[]>([]);
@@ -372,8 +406,17 @@ export default function App() {
   }, []);
 
   useEffect(() => {
-    console.log('App: Setting up onAuthStateChanged listener...');
     let isMounted = true;
+    
+    // If Firebase project was deleted or unlinked, immediately switch to local sandbox mode without failing
+    if (!isFirebaseConfigured) {
+      console.log('App: Firebase is unlinked or deleted. Seamlessly activating local sandbox mode.');
+      enterOfflineDemoMode();
+      setAuthChecking(false);
+      return;
+    }
+
+    console.log('App: Setting up onAuthStateChanged listener...');
 
     // Pre-load company settings immediately if an active session is already restored
     const initialSaved = getSavedUserSession();
@@ -968,63 +1011,9 @@ export default function App() {
     );
   }
 
-  // Quota Exceeded Gate
+  // Graceful Fallback: Never lock the user out with a full-screen block
   if (isQuotaExceeded && !isOfflineDemoMode) {
-    return (
-      <div className="min-h-screen bg-slate-950 flex flex-col justify-center items-center p-6 text-center select-none relative overflow-hidden">
-        {/* Subtle decorative background glow */}
-        <div className="absolute -top-40 -left-40 w-96 h-96 rounded-full bg-amber-500/10 blur-3xl" />
-        <div className="absolute -bottom-40 -right-40 w-96 h-96 rounded-full bg-amber-500/10 blur-3xl" />
-        
-        <div className="max-w-md w-full bg-slate-900 border border-amber-500/30 rounded-2xl p-8 shadow-2xl relative z-10">
-          <div className="w-16 h-16 bg-amber-500/10 border border-amber-500/30 rounded-2xl flex items-center justify-center mx-auto mb-6 text-amber-400 animate-pulse">
-            <AlertTriangle size={32} />
-          </div>
-          
-          <h2 className="text-2xl font-bold text-white tracking-tight mb-3">
-            Firestore Quota Exceeded
-          </h2>
-          
-          <p className="text-sm font-mono text-slate-400 uppercase tracking-wider mb-6">
-            Database Limit Reached
-          </p>
-
-          <div className="text-slate-300 text-sm space-y-4 mb-8 text-left leading-relaxed">
-            <p>
-              The Firestore database free-tier daily read/write limit has been exceeded for this project.
-            </p>
-            <p className="bg-slate-950/60 p-3 rounded-lg border border-slate-800 text-sm font-mono text-slate-400 break-words">
-              Error: Free daily read units per project (free tier database) limit exceeded.
-            </p>
-            <p>
-              This is a standard cloud resource guard. Quotas automatically reset daily at midnight Pacific Time.
-            </p>
-          </div>
-
-          <div className="flex flex-col gap-3">
-            <button
-              onClick={enterOfflineDemoMode}
-              className="w-full py-3 bg-amber-400 hover:bg-amber-300 text-slate-950 font-bold rounded-xl flex items-center justify-center gap-2 transition-all cursor-pointer shadow-lg shadow-amber-500/10"
-            >
-              <Sparkles size={16} />
-              Enter Offline Demo Mode
-            </button>
-            
-            <button
-              onClick={() => {
-                setIsQuotaExceeded(false);
-                setAuthChecking(true);
-                window.location.reload();
-              }}
-              className="w-full py-3 bg-slate-800 hover:bg-slate-750 text-slate-200 border border-slate-700 font-semibold rounded-xl flex items-center justify-center gap-2 transition-all cursor-pointer"
-            >
-              <RefreshCw size={14} />
-              Retry Connection
-            </button>
-          </div>
-        </div>
-      </div>
-    );
+    enterOfflineDemoMode();
   }
 
   // Auth Guard
@@ -1038,80 +1027,65 @@ export default function App() {
   }
 
   return (
-    <div className="h-screen w-full max-w-full bg-slate-100 text-slate-800 flex flex-col lg:flex-row overflow-hidden">
-      
-      {/* Sidebar Navigation */}
-      <Sidebar 
-        currentTab={currentTab} 
-        setCurrentTab={setCurrentTab} 
-        user={user} 
-        onLogout={handleLogout}
-        isOpen={isSidebarOpen}
-        setIsOpen={setIsSidebarOpen}
-        companyName={companySettings?.companyName || 'Sky Automation Tech'}
-        logoUrl={companySettings?.logoUrl || '/sat_logo.jpg'}
-      />
-
-      {/* Main Content Workspace */}
-      <div className="flex-1 flex flex-col h-full min-h-0 min-w-0 max-w-full overflow-hidden bg-slate-50">
-        
-        {/* Top Header Bar - Mobile/Tablet Only (Fixed) */}
-        <header className="lg:hidden fixed top-0 left-0 right-0 h-16 bg-slate-950 border-b border-slate-800 z-30 px-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <button
-              onClick={() => setIsSidebarOpen(true)}
-              className="p-2 text-slate-400 hover:text-white cursor-pointer"
-            >
-              <Menu size={20} />
-            </button>
-            <div className="flex items-center gap-2">
-              <img 
-                src={companySettings?.logoUrl || "/sat_logo.jpg"} 
-                alt="Sky Automation Tech Logo" 
-                className="w-6 h-6 rounded object-contain bg-white p-0.5" 
-                onError={(e) => {
-                  e.currentTarget.onerror = null;
-                  e.currentTarget.src = "/sat_logo.jpg";
-                }}
-              />
-              <h1 className="text-white font-bold tracking-tight text-sm uppercase">
-                {companySettings?.companyName || 'Sky Automation Tech'}
-              </h1>
-            </div>
-          </div>
+    <ThemeProvider userId={user.id} initialUserPreference={user.themePreference}>
+      <ToastProvider>
+        <div className="h-screen w-full max-w-full bg-slate-100 dark:bg-slate-950 text-slate-800 dark:text-slate-100 flex flex-col lg:flex-row overflow-hidden transition-colors">
           
-          <div className="flex items-center gap-2.5">
-            {dataLoading && (
-              <div className="w-2 h-2 bg-amber-400 rounded-full animate-ping" />
-            )}
-            <LiveClockWidget variant="compact" className="hidden sm:inline-flex" />
-            <NotificationCenter user={user} products={products} onNavigate={navigateToTab} />
-          </div>
-        </header>
+          {/* Sidebar Navigation */}
+          <Sidebar 
+            currentTab={currentTab} 
+            setCurrentTab={navigateToTab} 
+            user={user} 
+            onLogout={handleLogout}
+            isOpen={isSidebarOpen}
+            setIsOpen={setIsSidebarOpen}
+            companyName={companySettings?.companyName || 'Sky Automation Tech'}
+            logoUrl={companySettings?.logoUrl || '/sat_logo.jpg'}
+            isCollapsed={isSidebarCollapsed}
+            setIsCollapsed={(collapsed) => {
+              setIsSidebarCollapsed(collapsed);
+              try { localStorage.setItem('sat_sidebar_collapsed', String(collapsed)); } catch {}
+            }}
+          />
 
-        {/* Permanent Desktop Top Header Bar (Fixed at the Top) */}
-        <header className="hidden lg:flex items-center justify-between px-8 py-3.5 bg-white/95 backdrop-blur-md border-b border-slate-200/90 z-20 shrink-0 shadow-2xs">
-          <div>
-            <div className="text-[11px] font-mono font-bold text-amber-600 uppercase tracking-widest">
-              {companySettings?.companyName || 'Sky Automation Tech'} Platform
-            </div>
-            <h2 className="text-xl font-black text-slate-900 capitalize tracking-tight mt-0.5">
-              {currentTab.replace('_', ' ')}
-            </h2>
-          </div>
-
-          <div className="flex items-center gap-3.5">
-            {/* Glassmorphic Live Time & Date HUD */}
-            <LiveClockWidget variant="header" />
+          {/* Main Content Workspace */}
+          <div className="flex-1 flex flex-col h-full min-h-0 min-w-0 max-w-full overflow-hidden bg-slate-50 dark:bg-slate-950">
             
-            <NotificationCenter user={user} products={products} onNavigate={navigateToTab} />
-          </div>
-        </header>
+            {/* Sticky Top Header Bar (Laptop & Mobile Glass Header) */}
+            <TopBar 
+              currentTab={currentTab}
+              onNavigate={navigateToTab}
+              user={user}
+              products={products}
+              companySettings={companySettings}
+              onLogout={handleLogout}
+              isSidebarCollapsed={isSidebarCollapsed}
+              onToggleSidebarCollapse={() => {
+                setIsSidebarCollapsed(prev => {
+                  const next = !prev;
+                  try { localStorage.setItem('sat_sidebar_collapsed', String(next)); } catch {}
+                  return next;
+                });
+              }}
+              onOpenMobileSidebar={() => setIsSidebarOpen(true)}
+              dataLoading={dataLoading}
+            />
 
-        {/* Scrollable Main Workspace */}
-        <main className="flex-1 overflow-y-auto overflow-x-hidden p-3 sm:p-4 md:p-6 lg:p-8 pt-20 lg:pt-6 bg-slate-50 w-full max-w-full min-w-0">
+            {/* Contextual Breadcrumb Trail Bar */}
+            <div className="px-4 lg:px-8 py-2.5 bg-white/70 dark:bg-slate-900/70 border-b border-slate-200/80 dark:border-slate-800/80 flex items-center justify-between shrink-0 backdrop-blur-xs">
+              <Breadcrumbs currentTab={currentTab} onNavigate={navigateToTab} />
+              
+              <div className="hidden sm:flex items-center gap-2 text-[11px] font-mono text-slate-400">
+                <span>Desktop Workspace (min-width: 1280px)</span>
+                <span>•</span>
+                <span className="text-[#D4AF37] font-bold">SAT Core v2.4</span>
+              </div>
+            </div>
+
+            {/* Scrollable Main Workspace */}
+            <main className="flex-1 overflow-y-auto overflow-x-hidden p-4 md:p-6 lg:p-8 bg-slate-50 dark:bg-slate-950 w-full max-w-full min-w-0">
           
-          {/* Offline Mode Banner */}
+          {/* Offline / Local Mode Banner */}
           {isOfflineDemoMode && (
             <div className="mb-6 bg-amber-500/10 border border-amber-500/20 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-3xs">
               <div className="flex items-start gap-3">
@@ -1119,19 +1093,25 @@ export default function App() {
                   <Sparkles size={18} />
                 </div>
                 <div>
-                  <h4 className="text-sm font-semibold text-amber-800">Offline Demo Mode Active</h4>
-                  <p className="text-sm text-amber-700/80 mt-0.5">
-                    Viewing local workspace because Firestore quota is temporarily fully utilized. All features are fully functional.
+                  <h4 className="text-sm font-semibold text-amber-800 dark:text-amber-300">
+                    {!isFirebaseConfigured ? 'Firebase প্রজেক্ট রিমুভড — লোকাল মোডে চলছে (Local Sandbox Active)' : 'লোকাল স্যান্ডবক্স মোড সক্রিয় (Offline Sandbox)'}
+                  </h4>
+                  <p className="text-sm text-amber-700/80 dark:text-amber-400/80 mt-0.5">
+                    {!isFirebaseConfigured 
+                      ? 'ডিলিট হওয়া Firebase প্রজেক্টের কানেকশন ও ব্লকিং রিমুভ করা হয়েছে। সমস্ত ডাটা আপনার লোকাল স্টোরেজে নিরবচ্ছিন্নভাবে সংরক্ষিত হচ্ছে।' 
+                      : 'লোকাল ডেটাবেজ মোডে সমস্ত ফিচার (ইনভেন্টরি, অর্ডার, ইনভয়েস, একাউন্টিং) স্বাভাবিকভাবে কাজ করছে।'}
                   </p>
                 </div>
               </div>
-              <button
-                onClick={() => window.location.reload()}
-                className="self-start sm:self-center px-3 py-1.5 bg-amber-500 hover:bg-amber-400 text-slate-950 text-sm font-bold rounded-lg flex items-center gap-1.5 transition-all cursor-pointer shrink-0"
-              >
-                <RefreshCw size={12} />
-                Check Sync Status
-              </button>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setIsOfflineDemoMode(false)}
+                  className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-lg transition-colors cursor-pointer"
+                >
+                  Dismiss Banner
+                </button>
+              </div>
             </div>
           )}
 
@@ -1527,6 +1507,13 @@ export default function App() {
           </div>
         )}
 
+        {/* Tab Design System: Master Showcase for Super Admins */}
+        {currentTab === 'design_system' && (
+          <ErrorBoundary fallbackTitle="Design System Showcase encountered an issue">
+            <DesignSystemShowcase user={user} />
+          </ErrorBoundary>
+        )}
+
       </main>
 
       {/* Check In Guard Modal */}
@@ -1730,7 +1717,17 @@ export default function App() {
 
       {/* Persistent Offline Connectivity Indicator */}
       <OfflineIndicator />
+
+      {/* First-Run Welcome Tour Overlay for Approved Employees */}
+      {showWelcomeTour && user && (
+        <WelcomeTour
+          userName={user.name}
+          onClose={() => setShowWelcomeTour(false)}
+        />
+      )}
       </div>
     </div>
+      </ToastProvider>
+    </ThemeProvider>
   );
 }

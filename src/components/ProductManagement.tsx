@@ -175,8 +175,11 @@ export default function ProductManagement({
         setIsExportDropdownOpen(false);
       }
     };
-    document.addEventListener('mousedown', handleClickOutside);
-    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  // Reload Catalog data automatically when page opens
+  useEffect(() => {
+    onRefreshData?.();
   }, []);
 
   // Quick Inline Pricing & Stock Edit State
@@ -1698,9 +1701,8 @@ export default function ProductManagement({
 
           <button
             onClick={() => setIsResellerSyncModalOpen(true)}
-            className="flex items-center gap-1.5 py-1.5 px-3 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-sm font-bold text-indigo-700 rounded-xl cursor-pointer transition-colors"
+            className="flex items-center gap-1.5 py-1.5 px-3 bg-indigo-50 hover:bg-indigo-100 border border-indigo-200 text-xs font-bold text-indigo-700 rounded-xl cursor-pointer transition-colors"
           >
-            <RefreshCw size={14} className="text-indigo-600" />
             Sky Inventory Sync
           </button>
           <button
@@ -2087,10 +2089,10 @@ export default function ProductManagement({
                 </table>
               </div>
 
-              {/* Mobile Card View */}
-              <div className="md:hidden divide-y divide-slate-100">
+              {/* Mobile Compact 2-Column Card Grid (8-10px gaps, 8px padding, 1:1 square cover image, 34-36px buttons) */}
+              <div className="md:hidden grid grid-cols-2 gap-2 p-2">
                 {sortedProducts.length === 0 ? (
-                  <div className="py-10 text-center text-slate-400 italic text-sm">
+                  <div className="col-span-full py-10 text-center text-slate-400 italic text-xs">
                     No active gadget catalog records found.
                   </div>
                 ) : (
@@ -2102,88 +2104,95 @@ export default function ProductManagement({
                     return (
                       <div 
                         key={product.id}
-                        onClick={() => setSelectedProduct(product)}
-                        className={`p-4 active:bg-slate-50 transition-colors cursor-pointer ${
-                          selectedProduct?.id === product.id ? 'bg-amber-50/40' : ''
+                        className={`bg-white border border-slate-200/80 rounded-xl p-2 flex flex-col justify-between shadow-xs hover:shadow-sm transition-all ${
+                          selectedProduct?.id === product.id ? 'border-amber-400 ring-1 ring-amber-300' : ''
                         }`}
                       >
-                        <div className="flex gap-3">
-                          <div className="flex items-center" onClick={(e) => e.stopPropagation()}>
-                            <input
-                              type="checkbox"
-                              className="rounded border-slate-300 text-amber-500 focus:ring-amber-500 cursor-pointer size-4"
-                              checked={selectedProductIds.includes(product.id)}
-                              onChange={(e) => {
-                                if (e.target.checked) {
-                                  setSelectedProductIds([...selectedProductIds, product.id]);
-                                } else {
-                                  setSelectedProductIds(selectedProductIds.filter(id => id !== product.id));
-                                }
-                              }}
+                        <div>
+                          {/* Image area: 1:1 square ratio, object-fit: cover, corner radius 10-12px */}
+                          <div 
+                            onClick={() => setSelectedProduct(product)}
+                            className="aspect-square w-full rounded-lg overflow-hidden bg-slate-50 relative flex items-center justify-center cursor-pointer mb-1.5"
+                          >
+                            <img 
+                              src={defaultImg} 
+                              alt={product.name} 
+                              referrerPolicy="no-referrer"
+                              className="w-full h-full object-cover" 
                             />
-                          </div>
-                          <img 
-                            src={defaultImg} 
-                            alt={product.name} 
-                            referrerPolicy="no-referrer"
-                            className="w-16 h-16 object-cover rounded-xl border border-slate-100 flex-shrink-0" 
-                          />
-                          <div className="flex-1 min-w-0">
-                            <div className="flex justify-between items-start">
-                              <h4 className="text-sm font-bold text-slate-900 leading-tight truncate">{product.name}</h4>
-                              <span className={`text-[9px] font-mono font-black px-1.5 py-0.5 rounded-full ml-2 flex-shrink-0 ${
-                                product.subBrand === 'SAT' ? 'bg-slate-900 text-amber-400' : 'bg-amber-100 text-amber-800'
+
+                            {/* Checkbox overlay */}
+                            <div className="absolute top-1.5 left-1.5" onClick={(e) => e.stopPropagation()}>
+                              <input
+                                type="checkbox"
+                                className="rounded border-slate-300 text-amber-500 focus:ring-amber-500 cursor-pointer size-3.5 bg-white/90"
+                                checked={selectedProductIds.includes(product.id)}
+                                onChange={(e) => {
+                                  if (e.target.checked) {
+                                    setSelectedProductIds([...selectedProductIds, product.id]);
+                                  } else {
+                                    setSelectedProductIds(selectedProductIds.filter(id => id !== product.id));
+                                  }
+                                }}
+                              />
+                            </div>
+
+                            {/* SubBrand Badge */}
+                            <div className="absolute top-1.5 right-1.5">
+                              <span className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded ${
+                                product.subBrand === 'SAT' ? 'bg-slate-950/90 text-amber-400' : 'bg-amber-100 text-amber-900'
                               }`}>
                                 {product.subBrand}
                               </span>
                             </div>
-                            <p className="text-sm text-slate-400 font-mono mt-0.5">{product.sku}</p>
-                            {product.deletionStatus === 'pending_approval' && (
-                              <div className="mt-1">
-                                <span className="bg-rose-100 text-rose-700 text-[9px] font-mono font-bold px-1.5 py-0.5 rounded animate-pulse">
-                                  Deletion Pending
-                                </span>
-                              </div>
-                            )}
-                            
-                            <div className="flex items-center justify-between mt-3">
-                              <div className="flex items-center gap-2">
-                                <span className={`text-sm font-bold ${totalQty === 0 ? 'text-red-600' : isLow ? 'text-amber-600' : 'text-teal-600'}`}>
-                                  {totalQty} in stock
-                                </span>
-                                {isLow && totalQty > 0 && <span className="w-2 h-2 rounded-full bg-amber-500 animate-pulse"></span>}
-                              </div>
-                              <span className="text-sm font-black text-slate-950 font-mono">
-                                ৳ {product.sellingPrice.toLocaleString()}
+
+                            {/* Stock Badge */}
+                            <div className="absolute bottom-1.5 left-1.5">
+                              <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded shadow-xs ${
+                                totalQty === 0 ? 'bg-rose-500 text-white' : isLow ? 'bg-amber-500 text-slate-950' : 'bg-emerald-600/90 text-white'
+                              }`}>
+                                {totalQty === 0 ? 'Out' : `${totalQty} in stock`}
                               </span>
                             </div>
                           </div>
+
+                          {/* Secondary info (Brand, SKU) - 11-12px */}
+                          <div className="flex items-center justify-between text-[11px] text-slate-500 mb-0.5">
+                            <span className="truncate">{product.brand || product.category || 'Gadget'}</span>
+                            <span className="font-mono text-[10px] text-slate-400 truncate">{product.sku}</span>
+                          </div>
+
+                          {/* Product Title - 13-14px, max 2 lines, ellipsis */}
+                          <h4 
+                            onClick={() => setSelectedProduct(product)}
+                            className="text-[13px] font-semibold text-slate-900 line-clamp-2 leading-tight cursor-pointer hover:text-amber-600 transition-colors mb-1 min-h-[32px]"
+                            title={product.name}
+                          >
+                            {product.name}
+                          </h4>
+
+                          {/* Price - 14-15px bold */}
+                          <div className="text-[15px] font-bold text-amber-600 font-mono tracking-tight mb-2">
+                            ৳{product.sellingPrice.toLocaleString()}
+                          </div>
                         </div>
-                        
-                        <div className="flex gap-2 mt-4" onClick={(e) => e.stopPropagation()}>
+
+                        {/* Action buttons: Height 34-36px, text 12-13px, icon 16px */}
+                        <div className="grid grid-cols-2 gap-1 pt-1.5 border-t border-slate-100" onClick={(e) => e.stopPropagation()}>
                           <button
                             type="button"
                             onClick={() => openEditDrawer(product)}
-                            className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-slate-50 hover:bg-slate-100 text-slate-600 rounded-xl text-sm font-bold border border-slate-200 cursor-pointer transition-colors"
+                            className="h-[34px] flex items-center justify-center gap-1 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-lg text-xs font-bold transition cursor-pointer"
                           >
                             <Edit3 size={14} /> Edit
                           </button>
                           <button
                             type="button"
-                            onClick={() => handleArchiveProduct(product)}
-                            className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-slate-50 hover:bg-slate-100 text-slate-600 rounded-xl text-sm font-bold border border-slate-200 cursor-pointer transition-colors"
+                            onClick={() => setSelectedProduct(product)}
+                            className="h-[34px] flex items-center justify-center gap-1 bg-slate-950 hover:bg-slate-900 text-white rounded-lg text-xs font-bold transition cursor-pointer"
                           >
-                            <Archive size={14} /> Archive
+                            Overview
                           </button>
-                          {(user?.role === 'admin' || user?.role === 'superadmin') && (
-                            <button
-                              type="button"
-                              onClick={() => handleDeleteClick(product)}
-                              className="flex-1 flex items-center justify-center gap-1.5 py-2 bg-rose-50 hover:bg-rose-100 text-rose-600 rounded-xl text-sm font-bold border border-rose-100 cursor-pointer transition-colors"
-                            >
-                              <Trash2 size={14} /> Delete
-                            </button>
-                          )}
                         </div>
                       </div>
                     );
