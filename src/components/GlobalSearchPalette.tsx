@@ -142,7 +142,6 @@ export const GlobalSearchPalette: React.FC<GlobalSearchPaletteProps> = ({
         if (id === 'attendance' && !isSuperAdmin) return false;
         if (id === 'users' && !isPrivileged) return false;
         if (id === 'audit_logs' && !isPrivileged) return false;
-        if (id === 'design_system' && !isSuperAdmin) return false;
 
         if (!query.trim()) return true;
         const q = query.toLowerCase();

@@ -84,6 +84,7 @@ import SupplierManagement from './components/SupplierManagement';
 import ReportsAnalytics from './components/ReportsAnalytics';
 import { AuditLogView } from './components/AuditLogView';
 import CompanySettingsView from './components/CompanySettingsView';
+import ProfileSettingsView from './components/ProfileSettingsView';
 import NotificationCenter from './components/NotificationCenter';
 import { PublicInvoiceVerification } from './components/PublicInvoiceVerification';
 import ErrorBoundary from './components/ErrorBoundary';
@@ -93,7 +94,6 @@ import { TopBar } from './components/TopBar';
 import { Breadcrumbs } from './components/Breadcrumbs';
 import { WelcomeTour } from './components/WelcomeTour';
 import { ThemeProvider, ToastProvider, ThemeToggle } from './design-system';
-import { DesignSystemShowcase } from './components/DesignSystemShowcase';
 
 // Mock/Fallback Data in case of Firestore permission/network errors
 const MOCK_PRODUCTS: Product[] = [];
@@ -627,8 +627,20 @@ export default function App() {
       sessionStorage.setItem('sat_otp_verified', 'true');
       localStorage.setItem('sat_otp_verified', 'true');
       localStorage.setItem('sat_user_session', JSON.stringify(profile));
+      
+      // Track login
+      import('./firebase/db').then(({ addLoginHistory }) => {
+        addLoginHistory(profile.id, {
+          timestamp: Date.now(),
+          userAgent: navigator.userAgent,
+          platform: navigator.platform,
+          status: 'success'
+        }).catch(console.error);
+      });
     } catch (e) {}
     setUser(profile);
+    // ...
+
     try {
       const settings = await getCompanySettings();
       if (settings && settings.onboarded) {
@@ -983,6 +995,7 @@ export default function App() {
           <Sidebar 
             currentTab={currentTab} 
             setCurrentTab={navigateToTab} 
+            onNavigate={navigateToTab}
             user={user} 
             onLogout={handleLogout}
             isOpen={isSidebarOpen}
@@ -1182,6 +1195,13 @@ export default function App() {
         {currentTab === 'accounting' && (
           <ErrorBoundary fallbackTitle="Accounting Desk encountered an issue">
             <AccountingDesk user={user} />
+          </ErrorBoundary>
+        )}
+
+        {/* Tab Profile: Profile Settings */}
+        {currentTab === 'profile' && (
+          <ErrorBoundary fallbackTitle="Profile Settings encountered an issue">
+            <ProfileSettingsView user={user} onRefreshUser={refreshUserProfile} />
           </ErrorBoundary>
         )}
 
@@ -1446,12 +1466,7 @@ export default function App() {
           </div>
         )}
 
-        {/* Tab Design System: Master Showcase for Super Admins */}
-        {currentTab === 'design_system' && (
-          <ErrorBoundary fallbackTitle="Design System Showcase encountered an issue">
-            <DesignSystemShowcase user={user} />
-          </ErrorBoundary>
-        )}
+
 
       </main>
 

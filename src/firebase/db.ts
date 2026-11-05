@@ -63,7 +63,7 @@ import {
  * Recursively removes 'undefined' values from an object or array,
  * replacing them with 'null' or omitting them to prevent Firestore errors.
  */
-function sanitizeData(data: any): any {
+export function sanitizeData(data: any): any {
   if (data === undefined) return null;
   if (data === null || typeof data !== 'object') return data;
   
@@ -4838,3 +4838,42 @@ export async function deleteAccountingVoucher(id: string): Promise<void> {
 
 
 
+
+export async function addLoginHistory(userId: string, record: { timestamp: number, userAgent: string, platform: string, status: string }): Promise<void> {
+  try {
+    const colRef = collection(db, 'users', userId, 'loginHistory');
+    await addDoc(colRef, record);
+    
+    // Limit to 20 records
+    const q = query(colRef, orderBy('timestamp', 'desc'));
+    const snapshot = await getDocs(q);
+    if (snapshot.size > 20) {
+        const batch = writeBatch(db);
+        snapshot.docs.slice(20).forEach(doc => batch.delete(doc.ref));
+        await batch.commit();
+    }
+  } catch (e) {
+    console.error('addLoginHistory error:', e);
+  }
+}
+
+export async function getLoginHistory(userId: string, limitCount: number = 20): Promise<any[]> {
+  try {
+    const colRef = collection(db, 'users', userId, 'loginHistory');
+    const q = query(colRef, orderBy('timestamp', 'desc'), limit(limitCount));
+    const snapshot = await getDocs(q);
+    return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
+  } catch (e) {
+    console.error('getLoginHistory error:', e);
+    return [];
+  }
+}
+
+export async function revokeAllSessions(userId: string): Promise<void> {
+  try {
+    await updateUserProfile(userId, { sessionsRevokedAt: Date.now() });
+  } catch (e) {
+    console.error('revokeAllSessions error:', e);
+    throw e;
+  }
+}

@@ -12,14 +12,31 @@
         "role": { "type": "string" },
         "subBrandAccess": { "type": "array" },
         "designation": { "type": "string" },
+        "department": { "type": "string" },
         "joiningDate": { "type": "string" },
         "nidNumber": { "type": "string" },
         "address": { "type": "string" },
+        "dob": { "type": "string" },
+        "gender": { "type": "string" },
+        "notificationPrefs": { "type": "object" },
+        "twoFactorEnabled": { "type": "boolean" },
+        "sessionsRevokedAt": { "type": "number" },
         "requirePasswordChange": { "type": "boolean" },
         "permissionOverrides": { "type": "object" },
         "active": { "type": "boolean" },
         "createdBy": { "type": "string" },
         "createdAt": { "type": "number" }
+      }
+    },
+    "LoginHistory": {
+      "title": "LoginHistory",
+      "description": "User login records",
+      "type": "object",
+      "properties": {
+        "timestamp": { "type": "number" },
+        "userAgent": { "type": "string" },
+        "platform": { "type": "string" },
+        "status": { "type": "string" }
       }
     },
     "PrivateEmploymentInfo": {
@@ -309,6 +326,10 @@
     "/users/{userId}": {
       "schema": "UserProfile",
       "description": "User profile collection"
+    },
+    "/users/{userId}/loginHistory/{loginId}": {
+      "schema": "LoginHistory",
+      "description": "User login history"
     },
     "/users/{userId}/private/employment": {
       "schema": "PrivateEmploymentInfo",

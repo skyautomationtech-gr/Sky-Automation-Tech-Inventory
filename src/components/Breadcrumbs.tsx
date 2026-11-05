@@ -1,5 +1,5 @@
 import React from 'react';
-import { ChevronRight, Home, LayoutDashboard, Package, ArrowUpDown, ShoppingBag, Receipt, Coins, Calculator, Truck, BarChart3, Activity, DollarSign, Contact, Users, ShieldCheck, Settings, Sparkles } from 'lucide-react';
+import { ChevronRight, Home, LayoutDashboard, Package, ArrowUpDown, ShoppingBag, Receipt, Coins, Calculator, Truck, BarChart3, Activity, DollarSign, Contact, Users, ShieldCheck, Settings, User } from 'lucide-react';
 
 interface BreadcrumbsProps {
   currentTab: string;
@@ -29,7 +29,7 @@ export const TAB_DIRECTORY: Record<string, TabMeta> = {
   attendance: { group: 'People & CRM', label: 'Attendance Log', icon: Users },
   users: { group: 'Administration', label: 'Staff Permissions', icon: ShieldCheck },
   settings: { group: 'Administration', label: 'Company Settings', icon: Settings },
-  design_system: { group: 'Developer', label: 'Design System', icon: Sparkles },
+  profile: { group: 'Administration', label: 'Profile Settings', icon: User },
 };
 
 export const Breadcrumbs: React.FC<BreadcrumbsProps> = ({ currentTab, onNavigate, className = '' }) => {

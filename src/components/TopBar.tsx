@@ -6,7 +6,6 @@ import {
   Clock, 
   LogOut, 
   Settings, 
-  Sparkles, 
   User as UserIcon, 
   ShieldCheck, 
   ArrowRight,
@@ -136,7 +135,7 @@ export const TopBar: React.FC<TopBarProps> = ({
 
   return (
     <>
-      <header className="sticky top-0 z-30 h-16 w-full bg-white/90 dark:bg-slate-900/90 backdrop-blur-md border-b border-slate-200/90 dark:border-slate-800/90 px-6 flex items-center justify-between gap-4 transition-colors shadow-2xs shrink-0">
+      <header className="sticky top-0 z-30 h-16 w-full max-w-full box-border overflow-hidden bg-white/90 dark:bg-slate-900/90 backdrop-blur-md border-b border-slate-200/90 dark:border-slate-800/90 px-6 flex items-center justify-between gap-3 transition-colors shadow-2xs shrink-0">
         
         {/* Left Zone: Mobile Menu + Page Title Only (Clean, no toggle overlap) */}
         <div className="flex items-center gap-3.5 shrink-0 min-w-[220px]">
@@ -165,12 +164,12 @@ export const TopBar: React.FC<TopBarProps> = ({
         </div>
 
         {/* Center Zone: Search Bar (Fixed 320px on ≥1440px / xl+, collapses to 40x40 icon below 1440px) */}
-        <div className="shrink-0">
-          {/* Desktop 320px Search Bar */}
+        <div className="flex-[1_1_320px] min-w-[200px] max-w-[360px] flex items-center justify-center shrink">
+          {/* Desktop Search Bar */}
           <button
             type="button"
             onClick={() => setIsSearchOpen(true)}
-            className="hidden xl:flex w-[320px] h-10 px-3.5 rounded-xl bg-slate-100 dark:bg-slate-800/80 hover:bg-slate-200/70 dark:hover:bg-slate-800 border border-slate-200/90 dark:border-slate-700/80 text-slate-500 dark:text-slate-400 text-xs items-center justify-between transition-all cursor-pointer shadow-inner focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/40 group"
+            className="hidden xl:flex w-full h-10 px-3.5 rounded-xl bg-slate-100 dark:bg-slate-800/80 hover:bg-slate-200/70 dark:hover:bg-slate-800 border border-slate-200/90 dark:border-slate-700/80 text-slate-500 dark:text-slate-400 text-xs items-center justify-between transition-all cursor-pointer shadow-inner focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/40 group"
           >
             <div className="flex items-center gap-2.5 truncate">
               <Search size={15} className="text-slate-400 group-hover:text-[#D4AF37] transition-colors shrink-0" />
@@ -215,13 +214,13 @@ export const TopBar: React.FC<TopBarProps> = ({
             <span>{isCheckedIn ? 'Checked In' : 'Checked Out'}</span>
           </button>
 
-          {/* Date/Time Widget (Height 40px, tabular-nums, date visible on xl+, time only below) */}
-          <div className="h-10 px-3 rounded-xl bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 text-xs flex items-center gap-2 shrink-0 whitespace-nowrap text-slate-800 dark:text-slate-200 shadow-2xs">
-            <Clock size={15} className="text-[#D4AF37] shrink-0" />
-            <span className="font-mono font-bold tracking-tight" style={{ fontVariantNumeric: 'tabular-nums', minWidth: '70px' }}>
+          {/* Date/Time Widget (Hide full date below 1440px) */}
+          <div className="h-10 px-2 rounded-xl bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 text-xs flex items-center gap-2 flex-shrink-0 whitespace-nowrap text-slate-800 dark:text-slate-200 shadow-2xs">
+            <Clock size={15} className="text-[#D4AF37] flex-shrink-0" />
+            <span className="font-mono font-bold tracking-tight tabular-nums">
               {formattedTime}
             </span>
-            <span className="hidden 2xl:inline text-slate-400 dark:text-slate-500 text-[11px] font-medium border-l border-slate-200 dark:border-slate-700 pl-2">
+            <span className="hidden 1440:inline text-slate-400 dark:text-slate-500 text-[11px] font-medium border-l border-slate-200 dark:border-slate-700 pl-2">
               {formattedDate}
             </span>
           </div>
@@ -231,102 +230,8 @@ export const TopBar: React.FC<TopBarProps> = ({
             <NotificationCenter user={user} products={products} onNavigate={onNavigate} />
           </div>
 
-          {/* Theme Toggle (Light / Dark, 40x40) */}
-          <div className="shrink-0">
+          <div className="flex-shrink-0">
             <ThemeToggle />
-          </div>
-
-          {/* User Chip (Avatar + Name with max-width 160px truncate + chevron, avatar only on lg below) */}
-          <div className="relative shrink-0" ref={userMenuRef}>
-            <button
-              type="button"
-              onClick={() => setIsUserMenuOpen(prev => !prev)}
-              className="h-10 px-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 transition-all cursor-pointer flex items-center gap-2 shadow-2xs focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/40"
-              aria-expanded={isUserMenuOpen}
-              title={`${user?.name || 'User'} (${user?.role || 'Staff'})`}
-            >
-              <div className="w-7 h-7 rounded-lg bg-gradient-to-tr from-amber-600 to-amber-400 text-slate-950 font-black text-xs flex items-center justify-center uppercase shadow-2xs shrink-0">
-                {user?.name ? user.name.charAt(0) : 'U'}
-              </div>
-              <span className="hidden xl:block text-xs font-bold text-slate-800 dark:text-slate-100 truncate max-w-[160px]">
-                {user?.name || 'Operator'}
-              </span>
-              <ChevronDown size={14} className="hidden xl:block text-slate-400 shrink-0" />
-            </button>
-
-            {/* Dropdown Menu */}
-            {isUserMenuOpen && (
-              <div className="absolute right-0 mt-2 w-72 rounded-2xl bg-white/95 dark:bg-slate-900/95 backdrop-blur-xl border border-slate-200 dark:border-slate-800 shadow-2xl p-2 z-50 animate-scale-in">
-                <div className="p-3 border-b border-slate-100 dark:border-slate-800/80">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-amber-600 to-amber-400 text-slate-950 font-black text-sm flex items-center justify-center uppercase shadow-xs shrink-0">
-                      {user?.name ? user.name.charAt(0) : 'U'}
-                    </div>
-                    <div className="min-w-0 flex-1">
-                      <p className="text-sm font-extrabold text-slate-900 dark:text-white truncate font-sans">
-                        {user?.name || 'Authorized Operator'}
-                      </p>
-                      <p className="text-xs text-slate-500 dark:text-slate-400 truncate font-mono">
-                        {user?.email || 'user@sat.com'}
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="mt-2.5 flex items-center gap-2">
-                    <span className={`px-2 py-0.5 text-[10px] font-mono font-bold uppercase rounded-md border ${getRoleBadgeColor(user?.role)}`}>
-                      {user?.role || 'Staff'}
-                    </span>
-                    {user?.subBrandAccess && user.subBrandAccess.length > 0 && (
-                      <span className="text-[10px] text-slate-400 font-mono">
-                        Brands: {user.subBrandAccess.join(', ')}
-                      </span>
-                    )}
-                  </div>
-                </div>
-
-                <div className="py-1 space-y-0.5 text-xs">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      onNavigate('settings');
-                      setIsUserMenuOpen(false);
-                    }}
-                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-slate-700 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors cursor-pointer text-left"
-                  >
-                    <Settings size={15} className="text-slate-400" />
-                    <span>Company & System Settings</span>
-                  </button>
-
-                  {user?.role === 'superadmin' && (
-                    <button
-                      type="button"
-                      onClick={() => {
-                        onNavigate('design_system');
-                        setIsUserMenuOpen(false);
-                      }}
-                      className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-amber-600 dark:text-amber-400 hover:bg-amber-50 dark:hover:bg-amber-950/30 transition-colors cursor-pointer text-left font-semibold"
-                    >
-                      <Sparkles size={15} />
-                      <span>Design System Showcase</span>
-                    </button>
-                  )}
-                </div>
-
-                <div className="pt-1 mt-1 border-t border-slate-100 dark:border-slate-800/80">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setIsUserMenuOpen(false);
-                      onLogout();
-                    }}
-                    className="w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/30 transition-colors cursor-pointer text-left font-bold"
-                  >
-                    <LogOut size={15} />
-                    <span>Sign Out of Platform</span>
-                  </button>
-                </div>
-              </div>
-            )}
           </div>
 
         </div>

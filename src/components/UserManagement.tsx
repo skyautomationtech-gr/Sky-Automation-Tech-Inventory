@@ -117,6 +117,7 @@ export default function UserManagement({ user }: UserManagementProps) {
   const [designation, setDesignation] = useState('');
   const [joiningDate, setJoiningDate] = useState('');
   const [salary, setSalary] = useState<number | ''>('');
+  const [department, setDepartment] = useState('');
   const [nidNumber, setNidNumber] = useState('');
   const [address, setAddress] = useState('');
 
@@ -1006,7 +1007,20 @@ export default function UserManagement({ user }: UserManagementProps) {
                       />
                     </div>
 
-                    <div className="sm:col-span-2">
+                    <div className="sm:col-span-1">
+                      <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1">
+                        Department
+                      </label>
+                      <input
+                        type="text"
+                        value={department}
+                        onChange={(e) => setDepartment(e.target.value)}
+                        className="w-full bg-slate-50 border border-slate-200 rounded-lg px-3 py-1.5 text-xs text-slate-800 focus:outline-hidden"
+                        placeholder="e.g. Sales"
+                      />
+                    </div>
+
+                    <div className="sm:col-span-1">
                       <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1">
                         Address
                       </label>

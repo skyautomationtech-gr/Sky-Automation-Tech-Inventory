@@ -19,7 +19,7 @@ export interface UserProfile {
   phone?: string;
   alternativeMobile?: string;
   photoUrl?: string;
-  dateOfBirth?: string;
+  dob?: string;
   gender?: 'Male' | 'Female' | 'Other' | string;
   nidNumber?: string;
   presentAddress?: string;
@@ -65,6 +65,20 @@ export interface UserProfile {
 
   // Theme Preference
   themePreference?: 'light' | 'dark' | 'system';
+
+  // New Profile & Security Fields
+  address?: string;
+  twoFactorEnabled?: boolean;
+  lastLoginAt?: number;
+  sessionsRevokedAt?: number;
+  notificationPrefs?: {
+    orderUpdates?: boolean;
+    lowStockAlerts?: boolean;
+    pendingApprovals?: boolean;
+    duePaymentReminders?: boolean;
+    attendanceReminders?: boolean;
+    systemAnnouncements?: boolean;
+  };
 }
 
 export interface PrivateEmploymentInfo {

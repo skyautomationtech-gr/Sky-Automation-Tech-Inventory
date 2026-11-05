@@ -74,7 +74,7 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
 
   // New Employee Registration Fields & Step Wizard
   const [signupStep, setSignupStep] = useState(1); // 1: Personal, 2: Contact & OTP, 3: Employment & Credentials
-  const [dateOfBirth, setDateOfBirth] = useState('');
+  const [dob, setDob] = useState('');
   const [gender, setGender] = useState('Male');
   const [nidNumber, setNidNumber] = useState('');
   const [alternativeMobile, setAlternativeMobile] = useState('');
@@ -205,7 +205,7 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
         requestedSubBrandAccess: requestedSubBrands,
         designation: designation.trim() || undefined,
         photoUrl: photoUrl.trim() || undefined,
-        dateOfBirth,
+        dob,
         gender,
         nidNumber: nidNumber.trim(),
         alternativeMobile: alternativeMobile.trim() || undefined,
@@ -1085,8 +1085,8 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
                             </label>
                             <input
                               type="date"
-                              value={dateOfBirth}
-                              onChange={(e) => setDateOfBirth(e.target.value)}
+                              value={dob}
+                              onChange={(e) => setDob(e.target.value)}
                               className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-xl py-2.5 px-3 text-white text-sm focus:ring-2 focus:ring-[#D4AF37]"
                             />
                           </div>
@@ -1121,7 +1121,7 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
                           <button
                             type="button"
                             onClick={() => {
-                              if (!fullName.trim() || !photoUrl.trim() || !dateOfBirth || !nidNumber.trim()) {
+                              if (!fullName.trim() || !photoUrl.trim() || !dob || !nidNumber.trim()) {
                                 setError('Please fill in all required fields in Personal Information.');
                                 return;
                               }

@@ -17,7 +17,7 @@ import {
   BarChart3, 
   Activity,
   Calculator,
-  Sparkles,
+  User,
   ChevronRight,
   ExternalLink,
   PanelLeftClose,
@@ -28,6 +28,7 @@ import { UserProfile } from '../types';
 interface SidebarProps {
   currentTab: string;
   setCurrentTab: (tab: string) => void;
+  onNavigate: (tab: string, subAction?: string, initialId?: string | null) => void;
   user: UserProfile | null;
   onLogout: () => void;
   isOpen: boolean;
@@ -53,6 +54,7 @@ interface MenuGroup {
 export default function Sidebar({
   currentTab,
   setCurrentTab,
+  onNavigate,
   user,
   onLogout,
   isOpen,
@@ -112,7 +114,7 @@ export default function Sidebar({
       title: 'Administration',
       items: [
         { id: 'settings', name: 'Company Settings', icon: Settings },
-        ...(isSuperAdmin ? [{ id: 'design_system', name: 'Design System', icon: Sparkles, badge: 'Phase 1' }] : []),
+        { id: 'profile', name: 'Profile Settings', icon: User },
       ],
     },
   ];
@@ -273,7 +275,11 @@ export default function Sidebar({
         <div className="p-3 border-t border-slate-800/80 bg-slate-950/60 shrink-0">
           {!isCollapsed ? (
             <div className="flex items-center justify-between gap-3">
-              <div className="flex items-center gap-2.5 min-w-0">
+              <div 
+                className="flex items-center gap-2.5 min-w-0 cursor-pointer hover:opacity-80 transition-opacity"
+                onClick={() => onNavigate('profile')}
+                title="My Profile"
+              >
                 <div className="w-8 h-8 rounded-xl bg-gradient-to-tr from-amber-600 to-amber-400 text-slate-950 font-black text-xs flex items-center justify-center uppercase shrink-0 shadow-xs">
                   {user?.name ? user.name.charAt(0) : 'U'}
                 </div>
@@ -289,7 +295,7 @@ export default function Sidebar({
 
               <button
                 type="button"
-                onClick={onLogout}
+                onClick={() => onLogout()}
                 className="p-2 rounded-xl text-slate-400 hover:text-red-400 hover:bg-red-500/10 transition-colors cursor-pointer shrink-0"
                 title="Sign Out"
               >
@@ -297,10 +303,18 @@ export default function Sidebar({
               </button>
             </div>
           ) : (
-            <div className="flex justify-center">
+            <div className="flex flex-col gap-3 items-center">
               <button
                 type="button"
-                onClick={onLogout}
+                onClick={() => onNavigate('profile')}
+                className="w-10 h-10 rounded-xl bg-gradient-to-tr from-amber-600 to-amber-400 text-slate-950 font-black text-xs flex items-center justify-center uppercase shadow-xs cursor-pointer"
+                title="My Profile"
+              >
+                {user?.name ? user.name.charAt(0) : 'U'}
+              </button>
+              <button
+                type="button"
+                onClick={() => onLogout()}
                 className="p-2.5 rounded-xl text-slate-400 hover:text-red-400 hover:bg-red-500/10 transition-colors cursor-pointer"
                 title="Sign Out"
               >

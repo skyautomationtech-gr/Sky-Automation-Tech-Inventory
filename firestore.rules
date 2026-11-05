@@ -1,84 +1,33 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    
-    // Explicit operational collections for app features
-    match /notifications/{id} {
-      allow read, write: if true;
-    }
-    match /products/{id} {
-      allow read, write: if true;
-    }
-    match /orders/{id} {
-      allow read, write: if true;
-    }
-    match /customers/{id} {
-      allow read, write: if true;
-    }
-    match /users/{id} {
-      allow read, write: if true;
-    }
-    match /suppliers/{id} {
-      allow read, write: if true;
-    }
-    match /expenses/{id} {
-      allow read, write: if true;
-    }
-    match /incomes/{id} {
-      allow read, write: if true;
-    }
-    match /branches/{id} {
-      allow read, write: if true;
-    }
-    match /categories/{id} {
-      allow read, write: if true;
-    }
-    match /brands/{id} {
-      allow read, write: if true;
-    }
-    match /colors/{id} {
-      allow read, write: if true;
-    }
-    match /models/{id} {
-      allow read, write: if true;
-    }
-    match /settings/{id} {
-      allow read, write: if true;
+    function isSignedIn() { return request.auth != null; }
+    function isOwner(userId) { return isSignedIn() && request.auth.uid == userId; }
+    function isAdmin() { 
+      return isSignedIn() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['superadmin', 'admin']; 
     }
 
-    // Accounting & Financial Health collections
-    match /investments/{id} {
-      allow read, write: if true;
-    }
-    match /companyPurchases/{id} {
-      allow read, write: if true;
-    }
-    match /companyLosses/{id} {
-      allow read, write: if true;
-    }
-    match /cashReconciliations/{id} {
-      allow read, write: if true;
-    }
-    match /otherReceivables/{id} {
-      allow read, write: if true;
-    }
-    match /paymentPlatformLedger/{id} {
-      allow read, write: if true;
-    }
-    match /importShippingCosts/{id} {
-      allow read, write: if true;
-    }
-    match /chartOfAccounts/{id} {
-      allow read, write: if true;
-    }
-    match /accountingVouchers/{id} {
-      allow read, write: if true;
+    // Users & History
+    match /users/{userId} {
+      allow read: if isSignedIn() && (isOwner(userId) || isAdmin());
+      // Self-update allowed fields only
+      allow update: if isSignedIn() && isOwner(userId) && 
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'name', 'phone', 'address', 'dob', 'gender', 'photoUrl', 
+          'notificationPrefs', 'twoFactorEnabled', 'lastLoginAt', 'sessionsRevokedAt',
+          'themePreference'
+        ]);
+      allow update: if isAdmin();
     }
 
-    // Catch-all fallback for any other collections or nested documents
+    match /users/{userId}/loginHistory/{loginId} {
+        allow read: if isSignedIn() && (isOwner(userId) || isAdmin());
+        allow create: if isSignedIn() && isOwner(userId);
+    }
+
+    // Placeholder for other collections
     match /{document=**} {
       allow read, write: if true;
     }
   }
 }
-
