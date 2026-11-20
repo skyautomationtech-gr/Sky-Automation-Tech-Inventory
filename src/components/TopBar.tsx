@@ -18,7 +18,7 @@ import {
   Calendar,
   ChevronDown
 } from 'lucide-react';
-import { UserProfile, Product, CompanySettings } from '../types';
+import { UserProfile, Product, CompanySettings, RolePermissionsMap } from '../types';
 import NotificationCenter from './NotificationCenter';
 import { ThemeToggle } from '../design-system/ThemeToggle';
 import { TAB_DIRECTORY } from './Breadcrumbs';
@@ -28,6 +28,7 @@ interface TopBarProps {
   currentTab: string;
   onNavigate: (tab: string, subAction?: string, initialId?: string | null) => void;
   user: UserProfile | null;
+  rolePermissions?: RolePermissionsMap | null;
   products?: Product[];
   companySettings: CompanySettings | null;
   onLogout: () => void;
@@ -42,6 +43,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   currentTab,
   onNavigate,
   user,
+  rolePermissions = null,
   products = [],
   companySettings,
   onLogout,
@@ -243,6 +245,7 @@ export const TopBar: React.FC<TopBarProps> = ({
         onClose={() => setIsSearchOpen(false)}
         onNavigate={onNavigate}
         user={user}
+        rolePermissions={rolePermissions}
         products={products}
         onToggleTheme={onToggleTheme}
         onLogout={onLogout}

@@ -1,33 +1,326 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
-    function isSignedIn() { return request.auth != null; }
-    function isOwner(userId) { return isSignedIn() && request.auth.uid == userId; }
-    function isAdmin() { 
-      return isSignedIn() && get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role in ['superadmin', 'admin']; 
+    // ==========================================
+    // CORE AUTH & ROLE / PERMISSION HELPERS
+    // ==========================================
+    function isSignedIn() {
+      return request.auth != null;
     }
 
-    // Users & History
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function hasUserDoc() {
+      return isSignedIn() && exists(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function userData() {
+      return get(/databases/$(database)/documents/users/$(request.auth.uid)).data;
+    }
+
+    function userRole() {
+      return hasUserDoc() ? userData().get('role', 'staff') : '';
+    }
+
+    function isActiveUser() {
+      return hasUserDoc() && userData().get('active', true) != false;
+    }
+
+    function isSuperAdmin() {
+      return isActiveUser() && userRole() in ['superadmin', 'super_admin'];
+    }
+
+    function isAdmin() {
+      return isActiveUser() && userRole() in ['superadmin', 'super_admin', 'admin'];
+    }
+
+    function hasRolePermsDoc() {
+      return exists(/databases/$(database)/documents/settings/rolePermissions);
+    }
+
+    function rolePermsData() {
+      return get(/databases/$(database)/documents/settings/rolePermissions).data;
+    }
+
+    function hasPreOrderPerm(permKey) {
+      return isSuperAdmin() || (
+        isActiveUser() && (
+          (userData().keys().hasAny(['permissionOverrides']) &&
+           userData().permissionOverrides.keys().hasAny([permKey]))
+            ? userData().permissionOverrides[permKey] == true
+            : (hasRolePermsDoc() &&
+               rolePermsData().keys().hasAny([userRole()]) &&
+               rolePermsData()[userRole()].keys().hasAny([permKey])
+                ? rolePermsData()[userRole()][permKey] == true
+                : (userRole() == 'admin' ||
+                   (userRole() == 'manager' && permKey in [
+                     'preOrderView', 'preOrderCreate', 'preOrderEdit', 'preOrderUpdateStatus',
+                     'preOrderCollectPayment', 'preOrderVerifyPayment', 'preOrderReceiveStock',
+                     'preOrderConvertSale', 'preOrderManageTracking', 'preOrderSupplier', 'preOrderReports'
+                   ]) ||
+                   (userRole() == 'staff' && permKey in [
+                     'preOrderView', 'preOrderCreate', 'preOrderUpdateStatus',
+                     'preOrderCollectPayment', 'preOrderReceiveStock'
+                   ])))
+        )
+      );
+    }
+
+    // ==========================================
+    // USERS, PRIVATE EMPLOYMENT, LOGIN HISTORY & ATTENDANCE
+    // ==========================================
     match /users/{userId} {
       allow read: if isSignedIn() && (isOwner(userId) || isAdmin());
+      allow create: if isAdmin() || isOwner(userId);
       // Self-update allowed fields only
-      allow update: if isSignedIn() && isOwner(userId) && 
+      allow update: if isSignedIn() && isOwner(userId) &&
         request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-          'name', 'phone', 'address', 'dob', 'gender', 'photoUrl', 
+          'name', 'phone', 'address', 'dob', 'gender', 'photoUrl',
           'notificationPrefs', 'twoFactorEnabled', 'lastLoginAt', 'sessionsRevokedAt',
-          'themePreference'
+          'themePreference', 'currentSessionStatus', 'currentSessionId', 'currentSessionDate'
         ]);
       allow update: if isAdmin();
+      allow delete: if isSuperAdmin();
     }
 
     match /users/{userId}/loginHistory/{loginId} {
-        allow read: if isSignedIn() && (isOwner(userId) || isAdmin());
-        allow create: if isSignedIn() && isOwner(userId);
+      allow read: if isSignedIn() && (isOwner(userId) || isAdmin());
+      allow create: if isSignedIn() && isOwner(userId);
     }
 
-    // Placeholder for other collections
-    match /{document=**} {
-      allow read, write: if true;
+    match /users/{userId}/private/{docId} {
+      allow read: if isSignedIn() && (isOwner(userId) || isSuperAdmin());
+      allow write: if isSuperAdmin();
     }
+
+    match /attendance/{attendanceId} {
+      allow read: if isSignedIn();
+      allow create, update: if isSignedIn();
+      allow delete: if isAdmin();
+    }
+
+    match /liveLoginCodes/{codeId} {
+      allow read, write: if isSignedIn();
+    }
+
+    // ==========================================
+    // SETTINGS & SEQUENTIAL COUNTERS
+    // ==========================================
+    match /settings/rolePermissions {
+      allow read: if isSignedIn();
+      allow write: if isSuperAdmin();
+    }
+
+    match /settings/preOrderCounter {
+      allow read: if hasPreOrderPerm('preOrderView') || hasPreOrderPerm('preOrderCreate');
+      allow create, update: if hasPreOrderPerm('preOrderCreate');
+      allow delete: if false;
+    }
+
+    match /settings/customerCounter {
+      allow read: if isSignedIn();
+      allow create, update: if isAdmin() || hasPreOrderPerm('preOrderCreate');
+      allow delete: if false;
+    }
+
+    match /settings/supplierCounter {
+      allow read: if isSignedIn();
+      allow create, update: if isAdmin() || hasPreOrderPerm('preOrderCreate') || hasPreOrderPerm('preOrderSupplier');
+      allow delete: if false;
+    }
+
+    match /settings/{settingId} {
+      allow read: if isSignedIn() && !(settingId in ['rolePermissions', 'preOrderCounter', 'customerCounter', 'supplierCounter']);
+      allow write: if isAdmin() && !(settingId in ['rolePermissions', 'preOrderCounter', 'customerCounter', 'supplierCounter']);
+    }
+
+    // ==========================================
+    // PRE-ORDER MANAGEMENT SYSTEM
+    // ==========================================
+    match /preOrders/{preOrderId} {
+      allow read: if hasPreOrderPerm('preOrderView');
+
+      // Restricted fields (chinaUnitCost, expectedProfit, internalNotes, supplierUnitCost, shippingCost)
+      // MUST live in preOrders/{id}/private/cost so unauthorized roles cannot read them.
+      allow create: if hasPreOrderPerm('preOrderCreate') &&
+        request.resource.data.preOrderNumber is string &&
+        request.resource.data.qty is number &&
+        request.resource.data.qty > 0 &&
+        !request.resource.data.keys().hasAny([
+          'chinaUnitCost', 'shippingCost', 'expectedProfit', 'internalNotes', 'supplierUnitCost'
+        ]);
+
+      allow update: if (
+          hasPreOrderPerm('preOrderEdit') ||
+          hasPreOrderPerm('preOrderUpdateStatus') ||
+          hasPreOrderPerm('preOrderVerifyPayment') ||
+          hasPreOrderPerm('preOrderReceiveStock') ||
+          hasPreOrderPerm('preOrderConvertSale') ||
+          hasPreOrderPerm('preOrderManageTracking')
+        ) &&
+        !request.resource.data.keys().hasAny([
+          'chinaUnitCost', 'shippingCost', 'expectedProfit', 'internalNotes', 'supplierUnitCost'
+        ]) &&
+        request.resource.data.preOrderNumber == resource.data.preOrderNumber &&
+        request.resource.data.createdBy == resource.data.createdBy &&
+        request.resource.data.createdAt == resource.data.createdAt &&
+        (
+          !(resource.data.status in ['Delivered', 'Cancelled', 'Refunded']) ||
+          (resource.data.status == 'Cancelled' &&
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'status', 'refundedAmount', 'dueAmount', 'paymentState', 'updatedAt', 'updatedBy'
+            ]))
+        ) &&
+        (
+          isAdmin() ||
+          !(
+            (resource.data.get('paymentCount', 0) > 0 ||
+             resource.data.get('advancePaid', 0) > 0 ||
+             resource.data.get('pendingAmount', 0) > 0) &&
+            request.resource.data.diff(resource.data).affectedKeys().hasAny([
+              'qty', 'sellingUnitPrice', 'subtotal', 'deliveryCharge', 'discount', 'totalAmount'
+            ])
+          )
+        );
+
+      allow delete: if false;
+
+      // Restricted Cost / Profit / Internal Notes Subdocument
+      match /private/cost {
+        allow read: if hasPreOrderPerm('preOrderViewProfit');
+        allow create: if hasPreOrderPerm('preOrderCreate') || hasPreOrderPerm('preOrderViewProfit');
+        allow update: if hasPreOrderPerm('preOrderViewProfit') &&
+          (hasPreOrderPerm('preOrderEdit') || isAdmin());
+        allow delete: if false;
+      }
+
+      // Append-Only Payments Ledger (only status transition pending -> verified/rejected allowed on update)
+      match /payments/{paymentId} {
+        allow read: if hasPreOrderPerm('preOrderView');
+        allow create: if (
+            (request.resource.data.type == 'refund' && hasPreOrderPerm('preOrderRefund')) ||
+            (request.resource.data.type != 'refund' &&
+              (hasPreOrderPerm('preOrderCollectPayment') || hasPreOrderPerm('preOrderCreate')))
+          ) &&
+          request.resource.data.amount is number &&
+          request.resource.data.amount > 0 &&
+          request.resource.data.idempotencyKey is string &&
+          request.resource.data.idempotencyKey.size() > 0 &&
+          request.resource.data.status in ['pending', 'verified'] &&
+          (request.resource.data.status == 'pending' || hasPreOrderPerm('preOrderVerifyPayment'));
+
+        allow update: if hasPreOrderPerm('preOrderVerifyPayment') &&
+          resource.data.status == 'pending' &&
+          request.resource.data.status in ['verified', 'rejected'] &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'status', 'verifiedBy', 'verifiedByName', 'verifiedAt', 'rejectionReason'
+          ]) &&
+          request.resource.data.amount == resource.data.amount &&
+          request.resource.data.type == resource.data.type;
+
+        allow delete: if false;
+      }
+
+      // Append-Only Status History
+      match /statusHistory/{historyId} {
+        allow read: if hasPreOrderPerm('preOrderView');
+        allow create: if hasPreOrderPerm('preOrderCreate') || hasPreOrderPerm('preOrderUpdateStatus');
+        allow update, delete: if false;
+      }
+
+      // Shipment Details Subdocument
+      match /shipment/{docId} {
+        allow read: if hasPreOrderPerm('preOrderView');
+        allow create, update: if hasPreOrderPerm('preOrderManageTracking') || hasPreOrderPerm('preOrderUpdateStatus');
+        allow delete: if false;
+      }
+    }
+
+    // Append-Only Pre-Order Supplier Payments
+    match /preOrderSupplierPayments/{paymentId} {
+      allow read: if hasPreOrderPerm('preOrderSupplier') ||
+        hasPreOrderPerm('preOrderViewProfit') ||
+        hasPreOrderPerm('preOrderReports');
+      allow create: if hasPreOrderPerm('preOrderSupplier') &&
+        request.resource.data.amount is number &&
+        request.resource.data.amount > 0 &&
+        request.resource.data.idempotencyKey is string;
+      allow update, delete: if false;
+    }
+
+    // Public Customer Tracking Links:
+    // Unauthenticated single-doc GET ONLY (no list/query, no write, no private fields)
+    match /publicTracking/{token} {
+      allow get: if true;
+      allow list: if hasPreOrderPerm('preOrderView');
+      allow create: if hasPreOrderPerm('preOrderCreate') || hasPreOrderPerm('preOrderManageTracking');
+      allow update: if hasPreOrderPerm('preOrderManageTracking') ||
+        hasPreOrderPerm('preOrderUpdateStatus') ||
+        hasPreOrderPerm('preOrderEdit') ||
+        hasPreOrderPerm('preOrderVerifyPayment');
+      allow delete: if isSuperAdmin();
+    }
+
+    // Append-Only Pre-Order Audit Log
+    match /preOrderAudit/{auditId} {
+      allow read: if hasPreOrderPerm('preOrderReports') || isAdmin();
+      allow create: if hasPreOrderPerm('preOrderView') || hasPreOrderPerm('preOrderCreate');
+      allow update, delete: if false;
+    }
+
+    // Pre-Order Notifications
+    match /preOrderNotifications/{notificationId} {
+      allow read: if hasPreOrderPerm('preOrderView');
+      allow create: if hasPreOrderPerm('preOrderView') || hasPreOrderPerm('preOrderCreate');
+      allow update: if hasPreOrderPerm('preOrderView') &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['readBy']);
+      allow delete: if isSuperAdmin();
+    }
+
+    // ==========================================
+    // EXISTING PLATFORM COLLECTIONS
+    // ==========================================
+    match /products/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /categories/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /brands/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /productColors/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /productModels/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /orders/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /invoices/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /customers/{docId} {
+      allow read: if isSignedIn();
+      allow create, update: if isAdmin() || hasPreOrderPerm('preOrderCreate') || hasPreOrderPerm('preOrderEdit');
+      allow delete: if isAdmin();
+    }
+    match /customerPhones/{phone} {
+      allow read: if isSignedIn();
+      allow create, update: if isAdmin() || hasPreOrderPerm('preOrderCreate');
+      allow delete: if isAdmin();
+    }
+    match /suppliers/{docId} {
+      allow read: if isSignedIn();
+      allow create: if isAdmin() || hasPreOrderPerm('preOrderSupplier') || hasPreOrderPerm('preOrderCreate');
+      allow update, delete: if isAdmin() || hasPreOrderPerm('preOrderSupplier');
+    }
+    match /supplierPayments/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /stockLogs/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /stockPurchases/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /expenses/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /incomes/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /notifications/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /branches/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /auditLogs/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /investments/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /companyPurchases/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /companyLosses/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /cashReconciliations/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /otherReceivables/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /paymentPlatformLedger/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /importShippingCosts/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /chartOfAccounts/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /accountingVouchers/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /cashTransactions/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
   }
 }

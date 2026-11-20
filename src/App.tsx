@@ -43,7 +43,9 @@ import {
   exportAttendanceToExcel,
   exportEverythingWorkbook
 } from './utils/excelExport';
-import { UserProfile, Product, Category, Brand, CompanySettings, ProductColor, ProductModel } from './types';
+import { UserProfile, Product, Category, Brand, CompanySettings, ProductColor, ProductModel, RolePermissionsMap } from './types';
+import { getRolePermissions } from './firebase/preOrderDb';
+import { isPreOrderTab } from './preOrders/constants';
 import { EMAILJS_CONFIG } from './config/emailjs';
 import { sendOTPEmail } from './lib/emailjs';
 import { 
@@ -85,6 +87,9 @@ import ReportsAnalytics from './components/ReportsAnalytics';
 import { AuditLogView } from './components/AuditLogView';
 import CompanySettingsView from './components/CompanySettingsView';
 import ProfileSettingsView from './components/ProfileSettingsView';
+import PreOrderPlaceholderView from './components/PreOrders/PreOrderPlaceholderView';
+import CreatePreOrderView from './components/PreOrders/CreatePreOrderView';
+import AllPreOrdersView from './components/PreOrders/AllPreOrdersView';
 import NotificationCenter from './components/NotificationCenter';
 import { PublicInvoiceVerification } from './components/PublicInvoiceVerification';
 import ErrorBoundary from './components/ErrorBoundary';
@@ -93,7 +98,7 @@ import { LiveClockWidget } from './components/LiveClockWidget';
 import { TopBar } from './components/TopBar';
 import { Breadcrumbs } from './components/Breadcrumbs';
 import { WelcomeTour } from './components/WelcomeTour';
-import { ThemeProvider, ToastProvider, ThemeToggle } from './design-system';
+import { ThemeProvider, ToastProvider, ThemeToggle, ConfirmDialog } from './design-system';
 
 // Mock/Fallback Data in case of Firestore permission/network errors
 const MOCK_PRODUCTS: Product[] = [];
@@ -214,6 +219,7 @@ export default function App() {
   const [brands, setBrands] = useState<Brand[]>([]);
   const [productColors, setProductColors] = useState<ProductColor[]>([]);
   const [productModels, setProductModels] = useState<ProductModel[]>([]);
+  const [rolePermissions, setRolePermissions] = useState<RolePermissionsMap | null>(null);
   const [dataLoading, setDataLoading] = useState(false);
   const [showCheckInModal, setShowCheckInModal] = useState(false);
 
@@ -239,6 +245,13 @@ export default function App() {
   const [initialProductId, setInitialProductId] = useState<string | null>(null);
   const [initialOrderId, setInitialOrderId] = useState<string | null>(null);
   const [initialCustomerId, setInitialCustomerId] = useState<string | null>(null);
+  const [selectedPreOrderId, setSelectedPreOrderId] = useState<string | null>(null);
+  const [preOrderCreateDirty, setPreOrderCreateDirty] = useState(false);
+  const [pendingNavigation, setPendingNavigation] = useState<{
+    tab: string;
+    subAction?: string;
+    initialId?: string | null;
+  } | null>(null);
 
   // Sub-action passing (e.g., automatically opening add product drawer)
   const [initialProductAddMode, setInitialProductAddMode] = useState(false);
@@ -589,6 +602,10 @@ export default function App() {
 
   useEffect(() => {
     if (user && !isOnboarding && !isOfflineDemoMode) {
+      getRolePermissions()
+        .then((perms) => setRolePermissions(perms))
+        .catch(() => {});
+
       // Note: Subscriptions immediately return the cached or latest snapshot,
       // so we avoid an extra redundant batch of getDocs calls on mount.
       const unsubProducts = subscribeToProducts((prods) => {
@@ -681,8 +698,8 @@ export default function App() {
     setCurrentTab('dashboard');
   };
 
-  // Safe navigation from quick actions
-  const navigateToTab = (tab: string, subAction?: string, initialId?: string | null) => {
+  // Execute navigation immediately (after any dirty confirmation)
+  const performNavigate = (tab: string, subAction?: string, initialId?: string | null) => {
     setCurrentTab(tab);
     if (tab === 'products') {
       if (subAction === 'add') {
@@ -717,6 +734,21 @@ export default function App() {
     } else {
       setInitialCustomerId(null);
     }
+
+    if (tab === 'preorder_list') {
+      if (initialId) setSelectedPreOrderId(initialId);
+    } else {
+      setSelectedPreOrderId(null);
+    }
+  };
+
+  // Safe navigation from quick actions (with unsaved Pre-Order guard)
+  const navigateToTab = (tab: string, subAction?: string, initialId?: string | null) => {
+    if (currentTab === 'preorder_create' && preOrderCreateDirty && tab !== 'preorder_create') {
+      setPendingNavigation({ tab, subAction, initialId });
+      return;
+    }
+    performNavigate(tab, subAction, initialId);
   };
 
   // Settings prefix & logo updates form
@@ -997,6 +1029,7 @@ export default function App() {
             setCurrentTab={navigateToTab} 
             onNavigate={navigateToTab}
             user={user} 
+            rolePermissions={rolePermissions}
             onLogout={handleLogout}
             isOpen={isSidebarOpen}
             setIsOpen={setIsSidebarOpen}
@@ -1017,6 +1050,7 @@ export default function App() {
               currentTab={currentTab}
               onNavigate={navigateToTab}
               user={user}
+              rolePermissions={rolePermissions}
               products={products}
               companySettings={companySettings}
               onLogout={handleLogout}
@@ -1123,10 +1157,61 @@ export default function App() {
           </ErrorBoundary>
         )}
 
+        {/* Tab 2b: Pre-Order Management Routes */}
+        {currentTab === 'preorder_create' && (
+          <ErrorBoundary fallbackTitle="Create Pre-Order encountered an issue">
+            <CreatePreOrderView
+              user={user}
+              rolePermissions={rolePermissions}
+              products={products}
+              categories={categories}
+              onDirtyChange={setPreOrderCreateDirty}
+              onCancel={() => {
+                setPreOrderCreateDirty(false);
+                performNavigate('preorder_list');
+              }}
+              onCreated={(result) => {
+                setPreOrderCreateDirty(false);
+                performNavigate('preorder_list', undefined, result.id);
+              }}
+            />
+          </ErrorBoundary>
+        )}
+
+        {currentTab === 'preorder_list' && (
+          <ErrorBoundary fallbackTitle="All Pre-Orders encountered an issue">
+            <AllPreOrdersView
+              user={user}
+              rolePermissions={rolePermissions}
+              categories={categories}
+              onCreateNew={() => navigateToTab('preorder_create')}
+              initialSelectedPreOrderId={selectedPreOrderId}
+              onClearInitialSelected={() => setSelectedPreOrderId(null)}
+            />
+          </ErrorBoundary>
+        )}
+
+        {isPreOrderTab(currentTab) &&
+          currentTab !== 'preorder_create' &&
+          currentTab !== 'preorder_list' && (
+            <ErrorBoundary fallbackTitle="Pre-Order Management encountered an issue">
+              <PreOrderPlaceholderView
+                tab={currentTab}
+                user={user}
+                rolePermissions={rolePermissions}
+                onNavigate={navigateToTab}
+              />
+            </ErrorBoundary>
+          )}
+
         {/* Tab 4: User Management View */}
         {currentTab === 'users' && (
           <ErrorBoundary fallbackTitle="User Management encountered an issue">
-            <UserManagement user={user} />
+            <UserManagement
+              user={user}
+              rolePermissions={rolePermissions}
+              onRolePermissionsUpdated={(updated) => setRolePermissions(updated)}
+            />
           </ErrorBoundary>
         )}
 
@@ -1212,7 +1297,7 @@ export default function App() {
 
         {/* Tab Suppliers: Supplier Management View */}
         {currentTab === 'suppliers' && (
-          <SupplierManagement user={user} rolePermissions={{}} />
+          <SupplierManagement user={user} rolePermissions={rolePermissions || {}} />
         )}
 
         {/* Tab Reports: Reports & Analytics View */}
@@ -1679,6 +1764,25 @@ export default function App() {
           onClose={() => setShowWelcomeTour(false)}
         />
       )}
+
+      {/* Unsaved Pre-Order Navigation Guard */}
+      <ConfirmDialog
+        isOpen={Boolean(pendingNavigation)}
+        onClose={() => setPendingNavigation(null)}
+        onConfirm={() => {
+          const target = pendingNavigation;
+          setPendingNavigation(null);
+          setPreOrderCreateDirty(false);
+          if (target) {
+            performNavigate(target.tab, target.subAction, target.initialId);
+          }
+        }}
+        title="Leave without saving Pre-Order?"
+        message="You have unsaved customer or product details in your Pre-Order draft. Navigating away will discard them."
+        confirmLabel="Discard & Leave"
+        cancelLabel="Stay Here"
+        variant="warning"
+      />
       </div>
     </div>
       </ToastProvider>

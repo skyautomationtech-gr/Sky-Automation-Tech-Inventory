@@ -84,12 +84,24 @@
         "customerId": { "type": "string" },
         "name": { "type": "string" },
         "phone": { "type": "string" },
+        "whatsapp": { "type": "string" },
         "address": { "type": "string" },
         "subBrand": { "type": "string" },
         "notes": { "type": "string" },
         "totalOrders": { "type": "number" },
         "lifetimeValue": { "type": "number" },
         "createdAt": { "type": "number" }
+      }
+    },
+    "CustomerPhoneIndex": {
+      "title": "CustomerPhoneIndex",
+      "description": "Unique normalized BD phone index for duplicate customer prevention",
+      "type": "object",
+      "properties": {
+        "phone": { "type": "string" },
+        "customerDocId": { "type": "string" },
+        "customerCode": { "type": "string" },
+        "updatedAt": { "type": "number" }
       }
     },
     "Order": {
@@ -320,6 +332,187 @@
         "createdAt": { "type": "number" }
       },
       "required": ["amount", "date"]
+    },
+    "PreOrderCounters": {
+      "title": "PreOrderCounters",
+      "description": "Sequential counter for PO-0001 pre-order numbers",
+      "type": "object",
+      "properties": {
+        "count": { "type": "number" },
+        "updatedAt": { "type": "number" }
+      }
+    },
+    "PreOrder": {
+      "title": "PreOrder",
+      "description": "Pre-Order customer record (non-sensitive operational fields; cost/profit stored in private/cost subdoc)",
+      "type": "object",
+      "properties": {
+        "preOrderNumber": { "type": "string" },
+        "subBrand": { "type": "string" },
+        "customerId": { "type": "string" },
+        "customerCode": { "type": "string" },
+        "customerName": { "type": "string" },
+        "customerPhone": { "type": "string" },
+        "customerWhatsapp": { "type": "string" },
+        "customerAddress": { "type": "string" },
+        "productName": { "type": "string" },
+        "category": { "type": "string" },
+        "sku": { "type": "string" },
+        "model": { "type": "string" },
+        "variant": { "type": "string" },
+        "color": { "type": "string" },
+        "productImage": { "type": "string" },
+        "linkedProductId": { "type": "string" },
+        "qty": { "type": "number" },
+        "sellingUnitPrice": { "type": "number" },
+        "subtotal": { "type": "number" },
+        "deliveryCharge": { "type": "number" },
+        "discount": { "type": "number" },
+        "totalAmount": { "type": "number" },
+        "advancePaid": { "type": "number" },
+        "pendingAmount": { "type": "number" },
+        "refundedAmount": { "type": "number" },
+        "dueAmount": { "type": "number" },
+        "paymentCount": { "type": "number" },
+        "paymentState": { "type": "string" },
+        "status": { "type": "string" },
+        "orderDate": { "type": "string" },
+        "supplierId": { "type": "string" },
+        "supplierName": { "type": "string" },
+        "supplierOrderRef": { "type": "string" },
+        "estimatedDeliveryDate": { "type": "string" },
+        "trackingToken": { "type": "string" },
+        "trackingNumber": { "type": "string" },
+        "courier": { "type": "string" },
+        "stockReceived": { "type": "boolean" },
+        "convertedOrderId": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "createdAt": { "type": "number" },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["preOrderNumber", "subBrand", "customerName", "customerPhone", "productName", "qty", "totalAmount", "status", "createdAt"]
+    },
+    "PreOrderPrivateCost": {
+      "title": "PreOrderPrivateCost",
+      "description": "Restricted China unit cost, shipping cost, expected profit, and internal notes",
+      "type": "object",
+      "properties": {
+        "preOrderId": { "type": "string" },
+        "chinaUnitCost": { "type": "number" },
+        "shippingCost": { "type": "number" },
+        "supplierUnitCost": { "type": "number" },
+        "expectedProfit": { "type": "number" },
+        "internalNotes": { "type": "string" },
+        "supplierOrderRef": { "type": "string" },
+        "updatedAt": { "type": "number" },
+        "updatedBy": { "type": "string" }
+      }
+    },
+    "PreOrderPayment": {
+      "title": "PreOrderPayment",
+      "description": "Append-only pre-order customer payment & refund ledger",
+      "type": "object",
+      "properties": {
+        "preOrderId": { "type": "string" },
+        "preOrderNumber": { "type": "string" },
+        "type": { "type": "string" },
+        "amount": { "type": "number" },
+        "method": { "type": "string" },
+        "referenceNo": { "type": "string" },
+        "receiptUrl": { "type": "string" },
+        "receivedAt": { "type": "number" },
+        "status": { "type": "string" },
+        "idempotencyKey": { "type": "string" },
+        "recordedBy": { "type": "string" },
+        "createdAt": { "type": "number" },
+        "verifiedBy": { "type": "string" },
+        "verifiedAt": { "type": "number" }
+      },
+      "required": ["preOrderId", "type", "amount", "method", "status", "idempotencyKey", "createdAt"]
+    },
+    "PreOrderStatusHistory": {
+      "title": "PreOrderStatusHistory",
+      "description": "Append-only pre-order status timeline entries",
+      "type": "object",
+      "properties": {
+        "preOrderId": { "type": "string" },
+        "fromStatus": { "type": "string" },
+        "toStatus": { "type": "string" },
+        "note": { "type": "string" },
+        "changedBy": { "type": "string" },
+        "timestamp": { "type": "number" }
+      }
+    },
+    "PreOrderShipment": {
+      "title": "PreOrderShipment",
+      "description": "China & BD shipment tracking details for a pre-order",
+      "type": "object",
+      "properties": {
+        "preOrderId": { "type": "string" },
+        "chinaTrackingNo": { "type": "string" },
+        "bdTrackingNo": { "type": "string" },
+        "freightForwarder": { "type": "string" },
+        "bdCourier": { "type": "string" },
+        "estimatedArrivalDate": { "type": "string" },
+        "updatedAt": { "type": "number" }
+      }
+    },
+    "PreOrderSupplierPayment": {
+      "title": "PreOrderSupplierPayment",
+      "description": "Append-only supplier disbursement ledger for pre-orders",
+      "type": "object",
+      "properties": {
+        "preOrderId": { "type": "string" },
+        "supplierId": { "type": "string" },
+        "amount": { "type": "number" },
+        "currency": { "type": "string" },
+        "amountBdt": { "type": "number" },
+        "method": { "type": "string" },
+        "idempotencyKey": { "type": "string" },
+        "date": { "type": "string" },
+        "createdAt": { "type": "number" }
+      }
+    },
+    "PublicTrackingRecord": {
+      "title": "PublicTrackingRecord",
+      "description": "Public tracking link snapshot (non-sensitive subset only)",
+      "type": "object",
+      "properties": {
+        "token": { "type": "string" },
+        "preOrderId": { "type": "string" },
+        "preOrderNumber": { "type": "string" },
+        "customerName": { "type": "string" },
+        "productName": { "type": "string" },
+        "status": { "type": "string" },
+        "statusTimeline": { "type": "array" },
+        "updatedAt": { "type": "number" }
+      }
+    },
+    "PreOrderAuditEntry": {
+      "title": "PreOrderAuditEntry",
+      "description": "Append-only Pre-Order audit trail",
+      "type": "object",
+      "properties": {
+        "preOrderId": { "type": "string" },
+        "preOrderNumber": { "type": "string" },
+        "action": { "type": "string" },
+        "summary": { "type": "string" },
+        "userId": { "type": "string" },
+        "timestamp": { "type": "number" }
+      }
+    },
+    "PreOrderNotification": {
+      "title": "PreOrderNotification",
+      "description": "Pre-Order workflow notifications",
+      "type": "object",
+      "properties": {
+        "preOrderId": { "type": "string" },
+        "type": { "type": "string" },
+        "title": { "type": "string" },
+        "message": { "type": "string" },
+        "readBy": { "type": "array" },
+        "createdAt": { "type": "number" }
+      }
     }
   },
   "firestore": {
@@ -347,6 +540,10 @@
       "schema": "CustomerCounters",
       "description": "Customer sequential counter document"
     },
+    "/settings/preOrderCounter": {
+      "schema": "PreOrderCounters",
+      "description": "Pre-Order sequential PO-0001 counter document"
+    },
     "/settings/cashBalance": {
       "schema": "CashBalanceSettings",
       "description": "Cash on hand baseline settings"
@@ -354,6 +551,10 @@
     "/customers/{customerId}": {
       "schema": "Customer",
       "description": "Customers collection"
+    },
+    "/customerPhones/{phone}": {
+      "schema": "CustomerPhoneIndex",
+      "description": "Normalized BD phone index for duplicate customer prevention"
     },
     "/orders/{orderId}": {
       "schema": "Order",
@@ -402,6 +603,42 @@
     "/importShippingCosts/{entryId}": {
       "schema": "ImportShippingCost",
       "description": "Import, shipping, and customs costs separate from purchase price"
+    },
+    "/preOrders/{preOrderId}": {
+      "schema": "PreOrder",
+      "description": "Pre-Orders operational collection"
+    },
+    "/preOrders/{preOrderId}/private/cost": {
+      "schema": "PreOrderPrivateCost",
+      "description": "Restricted cost, profit, and internal notes subdocument"
+    },
+    "/preOrders/{preOrderId}/payments/{paymentId}": {
+      "schema": "PreOrderPayment",
+      "description": "Append-only customer payments and refunds subcollection"
+    },
+    "/preOrders/{preOrderId}/statusHistory/{historyId}": {
+      "schema": "PreOrderStatusHistory",
+      "description": "Append-only pre-order status timeline subcollection"
+    },
+    "/preOrders/{preOrderId}/shipment/{docId}": {
+      "schema": "PreOrderShipment",
+      "description": "Pre-order China and BD shipment tracking subdocument"
+    },
+    "/preOrderSupplierPayments/{paymentId}": {
+      "schema": "PreOrderSupplierPayment",
+      "description": "Append-only China supplier payments for pre-orders"
+    },
+    "/publicTracking/{token}": {
+      "schema": "PublicTrackingRecord",
+      "description": "Public customer tracking snapshots (unauthenticated single-doc get only)"
+    },
+    "/preOrderAudit/{auditId}": {
+      "schema": "PreOrderAuditEntry",
+      "description": "Append-only pre-order audit log collection"
+    },
+    "/preOrderNotifications/{notificationId}": {
+      "schema": "PreOrderNotification",
+      "description": "Pre-order workflow notifications"
     }
   }
 }

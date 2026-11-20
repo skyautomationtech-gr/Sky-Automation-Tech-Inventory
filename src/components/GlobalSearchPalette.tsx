@@ -26,7 +26,7 @@ import {
   Layers,
   Tag
 } from 'lucide-react';
-import { UserProfile, Product, Order, Invoice, Customer, Supplier } from '../types';
+import { UserProfile, Product, Order, Invoice, Customer, Supplier, RolePermissionsMap } from '../types';
 import { 
   getOrders, 
   getCustomers, 
@@ -37,12 +37,14 @@ import {
   getBrands 
 } from '../firebase/db';
 import { TAB_DIRECTORY } from './Breadcrumbs';
+import { PRE_ORDER_NAV_ITEMS, hasPermission, isPreOrderTab } from '../preOrders/constants';
 
 interface GlobalSearchPaletteProps {
   isOpen: boolean;
   onClose: () => void;
   onNavigate: (tab: string, subAction?: string, initialId?: string | null) => void;
   user: UserProfile | null;
+  rolePermissions?: RolePermissionsMap | null;
   products: Product[];
   onToggleTheme?: () => void;
   onLogout?: () => void;
@@ -55,6 +57,7 @@ export const GlobalSearchPalette: React.FC<GlobalSearchPaletteProps> = ({
   onClose,
   onNavigate,
   user,
+  rolePermissions = null,
   products = [],
   onToggleTheme,
   onLogout,
@@ -136,12 +139,21 @@ export const GlobalSearchPalette: React.FC<GlobalSearchPaletteProps> = ({
   // 1. Pages / Modules
   const pageResults = useMemo(() => {
     if (activeFilter !== 'all' && activeFilter !== 'pages') return [];
+    const canViewPreOrders = hasPermission(user, rolePermissions, 'preOrderView');
     return Object.entries(TAB_DIRECTORY)
       .filter(([id, meta]) => {
         if (id === 'financials' && !isAdminOrManager) return false;
         if (id === 'attendance' && !isSuperAdmin) return false;
         if (id === 'users' && !isPrivileged) return false;
         if (id === 'audit_logs' && !isPrivileged) return false;
+
+        if (isPreOrderTab(id)) {
+          if (!canViewPreOrders) return false;
+          const navMeta = PRE_ORDER_NAV_ITEMS.find((p) => p.id === id);
+          if (navMeta && !hasPermission(user, rolePermissions, navMeta.requiredPermission)) {
+            return false;
+          }
+        }
 
         if (!query.trim()) return true;
         const q = query.toLowerCase();
@@ -159,7 +171,7 @@ export const GlobalSearchPalette: React.FC<GlobalSearchPaletteProps> = ({
           onClose();
         }
       }));
-  }, [query, activeFilter, isAdminOrManager, isSuperAdmin, isPrivileged, onNavigate, onClose]);
+  }, [query, activeFilter, isAdminOrManager, isSuperAdmin, isPrivileged, user, rolePermissions, onNavigate, onClose]);
 
   // 2. Products
   const productResults = useMemo(() => {

@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
-import { UserProfile, UserRole } from '../types';
+import { RolePermissionSet, RolePermissionsMap, UserProfile, UserRole } from '../types';
 import { 
   getAllUsers, 
   subscribeToUsers,
@@ -11,6 +11,15 @@ import {
   updatePrivateEmploymentInfo,
   getNextEmployeeId
 } from '../firebase/db';
+import {
+  getRolePermissions,
+  saveRolePermissions,
+} from '../firebase/preOrderDb';
+import {
+  DEFAULT_ROLE_PERMISSIONS,
+  PRE_ORDER_PERMISSION_META,
+  mergeWithDefaultRolePermissions,
+} from '../preOrders/constants';
 import { 
   UserPlus, 
   Shield, 
@@ -48,51 +57,49 @@ import { storage, auth } from '../firebase/config';
 import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { sendCredentialsEmail, sendWelcomeEmail } from '../lib/emailjs';
 
-const DEFAULT_PERMISSIONS = {
-  admin: {
-    addProduct: true,
-    editProduct: true,
-    deleteProduct: true,
-    manageCategories: true,
-    stockIn: true,
-    stockOut: true,
-    stockAdjustment: true,
-    manageOrders: true
-  },
-  manager: {
-    addProduct: true,
-    editProduct: true,
-    deleteProduct: false,
-    manageCategories: true,
-    stockIn: true,
-    stockOut: true,
-    stockAdjustment: true,
-    manageOrders: true
-  },
-  staff: {
-    addProduct: false,
-    editProduct: false,
-    deleteProduct: false,
-    manageCategories: false,
-    stockIn: true,
-    stockOut: true,
-    stockAdjustment: false,
-    manageOrders: false
-  }
-};
+const CORE_PERMISSION_KEYS: Array<{ key: keyof RolePermissionSet; label: string }> = [
+  { key: 'addProduct', label: 'Add Product' },
+  { key: 'editProduct', label: 'Edit Product' },
+  { key: 'deleteProduct', label: 'Delete Product' },
+  { key: 'manageCategories', label: 'Manage Categories' },
+  { key: 'stockIn', label: 'Stock In' },
+  { key: 'stockOut', label: 'Stock Out' },
+  { key: 'stockAdjustment', label: 'Stock Adjustment' },
+  { key: 'manageOrders', label: 'Manage Orders' },
+  { key: 'voidInvoice', label: 'Void Invoice' },
+];
+
+const DEFAULT_PERMISSIONS = DEFAULT_ROLE_PERMISSIONS;
 
 interface UserManagementProps {
   user: UserProfile;
+  rolePermissions?: RolePermissionsMap | null;
+  onRolePermissionsUpdated?: (updated: RolePermissionsMap) => void;
 }
 
-export default function UserManagement({ user }: UserManagementProps) {
+export default function UserManagement({
+  user,
+  rolePermissions: externalRolePermissions,
+  onRolePermissionsUpdated,
+}: UserManagementProps) {
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
 
   // Tab control
-  const [activeTab, setActiveTab] = useState<'registry' | 'pending'>('registry');
+  const [activeTab, setActiveTab] = useState<'registry' | 'pending' | 'permissions'>('registry');
+
+  // Role Permissions Matrix state (/settings/rolePermissions)
+  const [rolePermsMatrix, setRolePermsMatrix] = useState<RolePermissionsMap>(() =>
+    mergeWithDefaultRolePermissions(externalRolePermissions)
+  );
+  const [savingRolePerms, setSavingRolePerms] = useState(false);
+
+  // Per-user Permission Overrides Modal
+  const [overrideTargetUser, setOverrideTargetUser] = useState<UserProfile | null>(null);
+  const [overrideDraft, setOverrideDraft] = useState<Record<string, boolean>>({});
+  const [savingOverrides, setSavingOverrides] = useState(false);
 
   // Form sections visibility
   const [showEmploymentInfo, setShowEmploymentInfo] = useState(false);
@@ -146,8 +153,72 @@ export default function UserManagement({ user }: UserManagementProps) {
       setUsers(list || []);
       setLoading(false);
     });
+    getRolePermissions().then((perms) => setRolePermsMatrix(perms)).catch(() => {});
     return () => unsub();
   }, []);
+
+  useEffect(() => {
+    if (externalRolePermissions) {
+      setRolePermsMatrix(mergeWithDefaultRolePermissions(externalRolePermissions));
+    }
+  }, [externalRolePermissions]);
+
+  const handleToggleRoleMatrixPerm = (
+    roleKey: 'admin' | 'manager' | 'staff',
+    permKey: keyof RolePermissionSet,
+    checked: boolean
+  ) => {
+    setRolePermsMatrix((prev) => ({
+      ...prev,
+      [roleKey]: {
+        ...(prev[roleKey] || {}),
+        [permKey]: checked,
+      },
+    }));
+  };
+
+  const handleSaveRolePermsMatrix = async () => {
+    if (!isSuperAdmin) return;
+    setSavingRolePerms(true);
+    setError('');
+    setSuccess('');
+    try {
+      const saved = await saveRolePermissions(rolePermsMatrix, user.id);
+      setRolePermsMatrix(saved);
+      if (onRolePermissionsUpdated) {
+        onRolePermissionsUpdated(saved);
+      }
+      setSuccess('Role permissions saved to /settings/rolePermissions.');
+    } catch (err: any) {
+      setError(err?.message || 'Failed to save role permissions.');
+    } finally {
+      setSavingRolePerms(false);
+    }
+  };
+
+  const openOverridesModal = (target: UserProfile) => {
+    setOverrideTargetUser(target);
+    setOverrideDraft({ ...(target.permissionOverrides || {}) });
+  };
+
+  const handleSaveUserOverrides = async () => {
+    if (!overrideTargetUser) return;
+    setSavingOverrides(true);
+    setError('');
+    setSuccess('');
+    try {
+      await updateUserProfile(overrideTargetUser.id, {
+        permissionOverrides: overrideDraft,
+      });
+      setSuccess(`Updated permission overrides for ${overrideTargetUser.name}.`);
+      setOverrideTargetUser(null);
+      await fetchUsersList();
+    } catch (err: any) {
+      setError(err?.message || 'Failed to save user permission overrides.');
+    } finally {
+      setSavingOverrides(false);
+    }
+  };
 
   const fetchUsersList = async () => {
     setLoading(true);
@@ -691,10 +762,10 @@ export default function UserManagement({ user }: UserManagementProps) {
 
       {/* Tab Navigation Strip */}
       {isSuperAdmin && (
-        <div className="flex items-center gap-1 bg-white p-1 rounded-xl border border-slate-200/80 shadow-2xs w-fit">
+        <div className="flex items-center gap-1 bg-white p-1 rounded-xl border border-slate-200/80 shadow-2xs w-fit flex-wrap">
           <button
             onClick={() => setActiveTab('registry')}
-            className={`px-3 py-1.5 text-xs font-bold rounded-lg transition ${
+            className={`px-3 py-1.5 text-xs font-bold rounded-lg transition cursor-pointer ${
               activeTab === 'registry' 
                 ? 'bg-slate-900 text-amber-400 shadow-2xs' 
                 : 'text-slate-500 hover:text-slate-900'
@@ -704,7 +775,7 @@ export default function UserManagement({ user }: UserManagementProps) {
           </button>
           <button
             onClick={() => setActiveTab('pending')}
-            className={`px-3 py-1.5 text-xs font-bold rounded-lg transition flex items-center gap-1.5 ${
+            className={`px-3 py-1.5 text-xs font-bold rounded-lg transition flex items-center gap-1.5 cursor-pointer ${
               activeTab === 'pending' 
                 ? 'bg-slate-900 text-amber-400 shadow-2xs' 
                 : 'text-slate-500 hover:text-slate-900'
@@ -716,6 +787,17 @@ export default function UserManagement({ user }: UserManagementProps) {
                 {pendingUsers.length}
               </span>
             )}
+          </button>
+          <button
+            onClick={() => setActiveTab('permissions')}
+            className={`px-3 py-1.5 text-xs font-bold rounded-lg transition flex items-center gap-1.5 cursor-pointer ${
+              activeTab === 'permissions'
+                ? 'bg-slate-900 text-amber-400 shadow-2xs'
+                : 'text-slate-500 hover:text-slate-900'
+            }`}
+          >
+            <SlidersHorizontal size={12} />
+            <span>Role &amp; Pre-Order Permissions</span>
           </button>
         </div>
       )}
@@ -903,34 +985,73 @@ export default function UserManagement({ user }: UserManagementProps) {
                   </button>
 
                   {showAdvancedPerms && (
-                    <div className="p-3 pt-0 grid grid-cols-2 sm:grid-cols-4 gap-2 border-t border-slate-200/60 mt-2">
-                      {Object.keys(DEFAULT_PERMISSIONS.admin).map((action) => {
-                        const defaultVal = DEFAULT_PERMISSIONS[selectedRole as keyof typeof DEFAULT_PERMISSIONS][action as keyof (typeof DEFAULT_PERMISSIONS)['admin']];
-                        const override = permissionOverrides[action];
-                        const effective = override !== undefined ? override : defaultVal;
+                    <div className="p-3 pt-2 space-y-3 border-t border-slate-200/60 mt-1">
+                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                        {CORE_PERMISSION_KEYS.map(({ key, label }) => {
+                          const roleMap = rolePermsMatrix[selectedRole] || DEFAULT_PERMISSIONS[selectedRole] || DEFAULT_PERMISSIONS.staff;
+                          const defaultVal = Boolean(roleMap?.[key]);
+                          const override = permissionOverrides[key];
+                          const effective = override !== undefined ? override : defaultVal;
 
-                        return (
-                          <label 
-                            key={action}
-                            className={`p-2 rounded-lg border flex items-center justify-between text-[11px] font-medium transition cursor-pointer ${
-                              effective ? 'bg-white border-teal-200 text-teal-800' : 'bg-slate-100 border-slate-200 text-slate-400'
-                            }`}
-                          >
-                            <span className="truncate mr-1">{action.replace(/([A-Z])/g, ' $1')}</span>
-                            <input 
-                              type="checkbox"
-                              checked={effective}
-                              onChange={(e) => {
-                                setPermissionOverrides(prev => ({
-                                  ...prev,
-                                  [action]: e.target.checked
-                                }));
-                              }}
-                              className="w-3.5 h-3.5 rounded border-slate-300 text-teal-600"
-                            />
-                          </label>
-                        );
-                      })}
+                          return (
+                            <label 
+                              key={key}
+                              className={`p-2 rounded-lg border flex items-center justify-between text-[11px] font-medium transition cursor-pointer ${
+                                effective ? 'bg-white border-teal-200 text-teal-800' : 'bg-slate-100 border-slate-200 text-slate-400'
+                              }`}
+                            >
+                              <span className="truncate mr-1">{label}</span>
+                              <input 
+                                type="checkbox"
+                                checked={effective}
+                                onChange={(e) => {
+                                  setPermissionOverrides(prev => ({
+                                    ...prev,
+                                    [key]: e.target.checked
+                                  }));
+                                }}
+                                className="w-3.5 h-3.5 rounded border-slate-300 text-teal-600"
+                              />
+                            </label>
+                          );
+                        })}
+                      </div>
+                      <div className="pt-2 border-t border-slate-200/70">
+                        <p className="text-[10px] font-mono font-bold uppercase tracking-wider text-amber-700 mb-2">
+                          Pre-Order Management Overrides
+                        </p>
+                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                          {PRE_ORDER_PERMISSION_META.map((perm) => {
+                            const roleMap = rolePermsMatrix[selectedRole] || DEFAULT_PERMISSIONS[selectedRole] || DEFAULT_PERMISSIONS.staff;
+                            const defaultVal = Boolean(roleMap?.[perm.key]);
+                            const override = permissionOverrides[perm.key];
+                            const effective = override !== undefined ? override : defaultVal;
+
+                            return (
+                              <label
+                                key={perm.key}
+                                title={perm.description}
+                                className={`p-2 rounded-lg border flex items-center justify-between text-[11px] font-medium transition cursor-pointer ${
+                                  effective ? 'bg-white border-amber-300 text-slate-900' : 'bg-slate-100 border-slate-200 text-slate-400'
+                                }`}
+                              >
+                                <span className="truncate mr-1">{perm.label}</span>
+                                <input
+                                  type="checkbox"
+                                  checked={effective}
+                                  onChange={(e) => {
+                                    setPermissionOverrides((prev) => ({
+                                      ...prev,
+                                      [perm.key]: e.target.checked,
+                                    }));
+                                  }}
+                                  className="w-3.5 h-3.5 rounded border-slate-300 text-amber-600"
+                                />
+                              </label>
+                            );
+                          })}
+                        </div>
+                      </div>
                     </div>
                   )}
                 </div>
@@ -1341,12 +1462,23 @@ export default function UserManagement({ user }: UserManagementProps) {
                               ) : (
                                 <>
                                   {isSuperAdmin && (
-                                    <button
-                                      onClick={() => startEdit(u)}
-                                      className="py-1 px-2 text-xs font-bold text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded transition cursor-pointer"
-                                    >
-                                      Edit
-                                    </button>
+                                    <>
+                                      <button
+                                        onClick={() => startEdit(u)}
+                                        className="py-1 px-2 text-xs font-bold text-slate-600 hover:text-slate-900 hover:bg-slate-100 rounded transition cursor-pointer"
+                                      >
+                                        Edit
+                                      </button>
+                                      {u.role !== 'superadmin' && (
+                                        <button
+                                          onClick={() => openOverridesModal(u)}
+                                          className="py-1 px-2 text-xs font-bold text-amber-700 hover:bg-amber-50 rounded transition cursor-pointer"
+                                          title="Manage per-user permission overrides"
+                                        >
+                                          Perms
+                                        </button>
+                                      )}
+                                    </>
                                   )}
 
                                   {u.id !== user.id && (
@@ -1373,6 +1505,122 @@ export default function UserManagement({ user }: UserManagementProps) {
               )}
             </div>
           </>
+        ) : activeTab === 'permissions' && isSuperAdmin ? (
+          /* ROLE & PRE-ORDER PERMISSIONS MATRIX (/settings/rolePermissions) */
+          <div className="p-4 sm:p-5 space-y-5">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3 pb-3 border-b border-slate-100">
+              <div>
+                <h2 className="text-sm font-bold text-slate-900">
+                  Role Permission Matrix (`/settings/rolePermissions`)
+                </h2>
+                <p className="text-xs text-slate-500 mt-0.5">
+                  Configure default permissions for Admin, Manager, and Staff roles. Super Admin always retains full access. Individual users can also be customized via the Perms button.
+                </p>
+              </div>
+              <div className="flex items-center gap-2 shrink-0">
+                <button
+                  type="button"
+                  onClick={() => setRolePermsMatrix(mergeWithDefaultRolePermissions(null))}
+                  className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-bold text-slate-600 hover:bg-slate-50 transition cursor-pointer"
+                >
+                  Reset Defaults
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveRolePermsMatrix}
+                  disabled={savingRolePerms}
+                  className="px-4 py-1.5 rounded-lg bg-slate-900 text-amber-400 hover:bg-slate-800 text-xs font-bold transition cursor-pointer disabled:opacity-50"
+                >
+                  {savingRolePerms ? 'Saving...' : 'Save Permissions'}
+                </button>
+              </div>
+            </div>
+
+            {/* Pre-Order Permissions Section */}
+            <div className="space-y-2">
+              <h3 className="text-xs font-mono font-bold uppercase tracking-wider text-amber-700">
+                Pre-Order Management Permissions (13)
+              </h3>
+              <div className="overflow-x-auto border border-slate-200 rounded-xl">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-bold uppercase text-slate-500">
+                      <th className="py-2.5 px-3.5">Permission</th>
+                      <th className="py-2.5 px-3 text-center w-24">Admin</th>
+                      <th className="py-2.5 px-3 text-center w-24">Manager</th>
+                      <th className="py-2.5 px-3 text-center w-24">Staff</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-xs">
+                    {PRE_ORDER_PERMISSION_META.map((perm) => (
+                      <tr key={perm.key} className="hover:bg-slate-50/70">
+                        <td className="py-2.5 px-3.5">
+                          <div className="font-bold text-slate-900">{perm.label}</div>
+                          <div className="text-[11px] text-slate-500">{perm.description}</div>
+                        </td>
+                        {(['admin', 'manager', 'staff'] as const).map((roleKey) => {
+                          const checked = Boolean(rolePermsMatrix[roleKey]?.[perm.key]);
+                          return (
+                            <td key={roleKey} className="py-2.5 px-3 text-center">
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={(e) =>
+                                  handleToggleRoleMatrixPerm(roleKey, perm.key, e.target.checked)
+                                }
+                                className="w-4 h-4 rounded border-slate-300 text-amber-600 cursor-pointer"
+                              />
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+
+            {/* Existing Core Operational Permissions Section */}
+            <div className="space-y-2">
+              <h3 className="text-xs font-mono font-bold uppercase tracking-wider text-slate-500">
+                Inventory, Orders &amp; Invoices Permissions
+              </h3>
+              <div className="overflow-x-auto border border-slate-200 rounded-xl">
+                <table className="w-full text-left border-collapse">
+                  <thead>
+                    <tr className="bg-slate-50 border-b border-slate-200 text-[11px] font-bold uppercase text-slate-500">
+                      <th className="py-2.5 px-3.5">Permission</th>
+                      <th className="py-2.5 px-3 text-center w-24">Admin</th>
+                      <th className="py-2.5 px-3 text-center w-24">Manager</th>
+                      <th className="py-2.5 px-3 text-center w-24">Staff</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-100 text-xs">
+                    {CORE_PERMISSION_KEYS.map(({ key, label }) => (
+                      <tr key={key} className="hover:bg-slate-50/70">
+                        <td className="py-2 px-3.5 font-semibold text-slate-800">{label}</td>
+                        {(['admin', 'manager', 'staff'] as const).map((roleKey) => {
+                          const checked = Boolean(rolePermsMatrix[roleKey]?.[key]);
+                          return (
+                            <td key={roleKey} className="py-2 px-3 text-center">
+                              <input
+                                type="checkbox"
+                                checked={checked}
+                                onChange={(e) =>
+                                  handleToggleRoleMatrixPerm(roleKey, key, e.target.checked)
+                                }
+                                className="w-4 h-4 rounded border-slate-300 text-teal-600 cursor-pointer"
+                              />
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
         ) : (
           /* PENDING APPROVALS LIST */
           <div className="p-4 space-y-3">
@@ -1467,6 +1715,142 @@ export default function UserManagement({ user }: UserManagementProps) {
         )}
 
       </div>
+
+      {/* Per-User Permission Overrides Modal */}
+      {overrideTargetUser && (
+        <div className="fixed inset-0 z-50 bg-slate-950/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white rounded-2xl border border-slate-200 shadow-2xl w-full max-w-2xl max-h-[88vh] flex flex-col overflow-hidden">
+            <div className="px-5 py-3.5 border-b border-slate-100 flex items-center justify-between bg-slate-50/70">
+              <div>
+                <h3 className="text-sm font-bold text-slate-900">
+                  Permission Overrides: {overrideTargetUser.name}
+                </h3>
+                <p className="text-[11px] text-slate-500">
+                  Base role: <span className="font-mono font-bold uppercase">{overrideTargetUser.role}</span> · Toggles override role defaults for this account.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setOverrideTargetUser(null)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 hover:bg-slate-100"
+              >
+                <X size={16} />
+              </button>
+            </div>
+            <div className="flex-1 overflow-y-auto p-5 space-y-4">
+              <div>
+                <p className="text-[11px] font-mono font-bold uppercase tracking-wider text-amber-700 mb-2">
+                  Pre-Order Management Permissions
+                </p>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                  {PRE_ORDER_PERMISSION_META.map((perm) => {
+                    const roleMap =
+                      rolePermsMatrix[overrideTargetUser.role] ||
+                      DEFAULT_PERMISSIONS[overrideTargetUser.role] ||
+                      DEFAULT_PERMISSIONS.staff;
+                    const baseVal = Boolean(roleMap?.[perm.key]);
+                    const effective =
+                      typeof overrideDraft[perm.key] === 'boolean'
+                        ? overrideDraft[perm.key]
+                        : baseVal;
+                    return (
+                      <label
+                        key={perm.key}
+                        className={`p-2.5 rounded-xl border flex items-center justify-between gap-2 text-xs cursor-pointer ${
+                          effective
+                            ? 'bg-amber-50/50 border-amber-300 text-slate-900'
+                            : 'bg-slate-50 border-slate-200 text-slate-500'
+                        }`}
+                      >
+                        <div className="min-w-0">
+                          <div className="font-bold truncate">{perm.label}</div>
+                          <div className="text-[10px] text-slate-500 truncate">{perm.description}</div>
+                        </div>
+                        <input
+                          type="checkbox"
+                          checked={effective}
+                          onChange={(e) =>
+                            setOverrideDraft((prev) => ({
+                              ...prev,
+                              [perm.key]: e.target.checked,
+                            }))
+                          }
+                          className="w-4 h-4 rounded border-slate-300 text-amber-600 shrink-0"
+                        />
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+              <div>
+                <p className="text-[11px] font-mono font-bold uppercase tracking-wider text-slate-500 mb-2">
+                  Core Operational Permissions
+                </p>
+                <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+                  {CORE_PERMISSION_KEYS.map(({ key, label }) => {
+                    const roleMap =
+                      rolePermsMatrix[overrideTargetUser.role] ||
+                      DEFAULT_PERMISSIONS[overrideTargetUser.role] ||
+                      DEFAULT_PERMISSIONS.staff;
+                    const baseVal = Boolean(roleMap?.[key]);
+                    const effective =
+                      typeof overrideDraft[key] === 'boolean' ? overrideDraft[key] : baseVal;
+                    return (
+                      <label
+                        key={key}
+                        className={`p-2 rounded-lg border flex items-center justify-between text-xs cursor-pointer ${
+                          effective
+                            ? 'bg-teal-50/50 border-teal-300 text-slate-900'
+                            : 'bg-slate-50 border-slate-200 text-slate-500'
+                        }`}
+                      >
+                        <span className="truncate font-semibold">{label}</span>
+                        <input
+                          type="checkbox"
+                          checked={effective}
+                          onChange={(e) =>
+                            setOverrideDraft((prev) => ({
+                              ...prev,
+                              [key]: e.target.checked,
+                            }))
+                          }
+                          className="w-4 h-4 rounded border-slate-300 text-teal-600 shrink-0"
+                        />
+                      </label>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+            <div className="px-5 py-3 border-t border-slate-100 bg-slate-50/60 flex items-center justify-between gap-2">
+              <button
+                type="button"
+                onClick={() => setOverrideDraft({})}
+                className="px-3 py-1.5 text-xs font-bold text-slate-600 hover:bg-slate-100 rounded-lg cursor-pointer"
+              >
+                Clear Overrides
+              </button>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => setOverrideTargetUser(null)}
+                  className="px-3 py-1.5 text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-lg cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={handleSaveUserOverrides}
+                  disabled={savingOverrides}
+                  className="px-4 py-1.5 text-xs font-bold bg-slate-900 text-amber-400 hover:bg-slate-800 rounded-lg cursor-pointer disabled:opacity-50"
+                >
+                  {savingOverrides ? 'Saving...' : 'Save Overrides'}
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
     </div>
   );

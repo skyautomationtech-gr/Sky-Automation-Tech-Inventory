@@ -1,7 +1,8 @@
-import React from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   LayoutDashboard, 
   Package, 
+  PackagePlus,
   ArrowUpDown, 
   Settings, 
   LogOut, 
@@ -19,17 +20,24 @@ import {
   Calculator,
   User,
   ChevronRight,
+  ChevronDown,
   ExternalLink,
   PanelLeftClose,
   PanelLeftOpen
 } from 'lucide-react';
-import { UserProfile } from '../types';
+import { RolePermissionsMap, UserProfile } from '../types';
+import {
+  PRE_ORDER_NAV_ITEMS,
+  hasPermission,
+  isPreOrderTab,
+} from '../preOrders/constants';
 
 interface SidebarProps {
   currentTab: string;
   setCurrentTab: (tab: string) => void;
   onNavigate: (tab: string, subAction?: string, initialId?: string | null) => void;
   user: UserProfile | null;
+  rolePermissions?: RolePermissionsMap | null;
   onLogout: () => void;
   isOpen: boolean;
   setIsOpen: (isOpen: boolean) => void;
@@ -56,6 +64,7 @@ export default function Sidebar({
   setCurrentTab,
   onNavigate,
   user,
+  rolePermissions = null,
   onLogout,
   isOpen,
   setIsOpen,
@@ -66,6 +75,32 @@ export default function Sidebar({
 }: SidebarProps) {
   const isPrivileged = user?.role === 'superadmin' || user?.role === 'admin';
   const isSuperAdmin = user?.role === 'superadmin';
+  const canViewPreOrders = hasPermission(user, rolePermissions, 'preOrderView');
+  const isPreOrderActive = isPreOrderTab(currentTab);
+
+  const [isPreOrderExpanded, setIsPreOrderExpanded] = useState<boolean>(isPreOrderActive);
+  const [showCollapsedFlyout, setShowCollapsedFlyout] = useState<boolean>(false);
+  const flyoutWrapperRef = useRef<HTMLDivElement>(null);
+
+  useEffect(() => {
+    if (isPreOrderActive) {
+      setIsPreOrderExpanded(true);
+    }
+  }, [isPreOrderActive]);
+
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (flyoutWrapperRef.current && !flyoutWrapperRef.current.contains(e.target as Node)) {
+        setShowCollapsedFlyout(false);
+      }
+    };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, []);
+
+  const visiblePreOrderSubItems = PRE_ORDER_NAV_ITEMS.filter((item) =>
+    hasPermission(user, rolePermissions, item.requiredPermission)
+  );
 
   // Structured Menu Groups for Desktop App Shell
   const menuGroups: MenuGroup[] = [
@@ -118,6 +153,140 @@ export default function Sidebar({
       ],
     },
   ];
+
+  const renderPreOrderGroup = () => {
+    if (!canViewPreOrders) return null;
+
+    if (isCollapsed) {
+      return (
+        <div
+          ref={flyoutWrapperRef}
+          className="relative"
+          onMouseEnter={() => setShowCollapsedFlyout(true)}
+          onMouseLeave={() => setShowCollapsedFlyout(false)}
+        >
+          <button
+            type="button"
+            onClick={() => setShowCollapsedFlyout((prev) => !prev)}
+            className={`
+              w-full flex items-center justify-center px-0 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer group relative
+              ${isPreOrderActive
+                ? 'bg-[#D4AF37] text-slate-950 shadow-md font-extrabold'
+                : 'text-slate-400 hover:text-white hover:bg-slate-900/80'
+              }
+            `}
+            title="Pre-Order Management"
+            aria-label="Pre-Order Management"
+          >
+            <PackagePlus
+              size={18}
+              className={`shrink-0 ${isPreOrderActive ? 'text-slate-950' : 'text-slate-400 group-hover:text-[#D4AF37]'}`}
+            />
+          </button>
+
+          {showCollapsedFlyout && (
+            <div className="fixed left-[76px] ml-2 z-50 w-60 rounded-2xl bg-slate-900/95 backdrop-blur-xl border border-slate-700/80 shadow-2xl p-2 space-y-1 animate-fade-in">
+              <div className="px-2.5 py-1.5 border-b border-slate-800 flex items-center justify-between gap-2">
+                <span className="text-xs font-bold text-white">Pre-Order Management</span>
+                <span className="px-1.5 py-0.5 text-[9px] font-mono font-bold rounded bg-[#D4AF37]/20 text-[#D4AF37] border border-[#D4AF37]/40 uppercase">
+                  New
+                </span>
+              </div>
+              <div className="space-y-0.5 pt-0.5">
+                {visiblePreOrderSubItems.map((sub) => {
+                  const subActive = currentTab === sub.id;
+                  return (
+                    <button
+                      key={sub.id}
+                      type="button"
+                      onClick={() => {
+                        setCurrentTab(sub.id);
+                        setShowCollapsedFlyout(false);
+                        setIsOpen(false);
+                      }}
+                      className={`w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-xs font-semibold transition-colors cursor-pointer text-left ${
+                        subActive
+                          ? 'bg-[#D4AF37] text-slate-950 font-bold'
+                          : 'text-slate-300 hover:text-white hover:bg-slate-800'
+                      }`}
+                    >
+                      <ChevronRight
+                        size={13}
+                        className={`shrink-0 ${subActive ? 'text-slate-950' : 'text-slate-500'}`}
+                      />
+                      <span className="truncate">{sub.label}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    return (
+      <div className="space-y-1">
+        <button
+          type="button"
+          onClick={() => setIsPreOrderExpanded((prev) => !prev)}
+          className={`
+            w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer group
+            ${isPreOrderActive
+              ? 'bg-slate-900 text-[#D4AF37] border border-[#D4AF37]/30'
+              : 'text-slate-400 hover:text-white hover:bg-slate-900/80'
+            }
+          `}
+          aria-expanded={isPreOrderExpanded}
+        >
+          <PackagePlus
+            size={18}
+            className={`shrink-0 ${isPreOrderActive ? 'text-[#D4AF37]' : 'text-slate-400 group-hover:text-[#D4AF37]'}`}
+          />
+          <span className="truncate flex-1 text-left">Pre-Order Management</span>
+          <span className="px-1.5 py-0.5 text-[9px] font-mono font-bold rounded bg-[#D4AF37]/15 text-[#D4AF37] border border-[#D4AF37]/30 uppercase shrink-0">
+            New
+          </span>
+          {isPreOrderExpanded ? (
+            <ChevronDown size={14} className="shrink-0 text-slate-400" />
+          ) : (
+            <ChevronRight size={14} className="shrink-0 text-slate-400" />
+          )}
+        </button>
+
+        {isPreOrderExpanded && (
+          <div className="pl-4 space-y-0.5 border-l border-slate-800 ml-4">
+            {visiblePreOrderSubItems.map((sub) => {
+              const subActive = currentTab === sub.id;
+              return (
+                <button
+                  key={sub.id}
+                  type="button"
+                  onClick={() => {
+                    setCurrentTab(sub.id);
+                    setIsOpen(false);
+                  }}
+                  className={`
+                    w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-xs font-semibold transition-all cursor-pointer group
+                    ${subActive
+                      ? 'bg-[#D4AF37] text-slate-950 shadow-sm font-extrabold'
+                      : 'text-slate-400 hover:text-white hover:bg-slate-900/70'
+                    }
+                  `}
+                >
+                  <ChevronRight
+                    size={13}
+                    className={`shrink-0 ${subActive ? 'text-slate-950' : 'text-slate-500 group-hover:text-[#D4AF37]'}`}
+                  />
+                  <span className="truncate flex-1 text-left">{sub.label}</span>
+                </button>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
     <>
@@ -232,37 +401,39 @@ export default function Sidebar({
                     const Icon = item.icon;
                     const isActive = currentTab === item.id;
                     return (
-                      <button
-                        key={item.id}
-                        type="button"
-                        onClick={() => {
-                          setCurrentTab(item.id);
-                          setIsOpen(false); // Close mobile menu on select
-                        }}
-                        className={`
-                          w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer group relative
-                          ${isActive 
-                            ? 'bg-[#D4AF37] text-slate-950 shadow-md font-extrabold' 
-                            : 'text-slate-400 hover:text-white hover:bg-slate-900/80'
-                          }
-                          ${isCollapsed ? 'justify-center px-0' : ''}
-                        `}
-                        title={isCollapsed ? item.name : undefined}
-                      >
-                        <Icon size={18} className={`shrink-0 ${isActive ? 'text-slate-950' : 'text-slate-400 group-hover:text-[#D4AF37]'}`} />
-                        
-                        {!isCollapsed && (
-                          <span className="truncate flex-1 text-left">
-                            {item.name}
-                          </span>
-                        )}
+                      <React.Fragment key={item.id}>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            setCurrentTab(item.id);
+                            setIsOpen(false); // Close mobile menu on select
+                          }}
+                          className={`
+                            w-full flex items-center gap-3 px-3 py-2.5 rounded-xl text-xs font-bold transition-all cursor-pointer group relative
+                            ${isActive 
+                              ? 'bg-[#D4AF37] text-slate-950 shadow-md font-extrabold' 
+                              : 'text-slate-400 hover:text-white hover:bg-slate-900/80'
+                            }
+                            ${isCollapsed ? 'justify-center px-0' : ''}
+                          `}
+                          title={isCollapsed ? item.name : undefined}
+                        >
+                          <Icon size={18} className={`shrink-0 ${isActive ? 'text-slate-950' : 'text-slate-400 group-hover:text-[#D4AF37]'}`} />
+                          
+                          {!isCollapsed && (
+                            <span className="truncate flex-1 text-left">
+                              {item.name}
+                            </span>
+                          )}
 
-                        {!isCollapsed && item.badge && (
-                          <span className="px-1.5 py-0.5 text-[9px] font-mono rounded bg-slate-800 text-amber-400 border border-slate-700">
-                            {item.badge}
-                          </span>
-                        )}
-                      </button>
+                          {!isCollapsed && item.badge && (
+                            <span className="px-1.5 py-0.5 text-[9px] font-mono rounded bg-slate-800 text-amber-400 border border-slate-700">
+                              {item.badge}
+                            </span>
+                          )}
+                        </button>
+                        {item.id === 'products' && renderPreOrderGroup()}
+                      </React.Fragment>
                     );
                   })}
                 </nav>

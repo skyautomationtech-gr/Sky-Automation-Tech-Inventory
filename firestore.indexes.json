@@ -1,0 +1,95 @@
+{
+  "indexes": [
+    {
+      "collectionGroup": "preOrders",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "subBrand", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "preOrders",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "preOrders",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "subBrand", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "preOrders",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "supplierId", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "preOrders",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "paymentState", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "preOrders",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "customerPhone", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "preOrders",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "subBrand", "order": "ASCENDING" },
+        { "fieldPath": "paymentState", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "preOrders",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "subBrand", "order": "ASCENDING" },
+        { "fieldPath": "dueAmount", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "preOrders",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "subBrand", "order": "ASCENDING" },
+        { "fieldPath": "estimatedDeliveryDate", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "preOrderAudit",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "preOrderId", "order": "ASCENDING" },
+        { "fieldPath": "timestamp", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "preOrderSupplierPayments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "preOrderId", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    }
+  ],
+  "fieldOverrides": []
+}

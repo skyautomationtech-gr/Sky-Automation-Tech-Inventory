@@ -1,5 +1,31 @@
 import React from 'react';
-import { ChevronRight, Home, LayoutDashboard, Package, ArrowUpDown, ShoppingBag, Receipt, Coins, Calculator, Truck, BarChart3, Activity, DollarSign, Contact, Users, ShieldCheck, Settings, User } from 'lucide-react';
+import {
+  ChevronRight,
+  Home,
+  LayoutDashboard,
+  Package,
+  PackagePlus,
+  PlusCircle,
+  ClipboardList,
+  Wallet,
+  Plane,
+  Link2,
+  Building2,
+  ArrowUpDown,
+  ShoppingBag,
+  Receipt,
+  Coins,
+  Calculator,
+  Truck,
+  BarChart3,
+  Activity,
+  DollarSign,
+  Contact,
+  Users,
+  ShieldCheck,
+  Settings,
+  User,
+} from 'lucide-react';
 
 interface BreadcrumbsProps {
   currentTab: string;
@@ -16,6 +42,14 @@ interface TabMeta {
 export const TAB_DIRECTORY: Record<string, TabMeta> = {
   dashboard: { group: 'Overview', label: 'Dashboard', icon: LayoutDashboard },
   products: { group: 'Operations', label: 'Products & Brands', icon: Package },
+  preorder_overview: { group: 'Pre-Order Management', label: 'Overview Dashboard', icon: PackagePlus },
+  preorder_create: { group: 'Pre-Order Management', label: 'Create Pre-Order', icon: PlusCircle },
+  preorder_list: { group: 'Pre-Order Management', label: 'All Pre-Orders', icon: ClipboardList },
+  preorder_payments: { group: 'Pre-Order Management', label: 'Payment Management', icon: Wallet },
+  preorder_tracking: { group: 'Pre-Order Management', label: 'Shipment Tracking', icon: Plane },
+  preorder_links: { group: 'Pre-Order Management', label: 'Customer Tracking Links', icon: Link2 },
+  preorder_suppliers: { group: 'Pre-Order Management', label: 'Supplier Management', icon: Building2 },
+  preorder_reports: { group: 'Pre-Order Management', label: 'Reports & History', icon: BarChart3 },
   stock: { group: 'Operations', label: 'Stock Operations', icon: ArrowUpDown },
   orders: { group: 'Sales Desk', label: 'Order Desk', icon: ShoppingBag },
   invoices: { group: 'Sales Desk', label: 'Invoice Desk', icon: Receipt },

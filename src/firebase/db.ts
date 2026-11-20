@@ -1371,6 +1371,54 @@ export async function seedInitialDataIfEmpty(): Promise<void> {
   try {
     const rolePermsRef = doc(db, 'settings', 'rolePermissions');
     const rolePermsSnap = await getDoc(rolePermsRef);
+    const defaultPreOrderPerms = {
+      admin: {
+        preOrderView: true,
+        preOrderCreate: true,
+        preOrderEdit: true,
+        preOrderUpdateStatus: true,
+        preOrderCollectPayment: true,
+        preOrderVerifyPayment: true,
+        preOrderRefund: true,
+        preOrderReceiveStock: true,
+        preOrderConvertSale: true,
+        preOrderManageTracking: true,
+        preOrderSupplier: true,
+        preOrderReports: true,
+        preOrderViewProfit: true
+      },
+      manager: {
+        preOrderView: true,
+        preOrderCreate: true,
+        preOrderEdit: true,
+        preOrderUpdateStatus: true,
+        preOrderCollectPayment: true,
+        preOrderVerifyPayment: true,
+        preOrderRefund: false,
+        preOrderReceiveStock: true,
+        preOrderConvertSale: true,
+        preOrderManageTracking: true,
+        preOrderSupplier: true,
+        preOrderReports: true,
+        preOrderViewProfit: false
+      },
+      staff: {
+        preOrderView: true,
+        preOrderCreate: true,
+        preOrderEdit: false,
+        preOrderUpdateStatus: true,
+        preOrderCollectPayment: true,
+        preOrderVerifyPayment: false,
+        preOrderRefund: false,
+        preOrderReceiveStock: true,
+        preOrderConvertSale: false,
+        preOrderManageTracking: false,
+        preOrderSupplier: false,
+        preOrderReports: false,
+        preOrderViewProfit: false
+      }
+    };
+
     if (!rolePermsSnap.exists()) {
       await setDoc(rolePermsRef, {
         admin: {
@@ -1382,7 +1430,20 @@ export async function seedInitialDataIfEmpty(): Promise<void> {
           stockOut: true,
           stockAdjustment: true,
           manageOrders: true,
-          voidInvoice: false
+          voidInvoice: false,
+          ...defaultPreOrderPerms.admin
+        },
+        manager: {
+          addProduct: true,
+          editProduct: true,
+          deleteProduct: false,
+          manageCategories: true,
+          stockIn: true,
+          stockOut: true,
+          stockAdjustment: true,
+          manageOrders: true,
+          voidInvoice: false,
+          ...defaultPreOrderPerms.manager
         },
         staff: {
           addProduct: false,
@@ -1393,10 +1454,30 @@ export async function seedInitialDataIfEmpty(): Promise<void> {
           stockOut: true,
           stockAdjustment: false,
           manageOrders: false,
-          voidInvoice: false
+          voidInvoice: false,
+          ...defaultPreOrderPerms.staff
         }
       });
       console.log('Seeded rolePermissions default settings.');
+    } else {
+      const existing = rolePermsSnap.data() || {};
+      const patch: Record<string, any> = {};
+      for (const roleKey of ['admin', 'manager', 'staff'] as const) {
+        const currentRoleMap = existing[roleKey] || {};
+        const roleDefaults = defaultPreOrderPerms[roleKey];
+        const missingKeys: Record<string, boolean> = {};
+        for (const [k, v] of Object.entries(roleDefaults)) {
+          if (typeof currentRoleMap[k] !== 'boolean') {
+            missingKeys[k] = v;
+          }
+        }
+        if (Object.keys(missingKeys).length > 0 || !existing[roleKey]) {
+          patch[roleKey] = { ...roleDefaults, ...currentRoleMap };
+        }
+      }
+      if (Object.keys(patch).length > 0) {
+        await setDoc(rolePermsRef, patch, { merge: true });
+      }
     }
 
     const categories = await getCategories();
@@ -3918,6 +3999,14 @@ export async function getNextEmployeeId(txn?: any): Promise<string> {
 
 export async function getBranches(): Promise<Branch[]> {
   if (dbCache.branches) return dbCache.branches;
+  const defaultBranches: Branch[] = [
+    { id: 'b1', name: 'Head Office - Dhaka', address: 'Gulshan, Dhaka', active: true },
+    { id: 'b2', name: 'Warehouse - Mirpur', address: 'Mirpur 10, Dhaka', active: true },
+    { id: 'b3', name: 'Branch - Chattogram', address: 'Agrabad, Chattogram', active: true }
+  ];
+  if (!auth?.currentUser) {
+    return defaultBranches;
+  }
   try {
     const colRef = collection(db, 'branches');
     const snapshot = await getDocs(colRef);
@@ -3925,23 +4014,14 @@ export async function getBranches(): Promise<Branch[]> {
     snapshot.forEach(docSnap => {
       list.push({ id: docSnap.id, ...docSnap.data() } as Branch);
     });
-    // Default if empty
     if (list.length === 0) {
-      list.push(
-        { id: 'b1', name: 'Head Office - Dhaka', address: 'Gulshan, Dhaka', active: true },
-        { id: 'b2', name: 'Warehouse - Mirpur', address: 'Mirpur 10, Dhaka', active: true },
-        { id: 'b3', name: 'Branch - Chattogram', address: 'Agrabad, Chattogram', active: true }
-      );
+      list.push(...defaultBranches);
     }
     dbCache.branches = list;
     return list;
   } catch (error) {
-    console.error('Failed to get branches:', error);
-    return [
-      { id: 'b1', name: 'Head Office - Dhaka', address: 'Gulshan, Dhaka', active: true },
-      { id: 'b2', name: 'Warehouse - Mirpur', address: 'Mirpur 10, Dhaka', active: true },
-      { id: 'b3', name: 'Branch - Chattogram', address: 'Agrabad, Chattogram', active: true }
-    ];
+    console.warn('getBranches using defaults:', error);
+    return defaultBranches;
   }
 }
 

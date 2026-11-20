@@ -263,10 +263,10 @@ export default function DashboardView({
   };
 
   const handleCheckOut = async () => {
-    if (!user || !user.currentSessionId || processingAttendance || !isCheckedIn) return;
+    if (!user || processingAttendance || !isCheckedIn) return;
     setProcessingAttendance(true);
     try {
-      await checkOutUser(user.id, user.currentSessionId);
+      await checkOutUser(user.id, user.currentSessionId || null);
       await onUserUpdate();
     } catch (err) {
       console.error(err);

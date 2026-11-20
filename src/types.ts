@@ -311,6 +311,7 @@ export interface Customer {
   customerId?: string;
   name: string;
   phone: string;
+  whatsapp?: string;
   address?: string;
   subBrand?: string;
   notes?: string;
@@ -669,3 +670,292 @@ export interface StockPurchaseRecord {
   notes?: string;
   createdAt?: number;
 }
+
+// ==========================================
+// PRE-ORDER MANAGEMENT SYSTEM TYPES (PART 1 FOUNDATION)
+// ==========================================
+
+export type PreOrderPermissionKey =
+  | 'preOrderView'
+  | 'preOrderCreate'
+  | 'preOrderEdit'
+  | 'preOrderUpdateStatus'
+  | 'preOrderCollectPayment'
+  | 'preOrderVerifyPayment'
+  | 'preOrderRefund'
+  | 'preOrderReceiveStock'
+  | 'preOrderConvertSale'
+  | 'preOrderManageTracking'
+  | 'preOrderSupplier'
+  | 'preOrderReports'
+  | 'preOrderViewProfit';
+
+export type LegacyRolePermissionKey =
+  | 'addProduct'
+  | 'editProduct'
+  | 'deleteProduct'
+  | 'manageCategories'
+  | 'stockIn'
+  | 'stockOut'
+  | 'stockAdjustment'
+  | 'manageOrders'
+  | 'voidInvoice';
+
+export type AppPermissionKey = LegacyRolePermissionKey | PreOrderPermissionKey;
+
+export type RolePermissionSet = Record<AppPermissionKey, boolean>;
+
+export type RolePermissionsMap = {
+  superadmin?: Partial<RolePermissionSet>;
+  admin: Partial<RolePermissionSet>;
+  manager?: Partial<RolePermissionSet>;
+  staff: Partial<RolePermissionSet>;
+  [role: string]: Partial<RolePermissionSet> | undefined;
+};
+
+export type PreOrderStatus =
+  | 'Advance Received'
+  | 'Order Confirmed'
+  | 'Ordered from China'
+  | 'China Warehouse'
+  | 'International Shipment'
+  | 'Customs Clearance'
+  | 'Arrived in Bangladesh'
+  | 'Received in Stock'
+  | 'Ready for Delivery'
+  | 'Out for Delivery'
+  | 'Delivered'
+  | 'Cancelled'
+  | 'Refunded';
+
+export type PreOrderPaymentType = 'advance' | 'installment' | 'additional' | 'refund';
+export type PreOrderPaymentStatus = 'pending' | 'verified' | 'rejected';
+export type PreOrderPaymentMethod = 'Cash' | 'bKash' | 'Nagad' | 'Rocket' | 'Bank Transfer' | 'Card' | string;
+
+export type PreOrderPaymentState = 'unpaid' | 'partially_paid' | 'fully_paid' | 'refunded';
+
+export interface PreOrder {
+  id: string;
+  preOrderNumber: string; // e.g. "PO-0001"
+  subBrand: 'SAT' | 'GZ' | 'RTX';
+  customerId?: string;
+  customerCode?: string; // e.g. "CUS-0001"
+  customerName: string;
+  customerPhone: string;
+  customerWhatsapp?: string;
+  customerAddress: string;
+  salesChannel?: SalesChannel | string;
+
+  // Product / Item details
+  productName: string;
+  category?: string;
+  sku?: string;
+  model?: string;
+  variant?: string;
+  color?: string;
+  productUrl?: string;
+  productSpecs?: string;
+  productImage?: string;
+  linkedProductId?: string;
+  linkedVariantId?: string;
+  qty: number;
+
+  // Customer-facing financials (non-sensitive cost fields live in preOrders/{id}/private/cost)
+  sellingUnitPrice: number;
+  subtotal: number;
+  deliveryCharge: number;
+  discount: number;
+  totalAmount: number;
+  advancePaid: number; // Sum of verified non-refund payments
+  pendingAmount?: number; // Sum of pending non-refund payments awaiting verification
+  refundedAmount: number; // Sum of verified refunds
+  dueAmount: number; // totalAmount - advancePaid + refundedAmount
+  paymentCount?: number; // Non-rejected payment ledger entries count
+  paymentState?: PreOrderPaymentState;
+
+  // Workflow & Operations
+  status: PreOrderStatus;
+  orderDate?: string; // YYYY-MM-DD
+  supplierId?: string;
+  supplierName?: string;
+  supplierOrderRef?: string;
+  courier?: string;
+  trackingNumber?: string;
+  trackingToken?: string;
+  estimatedDeliveryDate?: string;
+
+  // Conversion & Stock flags
+  stockReceived?: boolean;
+  stockReceivedAt?: number;
+  convertedOrderId?: string;
+  convertedAt?: number;
+
+  // Cancellation metadata
+  isCancelled?: boolean;
+  cancellationReason?: string;
+  cancelledAt?: number;
+  cancelledBy?: string;
+
+  // Idempotency & Audit
+  idempotencyKey?: string;
+  notes?: string; // Customer-visible order note
+  createdBy: string;
+  createdByName: string;
+  createdAt: number;
+  updatedAt: number;
+  updatedBy?: string;
+}
+
+/**
+ * Restricted cost/profit/internal note subdocument stored at `preOrders/{id}/private/cost`
+ * Read/write restricted exclusively to roles holding `preOrderViewProfit`.
+ */
+export interface PreOrderPrivateCost {
+  preOrderId: string;
+  chinaUnitCost: number;
+  shippingCost: number;
+  supplierUnitCost?: number;
+  expectedProfit: number;
+  internalNotes?: string;
+  supplierOrderRef?: string;
+  updatedAt: number;
+  updatedBy: string;
+}
+
+export interface PreOrderPayment {
+  id: string;
+  preOrderId: string;
+  preOrderNumber: string;
+  type: PreOrderPaymentType;
+  amount: number;
+  method: PreOrderPaymentMethod;
+  referenceNo?: string;
+  receiptUrl?: string;
+  receivedAt?: number;
+  note?: string;
+  status: PreOrderPaymentStatus;
+  idempotencyKey: string;
+  recordedBy: string;
+  recordedByName: string;
+  createdAt: number;
+  verifiedBy?: string;
+  verifiedByName?: string;
+  verifiedAt?: number;
+  rejectionReason?: string;
+}
+
+export interface PreOrderStatusHistory {
+  id: string;
+  preOrderId: string;
+  fromStatus: PreOrderStatus | null;
+  toStatus: PreOrderStatus;
+  note?: string;
+  changedBy: string;
+  changedByName: string;
+  timestamp: number;
+}
+
+export interface PreOrderShipment {
+  preOrderId: string;
+  supplierOrderRef?: string;
+  chinaCourier?: string;
+  chinaTrackingNo?: string;
+  freightForwarder?: string;
+  bdCourier?: string;
+  bdTrackingNo?: string;
+  trackingNumber?: string;
+  shippedFromChinaAt?: string;
+  arrivedBdAt?: string;
+  estimatedArrivalDate?: string;
+  notes?: string;
+  updatedBy: string;
+  updatedAt: number;
+}
+
+export interface PreOrderSupplierPayment {
+  id: string;
+  preOrderId: string;
+  preOrderNumber: string;
+  supplierId: string;
+  supplierName: string;
+  amount: number;
+  currency: 'BDT' | 'RMB' | 'USD' | string;
+  exchangeRate?: number;
+  amountBdt: number;
+  method: string;
+  referenceNo?: string;
+  note?: string;
+  idempotencyKey: string;
+  date: string; // YYYY-MM-DD
+  recordedBy: string;
+  recordedByName: string;
+  createdAt: number;
+}
+
+export interface PublicTrackingTimelineItem {
+  status: PreOrderStatus;
+  timestamp: number;
+}
+
+export interface PublicTrackingRecord {
+  token: string;
+  preOrderId: string;
+  preOrderNumber: string;
+  subBrand: 'SAT' | 'GZ' | 'RTX';
+  customerName: string;
+  maskedPhone?: string;
+  productName: string;
+  qty: number;
+  totalAmount: number;
+  advancePaid: number;
+  refundedAmount: number;
+  dueAmount: number;
+  status: PreOrderStatus;
+  trackingNumber?: string;
+  courier?: string;
+  estimatedDeliveryDate?: string;
+  statusTimeline: PublicTrackingTimelineItem[];
+  updatedAt: number;
+}
+
+export type PreOrderAuditAction =
+  | 'PREORDER_CREATED'
+  | 'PREORDER_UPDATED'
+  | 'PRIVATE_COST_UPDATED'
+  | 'STATUS_CHANGED'
+  | 'PAYMENT_RECORDED'
+  | 'PAYMENT_VERIFIED'
+  | 'PAYMENT_REJECTED'
+  | 'REFUND_RECORDED'
+  | 'SHIPMENT_UPDATED'
+  | 'SUPPLIER_PAYMENT_RECORDED'
+  | 'TRACKING_LINK_GENERATED'
+  | 'STOCK_RECEIVED'
+  | 'CONVERTED_TO_SALE';
+
+export interface PreOrderAuditEntry {
+  id: string;
+  preOrderId: string;
+  preOrderNumber: string;
+  action: PreOrderAuditAction;
+  summary: string;
+  metadata?: Record<string, any>;
+  userId: string;
+  userName: string;
+  userRole: string;
+  timestamp: number;
+}
+
+export interface PreOrderNotification {
+  id: string;
+  preOrderId: string;
+  preOrderNumber: string;
+  type: 'payment_pending' | 'status_update' | 'arrival_alert' | 'refund_alert' | 'general';
+  title: string;
+  message: string;
+  targetTab: string;
+  readBy: string[];
+  createdAt: number;
+  createdBy: string;
+}
+

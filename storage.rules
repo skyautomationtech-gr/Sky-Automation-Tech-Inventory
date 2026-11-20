@@ -2,9 +2,15 @@ rules_version = '2';
 service firebase.storage {
   match /b/{bucket}/o {
     match /profilePhotos/{userId}/{allPaths=**} {
-      allow read: if true; // Publicly viewable profiles or restricted? User said "upload to their own"
+      allow read: if true;
       allow write: if request.auth != null && request.auth.uid == userId
                    && request.resource.size < 2 * 1024 * 1024 // 2MB limit
+                   && request.resource.contentType.matches('image/.*');
+    }
+    match /preOrders/{allPaths=**} {
+      allow read: if request.auth != null;
+      allow write: if request.auth != null
+                   && request.resource.size < 3 * 1024 * 1024 // 3MB limit
                    && request.resource.contentType.matches('image/.*');
     }
   }
