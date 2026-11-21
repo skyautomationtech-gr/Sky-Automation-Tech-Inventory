@@ -90,6 +90,7 @@ import ProfileSettingsView from './components/ProfileSettingsView';
 import PreOrderPlaceholderView from './components/PreOrders/PreOrderPlaceholderView';
 import CreatePreOrderView from './components/PreOrders/CreatePreOrderView';
 import AllPreOrdersView from './components/PreOrders/AllPreOrdersView';
+import PaymentManagementView from './components/PreOrders/PaymentManagementView';
 import NotificationCenter from './components/NotificationCenter';
 import { PublicInvoiceVerification } from './components/PublicInvoiceVerification';
 import ErrorBoundary from './components/ErrorBoundary';
@@ -220,6 +221,7 @@ export default function App() {
   const [productColors, setProductColors] = useState<ProductColor[]>([]);
   const [productModels, setProductModels] = useState<ProductModel[]>([]);
   const [rolePermissions, setRolePermissions] = useState<RolePermissionsMap | null>(null);
+  const [firebaseAuthed, setFirebaseAuthed] = useState<boolean>(() => Boolean(auth?.currentUser));
   const [dataLoading, setDataLoading] = useState(false);
   const [showCheckInModal, setShowCheckInModal] = useState(false);
 
@@ -379,9 +381,9 @@ export default function App() {
 
     console.log('App: Setting up onAuthStateChanged listener...');
 
-    // Pre-load company settings immediately if an active session is already restored
+    // Pre-load company settings only if Firebase Auth already has a signed-in user
     const initialSaved = getSavedUserSession();
-    if (initialSaved) {
+    if (initialSaved && auth?.currentUser) {
       getCompanySettings().then((settings) => {
         if (!isMounted) return;
         if (settings && settings.onboarded) {
@@ -396,6 +398,7 @@ export default function App() {
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       console.log('App: onAuthStateChanged triggered. User:', firebaseUser ? firebaseUser.uid : 'null');
       if (!isMounted) return;
+      setFirebaseAuthed(Boolean(firebaseUser));
 
       try {
         if (firebaseUser) {
@@ -479,43 +482,21 @@ export default function App() {
           }
         } else {
           // Firebase Auth user is null.
-          // Check if there is a verified local session (e.g. custom password, offline, or session restored across refresh)
+          // Restore verified local session from cache WITHOUT triggering unauthenticated Firestore reads
           const savedSession = getSavedUserSession();
           if (savedSession) {
-            console.log('App: Firebase Auth user is null, but verified local session found for:', savedSession.email);
-            // Verify in background that the account is still valid and not suspended
+            console.log('App: Firebase Auth user is null, restoring verified local session from cache for:', savedSession.email);
+            setUser(savedSession);
             try {
-              let verifiedProfile = await getUserProfile(savedSession.id);
-              if (!verifiedProfile && savedSession.email) {
-                verifiedProfile = await findUserProfileByEmail(savedSession.email);
-              }
-              if (verifiedProfile) {
-                if (verifiedProfile.active === false && verifiedProfile.role !== 'superadmin') {
-                  console.warn('App: Local session user has been suspended in Firestore:', verifiedProfile.email);
-                  await handleLogout();
-                  return;
-                }
-                setUser(verifiedProfile);
-                try {
-                  localStorage.setItem('sat_user_session', JSON.stringify(verifiedProfile));
-                } catch (e) {}
-              } else {
-                // Keep the savedSession if Firestore read was empty or offline
-                setUser(savedSession);
-              }
-
-              // Load company settings
-              try {
-                const settings = await getCompanySettings();
-                if (settings && settings.onboarded) {
-                  setCompanySettings(settings);
+              const cachedSettingsStr = localStorage.getItem('company_settings');
+              if (cachedSettingsStr) {
+                const parsedSettings = JSON.parse(cachedSettingsStr);
+                if (parsedSettings && parsedSettings.onboarded) {
+                  setCompanySettings(parsedSettings);
                   setIsOnboarding(false);
                 }
-              } catch (e) {}
-            } catch (verifyErr) {
-              console.warn('App: Background verification failed, using saved session:', verifyErr);
-              setUser(savedSession);
-            }
+              }
+            } catch (e) {}
           } else {
             // No local session either - truly signed out
             setUser(null);
@@ -601,7 +582,7 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (user && !isOnboarding && !isOfflineDemoMode) {
+    if (user && firebaseAuthed && !isOnboarding && !isOfflineDemoMode) {
       getRolePermissions()
         .then((perms) => setRolePermissions(perms))
         .catch(() => {});
@@ -636,7 +617,7 @@ export default function App() {
         unsubModels();
       };
     }
-  }, [user, isOnboarding, isOfflineDemoMode]);
+  }, [user, firebaseAuthed, isOnboarding, isOfflineDemoMode]);
 
   // Handle Auth success from Login Screen
   const handleAuthSuccess = async (profile: UserProfile) => {
@@ -1184,6 +1165,7 @@ export default function App() {
               user={user}
               rolePermissions={rolePermissions}
               categories={categories}
+              companySettings={companySettings}
               onCreateNew={() => navigateToTab('preorder_create')}
               initialSelectedPreOrderId={selectedPreOrderId}
               onClearInitialSelected={() => setSelectedPreOrderId(null)}
@@ -1191,9 +1173,21 @@ export default function App() {
           </ErrorBoundary>
         )}
 
+        {currentTab === 'preorder_payments' && (
+          <ErrorBoundary fallbackTitle="Pre-Order Payment Management encountered an issue">
+            <PaymentManagementView
+              user={user}
+              rolePermissions={rolePermissions}
+              categories={categories}
+              companySettings={companySettings}
+            />
+          </ErrorBoundary>
+        )}
+
         {isPreOrderTab(currentTab) &&
           currentTab !== 'preorder_create' &&
-          currentTab !== 'preorder_list' && (
+          currentTab !== 'preorder_list' &&
+          currentTab !== 'preorder_payments' && (
             <ErrorBoundary fallbackTitle="Pre-Order Management encountered an issue">
               <PreOrderPlaceholderView
                 tab={currentTab}

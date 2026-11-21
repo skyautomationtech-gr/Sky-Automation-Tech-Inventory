@@ -20,6 +20,7 @@ import {
   getOrders, 
   getAllUsers 
 } from '../firebase/db';
+import { auth } from '../firebase/config';
 
 interface NotificationCenterProps {
   user: UserProfile | null;
@@ -33,10 +34,12 @@ export default function NotificationCenter({ user, products: propProducts, onNav
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
+    if (!user || !auth?.currentUser) return;
     fetchAndCompileNotifications();
   }, [user, propProducts]);
 
   const fetchAndCompileNotifications = async () => {
+    if (!auth?.currentUser) return;
     setLoading(true);
     try {
       // Fetch persisted notifications from Firestore

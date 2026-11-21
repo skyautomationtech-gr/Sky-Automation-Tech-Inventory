@@ -26,7 +26,7 @@ export interface PreOrderCalculationInput {
   discount?: number;
   chinaUnitCost?: number;
   shippingCost?: number;
-  payments?: Array<Pick<PreOrderPayment, 'type' | 'status' | 'amount'>>;
+  payments?: Array<Pick<PreOrderPayment, 'type' | 'status' | 'amount' | 'reversedPaymentType'>>;
 }
 
 export interface PreOrderFinancialSummary {
@@ -50,8 +50,8 @@ export interface PreOrderFinancialSummary {
  * Formulas:
  *   subtotal              = sellingUnitPrice * qty
  *   totalAmount           = subtotal + deliveryCharge - discount
- *   verifiedCollected     = sum(payments where status === 'verified' && type in ['advance','installment','additional'])
- *   verifiedRefunded      = sum(payments where status === 'verified' && type === 'refund')
+ *   verifiedCollected     = sum(verified non-refund collections) - sum(verified reversals of collections)
+ *   verifiedRefunded      = sum(verified refunds) - sum(verified reversals of refunds)
  *   verifiedNetPaid       = verifiedCollected - verifiedRefunded
  *   dueAmount             = totalAmount - verifiedCollected + verifiedRefunded
  *   expectedProfit        = totalAmount - deliveryCharge - (chinaUnitCost * qty) - shippingCost
@@ -71,19 +71,30 @@ export function calculatePreOrderFinancials(input: PreOrderCalculationInput): Pr
   let verifiedCollectedPaisa = 0;
   let verifiedRefundedPaisa = 0;
   let pendingCollectedPaisa = 0;
+  let reversedCollectionPaisa = 0;
+  let reversedRefundPaisa = 0;
 
   for (const p of input.payments || []) {
     const pPaisa = Math.max(0, toPaisa(p.amount));
     if (p.status === 'verified') {
       if (p.type === 'refund') {
         verifiedRefundedPaisa += pPaisa;
+      } else if (p.type === 'reversal') {
+        if (p.reversedPaymentType === 'refund') {
+          reversedRefundPaisa += pPaisa;
+        } else {
+          reversedCollectionPaisa += pPaisa;
+        }
       } else {
         verifiedCollectedPaisa += pPaisa;
       }
-    } else if (p.status === 'pending' && p.type !== 'refund') {
+    } else if (p.status === 'pending' && p.type !== 'refund' && p.type !== 'reversal') {
       pendingCollectedPaisa += pPaisa;
     }
   }
+
+  verifiedCollectedPaisa = Math.max(0, verifiedCollectedPaisa - reversedCollectionPaisa);
+  verifiedRefundedPaisa = Math.max(0, verifiedRefundedPaisa - reversedRefundPaisa);
 
   const verifiedNetPaidPaisa = verifiedCollectedPaisa - verifiedRefundedPaisa;
   const dueAmountPaisa = totalAmountPaisa - verifiedCollectedPaisa + verifiedRefundedPaisa;
@@ -147,12 +158,13 @@ export interface StatusTransitionValidation {
  * Validates whether transitioning from `fromStatus` to `toStatus` is permitted.
  * - Rejects transitions to the same status
  * - Enforces PRE_ORDER_ALLOWED_TRANSITIONS map
- * - Requires verifiedNetPaid > 0 to transition from 'Cancelled' -> 'Refunded'
+ * - Requires verifiedRefunded > 0 to transition from 'Cancelled' -> 'Refunded'
  */
 export function canTransitionPreOrderStatus(
   fromStatus: PreOrderStatus,
   toStatus: PreOrderStatus,
-  verifiedNetPaid: number = 0
+  _verifiedNetPaid: number = 0,
+  verifiedRefunded: number = 0
 ): StatusTransitionValidation {
   if (fromStatus === toStatus) {
     return { allowed: false, reason: `Pre-order is already in "${toStatus}" status.` };
@@ -173,10 +185,10 @@ export function canTransitionPreOrderStatus(
         reason: 'Pre-order must be Cancelled before transitioning to Refunded.',
       };
     }
-    if (roundMoney(verifiedNetPaid) <= 0) {
+    if (roundMoney(verifiedRefunded) <= 0) {
       return {
         allowed: false,
-        reason: 'Refunded status requires a verified net paid balance greater than zero.',
+        reason: 'Record the customer refund in the Payments tab before marking the order as Refunded.',
       };
     }
   }

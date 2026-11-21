@@ -3,6 +3,7 @@ import { DocumentData, QueryDocumentSnapshot } from 'firebase/firestore';
 import {
   AlertCircle,
   ArrowDown,
+  ArrowRightLeft,
   ArrowUp,
   ArrowUpDown,
   ChevronDown,
@@ -20,6 +21,7 @@ import {
 } from 'lucide-react';
 import {
   Category,
+  CompanySettings,
   PreOrder,
   PreOrderPaymentState,
   PreOrderStatus,
@@ -49,11 +51,13 @@ import {
   SubBrandBadge,
 } from './PreOrderStatusBadge';
 import PreOrderDetailDrawer from './PreOrderDetailDrawer';
+import PreOrderStatusDialog from './PreOrderStatusDialog';
 
 export interface AllPreOrdersViewProps {
   user: UserProfile;
   rolePermissions: RolePermissionsMap | null;
   categories: Category[];
+  companySettings?: CompanySettings | null;
   onCreateNew: () => void;
   initialSelectedPreOrderId?: string | null;
   onClearInitialSelected?: () => void;
@@ -63,6 +67,7 @@ export const AllPreOrdersView: React.FC<AllPreOrdersViewProps> = ({
   user,
   rolePermissions,
   categories,
+  companySettings,
   onCreateNew,
   initialSelectedPreOrderId,
   onClearInitialSelected,
@@ -117,8 +122,10 @@ export const AllPreOrdersView: React.FC<AllPreOrdersViewProps> = ({
   );
   const [drawerEditMode, setDrawerEditMode] = useState(false);
   const [openMenuRowId, setOpenMenuRowId] = useState<string | null>(null);
+  const [statusTargetOrder, setStatusTargetOrder] = useState<PreOrder | null>(null);
 
   const canEdit = hasPermission(user, rolePermissions, 'preOrderEdit');
+  const canUpdateStatus = hasPermission(user, rolePermissions, 'preOrderUpdateStatus');
 
   // Sync external initial selection (e.g. immediately after creating a Pre-Order)
   useEffect(() => {
@@ -705,7 +712,15 @@ export const AllPreOrdersView: React.FC<AllPreOrdersViewProps> = ({
                       </td>
 
                       <td className="px-4 py-3 whitespace-nowrap">
-                        <PreOrderStatusBadge status={row.status} size="xs" />
+                        <div className="flex flex-col items-start gap-1">
+                          <PreOrderStatusBadge status={row.status} size="xs" />
+                          {row.status === 'Cancelled' &&
+                            (row.advancePaid || 0) - (row.refundedAmount || 0) > 0 && (
+                              <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-rose-100 text-rose-800 border border-rose-200 dark:bg-rose-950/50 dark:text-rose-300 dark:border-rose-800">
+                                Refund required
+                              </span>
+                            )}
+                        </div>
                       </td>
 
                       <td className="px-4 py-3 whitespace-nowrap text-right font-mono font-bold tabular-nums text-slate-900 dark:text-slate-100">
@@ -830,6 +845,21 @@ export const AllPreOrdersView: React.FC<AllPreOrdersViewProps> = ({
                                   Edit Pre-Order
                                 </button>
                               )}
+                            {canUpdateStatus &&
+                              row.status !== 'Delivered' &&
+                              row.status !== 'Refunded' && (
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    setOpenMenuRowId(null);
+                                    setStatusTargetOrder(row);
+                                  }}
+                                  className="w-full flex items-center gap-2 px-2.5 py-2 rounded-lg text-xs font-medium text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800 cursor-pointer"
+                                >
+                                  <ArrowRightLeft className="w-3.5 h-3.5 text-sky-600" />
+                                  Update Status
+                                </button>
+                              )}
                           </div>
                         )}
                       </td>
@@ -903,6 +933,16 @@ export const AllPreOrdersView: React.FC<AllPreOrdersViewProps> = ({
         rolePermissions={rolePermissions}
         categories={categories}
         suppliers={suppliers}
+        companySettings={companySettings}
+        onUpdated={fetchPage}
+      />
+
+      {/* Quick Update Status Dialog */}
+      <PreOrderStatusDialog
+        isOpen={Boolean(statusTargetOrder)}
+        onClose={() => setStatusTargetOrder(null)}
+        preOrder={statusTargetOrder}
+        user={user}
         onUpdated={fetchPage}
       />
     </div>

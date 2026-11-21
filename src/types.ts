@@ -728,7 +728,7 @@ export type PreOrderStatus =
   | 'Cancelled'
   | 'Refunded';
 
-export type PreOrderPaymentType = 'advance' | 'installment' | 'additional' | 'refund';
+export type PreOrderPaymentType = 'advance' | 'installment' | 'additional' | 'refund' | 'reversal';
 export type PreOrderPaymentStatus = 'pending' | 'verified' | 'rejected';
 export type PreOrderPaymentMethod = 'Cash' | 'bKash' | 'Nagad' | 'Rocket' | 'Bank Transfer' | 'Card' | string;
 
@@ -766,9 +766,9 @@ export interface PreOrder {
   deliveryCharge: number;
   discount: number;
   totalAmount: number;
-  advancePaid: number; // Sum of verified non-refund payments
+  advancePaid: number; // Sum of verified non-refund collections minus reversals
   pendingAmount?: number; // Sum of pending non-refund payments awaiting verification
-  refundedAmount: number; // Sum of verified refunds
+  refundedAmount: number; // Sum of verified refunds minus refund reversals
   dueAmount: number; // totalAmount - advancePaid + refundedAmount
   paymentCount?: number; // Non-rejected payment ledger entries count
   paymentState?: PreOrderPaymentState;
@@ -826,6 +826,9 @@ export interface PreOrderPayment {
   id: string;
   preOrderId: string;
   preOrderNumber: string;
+  subBrand?: 'SAT' | 'GZ' | 'RTX';
+  customerName?: string;
+  customerPhone?: string;
   type: PreOrderPaymentType;
   amount: number;
   method: PreOrderPaymentMethod;
@@ -842,6 +845,10 @@ export interface PreOrderPayment {
   verifiedByName?: string;
   verifiedAt?: number;
   rejectionReason?: string;
+  reversesPaymentId?: string;
+  reversedPaymentType?: PreOrderPaymentType;
+  reversalReason?: string;
+  duplicateOverrideReason?: string;
 }
 
 export interface PreOrderStatusHistory {
@@ -850,6 +857,10 @@ export interface PreOrderStatusHistory {
   fromStatus: PreOrderStatus | null;
   toStatus: PreOrderStatus;
   note?: string;
+  publicMessage?: string;
+  notifyCustomer?: boolean;
+  isBackwardMove?: boolean;
+  overrideReason?: string;
   changedBy: string;
   changedByName: string;
   timestamp: number;
@@ -895,6 +906,7 @@ export interface PreOrderSupplierPayment {
 export interface PublicTrackingTimelineItem {
   status: PreOrderStatus;
   timestamp: number;
+  publicMessage?: string;
 }
 
 export interface PublicTrackingRecord {
@@ -926,7 +938,9 @@ export type PreOrderAuditAction =
   | 'PAYMENT_RECORDED'
   | 'PAYMENT_VERIFIED'
   | 'PAYMENT_REJECTED'
+  | 'PAYMENT_REVERSED'
   | 'REFUND_RECORDED'
+  | 'LEDGER_RECALCULATED'
   | 'SHIPMENT_UPDATED'
   | 'SUPPLIER_PAYMENT_RECORDED'
   | 'TRACKING_LINK_GENERATED'

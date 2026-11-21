@@ -240,6 +240,7 @@ export const PRE_ORDER_EDIT_LOCKED_STATUSES: readonly PreOrderStatus[] = [
 ] as const;
 
 export const PRE_ORDER_NOT_OVERDUE_STATUSES: readonly PreOrderStatus[] = [
+  'Arrived in Bangladesh',
   'Received in Stock',
   'Ready for Delivery',
   'Out for Delivery',
@@ -247,6 +248,48 @@ export const PRE_ORDER_NOT_OVERDUE_STATUSES: readonly PreOrderStatus[] = [
   'Cancelled',
   'Refunded',
 ] as const;
+
+export const PRE_ORDER_LOCKED_PART6_STATUS: PreOrderStatus = 'Received in Stock';
+
+export function isPreOrderAdminRole(role?: string | null): boolean {
+  return role === 'superadmin' || role === 'super_admin' || role === 'admin';
+}
+
+export function getSelectablePreOrderTransitions(
+  currentStatus: PreOrderStatus,
+  options?: { isAdmin?: boolean; verifiedRefunded?: number }
+): {
+  forward: PreOrderStatus[];
+  backward: PreOrderStatus[];
+} {
+  const forwardRaw = PRE_ORDER_ALLOWED_TRANSITIONS[currentStatus] || [];
+  const forward = forwardRaw.filter((st) => {
+    // Part 3 locks 'Received in Stock' (handled via Receive Stock workflow in Part 6)
+    if (st === PRE_ORDER_LOCKED_PART6_STATUS) return false;
+    if (st === 'Refunded' && (options?.verifiedRefunded || 0) <= 0) return false;
+    return true;
+  });
+
+  const backward: PreOrderStatus[] = [];
+  if (
+    options?.isAdmin &&
+    currentStatus !== 'Cancelled' &&
+    currentStatus !== 'Refunded' &&
+    currentStatus !== 'Delivered'
+  ) {
+    const currentIdx = PRE_ORDER_FORWARD_FLOW.indexOf(currentStatus);
+    if (currentIdx > 0) {
+      for (let i = 0; i < currentIdx; i++) {
+        const st = PRE_ORDER_FORWARD_FLOW[i];
+        if (st !== PRE_ORDER_LOCKED_PART6_STATUS) {
+          backward.push(st);
+        }
+      }
+    }
+  }
+
+  return { forward, backward };
+}
 
 export function getTodayIsoDate(): string {
   const now = new Date();

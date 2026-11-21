@@ -415,6 +415,9 @@
       "properties": {
         "preOrderId": { "type": "string" },
         "preOrderNumber": { "type": "string" },
+        "subBrand": { "type": "string" },
+        "customerName": { "type": "string" },
+        "customerPhone": { "type": "string" },
         "type": { "type": "string" },
         "amount": { "type": "number" },
         "method": { "type": "string" },
@@ -426,7 +429,10 @@
         "recordedBy": { "type": "string" },
         "createdAt": { "type": "number" },
         "verifiedBy": { "type": "string" },
-        "verifiedAt": { "type": "number" }
+        "verifiedAt": { "type": "number" },
+        "reversesPaymentId": { "type": "string" },
+        "reversedPaymentType": { "type": "string" },
+        "reversalReason": { "type": "string" }
       },
       "required": ["preOrderId", "type", "amount", "method", "status", "idempotencyKey", "createdAt"]
     },
@@ -439,6 +445,10 @@
         "fromStatus": { "type": "string" },
         "toStatus": { "type": "string" },
         "note": { "type": "string" },
+        "publicMessage": { "type": "string" },
+        "notifyCustomer": { "type": "boolean" },
+        "isBackwardMove": { "type": "boolean" },
+        "overrideReason": { "type": "string" },
         "changedBy": { "type": "string" },
         "timestamp": { "type": "number" }
       }

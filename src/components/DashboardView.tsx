@@ -81,6 +81,7 @@ import {
   getCashTransactions,
   subscribeToCashTransactions
 } from '../firebase/db';
+import { auth } from '../firebase/config';
 
 interface DashboardViewProps {
   products: Product[];
@@ -114,7 +115,7 @@ export default function DashboardView({
   const [liveLoginCodes, setLiveLoginCodes] = useState<any[]>([]);
 
   useEffect(() => {
-    if (user?.role !== 'superadmin') return;
+    if (user?.role !== 'superadmin' || !auth?.currentUser) return;
     
     let unsubscribe: any = null;
     let isMounted = true;
@@ -124,7 +125,7 @@ export default function DashboardView({
         const { collection, onSnapshot, query } = await import('firebase/firestore');
         const { db } = await import('../firebase/config');
         
-        if (!isMounted) return;
+        if (!isMounted || !auth?.currentUser) return;
         
         const q = query(collection(db, 'liveLoginCodes'));
         unsubscribe = onSnapshot(q, (snapshot: any) => {
@@ -150,6 +151,10 @@ export default function DashboardView({
   }, [user]);
 
   useEffect(() => {
+    if (!auth?.currentUser) {
+      setLoadingData(false);
+      return;
+    }
     const fetchDashboardData = async () => {
       setLoadingData(true);
       try {
@@ -157,7 +162,7 @@ export default function DashboardView({
           getOrders(),
           getCustomers(),
           getInvoices(),
-          getAllUsers()
+          isAdminOrSuperAdmin ? getAllUsers() : Promise.resolve([])
         ]);
         setAllOrders(orders || []);
         setAllCustomers(customers || []);
@@ -170,7 +175,7 @@ export default function DashboardView({
       }
     };
     fetchDashboardData();
-  }, []);
+  }, [user?.id, isAdminOrSuperAdmin]);
 
   useEffect(() => {
     if (!searchQuery.trim()) {

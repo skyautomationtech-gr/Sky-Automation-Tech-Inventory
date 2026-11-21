@@ -310,6 +310,7 @@ export async function getUserProfile(userId: string): Promise<UserProfile | null
 export async function getAllUsers(): Promise<UserProfile[]> {
   if (dbCache.users) return dbCache.users;
   const cached = localStore.get<UserProfile[]>('all_users');
+  if (!auth?.currentUser) return cached || [];
   try {
     const colRef = collection(db, 'users');
     const querySnapshot = await getDocs(colRef);
@@ -547,6 +548,17 @@ export async function promoteUserToSuperAdmin(email: string): Promise<void> {
 export async function getCompanySettings(): Promise<CompanySettings | null> {
   if (dbCache.settings) return dbCache.settings;
   const cached = localStore.get<CompanySettings>('company_settings');
+  const defaultSettings: CompanySettings = {
+    companyName: 'Sky Automation Tech',
+    subBrands: ['SAT', 'GZ', 'RTX'],
+    prefixes: { SAT: 'SAT-INV', GZ: 'GZ-INV', RTX: 'RTX-INV' },
+    onboarded: true,
+    phone: '+880 1800-000000',
+    address: 'Dhaka, Bangladesh'
+  };
+  if (!auth?.currentUser) {
+    return cached || defaultSettings;
+  }
   
   try {
     const docRef = doc(db, 'settings', 'company');
@@ -2190,6 +2202,7 @@ export async function getNextCustomerId(txn?: any): Promise<string> {
 export async function getCustomers(): Promise<Customer[]> {
   if (dbCache.customers) return dbCache.customers;
   const cached = localStore.get<Customer[]>('customers');
+  if (!auth?.currentUser) return cached || [];
   try {
     const colRef = collection(db, 'customers');
     const q = query(colRef, orderBy('createdAt', 'desc'));
@@ -2379,6 +2392,7 @@ export async function updateCustomer(id: string, customerData: Partial<Customer>
 export async function getOrders(): Promise<Order[]> {
   if (dbCache.orders) return dbCache.orders;
   const cached = localStore.get<Order[]>('orders');
+  if (!auth?.currentUser) return cached || [];
   try {
     const colRef = collection(db, 'orders');
     const q = query(colRef, orderBy('createdAt', 'desc'));
@@ -2878,6 +2892,7 @@ export async function updateOrderFullDetails(
 export async function getInvoices(): Promise<Invoice[]> {
   if (dbCache.invoices) return dbCache.invoices;
   const cached = localStore.get<Invoice[]>('invoices');
+  if (!auth?.currentUser) return cached || [];
   try {
     const colRef = collection(db, 'invoices');
     // Fetch all docs without orderBy to avoid excluding documents missing generatedAt field
@@ -3894,6 +3909,7 @@ export async function recordSupplierPurchase(supplierId: string, purchaseAmount:
 // ==========================================
 
 export async function getNotifications(): Promise<AppNotification[]> {
+  if (!auth?.currentUser) return [];
   try {
     const colRef = collection(db, 'notifications');
     const q = query(colRef, orderBy('createdAt', 'desc'), limit(50));

@@ -1,7 +1,10 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AlertCircle,
+  ArrowRightLeft,
+  Banknote,
   Calendar,
+  CheckCircle2,
   Clock,
   CreditCard,
   Edit3,
@@ -12,16 +15,22 @@ import {
   Package,
   Phone,
   Plus,
+  Printer,
   Receipt,
+  RefreshCw,
+  RotateCcw,
   Save,
+  ShieldAlert,
   ShieldCheck,
   Trash2,
   User,
   Wallet,
   X,
+  XCircle,
 } from 'lucide-react';
 import {
   Category,
+  CompanySettings,
   PreOrder,
   PreOrderAuditEntry,
   PreOrderPayment,
@@ -33,9 +42,11 @@ import {
 } from '../../types';
 import {
   PRE_ORDER_EDIT_LOCKED_STATUSES,
+  PRE_ORDER_FORWARD_FLOW,
   formatBDT,
   getTodayIsoDate,
   hasPermission,
+  isPreOrderAdminRole,
   isPreOrderOverdue,
   isValidBdPhone,
   normalizeBdPhone,
@@ -45,8 +56,10 @@ import { uploadPreOrderImage, validateImageFile } from '../../preOrders/imageUpl
 import {
   actorFromUser,
   getPreOrderFullDetail,
+  recalculatePreOrderFromLedger,
   updatePreOrder,
   updatePreOrderPrivateCost,
+  verifyPreOrderPayment,
 } from '../../firebase/preOrderDb';
 import {
   Badge,
@@ -67,6 +80,14 @@ import {
   PreOrderStatusBadge,
   SubBrandBadge,
 } from './PreOrderStatusBadge';
+import PreOrderStatusDialog from './PreOrderStatusDialog';
+import {
+  CollectPaymentModal,
+  RefundPaymentModal,
+  RejectPaymentModal,
+  ReversePaymentModal,
+} from './PreOrderPaymentModals';
+import PreOrderPaymentReceiptModal from './PreOrderPaymentReceiptModal';
 
 export interface PreOrderDetailDrawerProps {
   preOrderId: string | null;
@@ -76,7 +97,9 @@ export interface PreOrderDetailDrawerProps {
   rolePermissions: RolePermissionsMap | null;
   categories: Category[];
   suppliers: Supplier[];
+  companySettings?: CompanySettings | null;
   initialEditMode?: boolean;
+  initialTab?: DetailTab;
   onUpdated?: () => void;
 }
 
@@ -101,17 +124,20 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
   rolePermissions,
   categories,
   suppliers,
+  companySettings,
   initialEditMode = false,
+  initialTab = 'overview',
   onUpdated,
 }) => {
   const toast = useToast();
 
-  const isAdminUser =
-    user.role === 'superadmin' ||
-    (user.role as string) === 'super_admin' ||
-    user.role === 'admin';
+  const isAdminUser = isPreOrderAdminRole(user.role);
   const canEdit = hasPermission(user, rolePermissions, 'preOrderEdit');
   const canViewProfit = hasPermission(user, rolePermissions, 'preOrderViewProfit');
+  const canCollectPayment = hasPermission(user, rolePermissions, 'preOrderCollectPayment');
+  const canVerifyPayment = hasPermission(user, rolePermissions, 'preOrderVerifyPayment');
+  const canRefund = hasPermission(user, rolePermissions, 'preOrderRefund');
+  const canUpdateStatus = hasPermission(user, rolePermissions, 'preOrderUpdateStatus');
   const canViewAudit = isAdminUser;
 
   const allowedSubBrands = useMemo<Array<'SAT' | 'GZ' | 'RTX'>>(() => {
@@ -125,7 +151,7 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
     return valid.length > 0 ? valid : ['SAT'];
   }, [user.role, user.subBrandAccess]);
 
-  const [activeTab, setActiveTab] = useState<DetailTab>('overview');
+  const [activeTab, setActiveTab] = useState<DetailTab>(initialTab);
   const [loading, setLoading] = useState(false);
   const [loadError, setLoadError] = useState('');
   const [order, setOrder] = useState<PreOrder | null>(null);
@@ -134,6 +160,17 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
   const [privateCost, setPrivateCost] = useState<PreOrderPrivateCost | null>(null);
   const [auditLogs, setAuditLogs] = useState<PreOrderAuditEntry[]>([]);
   const [receiptModalUrl, setReceiptModalUrl] = useState<string | null>(null);
+
+  // Part 3 interactive workflow states
+  const [showCollectModal, setShowCollectModal] = useState(false);
+  const [showRefundModal, setShowRefundModal] = useState(false);
+  const [showStatusDialog, setShowStatusDialog] = useState(false);
+  const [rejectTarget, setRejectTarget] = useState<PreOrderPayment | null>(null);
+  const [reverseTarget, setReverseTarget] = useState<PreOrderPayment | null>(null);
+  const [printableReceiptPayment, setPrintableReceiptPayment] = useState<PreOrderPayment | null>(null);
+  const [verifyingId, setVerifyingId] = useState<string | null>(null);
+  const [recalculating, setRecalculating] = useState(false);
+  const [timelineFilter, setTimelineFilter] = useState<'all' | 'status' | 'payments'>('all');
 
   // Edit mode state
   const [isEditing, setIsEditing] = useState(false);
@@ -231,13 +268,24 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
 
   useEffect(() => {
     if (isOpen && preOrderId) {
-      setActiveTab('overview');
+      setActiveTab(initialTab || 'overview');
       setIsEditing(false);
       loadDetail();
     }
-  }, [isOpen, preOrderId, loadDetail]);
+  }, [isOpen, preOrderId, initialTab, loadDetail]);
 
   const isStatusLocked = order ? PRE_ORDER_EDIT_LOCKED_STATUSES.includes(order.status) : true;
+
+  const reversedPaymentIds = useMemo(() => {
+    const set = new Set<string>();
+    payments.forEach((p) => {
+      if (p.type === 'reversal' && p.reversesPaymentId) {
+        set.add(p.reversesPaymentId);
+      }
+    });
+    return set;
+  }, [payments]);
+
   const hasAnyActivePayment = useMemo(() => {
     if (!order) return false;
     return (
@@ -252,7 +300,6 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
 
   const liveFinancials = useMemo(() => {
     if (!order) return null;
-    const activeLedger = payments.filter((p) => p.status !== 'rejected');
     return calculatePreOrderFinancials({
       qty: isEditing ? editQty : order.qty,
       sellingUnitPrice: isEditing ? Number(editSellingUnitPrice || 0) : order.sellingUnitPrice,
@@ -265,8 +312,8 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
         ? Number(editShippingCost || 0)
         : privateCost?.shippingCost || 0,
       payments:
-        activeLedger.length > 0
-          ? activeLedger
+        payments.length > 0
+          ? payments
           : [
               { type: 'advance', status: 'verified', amount: order.advancePaid || 0 },
               { type: 'refund', status: 'verified', amount: order.refundedAmount || 0 },
@@ -284,6 +331,30 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
     editChinaUnitCost,
     editShippingCost,
   ]);
+
+  const mergedTimeline = useMemo(() => {
+    type TimelineItem =
+      | { kind: 'status'; timestamp: number; data: PreOrderStatusHistory }
+      | { kind: 'payment'; timestamp: number; data: PreOrderPayment };
+    const list: TimelineItem[] = [];
+    if (timelineFilter === 'all' || timelineFilter === 'status') {
+      statusHistory.forEach((h) =>
+        list.push({ kind: 'status', timestamp: h.timestamp, data: h })
+      );
+    }
+    if (timelineFilter === 'all' || timelineFilter === 'payments') {
+      payments.forEach((p) =>
+        list.push({ kind: 'payment', timestamp: p.receivedAt || p.createdAt, data: p })
+      );
+    }
+    return list.sort((a, b) => a.timestamp - b.timestamp);
+  }, [statusHistory, payments, timelineFilter]);
+
+  const needsRefundRequired = Boolean(
+    order &&
+      order.status === 'Cancelled' &&
+      toPaisa(liveFinancials?.verifiedNetPaid || 0) > 0
+  );
 
   const categoryOptions = useMemo(() => {
     const names = Array.from(
@@ -455,6 +526,44 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
     }
   };
 
+  const handleVerifyPayment = async (payment: PreOrderPayment) => {
+    if (!order || !canVerifyPayment || verifyingId) return;
+    if (payment.recordedBy === user.id) {
+      toast.error('You cannot verify your own payment entry.');
+      return;
+    }
+    setVerifyingId(payment.id);
+    try {
+      await verifyPreOrderPayment(order.id, payment.id, 'verified', actorFromUser(user));
+      toast.success(`Verified ${formatBDT(payment.amount)} on ${order.preOrderNumber}.`);
+      await loadDetail();
+      onUpdated?.();
+    } catch (err: any) {
+      toast.error(err?.message || 'Failed to verify payment.');
+    } finally {
+      setVerifyingId(null);
+    }
+  };
+
+  const handleRecalculateLedger = async () => {
+    if (!order || !isAdminUser || recalculating) return;
+    setRecalculating(true);
+    try {
+      const res = await recalculatePreOrderFromLedger(order.id, actorFromUser(user));
+      if (res.changed) {
+        toast.success('Derived totals rebuilt from payment ledger & logged to audit.');
+        await loadDetail();
+        onUpdated?.();
+      } else {
+        toast.success('Stored totals already match the payment ledger.');
+      }
+    } catch (err: any) {
+      toast.error(err?.message || 'Recalculation failed.');
+    } finally {
+      setRecalculating(false);
+    }
+  };
+
   const tabs: Array<{ id: DetailTab; label: string; icon: React.ReactNode }> = [
     { id: 'overview', label: 'Overview', icon: <Package className="w-3.5 h-3.5" /> },
     {
@@ -464,7 +573,7 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
     },
     {
       id: 'timeline',
-      label: `Timeline (${statusHistory.length})`,
+      label: `Timeline (${statusHistory.length + payments.length})`,
       icon: <History className="w-3.5 h-3.5" />,
     },
     ...(canViewAudit
@@ -482,6 +591,12 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
     ? isPreOrderOverdue(order.estimatedDeliveryDate, order.status, order.stockReceived)
     : false;
 
+  const forwardStageIdx = order ? PRE_ORDER_FORWARD_FLOW.indexOf(order.status) : -1;
+  const stagePercent =
+    order && forwardStageIdx >= 0
+      ? Math.round(((forwardStageIdx + 1) / PRE_ORDER_FORWARD_FLOW.length) * 100)
+      : 0;
+
   return (
     <>
       <Drawer
@@ -498,6 +613,11 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
               </span>
               <SubBrandBadge subBrand={order.subBrand} />
               <PreOrderStatusBadge status={order.status} size="xs" />
+              {needsRefundRequired && (
+                <Badge variant="danger" size="xs">
+                  Refund required
+                </Badge>
+              )}
               {overdue && <OverdueTag />}
             </div>
           ) : (
@@ -534,7 +654,7 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
               </Button>
             </>
           ) : (
-            <div className="flex items-center justify-between w-full gap-3">
+            <div className="flex flex-wrap items-center justify-between w-full gap-3">
               <div className="text-xs text-slate-500 dark:text-slate-400">
                 {order && isStatusLocked ? (
                   <span className="inline-flex items-center gap-1.5 text-slate-500">
@@ -543,7 +663,17 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
                   </span>
                 ) : null}
               </div>
-              <div className="flex items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2">
+                {order && canUpdateStatus && order.status !== 'Delivered' && order.status !== 'Refunded' && (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    leftIcon={<ArrowRightLeft className="w-3.5 h-3.5" />}
+                    onClick={() => setShowStatusDialog(true)}
+                  >
+                    Update Status
+                  </Button>
+                )}
                 {order && canEdit && !isStatusLocked && activeTab === 'overview' && (
                   <Button
                     type="button"
@@ -578,6 +708,48 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
           </div>
         ) : order ? (
           <div className="space-y-5">
+            {/* Stage Progress Bar on Detail Header */}
+            <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/50 space-y-2">
+              <div className="flex items-center justify-between text-xs">
+                <span className="font-semibold text-slate-700 dark:text-slate-200">
+                  {forwardStageIdx >= 0
+                    ? `Workflow Stage ${forwardStageIdx + 1} of ${PRE_ORDER_FORWARD_FLOW.length}: ${order.status}`
+                    : `Order Status: ${order.status}`}
+                </span>
+                <span className="font-mono font-bold text-slate-600 dark:text-slate-300">
+                  {forwardStageIdx >= 0 ? `${stagePercent}%` : order.status}
+                </span>
+              </div>
+              {forwardStageIdx >= 0 ? (
+                <div className="grid grid-cols-11 gap-1 pt-0.5">
+                  {PRE_ORDER_FORWARD_FLOW.map((stageName, idx) => {
+                    const done = idx <= forwardStageIdx;
+                    return (
+                      <div key={stageName} title={stageName} className="space-y-1">
+                        <div
+                          className={`h-2 rounded-full transition-colors ${
+                            idx === forwardStageIdx
+                              ? 'bg-[#D4AF37]'
+                              : done
+                              ? 'bg-emerald-500'
+                              : 'bg-slate-200 dark:bg-slate-800'
+                          }`}
+                        />
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="text-xs text-rose-600 dark:text-rose-400 font-medium">
+                  {needsRefundRequired
+                    ? `Cancelled with ${formatBDT(liveFinancials?.verifiedNetPaid || 0)} net paid — Refund required before marking Refunded.`
+                    : order.cancellationReason
+                    ? `Reason: ${order.cancellationReason}`
+                    : null}
+                </div>
+              )}
+            </div>
+
             {/* Sub-Tabs */}
             <div className="flex items-center gap-1 border-b border-slate-200 dark:border-slate-800 overflow-x-auto">
               {tabs.map((tab) => {
@@ -1115,16 +1287,77 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
               </div>
             )}
 
-            {/* TAB 2: PAYMENTS (READ-ONLY LEDGER) */}
+            {/* TAB 2: PAYMENTS (APPEND-ONLY LEDGER + VERIFY + REVERSE + REFUND + RECEIPT PDF) */}
             {activeTab === 'payments' && (
               <div className="space-y-4">
-                <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950/50 border border-slate-200 dark:border-slate-800 text-xs text-slate-500 dark:text-slate-400 flex items-center justify-between gap-2">
-                  <span>
-                    Read-only payment ledger for Part 2. Collection, verification, and refunds are managed in Payment Management (Part 4).
-                  </span>
-                  <span className="font-mono font-bold text-slate-900 dark:text-slate-100 shrink-0">
-                    Due: {formatBDT(order.dueAmount)}
-                  </span>
+                <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950/50 border border-slate-200 dark:border-slate-800 space-y-3">
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs tabular-nums">
+                    <div>
+                      <div className="text-slate-400">Verified Advance Paid</div>
+                      <div className="font-mono font-bold text-sm text-emerald-700 dark:text-emerald-400 mt-0.5">
+                        {formatBDT(order.advancePaid)}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-slate-400">Pending Verification</div>
+                      <div className="font-mono font-semibold text-sm text-amber-600 dark:text-amber-400 mt-0.5">
+                        {formatBDT(order.pendingAmount || 0)}
+                      </div>
+                      <div className="text-[10px] text-slate-400">Excluded until verified</div>
+                    </div>
+                    <div>
+                      <div className="text-slate-400">Refunded</div>
+                      <div className="font-mono font-semibold text-sm text-rose-600 dark:text-rose-400 mt-0.5">
+                        {formatBDT(order.refundedAmount || 0)}
+                      </div>
+                    </div>
+                    <div>
+                      <div className="text-slate-400">Remaining Due</div>
+                      <div className="font-mono font-bold text-sm text-slate-900 dark:text-slate-100 mt-0.5">
+                        {formatBDT(order.dueAmount)}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-200/70 dark:border-slate-800">
+                    {canCollectPayment &&
+                      order.dueAmount > 0 &&
+                      !['Delivered', 'Cancelled', 'Refunded'].includes(order.status) && (
+                        <Button
+                          type="button"
+                          variant="primary"
+                          size="xs"
+                          leftIcon={<Banknote className="w-3.5 h-3.5" />}
+                          onClick={() => setShowCollectModal(true)}
+                        >
+                          Collect Payment
+                        </Button>
+                      )}
+                    {canRefund && (liveFinancials?.verifiedNetPaid || 0) > 0 && (
+                      <Button
+                        type="button"
+                        variant="danger"
+                        size="xs"
+                        leftIcon={<RotateCcw className="w-3.5 h-3.5" />}
+                        onClick={() => setShowRefundModal(true)}
+                      >
+                        Issue Refund
+                      </Button>
+                    )}
+                    {isAdminUser && (
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="xs"
+                        isLoading={recalculating}
+                        leftIcon={<RefreshCw className="w-3.5 h-3.5" />}
+                        onClick={handleRecalculateLedger}
+                        className="ml-auto"
+                      >
+                        Recalculate from Ledger
+                      </Button>
+                    )}
+                  </div>
                 </div>
 
                 {payments.length === 0 ? (
@@ -1133,102 +1366,281 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
                   </div>
                 ) : (
                   <div className="space-y-2.5">
-                    {payments.map((p) => (
-                      <div
-                        key={p.id}
-                        className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex flex-wrap items-center justify-between gap-3"
-                      >
-                        <div className="space-y-1">
-                          <div className="flex items-center gap-2">
-                            <span className="font-mono font-bold text-sm text-slate-900 dark:text-slate-100">
-                              {p.type === 'refund' ? '-' : '+'}
-                              {formatBDT(p.amount)}
-                            </span>
-                            <Badge
-                              variant={
-                                p.status === 'verified'
-                                  ? 'success'
-                                  : p.status === 'rejected'
-                                  ? 'danger'
-                                  : 'warning'
-                              }
-                              size="xs"
-                            >
-                              {p.status}
-                            </Badge>
-                            <Badge variant="neutral" size="xs">
-                              {p.type} • {p.method}
-                            </Badge>
-                          </div>
-                          <div className="text-xs text-slate-500 dark:text-slate-400 flex flex-wrap items-center gap-x-3 gap-y-1">
-                            <span>Received: {formatDateTime(p.receivedAt || p.createdAt)}</span>
-                            {p.referenceNo && (
-                              <span className="font-mono">Ref: {p.referenceNo}</span>
+                    {payments.map((p) => {
+                      const isReversed = reversedPaymentIds.has(p.id);
+                      const isSelfRecorded = p.recordedBy === user.id;
+                      const canVerifyThis =
+                        canVerifyPayment && p.status === 'pending' && !isSelfRecorded;
+                      const canReverseThis =
+                        isAdminUser &&
+                        p.status === 'verified' &&
+                        p.type !== 'reversal' &&
+                        !isReversed;
+
+                      return (
+                        <div
+                          key={p.id}
+                          className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex flex-col sm:flex-row sm:items-center justify-between gap-3"
+                        >
+                          <div className="space-y-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span
+                                className={`font-mono font-bold text-sm ${
+                                  p.type === 'refund' || p.type === 'reversal'
+                                    ? 'text-rose-600 dark:text-rose-400'
+                                    : 'text-slate-900 dark:text-slate-100'
+                                }`}
+                              >
+                                {p.type === 'refund' || p.type === 'reversal' ? '-' : '+'}
+                                {formatBDT(p.amount)}
+                              </span>
+                              <Badge
+                                variant={
+                                  p.status === 'verified'
+                                    ? 'success'
+                                    : p.status === 'rejected'
+                                    ? 'danger'
+                                    : 'warning'
+                                }
+                                size="xs"
+                              >
+                                {p.status === 'pending' ? 'Pending verification' : p.status}
+                              </Badge>
+                              {isReversed && (
+                                <Badge variant="neutral" size="xs">
+                                  Reversed
+                                </Badge>
+                              )}
+                              <Badge variant="neutral" size="xs">
+                                {p.type} • {p.method}
+                              </Badge>
+                            </div>
+                            <div className="text-xs text-slate-500 dark:text-slate-400 flex flex-wrap items-center gap-x-3 gap-y-1">
+                              <span>Received: {formatDateTime(p.receivedAt || p.createdAt)}</span>
+                              {p.referenceNo && (
+                                <span className="font-mono">Txn: {p.referenceNo}</span>
+                              )}
+                              <span>By: {p.recordedByName || p.recordedBy}</span>
+                              {p.verifiedByName && <span>Verified by: {p.verifiedByName}</span>}
+                            </div>
+                            {p.note && (
+                              <div className="text-xs text-slate-600 dark:text-slate-300">
+                                {p.note}
+                              </div>
                             )}
-                            <span>By: {p.recordedByName || p.recordedBy}</span>
-                            {p.verifiedByName && <span>Verified by: {p.verifiedByName}</span>}
+                            {p.rejectionReason && (
+                              <div className="text-xs text-rose-600 dark:text-rose-400">
+                                Rejection reason: {p.rejectionReason}
+                              </div>
+                            )}
+                          </div>
+
+                          <div className="flex flex-wrap items-center gap-1.5 shrink-0">
+                            {p.status === 'pending' && canVerifyPayment && isSelfRecorded && (
+                              <span className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-slate-100 dark:bg-slate-800 text-[11px] text-slate-500">
+                                <ShieldAlert className="w-3 h-3" />
+                                Own entry
+                              </span>
+                            )}
+                            {canVerifyThis && (
+                              <>
+                                <Button
+                                  type="button"
+                                  variant="primary"
+                                  size="xs"
+                                  isLoading={verifyingId === p.id}
+                                  disabled={Boolean(verifyingId)}
+                                  onClick={() => handleVerifyPayment(p)}
+                                  leftIcon={<CheckCircle2 className="w-3 h-3" />}
+                                >
+                                  Verify
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="danger"
+                                  size="xs"
+                                  disabled={Boolean(verifyingId)}
+                                  onClick={() => setRejectTarget(p)}
+                                  leftIcon={<XCircle className="w-3 h-3" />}
+                                >
+                                  Reject
+                                </Button>
+                              </>
+                            )}
+                            {canReverseThis && (
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="xs"
+                                onClick={() => setReverseTarget(p)}
+                                leftIcon={<RotateCcw className="w-3 h-3" />}
+                              >
+                                Reverse
+                              </Button>
+                            )}
+                            {p.receiptUrl && (
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="xs"
+                                onClick={() => setReceiptModalUrl(p.receiptUrl || null)}
+                                leftIcon={<Receipt className="w-3 h-3 text-[#D4AF37]" />}
+                              >
+                                Attachment
+                              </Button>
+                            )}
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              size="xs"
+                              onClick={() => setPrintableReceiptPayment(p)}
+                              leftIcon={<Printer className="w-3 h-3" />}
+                            >
+                              Receipt PDF
+                            </Button>
                           </div>
                         </div>
-
-                        {p.receiptUrl && (
-                          <button
-                            type="button"
-                            onClick={() => setReceiptModalUrl(p.receiptUrl || null)}
-                            className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-50 dark:hover:bg-slate-800 cursor-pointer"
-                          >
-                            <Receipt className="w-3.5 h-3.5 text-[#D4AF37]" />
-                            Receipt
-                          </button>
-                        )}
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>
             )}
 
-            {/* TAB 3: TIMELINE (READ-ONLY) */}
+            {/* TAB 3: MERGED TIMELINE (STATUS HISTORY + PAYMENTS) */}
             {activeTab === 'timeline' && (
               <div className="space-y-4">
-                <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-950/50 border border-slate-200 dark:border-slate-800 text-xs text-slate-500 dark:text-slate-400">
-                  Read-only status history. Status progression & cancellation workflow will be added in Part 3.
+                <div className="flex flex-wrap items-center justify-between gap-2 p-3 rounded-xl bg-slate-50 dark:bg-slate-950/50 border border-slate-200 dark:border-slate-800">
+                  <div className="flex items-center gap-1.5">
+                    {(['all', 'status', 'payments'] as const).map((f) => (
+                      <button
+                        key={f}
+                        type="button"
+                        onClick={() => setTimelineFilter(f)}
+                        className={`px-2.5 py-1 rounded-md text-xs font-semibold cursor-pointer transition-colors ${
+                          timelineFilter === f
+                            ? 'bg-slate-900 text-white dark:bg-slate-100 dark:text-slate-900'
+                            : 'text-slate-600 dark:text-slate-300 hover:bg-slate-200/70 dark:hover:bg-slate-800'
+                        }`}
+                      >
+                        {f === 'all' ? 'All Events' : f === 'status' ? 'Status Only' : 'Payments Only'}
+                      </button>
+                    ))}
+                  </div>
+                  {canUpdateStatus && order.status !== 'Delivered' && order.status !== 'Refunded' && (
+                    <Button
+                      type="button"
+                      variant="secondary"
+                      size="xs"
+                      leftIcon={<ArrowRightLeft className="w-3.5 h-3.5" />}
+                      onClick={() => setShowStatusDialog(true)}
+                    >
+                      Update Status
+                    </Button>
+                  )}
                 </div>
 
-                {statusHistory.length === 0 ? (
+                {mergedTimeline.length === 0 ? (
                   <div className="p-8 rounded-xl border border-dashed border-slate-200 dark:border-slate-800 text-center text-xs text-slate-500">
-                    No status timeline entries found.
+                    No timeline events recorded yet.
                   </div>
                 ) : (
-                  <div className="relative pl-5 space-y-4 before:content-[''] before:absolute before:left-2 before:top-2 before:bottom-2 before:w-px before:bg-slate-200 dark:before:bg-slate-800">
-                    {statusHistory.map((item) => (
-                      <div key={item.id} className="relative">
-                        <span className="absolute -left-5 top-1.5 w-3 h-3 rounded-full bg-[#D4AF37] border-2 border-white dark:border-slate-900" />
-                        <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-1.5">
-                          <div className="flex flex-wrap items-center justify-between gap-2">
-                            <div className="flex items-center gap-2">
-                              {item.fromStatus && (
-                                <span className="text-xs text-slate-400">
-                                  {item.fromStatus} →
-                                </span>
-                              )}
-                              <PreOrderStatusBadge status={item.toStatus} size="xs" />
-                            </div>
-                            <span className="text-[11px] font-mono text-slate-400 flex items-center gap-1">
-                              <Clock className="w-3 h-3" />
-                              {formatDateTime(item.timestamp)}
+                  <div className="relative pl-6 space-y-4 before:content-[''] before:absolute before:left-2.5 before:top-2 before:bottom-2 before:w-px before:bg-slate-200 dark:before:bg-slate-800">
+                    {mergedTimeline.map((entry) => {
+                      if (entry.kind === 'status') {
+                        const item = entry.data;
+                        return (
+                          <div key={`st_${item.id}`} className="relative">
+                            <span className="absolute -left-6 top-1.5 w-4 h-4 rounded-full bg-[#D4AF37] text-slate-950 border-2 border-white dark:border-slate-900 flex items-center justify-center">
+                              <Clock className="w-2.5 h-2.5" />
                             </span>
+                            <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-1.5">
+                              <div className="flex flex-wrap items-center justify-between gap-2">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  {item.fromStatus && (
+                                    <span className="text-xs text-slate-400">
+                                      {item.fromStatus} →
+                                    </span>
+                                  )}
+                                  <PreOrderStatusBadge status={item.toStatus} size="xs" />
+                                  {item.isBackwardMove && (
+                                    <Badge variant="warning" size="xs">
+                                      Backward Move
+                                    </Badge>
+                                  )}
+                                  {item.overrideReason && (
+                                    <Badge variant="danger" size="xs">
+                                      Admin Override
+                                    </Badge>
+                                  )}
+                                </div>
+                                <span className="text-[11px] font-mono text-slate-400 flex items-center gap-1">
+                                  <Clock className="w-3 h-3" />
+                                  {formatDateTime(item.timestamp)}
+                                </span>
+                              </div>
+                              {item.note && (
+                                <p className="text-xs text-slate-700 dark:text-slate-300">
+                                  {item.note}
+                                </p>
+                              )}
+                              {item.publicMessage && (
+                                <p className="text-[11px] text-sky-700 dark:text-sky-300 bg-sky-50 dark:bg-sky-950/30 px-2 py-1 rounded">
+                                  Customer Message: {item.publicMessage}
+                                </p>
+                              )}
+                              <div className="text-[11px] text-slate-400">
+                                By {item.changedByName || item.changedBy}
+                              </div>
+                            </div>
                           </div>
-                          {item.note && (
-                            <p className="text-xs text-slate-700 dark:text-slate-300">
-                              {item.note}
-                            </p>
-                          )}
-                          <div className="text-[11px] text-slate-400">
-                            By {item.changedByName || item.changedBy}
+                        );
+                      }
+
+                      const pay = entry.data;
+                      return (
+                        <div key={`pay_${pay.id}`} className="relative">
+                          <span className="absolute -left-6 top-1.5 w-4 h-4 rounded-full bg-emerald-600 text-white border-2 border-white dark:border-slate-900 flex items-center justify-center">
+                            <Banknote className="w-2.5 h-2.5" />
+                          </span>
+                          <div className="p-3 rounded-xl border border-emerald-200/70 dark:border-emerald-900/60 bg-emerald-50/30 dark:bg-emerald-950/10 space-y-1">
+                            <div className="flex flex-wrap items-center justify-between gap-2">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className="text-xs font-bold font-mono text-slate-900 dark:text-slate-100">
+                                  {pay.type === 'refund' || pay.type === 'reversal' ? '-' : '+'}
+                                  {formatBDT(pay.amount)}
+                                </span>
+                                <Badge variant="neutral" size="xs">
+                                  {pay.type} • {pay.method}
+                                </Badge>
+                                <Badge
+                                  variant={
+                                    pay.status === 'verified'
+                                      ? 'success'
+                                      : pay.status === 'rejected'
+                                      ? 'danger'
+                                      : 'warning'
+                                  }
+                                  size="xs"
+                                >
+                                  {pay.status}
+                                </Badge>
+                              </div>
+                              <span className="text-[11px] font-mono text-slate-400">
+                                {formatDateTime(pay.receivedAt || pay.createdAt)}
+                              </span>
+                            </div>
+                            {pay.note && (
+                              <p className="text-xs text-slate-600 dark:text-slate-300">{pay.note}</p>
+                            )}
+                            <div className="text-[11px] text-slate-400">
+                              Recorded by {pay.recordedByName || pay.recordedBy}
+                              {pay.verifiedByName ? ` • Verified by ${pay.verifiedByName}` : ''}
+                            </div>
                           </div>
                         </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
               </div>
@@ -1317,18 +1729,18 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
         ) : null}
       </Drawer>
 
-      {/* Receipt Preview Modal */}
+      {/* Receipt Attachment Image Modal */}
       <Modal
         isOpen={Boolean(receiptModalUrl)}
         onClose={() => setReceiptModalUrl(null)}
-        title="Payment Receipt"
+        title="Uploaded Payment Attachment"
         size="md"
       >
         {receiptModalUrl && (
           <div className="flex flex-col items-center gap-3">
             <img
               src={receiptModalUrl}
-              alt="Payment receipt"
+              alt="Payment attachment"
               className="max-h-[70vh] w-auto rounded-xl border border-slate-200 dark:border-slate-700"
             />
             <Button
@@ -1342,6 +1754,72 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
           </div>
         )}
       </Modal>
+
+      {/* Part 3 Modals */}
+      <CollectPaymentModal
+        isOpen={showCollectModal}
+        onClose={() => setShowCollectModal(false)}
+        order={order}
+        user={user}
+        onSuccess={(payment) => {
+          setPrintableReceiptPayment(payment);
+          loadDetail();
+          onUpdated?.();
+        }}
+      />
+
+      <RefundPaymentModal
+        isOpen={showRefundModal}
+        onClose={() => setShowRefundModal(false)}
+        order={order}
+        user={user}
+        onSuccess={(payment) => {
+          setPrintableReceiptPayment(payment);
+          loadDetail();
+          onUpdated?.();
+        }}
+      />
+
+      <ReversePaymentModal
+        isOpen={Boolean(reverseTarget)}
+        onClose={() => setReverseTarget(null)}
+        payment={reverseTarget}
+        user={user}
+        onSuccess={() => {
+          loadDetail();
+          onUpdated?.();
+        }}
+      />
+
+      <RejectPaymentModal
+        isOpen={Boolean(rejectTarget)}
+        onClose={() => setRejectTarget(null)}
+        payment={rejectTarget}
+        user={user}
+        onSuccess={() => {
+          loadDetail();
+          onUpdated?.();
+        }}
+      />
+
+      <PreOrderStatusDialog
+        isOpen={showStatusDialog}
+        onClose={() => setShowStatusDialog(false)}
+        order={order}
+        user={user}
+        onUpdated={() => {
+          loadDetail();
+          onUpdated?.();
+        }}
+      />
+
+      <PreOrderPaymentReceiptModal
+        isOpen={Boolean(printableReceiptPayment)}
+        onClose={() => setPrintableReceiptPayment(null)}
+        order={order}
+        payment={printableReceiptPayment}
+        companySettings={companySettings}
+      />
     </>
   );
 };

@@ -34,6 +34,7 @@ import {
   formatBDT,
   getTodayIsoDate,
   hasPermission,
+  isPreOrderAdminRole,
   isValidBdPhone,
   normalizeBdPhone,
 } from '../../preOrders/constants';
@@ -104,7 +105,7 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
   const canViewProfit = hasPermission(user, rolePermissions, 'preOrderViewProfit');
   const canViewChinaCost =
     hasPermission(user, rolePermissions, 'preOrderSupplier') || canViewProfit;
-  const canVerifyPayment = hasPermission(user, rolePermissions, 'preOrderVerifyPayment');
+  const isAdminActor = isPreOrderAdminRole(user.role);
   const canAddSupplier =
     hasPermission(user, rolePermissions, 'preOrderSupplier') || canCreate;
 
@@ -160,7 +161,7 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
   const [paymentReceivedAt, setPaymentReceivedAt] = useState<string>(() =>
     getLocalDateTimeInputValue()
   );
-  const [autoVerifyAdvance, setAutoVerifyAdvance] = useState<boolean>(() => canVerifyPayment);
+  const [autoVerifyAdvance, setAutoVerifyAdvance] = useState<boolean>(() => isPreOrderAdminRole(user.role));
   const [receiptFile, setReceiptFile] = useState<File | null>(null);
   const [receiptPreview, setReceiptPreview] = useState('');
   const [uploadedReceiptUrl, setUploadedReceiptUrl] = useState('');
@@ -338,7 +339,8 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
   const parsedDiscount = Number(discount || 0);
   const parsedAdvance = Number(advanceAmount || 0);
 
-  const shouldVerify = canVerifyPayment && autoVerifyAdvance;
+  const canAutoVerifyCash = isAdminActor && paymentMethod === 'Cash';
+  const shouldVerify = canAutoVerifyCash && autoVerifyAdvance;
   const financials = useMemo(() => {
     return calculatePreOrderFinancials({
       qty,
@@ -1318,7 +1320,7 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
                     </div>
                   </FormField>
 
-                  {canVerifyPayment ? (
+                  {canAutoVerifyCash ? (
                     <div className="sm:col-span-2">
                       <label className="inline-flex items-center gap-2 text-xs font-medium text-slate-700 dark:text-slate-200 cursor-pointer select-none">
                         <input
@@ -1327,13 +1329,21 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
                           onChange={(e) => setAutoVerifyAdvance(e.target.checked)}
                           className="rounded border-slate-300 text-[#D4AF37] focus:ring-[#D4AF37]"
                         />
-                        Verify this advance payment immediately (reduces Remaining Due right away)
+                        Auto-verify Cash advance immediately (Admin / Super Admin only — reduces Remaining Due right away)
                       </label>
                     </div>
                   ) : (
                     <div className="sm:col-span-2 p-2.5 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/70 text-xs text-amber-800 dark:text-amber-300 flex items-center gap-2">
                       <AlertCircle className="w-4 h-4 shrink-0" />
-                      Advance entry will be created as <strong>Pending Verification</strong> until approved by an authorized verifier.
+                      {paymentMethod !== 'Cash' ? (
+                        <span>
+                          Non-cash payments (<strong>{paymentMethod}</strong>) always start as <strong>Pending Verification</strong> and do not reduce Remaining Due until approved by another verifier.
+                        </span>
+                      ) : (
+                        <span>
+                          Cash entry will start as <strong>Pending Verification</strong> until approved by an authorized verifier.
+                        </span>
+                      )}
                     </div>
                   )}
                 </>

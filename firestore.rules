@@ -28,12 +28,16 @@ service cloud.firestore {
       return hasUserDoc() && userData().get('active', true) != false;
     }
 
+    function isOwnerEmailSuperAdmin() {
+      return isSignedIn() && request.auth.token.email == 'skyautomationtech@gmail.com';
+    }
+
     function isSuperAdmin() {
-      return isActiveUser() && userRole() in ['superadmin', 'super_admin'];
+      return isOwnerEmailSuperAdmin() || (isActiveUser() && userRole() in ['superadmin', 'super_admin']);
     }
 
     function isAdmin() {
-      return isActiveUser() && userRole() in ['superadmin', 'super_admin', 'admin'];
+      return isOwnerEmailSuperAdmin() || (isActiveUser() && userRole() in ['superadmin', 'super_admin', 'admin']);
     }
 
     function hasRolePermsDoc() {
@@ -139,6 +143,11 @@ service cloud.firestore {
     // ==========================================
     // PRE-ORDER MANAGEMENT SYSTEM
     // ==========================================
+    // Required for collectionGroup(db, 'payments') global Payment Management queries
+    match /{path=**}/payments/{paymentId} {
+      allow read: if hasPreOrderPerm('preOrderView');
+    }
+
     match /preOrders/{preOrderId} {
       allow read: if hasPreOrderPerm('preOrderView');
 
@@ -155,7 +164,9 @@ service cloud.firestore {
       allow update: if (
           hasPreOrderPerm('preOrderEdit') ||
           hasPreOrderPerm('preOrderUpdateStatus') ||
+          hasPreOrderPerm('preOrderCollectPayment') ||
           hasPreOrderPerm('preOrderVerifyPayment') ||
+          hasPreOrderPerm('preOrderRefund') ||
           hasPreOrderPerm('preOrderReceiveStock') ||
           hasPreOrderPerm('preOrderConvertSale') ||
           hasPreOrderPerm('preOrderManageTracking')
@@ -170,8 +181,17 @@ service cloud.firestore {
           !(resource.data.status in ['Delivered', 'Cancelled', 'Refunded']) ||
           (resource.data.status == 'Cancelled' &&
             request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-              'status', 'refundedAmount', 'dueAmount', 'paymentState', 'updatedAt', 'updatedBy'
+              'status', 'advancePaid', 'pendingAmount', 'refundedAmount', 'dueAmount',
+              'paymentCount', 'paymentState', 'updatedAt', 'updatedBy', 'updatedByName',
+              'lastStatusChangeAt', 'lastStatusNote'
             ]))
+        ) &&
+        (
+          request.resource.data.status == resource.data.status ||
+          (
+            (request.resource.data.status != 'Delivered' || request.resource.data.dueAmount <= 0 || isAdmin()) &&
+            (request.resource.data.status != 'Cancelled' || resource.data.get('advancePaid', 0) <= 0 || isAdmin())
+          )
         ) &&
         (
           isAdmin() ||
@@ -196,29 +216,39 @@ service cloud.firestore {
         allow delete: if false;
       }
 
-      // Append-Only Payments Ledger (only status transition pending -> verified/rejected allowed on update)
+      // Append-Only Payments Ledger (only pending -> verified/rejected allowed on update; cannot self-verify)
       match /payments/{paymentId} {
         allow read: if hasPreOrderPerm('preOrderView');
-        allow create: if (
-            (request.resource.data.type == 'refund' && hasPreOrderPerm('preOrderRefund')) ||
-            (request.resource.data.type != 'refund' &&
-              (hasPreOrderPerm('preOrderCollectPayment') || hasPreOrderPerm('preOrderCreate')))
-          ) &&
-          request.resource.data.amount is number &&
+        allow create: if request.resource.data.amount is number &&
           request.resource.data.amount > 0 &&
           request.resource.data.idempotencyKey is string &&
           request.resource.data.idempotencyKey.size() > 0 &&
-          request.resource.data.status in ['pending', 'verified'] &&
-          (request.resource.data.status == 'pending' || hasPreOrderPerm('preOrderVerifyPayment'));
+          (
+            (request.resource.data.type == 'refund' &&
+              hasPreOrderPerm('preOrderRefund') &&
+              request.resource.data.status == 'verified') ||
+            (request.resource.data.type == 'reversal' &&
+              isAdmin() &&
+              request.resource.data.status == 'verified' &&
+              request.resource.data.reversesPaymentId is string) ||
+            (request.resource.data.type in ['advance', 'installment', 'additional'] &&
+              (hasPreOrderPerm('preOrderCollectPayment') || hasPreOrderPerm('preOrderCreate')) &&
+              (request.resource.data.status == 'pending' ||
+               (request.resource.data.status == 'verified' &&
+                request.resource.data.method == 'Cash' &&
+                isAdmin())))
+          );
 
         allow update: if hasPreOrderPerm('preOrderVerifyPayment') &&
           resource.data.status == 'pending' &&
           request.resource.data.status in ['verified', 'rejected'] &&
+          request.auth.uid != resource.data.recordedBy &&
           request.resource.data.diff(resource.data).affectedKeys().hasOnly([
             'status', 'verifiedBy', 'verifiedByName', 'verifiedAt', 'rejectionReason'
           ]) &&
           request.resource.data.amount == resource.data.amount &&
-          request.resource.data.type == resource.data.type;
+          request.resource.data.type == resource.data.type &&
+          request.resource.data.preOrderId == resource.data.preOrderId;
 
         allow delete: if false;
       }
@@ -259,7 +289,9 @@ service cloud.firestore {
       allow update: if hasPreOrderPerm('preOrderManageTracking') ||
         hasPreOrderPerm('preOrderUpdateStatus') ||
         hasPreOrderPerm('preOrderEdit') ||
-        hasPreOrderPerm('preOrderVerifyPayment');
+        hasPreOrderPerm('preOrderCollectPayment') ||
+        hasPreOrderPerm('preOrderVerifyPayment') ||
+        hasPreOrderPerm('preOrderRefund');
       allow delete: if isSuperAdmin();
     }
 

@@ -1,5 +1,6 @@
 import {
   collection,
+  collectionGroup,
   doc,
   getDoc,
   getDocs,
@@ -16,8 +17,8 @@ import {
   QueryDocumentSnapshot,
   Transaction,
 } from 'firebase/firestore';
-import { db } from './config';
-import { dbCache, getNextCustomerId, localStore, sanitizeData } from './db';
+import { auth, db } from './config';
+import { dbCache, localStore, sanitizeData } from './db';
 import {
   Customer,
   PreOrder,
@@ -27,6 +28,7 @@ import {
   PreOrderPayment,
   PreOrderPaymentMethod,
   PreOrderPaymentState,
+  PreOrderPaymentStatus,
   PreOrderPaymentType,
   PreOrderPrivateCost,
   PreOrderShipment,
@@ -48,7 +50,11 @@ import {
 } from '../preOrders/calculations';
 import {
   PRE_ORDER_EDIT_LOCKED_STATUSES,
+  PRE_ORDER_FORWARD_FLOW,
+  PRE_ORDER_LOCKED_PART6_STATUS,
   getTodayIsoDate,
+  isPreOrderAdminRole,
+  isPreOrderOverdue,
   isValidBdPhone,
   mergeWithDefaultRolePermissions,
   normalizeBdPhone,
@@ -129,6 +135,9 @@ export async function getNextPreOrderNumber(txn?: Transaction): Promise<string> 
 // ==========================================
 
 export async function getRolePermissions(): Promise<RolePermissionsMap> {
+  if (!auth?.currentUser) {
+    return mergeWithDefaultRolePermissions(null);
+  }
   try {
     const ref = doc(db, 'settings', 'rolePermissions');
     const snap = await getDoc(ref);
@@ -311,7 +320,10 @@ export async function createPreOrder(
     throw new Error('Expected arrival date cannot be earlier than the order date.');
   }
 
-  const shouldAutoVerify = Boolean(input.initialAdvance?.autoVerify);
+  const shouldAutoVerify =
+    Boolean(input.initialAdvance?.autoVerify) &&
+    input.initialAdvance?.method === 'Cash' &&
+    isPreOrderAdminRole(actor.role);
   const initialPaymentStatus = shouldAutoVerify ? 'verified' : 'pending';
 
   const calc = calculatePreOrderFinancials({
@@ -586,6 +598,9 @@ export async function createPreOrder(
         id: paymentId,
         preOrderId,
         preOrderNumber: createdNumber,
+        subBrand: preOrderDoc.subBrand,
+        customerName: preOrderDoc.customerName,
+        customerPhone: preOrderDoc.customerPhone,
         type: 'advance',
         amount: initialAdvanceAmount,
         method: input.initialAdvance.method,
@@ -692,21 +707,7 @@ function matchesClientSideFilters(order: PreOrder, opts: QueryPreOrdersOptions):
     if (orderDay > opts.dateTo) return false;
   }
   if (opts.overdueOnly) {
-    const today = getTodayIsoDate();
-    const terminalOrReceived = [
-      'Received in Stock',
-      'Ready for Delivery',
-      'Out for Delivery',
-      'Delivered',
-      'Cancelled',
-      'Refunded',
-    ].includes(order.status);
-    if (
-      terminalOrReceived ||
-      order.stockReceived ||
-      !order.estimatedDeliveryDate ||
-      order.estimatedDeliveryDate >= today
-    ) {
+    if (!isPreOrderOverdue(order.estimatedDeliveryDate, order.status, order.stockReceived)) {
       return false;
     }
   }
@@ -1308,30 +1309,100 @@ export async function updatePreOrderPrivateCost(
 }
 
 // ==========================================
-// PAYMENTS LEDGER (APPEND-ONLY + VERIFY)
+// PAYMENTS LEDGER (APPEND-ONLY + VERIFY + REVERSAL + REFUND + RECALC)
 // ==========================================
 
-export interface AddPreOrderPaymentInput {
-  type: PreOrderPaymentType;
+async function loadAndLockOrderLedgerInTxn(
+  txn: Transaction,
+  preOrderId: string
+): Promise<PreOrderPayment[]> {
+  const ledgerSnap = await getDocs(collection(db, 'preOrders', preOrderId, 'payments'));
+  if (ledgerSnap.empty) return [];
+  const docSnaps = await Promise.all(ledgerSnap.docs.map((d) => txn.get(d.ref)));
+  return docSnaps
+    .filter((s) => s.exists())
+    .map((s) => ({ ...(s.data() as PreOrderPayment), id: s.id }));
+}
+
+function buildDerivedOrderFinancialPatch(
+  order: PreOrder,
+  ledger: PreOrderPayment[],
+  actorId: string,
+  now: number
+) {
+  const calc = calculatePreOrderFinancials({
+    qty: order.qty,
+    sellingUnitPrice: order.sellingUnitPrice,
+    deliveryCharge: order.deliveryCharge,
+    discount: order.discount,
+    payments: ledger,
+  });
+
+  const paymentState = derivePreOrderPaymentState(
+    calc.totalAmount,
+    calc.verifiedCollected,
+    calc.verifiedRefunded,
+    order.status
+  );
+
+  const patch = {
+    advancePaid: calc.verifiedCollected,
+    pendingAmount: calc.pendingCollected,
+    refundedAmount: calc.verifiedRefunded,
+    dueAmount: calc.dueAmount,
+    paymentCount: ledger.length,
+    paymentState,
+    updatedAt: now,
+    updatedBy: actorId,
+  };
+
+  return { calc, patch };
+}
+
+export interface CollectPreOrderPaymentInput {
+  type: 'advance' | 'installment' | 'additional';
   amount: number;
   method: PreOrderPaymentMethod;
   referenceNo?: string;
+  receiptUrl?: string;
+  receivedAt?: number;
   note?: string;
   idempotencyKey: string;
+  autoVerify?: boolean;
+  duplicateOverrideReason?: string;
 }
 
-export async function addPreOrderPayment(
+export interface PaymentMutationResult {
+  payment: PreOrderPayment;
+  order: PreOrder;
+}
+
+export async function collectPreOrderPayment(
   preOrderId: string,
-  input: AddPreOrderPaymentInput,
+  input: CollectPreOrderPaymentInput,
   actor: PreOrderActor
-): Promise<string> {
+): Promise<PaymentMutationResult> {
   const safeAmount = roundMoney(input.amount);
   if (safeAmount <= 0) {
     throw new Error('Payment amount must be greater than zero.');
   }
   if (!input.idempotencyKey?.trim()) {
-    throw new Error('idempotencyKey is required for payment recording.');
+    throw new Error('Idempotency key is required for payment recording.');
   }
+  if (!['advance', 'installment', 'additional'].includes(input.type)) {
+    throw new Error('Payment type must be advance, installment, or additional.');
+  }
+
+  const trimmedRef = input.referenceNo?.trim() || '';
+  if (input.method !== 'Cash' && !trimmedRef) {
+    throw new Error(`Transaction ID / Reference No is required for ${input.method}.`);
+  }
+
+  const shouldAutoVerify =
+    Boolean(input.autoVerify) &&
+    input.method === 'Cash' &&
+    isPreOrderAdminRole(actor.role);
+  const nextStatus: PreOrderPaymentStatus = shouldAutoVerify ? 'verified' : 'pending';
 
   const now = Date.now();
   const safeKey = sanitizeIdFragment(input.idempotencyKey.trim());
@@ -1342,79 +1413,183 @@ export async function addPreOrderPayment(
   const auditRef = doc(db, 'preOrderAudit', generateId('AUD'));
   const notifRef = doc(db, 'preOrderNotifications', generateId('NTF'));
 
+  let resultPayment!: PreOrderPayment;
+  let resultOrder!: PreOrder;
+
   await runTransaction(db, async (txn) => {
-    const [orderSnap, existingPaymentSnap] = await Promise.all([
+    const [orderSnap, existingPaymentSnap, existingLedger] = await Promise.all([
       txn.get(preOrderRef),
       txn.get(paymentRef),
+      loadAndLockOrderLedgerInTxn(txn, preOrderId),
     ]);
 
     if (!orderSnap.exists()) throw new Error('Pre-order not found.');
+    const order = { ...(orderSnap.data() as PreOrder), id: orderSnap.id };
+
     if (existingPaymentSnap.exists()) {
-      // Idempotent duplicate submission guard
+      // Idempotent duplicate submission return
+      resultPayment = { ...(existingPaymentSnap.data() as PreOrderPayment), id: existingPaymentSnap.id };
+      resultOrder = order;
       return;
     }
 
-    const order = orderSnap.data() as PreOrder;
-    const netPaid = fromPaisa(toPaisa(order.advancePaid) - toPaisa(order.refundedAmount));
-    if (input.type === 'refund' && safeAmount > netPaid) {
+    if (['Delivered', 'Cancelled', 'Refunded'].includes(order.status)) {
+      throw new Error(`Cannot collect payment while pre-order status is "${order.status}".`);
+    }
+
+    const currentCalc = calculatePreOrderFinancials({
+      qty: order.qty,
+      sellingUnitPrice: order.sellingUnitPrice,
+      deliveryCharge: order.deliveryCharge,
+      discount: order.discount,
+      payments: existingLedger,
+    });
+
+    if (toPaisa(safeAmount) > toPaisa(currentCalc.dueAmount)) {
       throw new Error(
-        `Refund amount (৳${safeAmount}) exceeds verified net paid balance (৳${netPaid}).`
+        `Payment amount (৳${safeAmount.toLocaleString()}) exceeds current due balance (৳${currentCalc.dueAmount.toLocaleString()}).`
       );
     }
+
+    // Duplicate (transaction ID + amount) protection on this pre-order
+    if (trimmedRef) {
+      const reversedIds = new Set(
+        existingLedger
+          .filter((p) => p.type === 'reversal' && p.reversesPaymentId)
+          .map((p) => p.reversesPaymentId as string)
+      );
+      const duplicateMatch = existingLedger.find(
+        (p) =>
+          p.type !== 'reversal' &&
+          p.status !== 'rejected' &&
+          !reversedIds.has(p.id) &&
+          (p.referenceNo || '').trim().toLowerCase() === trimmedRef.toLowerCase() &&
+          toPaisa(p.amount) === toPaisa(safeAmount)
+      );
+      if (duplicateMatch) {
+        if (!isPreOrderAdminRole(actor.role)) {
+          throw new Error(
+            `DUPLICATE_TXN: Transaction ID "${trimmedRef}" with amount ৳${safeAmount.toLocaleString()} already exists on ${order.preOrderNumber}. Only an Admin or Super Admin can override.`
+          );
+        }
+        if (!input.duplicateOverrideReason?.trim()) {
+          throw new Error(
+            `DUPLICATE_TXN_ADMIN: Transaction ID "${trimmedRef}" with amount ৳${safeAmount.toLocaleString()} already exists on ${order.preOrderNumber}. Enter an Admin override reason to proceed.`
+          );
+        }
+      }
+    }
+
+    const trackingRef = order.trackingToken
+      ? doc(db, 'publicTracking', order.trackingToken)
+      : null;
+    const trackingSnap = trackingRef ? await txn.get(trackingRef) : null;
 
     const paymentDoc: PreOrderPayment = {
       id: paymentId,
       preOrderId,
       preOrderNumber: order.preOrderNumber,
+      subBrand: order.subBrand,
+      customerName: order.customerName,
+      customerPhone: order.customerPhone,
       type: input.type,
       amount: safeAmount,
       method: input.method,
-      referenceNo: input.referenceNo?.trim() || '',
+      referenceNo: trimmedRef,
+      receiptUrl: input.receiptUrl || '',
+      receivedAt: input.receivedAt || now,
       note: input.note?.trim() || '',
-      status: 'pending',
+      status: nextStatus,
       idempotencyKey: input.idempotencyKey.trim(),
+      duplicateOverrideReason: input.duplicateOverrideReason?.trim() || '',
       recordedBy: actor.id,
       recordedByName: actor.name,
       createdAt: now,
+      ...(shouldAutoVerify
+        ? {
+            verifiedBy: actor.id,
+            verifiedByName: actor.name,
+            verifiedAt: now,
+          }
+        : {}),
     };
 
-    const action: PreOrderAuditAction =
-      input.type === 'refund' ? 'REFUND_RECORDED' : 'PAYMENT_RECORDED';
+    const nextLedger = [...existingLedger, paymentDoc];
+    const { patch } = buildDerivedOrderFinancialPatch(order, nextLedger, actor.id, now);
 
     txn.set(paymentRef, sanitizeData(paymentDoc));
+    txn.update(preOrderRef, sanitizeData(patch));
+
+    if (trackingRef && trackingSnap && trackingSnap.exists()) {
+      txn.update(
+        trackingRef,
+        sanitizeData({
+          advancePaid: patch.advancePaid,
+          refundedAmount: patch.refundedAmount,
+          dueAmount: patch.dueAmount,
+          updatedAt: now,
+        })
+      );
+    }
+
     txn.set(
       auditRef,
       sanitizeData({
         id: auditRef.id,
         preOrderId,
         preOrderNumber: order.preOrderNumber,
-        action,
-        summary: `Recorded pending ${input.type} of ৳${safeAmount} (${input.method}) on ${order.preOrderNumber}`,
-        metadata: { paymentId, amount: safeAmount, method: input.method, type: input.type },
+        action: 'PAYMENT_RECORDED' as PreOrderAuditAction,
+        summary: `Collected ${nextStatus} ${input.type} of ৳${safeAmount.toLocaleString()} (${input.method}) on ${order.preOrderNumber}`,
+        metadata: {
+          paymentId,
+          type: input.type,
+          method: input.method,
+          referenceNo: trimmedRef,
+          status: nextStatus,
+          duplicateOverrideReason: input.duplicateOverrideReason?.trim() || '',
+          before: {
+            advancePaid: order.advancePaid || 0,
+            pendingAmount: order.pendingAmount || 0,
+            dueAmount: order.dueAmount,
+            paymentState: order.paymentState || 'unpaid',
+          },
+          after: {
+            advancePaid: patch.advancePaid,
+            pendingAmount: patch.pendingAmount,
+            dueAmount: patch.dueAmount,
+            paymentState: patch.paymentState,
+          },
+        },
         userId: actor.id,
         userName: actor.name,
         userRole: actor.role,
         timestamp: now,
       })
     );
-    txn.set(
-      notifRef,
-      sanitizeData({
-        id: notifRef.id,
-        preOrderId,
-        preOrderNumber: order.preOrderNumber,
-        type: input.type === 'refund' ? 'refund_alert' : 'payment_pending',
-        title: `${input.type === 'refund' ? 'Refund' : 'Payment'} Pending Verification`,
-        message: `${order.preOrderNumber}: ৳${safeAmount} via ${input.method} awaiting verification.`,
-        targetTab: 'preorder_payments',
-        readBy: [],
-        createdAt: now,
-        createdBy: actor.id,
-      } as PreOrderNotification)
-    );
+
+    if (nextStatus === 'pending') {
+      txn.set(
+        notifRef,
+        sanitizeData({
+          id: notifRef.id,
+          preOrderId,
+          preOrderNumber: order.preOrderNumber,
+          type: 'payment_pending',
+          title: 'Payment Pending Verification',
+          message: `${order.preOrderNumber}: ৳${safeAmount.toLocaleString()} via ${input.method} recorded by ${actor.name} awaiting verification.`,
+          targetTab: 'preorder_payments',
+          readBy: [],
+          createdAt: now,
+          createdBy: actor.id,
+        } as PreOrderNotification)
+      );
+    }
+
+    resultPayment = paymentDoc;
+    resultOrder = { ...order, ...patch };
   });
 
-  return paymentId;
+  return { payment: resultPayment, order: resultOrder };
 }
 
 export async function verifyPreOrderPayment(
@@ -1423,26 +1598,38 @@ export async function verifyPreOrderPayment(
   decision: 'verified' | 'rejected',
   actor: PreOrderActor,
   rejectionReason?: string
-): Promise<void> {
+): Promise<PreOrder> {
+  if (decision === 'rejected' && !rejectionReason?.trim()) {
+    throw new Error('Please provide a reason when rejecting a payment.');
+  }
+
   const now = Date.now();
   const preOrderRef = doc(db, 'preOrders', preOrderId);
   const paymentRef = doc(db, 'preOrders', preOrderId, 'payments', paymentId);
   const auditRef = doc(db, 'preOrderAudit', generateId('AUD'));
 
+  let updatedOrder!: PreOrder;
+
   await runTransaction(db, async (txn) => {
-    const [orderSnap, paySnap] = await Promise.all([
+    const [orderSnap, paySnap, existingLedger] = await Promise.all([
       txn.get(preOrderRef),
       txn.get(paymentRef),
+      loadAndLockOrderLedgerInTxn(txn, preOrderId),
     ]);
 
     if (!orderSnap.exists()) throw new Error('Pre-order not found.');
     if (!paySnap.exists()) throw new Error('Payment record not found.');
 
-    const order = orderSnap.data() as PreOrder;
-    const payment = paySnap.data() as PreOrderPayment;
+    const order = { ...(orderSnap.data() as PreOrder), id: orderSnap.id };
+    const payment = { ...(paySnap.data() as PreOrderPayment), id: paySnap.id };
 
     if (payment.status !== 'pending') {
       throw new Error(`Payment has already been ${payment.status}.`);
+    }
+    if (payment.recordedBy === actor.id) {
+      throw new Error(
+        'Self-verification is not allowed. Another authorized verifier must verify or reject this payment.'
+      );
     }
 
     const trackingRef = order.trackingToken
@@ -1450,51 +1637,38 @@ export async function verifyPreOrderPayment(
       : null;
     const trackingSnap = trackingRef ? await txn.get(trackingRef) : null;
 
-    txn.update(
-      paymentRef,
-      sanitizeData({
-        status: decision,
-        verifiedBy: actor.id,
-        verifiedByName: actor.name,
-        verifiedAt: now,
-        rejectionReason: decision === 'rejected' ? rejectionReason?.trim() || 'Rejected' : '',
-      })
+    const paymentPatch = {
+      status: decision,
+      verifiedBy: actor.id,
+      verifiedByName: actor.name,
+      verifiedAt: now,
+      rejectionReason: decision === 'rejected' ? rejectionReason?.trim() || 'Rejected' : '',
+    };
+
+    const nextLedger = existingLedger.map((p) =>
+      p.id === paymentId ? { ...p, ...paymentPatch } : p
     );
+    const { calc, patch } = buildDerivedOrderFinancialPatch(order, nextLedger, actor.id, now);
 
-    if (decision === 'verified') {
-      let nextAdvancePaid = roundMoney(order.advancePaid || 0);
-      let nextRefundedAmount = roundMoney(order.refundedAmount || 0);
-
-      if (payment.type === 'refund') {
-        const netPaid = fromPaisa(toPaisa(nextAdvancePaid) - toPaisa(nextRefundedAmount));
-        if (toPaisa(payment.amount) > toPaisa(netPaid)) {
-          throw new Error('Cannot verify refund exceeding net verified payments.');
-        }
-        nextRefundedAmount = fromPaisa(toPaisa(nextRefundedAmount) + toPaisa(payment.amount));
-      } else {
-        nextAdvancePaid = fromPaisa(toPaisa(nextAdvancePaid) + toPaisa(payment.amount));
+    if (decision === 'verified' && payment.type === 'refund') {
+      if (toPaisa(calc.verifiedRefunded) > toPaisa(calc.verifiedCollected)) {
+        throw new Error('Cannot verify refund exceeding net verified collections.');
       }
+    }
 
-      const nextDueAmount = fromPaisa(
-        toPaisa(order.totalAmount) - toPaisa(nextAdvancePaid) + toPaisa(nextRefundedAmount)
-      );
+    txn.update(paymentRef, sanitizeData(paymentPatch));
+    txn.update(preOrderRef, sanitizeData(patch));
 
-      txn.update(preOrderRef, {
-        advancePaid: nextAdvancePaid,
-        refundedAmount: nextRefundedAmount,
-        dueAmount: nextDueAmount,
-        updatedAt: now,
-        updatedBy: actor.id,
-      });
-
-      if (trackingRef && trackingSnap && trackingSnap.exists()) {
-        txn.update(trackingRef, {
-          advancePaid: nextAdvancePaid,
-          refundedAmount: nextRefundedAmount,
-          dueAmount: nextDueAmount,
+    if (trackingRef && trackingSnap && trackingSnap.exists()) {
+      txn.update(
+        trackingRef,
+        sanitizeData({
+          advancePaid: patch.advancePaid,
+          refundedAmount: patch.refundedAmount,
+          dueAmount: patch.dueAmount,
           updatedAt: now,
-        });
-      }
+        })
+      );
     }
 
     txn.set(
@@ -1506,20 +1680,497 @@ export async function verifyPreOrderPayment(
         action: (decision === 'verified'
           ? 'PAYMENT_VERIFIED'
           : 'PAYMENT_REJECTED') as PreOrderAuditAction,
-        summary: `${decision === 'verified' ? 'Verified' : 'Rejected'} ${payment.type} of ৳${payment.amount} on ${order.preOrderNumber}`,
-        metadata: { paymentId, amount: payment.amount, decision },
+        summary: `${decision === 'verified' ? 'Verified' : 'Rejected'} ${payment.type} of ৳${payment.amount.toLocaleString()} on ${order.preOrderNumber}`,
+        metadata: {
+          paymentId,
+          amount: payment.amount,
+          decision,
+          rejectionReason: paymentPatch.rejectionReason,
+          before: {
+            paymentStatus: payment.status,
+            advancePaid: order.advancePaid || 0,
+            pendingAmount: order.pendingAmount || 0,
+            dueAmount: order.dueAmount,
+            paymentState: order.paymentState || 'unpaid',
+          },
+          after: {
+            paymentStatus: decision,
+            advancePaid: patch.advancePaid,
+            pendingAmount: patch.pendingAmount,
+            dueAmount: patch.dueAmount,
+            paymentState: patch.paymentState,
+          },
+        },
         userId: actor.id,
         userName: actor.name,
         userRole: actor.role,
         timestamp: now,
       })
     );
+
+    updatedOrder = { ...order, ...patch };
   });
+
+  return updatedOrder;
+}
+
+export async function reversePreOrderPayment(
+  preOrderId: string,
+  originalPaymentId: string,
+  reason: string,
+  actor: PreOrderActor
+): Promise<PaymentMutationResult> {
+  if (!isPreOrderAdminRole(actor.role)) {
+    throw new Error('Only Admin or Super Admin can reverse a verified payment entry.');
+  }
+  if (!reason?.trim()) {
+    throw new Error('A reversal reason is required.');
+  }
+
+  const now = Date.now();
+  const revId = `REV_${sanitizeIdFragment(originalPaymentId)}`;
+  const preOrderRef = doc(db, 'preOrders', preOrderId);
+  const origPaymentRef = doc(db, 'preOrders', preOrderId, 'payments', originalPaymentId);
+  const revPaymentRef = doc(db, 'preOrders', preOrderId, 'payments', revId);
+  const auditRef = doc(db, 'preOrderAudit', generateId('AUD'));
+
+  let resultPayment!: PreOrderPayment;
+  let resultOrder!: PreOrder;
+
+  await runTransaction(db, async (txn) => {
+    const [orderSnap, origSnap, revSnap, existingLedger] = await Promise.all([
+      txn.get(preOrderRef),
+      txn.get(origPaymentRef),
+      txn.get(revPaymentRef),
+      loadAndLockOrderLedgerInTxn(txn, preOrderId),
+    ]);
+
+    if (!orderSnap.exists()) throw new Error('Pre-order not found.');
+    if (!origSnap.exists()) throw new Error('Original payment entry not found.');
+
+    const order = { ...(orderSnap.data() as PreOrder), id: orderSnap.id };
+    if (revSnap.exists()) {
+      resultPayment = { ...(revSnap.data() as PreOrderPayment), id: revSnap.id };
+      resultOrder = order;
+      return;
+    }
+
+    const orig = { ...(origSnap.data() as PreOrderPayment), id: origSnap.id };
+    if (orig.type === 'reversal') {
+      throw new Error('A reversal entry cannot itself be reversed.');
+    }
+    if (orig.status !== 'verified') {
+      throw new Error('Only verified payment entries can be reversed. Reject pending entries instead.');
+    }
+    if (
+      existingLedger.some(
+        (p) => p.type === 'reversal' && p.reversesPaymentId === originalPaymentId
+      )
+    ) {
+      throw new Error('This payment entry has already been reversed.');
+    }
+
+    const trackingRef = order.trackingToken
+      ? doc(db, 'publicTracking', order.trackingToken)
+      : null;
+    const trackingSnap = trackingRef ? await txn.get(trackingRef) : null;
+
+    const reversalDoc: PreOrderPayment = {
+      id: revId,
+      preOrderId,
+      preOrderNumber: order.preOrderNumber,
+      subBrand: order.subBrand,
+      customerName: order.customerName,
+      customerPhone: order.customerPhone,
+      type: 'reversal',
+      amount: roundMoney(orig.amount),
+      method: orig.method,
+      referenceNo: orig.referenceNo || '',
+      receivedAt: now,
+      note: `Reversal of ${originalPaymentId}: ${reason.trim()}`,
+      reversesPaymentId: originalPaymentId,
+      reversedPaymentType: orig.type,
+      reversalReason: reason.trim(),
+      status: 'verified',
+      idempotencyKey: revId,
+      recordedBy: actor.id,
+      recordedByName: actor.name,
+      verifiedBy: actor.id,
+      verifiedByName: actor.name,
+      verifiedAt: now,
+      createdAt: now,
+    };
+
+    const nextLedger = [...existingLedger, reversalDoc];
+
+    // Guard: reversing a collection cannot leave verifiedCollected < verifiedRefunded
+    const beforeCalc = calculatePreOrderFinancials({
+      qty: order.qty,
+      sellingUnitPrice: order.sellingUnitPrice,
+      deliveryCharge: order.deliveryCharge,
+      discount: order.discount,
+      payments: existingLedger,
+    });
+    const rawAfterCalc = calculatePreOrderFinancials({
+      qty: order.qty,
+      sellingUnitPrice: order.sellingUnitPrice,
+      deliveryCharge: order.deliveryCharge,
+      discount: order.discount,
+      payments: nextLedger,
+    });
+    if (
+      orig.type !== 'refund' &&
+      toPaisa(rawAfterCalc.verifiedCollected) < toPaisa(beforeCalc.verifiedRefunded)
+    ) {
+      throw new Error(
+        `Cannot reverse ৳${orig.amount.toLocaleString()} because ৳${beforeCalc.verifiedRefunded.toLocaleString()} has already been refunded.`
+      );
+    }
+
+    const { patch } = buildDerivedOrderFinancialPatch(order, nextLedger, actor.id, now);
+
+    // Append-only: NEVER overwrite or delete the original payment doc
+    txn.set(revPaymentRef, sanitizeData(reversalDoc));
+    txn.update(preOrderRef, sanitizeData(patch));
+
+    if (trackingRef && trackingSnap && trackingSnap.exists()) {
+      txn.update(
+        trackingRef,
+        sanitizeData({
+          advancePaid: patch.advancePaid,
+          refundedAmount: patch.refundedAmount,
+          dueAmount: patch.dueAmount,
+          updatedAt: now,
+        })
+      );
+    }
+
+    txn.set(
+      auditRef,
+      sanitizeData({
+        id: auditRef.id,
+        preOrderId,
+        preOrderNumber: order.preOrderNumber,
+        action: 'PAYMENT_REVERSED' as PreOrderAuditAction,
+        summary: `Reversed ${orig.type} (${originalPaymentId}) of ৳${orig.amount.toLocaleString()} on ${order.preOrderNumber}: ${reason.trim()}`,
+        metadata: {
+          reversalPaymentId: revId,
+          reversedPaymentId: originalPaymentId,
+          amount: orig.amount,
+          reason: reason.trim(),
+          before: {
+            advancePaid: order.advancePaid || 0,
+            refundedAmount: order.refundedAmount || 0,
+            dueAmount: order.dueAmount,
+            paymentState: order.paymentState || 'unpaid',
+          },
+          after: {
+            advancePaid: patch.advancePaid,
+            refundedAmount: patch.refundedAmount,
+            dueAmount: patch.dueAmount,
+            paymentState: patch.paymentState,
+          },
+        },
+        userId: actor.id,
+        userName: actor.name,
+        userRole: actor.role,
+        timestamp: now,
+      })
+    );
+
+    resultPayment = reversalDoc;
+    resultOrder = { ...order, ...patch };
+  });
+
+  return { payment: resultPayment, order: resultOrder };
+}
+
+export interface RefundPreOrderPaymentInput {
+  amount: number;
+  method: PreOrderPaymentMethod;
+  referenceNo: string;
+  reason: string;
+  receiptUrl?: string;
+  receivedAt?: number;
+  idempotencyKey: string;
+}
+
+export async function refundPreOrderPayment(
+  preOrderId: string,
+  input: RefundPreOrderPaymentInput,
+  actor: PreOrderActor
+): Promise<PaymentMutationResult> {
+  const safeAmount = roundMoney(input.amount);
+  if (safeAmount <= 0) {
+    throw new Error('Refund amount must be greater than zero.');
+  }
+  if (!input.reason?.trim()) {
+    throw new Error('Refund reason is required.');
+  }
+  if (!input.referenceNo?.trim()) {
+    throw new Error('Refund transaction ID / voucher reference is required.');
+  }
+  if (!input.idempotencyKey?.trim()) {
+    throw new Error('Idempotency key is required.');
+  }
+
+  const now = Date.now();
+  const safeKey = sanitizeIdFragment(input.idempotencyKey.trim());
+  const paymentId = `PAY_${safeKey}`;
+
+  const preOrderRef = doc(db, 'preOrders', preOrderId);
+  const paymentRef = doc(db, 'preOrders', preOrderId, 'payments', paymentId);
+  const auditRef = doc(db, 'preOrderAudit', generateId('AUD'));
+  const notifRef = doc(db, 'preOrderNotifications', generateId('NTF'));
+
+  let resultPayment!: PreOrderPayment;
+  let resultOrder!: PreOrder;
+
+  await runTransaction(db, async (txn) => {
+    const [orderSnap, existingPaySnap, existingLedger] = await Promise.all([
+      txn.get(preOrderRef),
+      txn.get(paymentRef),
+      loadAndLockOrderLedgerInTxn(txn, preOrderId),
+    ]);
+
+    if (!orderSnap.exists()) throw new Error('Pre-order not found.');
+    const order = { ...(orderSnap.data() as PreOrder), id: orderSnap.id };
+
+    if (existingPaySnap.exists()) {
+      resultPayment = { ...(existingPaySnap.data() as PreOrderPayment), id: existingPaySnap.id };
+      resultOrder = order;
+      return;
+    }
+
+    const currentCalc = calculatePreOrderFinancials({
+      qty: order.qty,
+      sellingUnitPrice: order.sellingUnitPrice,
+      deliveryCharge: order.deliveryCharge,
+      discount: order.discount,
+      payments: existingLedger,
+    });
+
+    if (toPaisa(safeAmount) > toPaisa(currentCalc.verifiedNetPaid)) {
+      throw new Error(
+        `Refund amount (৳${safeAmount.toLocaleString()}) exceeds net verified paid balance (৳${currentCalc.verifiedNetPaid.toLocaleString()}).`
+      );
+    }
+
+    const trackingRef = order.trackingToken
+      ? doc(db, 'publicTracking', order.trackingToken)
+      : null;
+    const trackingSnap = trackingRef ? await txn.get(trackingRef) : null;
+
+    const refundDoc: PreOrderPayment = {
+      id: paymentId,
+      preOrderId,
+      preOrderNumber: order.preOrderNumber,
+      subBrand: order.subBrand,
+      customerName: order.customerName,
+      customerPhone: order.customerPhone,
+      type: 'refund',
+      amount: safeAmount,
+      method: input.method,
+      referenceNo: input.referenceNo.trim(),
+      receiptUrl: input.receiptUrl || '',
+      receivedAt: input.receivedAt || now,
+      note: input.reason.trim(),
+      status: 'verified',
+      idempotencyKey: input.idempotencyKey.trim(),
+      recordedBy: actor.id,
+      recordedByName: actor.name,
+      verifiedBy: actor.id,
+      verifiedByName: actor.name,
+      verifiedAt: now,
+      createdAt: now,
+    };
+
+    const nextLedger = [...existingLedger, refundDoc];
+    const { patch } = buildDerivedOrderFinancialPatch(order, nextLedger, actor.id, now);
+
+    txn.set(paymentRef, sanitizeData(refundDoc));
+    txn.update(preOrderRef, sanitizeData(patch));
+
+    if (trackingRef && trackingSnap && trackingSnap.exists()) {
+      txn.update(
+        trackingRef,
+        sanitizeData({
+          advancePaid: patch.advancePaid,
+          refundedAmount: patch.refundedAmount,
+          dueAmount: patch.dueAmount,
+          updatedAt: now,
+        })
+      );
+    }
+
+    txn.set(
+      auditRef,
+      sanitizeData({
+        id: auditRef.id,
+        preOrderId,
+        preOrderNumber: order.preOrderNumber,
+        action: 'REFUND_RECORDED' as PreOrderAuditAction,
+        summary: `Issued refund of ৳${safeAmount.toLocaleString()} (${input.method}) on ${order.preOrderNumber}: ${input.reason.trim()}`,
+        metadata: {
+          paymentId,
+          amount: safeAmount,
+          method: input.method,
+          referenceNo: input.referenceNo.trim(),
+          reason: input.reason.trim(),
+          before: {
+            advancePaid: order.advancePaid || 0,
+            refundedAmount: order.refundedAmount || 0,
+            dueAmount: order.dueAmount,
+            paymentState: order.paymentState || 'unpaid',
+          },
+          after: {
+            advancePaid: patch.advancePaid,
+            refundedAmount: patch.refundedAmount,
+            dueAmount: patch.dueAmount,
+            paymentState: patch.paymentState,
+          },
+        },
+        userId: actor.id,
+        userName: actor.name,
+        userRole: actor.role,
+        timestamp: now,
+      })
+    );
+
+    txn.set(
+      notifRef,
+      sanitizeData({
+        id: notifRef.id,
+        preOrderId,
+        preOrderNumber: order.preOrderNumber,
+        type: 'refund_alert',
+        title: 'Customer Refund Recorded',
+        message: `${order.preOrderNumber}: ৳${safeAmount.toLocaleString()} refunded via ${input.method} by ${actor.name}.`,
+        targetTab: 'preorder_payments',
+        readBy: [],
+        createdAt: now,
+        createdBy: actor.id,
+      } as PreOrderNotification)
+    );
+
+    resultPayment = refundDoc;
+    resultOrder = { ...order, ...patch };
+  });
+
+  return { payment: resultPayment, order: resultOrder };
+}
+
+export interface RecalculateLedgerResult {
+  changed: boolean;
+  before: Record<string, any>;
+  after: Record<string, any>;
+  order: PreOrder;
+}
+
+export async function recalculatePreOrderFromLedger(
+  preOrderId: string,
+  actor: PreOrderActor
+): Promise<RecalculateLedgerResult> {
+  if (!isPreOrderAdminRole(actor.role)) {
+    throw new Error('Only Admin or Super Admin can recalculate totals from the payment ledger.');
+  }
+
+  const now = Date.now();
+  const preOrderRef = doc(db, 'preOrders', preOrderId);
+  const auditRef = doc(db, 'preOrderAudit', generateId('AUD'));
+
+  let result!: RecalculateLedgerResult;
+
+  await runTransaction(db, async (txn) => {
+    const [orderSnap, ledger] = await Promise.all([
+      txn.get(preOrderRef),
+      loadAndLockOrderLedgerInTxn(txn, preOrderId),
+    ]);
+    if (!orderSnap.exists()) throw new Error('Pre-order not found.');
+
+    const order = { ...(orderSnap.data() as PreOrder), id: orderSnap.id };
+    const { patch } = buildDerivedOrderFinancialPatch(order, ledger, actor.id, now);
+
+    const before = {
+      advancePaid: roundMoney(order.advancePaid || 0),
+      pendingAmount: roundMoney(order.pendingAmount || 0),
+      refundedAmount: roundMoney(order.refundedAmount || 0),
+      dueAmount: roundMoney(order.dueAmount || 0),
+      paymentCount: Number(order.paymentCount || 0),
+      paymentState: order.paymentState || 'unpaid',
+    };
+
+    const after = {
+      advancePaid: patch.advancePaid,
+      pendingAmount: patch.pendingAmount,
+      refundedAmount: patch.refundedAmount,
+      dueAmount: patch.dueAmount,
+      paymentCount: patch.paymentCount,
+      paymentState: patch.paymentState,
+    };
+
+    const changed =
+      toPaisa(before.advancePaid) !== toPaisa(after.advancePaid) ||
+      toPaisa(before.pendingAmount) !== toPaisa(after.pendingAmount) ||
+      toPaisa(before.refundedAmount) !== toPaisa(after.refundedAmount) ||
+      toPaisa(before.dueAmount) !== toPaisa(after.dueAmount) ||
+      before.paymentCount !== after.paymentCount ||
+      before.paymentState !== after.paymentState;
+
+    if (changed) {
+      const trackingRef = order.trackingToken
+        ? doc(db, 'publicTracking', order.trackingToken)
+        : null;
+      const trackingSnap = trackingRef ? await txn.get(trackingRef) : null;
+
+      txn.update(preOrderRef, sanitizeData(patch));
+      if (trackingRef && trackingSnap && trackingSnap.exists()) {
+        txn.update(
+          trackingRef,
+          sanitizeData({
+            advancePaid: patch.advancePaid,
+            refundedAmount: patch.refundedAmount,
+            dueAmount: patch.dueAmount,
+            updatedAt: now,
+          })
+        );
+      }
+
+      txn.set(
+        auditRef,
+        sanitizeData({
+          id: auditRef.id,
+          preOrderId,
+          preOrderNumber: order.preOrderNumber,
+          action: 'LEDGER_RECALCULATED' as PreOrderAuditAction,
+          summary: `Recalculated ${order.preOrderNumber} totals from ${ledger.length} payment ledger entries`,
+          metadata: {
+            ledgerEntries: ledger.length,
+            before,
+            after,
+          },
+          userId: actor.id,
+          userName: actor.name,
+          userRole: actor.role,
+          timestamp: now,
+        })
+      );
+    }
+
+    result = {
+      changed,
+      before,
+      after,
+      order: changed ? { ...order, ...patch } : order,
+    };
+  });
+
+  return result;
 }
 
 export async function getPreOrderPayments(
   preOrderId: string,
-  limitCount: number = 50
+  limitCount: number = 100
 ): Promise<PreOrderPayment[]> {
   const q = query(
     collection(db, 'preOrders', preOrderId, 'payments'),
@@ -1531,33 +2182,460 @@ export async function getPreOrderPayments(
 }
 
 // ==========================================
-// STATUS TRANSITIONS & HISTORY
+// GLOBAL PAYMENT MANAGEMENT (COLLECTION GROUP + DUE LIST)
 // ==========================================
+
+export interface QueryPreOrderPaymentsGroupOptions {
+  pageSize?: 25 | 50 | 100 | number;
+  cursor?: QueryDocumentSnapshot<DocumentData> | null;
+  status?: PreOrderPaymentStatus | 'ALL';
+  type?: PreOrderPaymentType | 'ALL';
+  method?: PreOrderPaymentMethod | 'ALL';
+  subBrand?: 'SAT' | 'GZ' | 'RTX' | 'ALL';
+  allowedSubBrands?: Array<'SAT' | 'GZ' | 'RTX'>;
+  dateFrom?: string; // YYYY-MM-DD
+  dateTo?: string; // YYYY-MM-DD
+  searchTerm?: string;
+}
+
+export interface EnrichedPreOrderPayment extends PreOrderPayment {
+  isReversed?: boolean;
+}
+
+export interface QueryPreOrderPaymentsGroupResult {
+  items: EnrichedPreOrderPayment[];
+  lastDoc: QueryDocumentSnapshot<DocumentData> | null;
+  hasMore: boolean;
+  indexNotice?: string;
+}
+
+function matchesPaymentFilters(
+  p: PreOrderPayment,
+  opts: QueryPreOrderPaymentsGroupOptions
+): boolean {
+  if (opts.allowedSubBrands && opts.allowedSubBrands.length > 0 && p.subBrand) {
+    if (!opts.allowedSubBrands.includes(p.subBrand)) return false;
+  }
+  if (opts.subBrand && opts.subBrand !== 'ALL' && p.subBrand && p.subBrand !== opts.subBrand) {
+    return false;
+  }
+  if (opts.status && opts.status !== 'ALL' && p.status !== opts.status) {
+    return false;
+  }
+  if (opts.type && opts.type !== 'ALL' && p.type !== opts.type) {
+    return false;
+  }
+  if (opts.method && opts.method !== 'ALL' && p.method !== opts.method) {
+    return false;
+  }
+  if (opts.dateFrom || opts.dateTo) {
+    const dayStr = new Date(p.receivedAt || p.createdAt).toISOString().split('T')[0];
+    if (opts.dateFrom && dayStr < opts.dateFrom) return false;
+    if (opts.dateTo && dayStr > opts.dateTo) return false;
+  }
+  if (opts.searchTerm?.trim()) {
+    const q = opts.searchTerm.trim().toLowerCase();
+    const normPhone = normalizeBdPhone(opts.searchTerm);
+    const haystack = [
+      p.preOrderNumber,
+      p.customerName,
+      p.customerPhone,
+      p.referenceNo,
+      p.recordedByName,
+      p.verifiedByName,
+      p.note,
+    ]
+      .filter(Boolean)
+      .join(' ')
+      .toLowerCase();
+    const phoneMatch =
+      normPhone.length >= 4 && normalizeBdPhone(p.customerPhone || '').includes(normPhone);
+    if (!haystack.includes(q) && !phoneMatch) return false;
+  }
+  return true;
+}
+
+export async function queryPreOrderPaymentsGroup(
+  options: QueryPreOrderPaymentsGroupOptions = {}
+): Promise<QueryPreOrderPaymentsGroupResult> {
+  const pageSize = Math.min(Math.max(Number(options.pageSize) || 25, 1), 100);
+
+  // Fetch reversed payment IDs from reversal entries across ledger (small set)
+  const reversedPaymentIds = new Set<string>();
+  try {
+    const revSnap = await getDocs(
+      query(collectionGroup(db, 'payments'), where('type', '==', 'reversal'), limit(500))
+    );
+    revSnap.forEach((d) => {
+      const data = d.data() as PreOrderPayment;
+      if (data.reversesPaymentId) {
+        reversedPaymentIds.add(data.reversesPaymentId);
+      }
+    });
+  } catch (err) {
+    console.warn('Reversal lookup fallback:', err);
+  }
+
+  const buildPrimaryQuery = () => {
+    const constraints: any[] = [];
+    if (options.status && options.status !== 'ALL') {
+      constraints.push(where('status', '==', options.status));
+    } else if (options.type && options.type !== 'ALL') {
+      constraints.push(where('type', '==', options.type));
+    } else if (options.method && options.method !== 'ALL') {
+      constraints.push(where('method', '==', options.method));
+    }
+    if (options.subBrand && options.subBrand !== 'ALL') {
+      constraints.push(where('subBrand', '==', options.subBrand));
+    }
+    constraints.push(orderBy('createdAt', 'desc'));
+    if (options.cursor) {
+      constraints.push(startAfter(options.cursor));
+    }
+    constraints.push(limit(pageSize + 1));
+    return query(collectionGroup(db, 'payments'), ...constraints);
+  };
+
+  let slicedDocs: QueryDocumentSnapshot<DocumentData>[] = [];
+  let hasMore = false;
+  let indexNotice: string | undefined;
+
+  try {
+    const snap = await getDocs(buildPrimaryQuery());
+    hasMore = snap.docs.length > pageSize;
+    slicedDocs = hasMore ? snap.docs.slice(0, pageSize) : snap.docs;
+  } catch (err: any) {
+    const isIndexError =
+      err?.code === 'failed-precondition' ||
+      String(err?.message || '').toLowerCase().includes('index');
+    if (!isIndexError) throw err;
+
+    const fallbackConstraints: any[] = [orderBy('createdAt', 'desc')];
+    if (options.cursor) {
+      fallbackConstraints.push(startAfter(options.cursor));
+    }
+    fallbackConstraints.push(limit(pageSize + 1));
+    const fallbackSnap = await getDocs(
+      query(collectionGroup(db, 'payments'), ...fallbackConstraints)
+    );
+    hasMore = fallbackSnap.docs.length > pageSize;
+    slicedDocs = hasMore ? fallbackSnap.docs.slice(0, pageSize) : fallbackSnap.docs;
+    indexNotice =
+      'Using base collectionGroup ordering because the composite index for this filter combination has not finished building in Firebase Console yet.';
+  }
+
+  const rawPayments = slicedDocs.map((d) => ({
+    ...(d.data() as PreOrderPayment),
+    id: d.id,
+  }));
+
+  // Lazily hydrate parent customerName/customerPhone/subBrand if an older Part 2 entry lacks them
+  const missingParentIds = Array.from(
+    new Set(
+      rawPayments
+        .filter((p) => p.preOrderId && (!p.customerName || !p.subBrand))
+        .map((p) => p.preOrderId)
+    )
+  );
+  const parentMap = new Map<string, PreOrder>();
+  if (missingParentIds.length > 0) {
+    await Promise.all(
+      missingParentIds.slice(0, 30).map(async (poId) => {
+        try {
+          const poSnap = await getDoc(doc(db, 'preOrders', poId));
+          if (poSnap.exists()) {
+            parentMap.set(poId, { ...(poSnap.data() as PreOrder), id: poSnap.id });
+          }
+        } catch {
+          // ignore
+        }
+      })
+    );
+  }
+
+  const enriched: EnrichedPreOrderPayment[] = rawPayments
+    .map((p) => {
+      const parent = parentMap.get(p.preOrderId);
+      return {
+        ...p,
+        subBrand: p.subBrand || parent?.subBrand,
+        customerName: p.customerName || parent?.customerName || '—',
+        customerPhone: p.customerPhone || parent?.customerPhone || '',
+        isReversed: reversedPaymentIds.has(p.id),
+      };
+    })
+    .filter((p) => matchesPaymentFilters(p, options));
+
+  const lastDoc = slicedDocs.length > 0 ? slicedDocs[slicedDocs.length - 1] : null;
+  return {
+    items: enriched,
+    lastDoc,
+    hasMore,
+    indexNotice,
+  };
+}
+
+export interface QueryPreOrderDueListOptions {
+  pageSize?: number;
+  cursor?: QueryDocumentSnapshot<DocumentData> | null;
+  subBrand?: 'SAT' | 'GZ' | 'RTX' | 'ALL';
+  allowedSubBrands?: Array<'SAT' | 'GZ' | 'RTX'>;
+  searchTerm?: string;
+}
+
+export async function queryPreOrderDueList(
+  options: QueryPreOrderDueListOptions = {}
+): Promise<QueryPreOrdersResult> {
+  const pageSize = Math.min(Math.max(Number(options.pageSize) || 50, 1), 100);
+
+  const filterDueRow = (o: PreOrder) => {
+    if (toPaisa(o.dueAmount) <= 0) return false;
+    if (o.status === 'Cancelled' || o.status === 'Refunded') return false;
+    if (options.allowedSubBrands && options.allowedSubBrands.length > 0) {
+      if (!options.allowedSubBrands.includes(o.subBrand)) return false;
+    }
+    if (options.subBrand && options.subBrand !== 'ALL' && o.subBrand !== options.subBrand) {
+      return false;
+    }
+    if (options.searchTerm?.trim()) {
+      const q = options.searchTerm.trim().toLowerCase();
+      const normPhone = normalizeBdPhone(options.searchTerm);
+      const haystack = [o.preOrderNumber, o.customerName, o.customerPhone, o.productName]
+        .filter(Boolean)
+        .join(' ')
+        .toLowerCase();
+      const phoneMatch =
+        normPhone.length >= 4 && normalizeBdPhone(o.customerPhone).includes(normPhone);
+      if (!haystack.includes(q) && !phoneMatch) return false;
+    }
+    return true;
+  };
+
+  try {
+    const constraints: any[] = [where('dueAmount', '>', 0), orderBy('dueAmount', 'asc'), orderBy('createdAt', 'asc')];
+    if (options.cursor) constraints.push(startAfter(options.cursor));
+    constraints.push(limit(pageSize + 1));
+
+    const snap = await getDocs(query(collection(db, 'preOrders'), ...constraints));
+    const hasMore = snap.docs.length > pageSize;
+    const sliced = hasMore ? snap.docs.slice(0, pageSize) : snap.docs;
+    const items = sliced
+      .map((d) => ({ ...(d.data() as PreOrder), id: d.id }))
+      .filter(filterDueRow)
+      .sort((a, b) => a.createdAt - b.createdAt); // Oldest first
+
+    return {
+      items,
+      lastDoc: sliced.length > 0 ? sliced[sliced.length - 1] : null,
+      hasMore,
+    };
+  } catch (err: any) {
+    const isIndexError =
+      err?.code === 'failed-precondition' ||
+      String(err?.message || '').toLowerCase().includes('index');
+    if (!isIndexError) throw err;
+
+    // Fallback: single-field createdAt ASC cursor
+    const fallbackConstraints: any[] = [orderBy('createdAt', 'asc')];
+    if (options.cursor) fallbackConstraints.push(startAfter(options.cursor));
+    fallbackConstraints.push(limit(pageSize + 1));
+    const snap = await getDocs(query(collection(db, 'preOrders'), ...fallbackConstraints));
+    const hasMore = snap.docs.length > pageSize;
+    const sliced = hasMore ? snap.docs.slice(0, pageSize) : snap.docs;
+    const items = sliced
+      .map((d) => ({ ...(d.data() as PreOrder), id: d.id }))
+      .filter(filterDueRow);
+
+    return {
+      items,
+      lastDoc: sliced.length > 0 ? sliced[sliced.length - 1] : null,
+      hasMore,
+      indexNotice:
+        'Using base oldest-first ordering because the composite dueAmount index has not been created yet.',
+    };
+  }
+}
+
+export interface PreOrderPaymentsSummaryKPIs {
+  totalVerifiedAdvance: number;
+  totalPendingVerification: number;
+  totalCustomerDue: number;
+  totalRefunded: number;
+  pendingCountApprox: number;
+  dueOrdersCount: number;
+}
+
+export async function getPreOrderPaymentsSummary(
+  allowedSubBrands?: Array<'SAT' | 'GZ' | 'RTX'>,
+  subBrandFilter?: 'SAT' | 'GZ' | 'RTX' | 'ALL'
+): Promise<PreOrderPaymentsSummaryKPIs> {
+  const [ordersSnap, pendingSnap] = await Promise.all([
+    getDocs(query(collection(db, 'preOrders'), orderBy('createdAt', 'desc'), limit(500))),
+    getDocs(
+      query(collectionGroup(db, 'payments'), where('status', '==', 'pending'), limit(500))
+    ).catch(() => null),
+  ]);
+
+  let verifiedPaisa = 0;
+  let pendingPaisa = 0;
+  let duePaisa = 0;
+  let refundedPaisa = 0;
+  let dueOrdersCount = 0;
+
+  ordersSnap.forEach((d) => {
+    const o = d.data() as PreOrder;
+    if (allowedSubBrands && allowedSubBrands.length > 0 && !allowedSubBrands.includes(o.subBrand)) {
+      return;
+    }
+    if (subBrandFilter && subBrandFilter !== 'ALL' && o.subBrand !== subBrandFilter) {
+      return;
+    }
+    verifiedPaisa += Math.max(0, toPaisa(o.advancePaid || 0));
+    pendingPaisa += Math.max(0, toPaisa(o.pendingAmount || 0));
+    refundedPaisa += Math.max(0, toPaisa(o.refundedAmount || 0));
+    if (o.status !== 'Cancelled' && o.status !== 'Refunded' && toPaisa(o.dueAmount) > 0) {
+      duePaisa += toPaisa(o.dueAmount);
+      dueOrdersCount += 1;
+    }
+  });
+
+  let pendingCountApprox = 0;
+  if (pendingSnap) {
+    pendingSnap.forEach((d) => {
+      const p = d.data() as PreOrderPayment;
+      if (allowedSubBrands && allowedSubBrands.length > 0 && p.subBrand && !allowedSubBrands.includes(p.subBrand)) {
+        return;
+      }
+      if (subBrandFilter && subBrandFilter !== 'ALL' && p.subBrand && p.subBrand !== subBrandFilter) {
+        return;
+      }
+      pendingCountApprox += 1;
+    });
+  }
+
+  return {
+    totalVerifiedAdvance: fromPaisa(verifiedPaisa),
+    totalPendingVerification: fromPaisa(pendingPaisa),
+    totalCustomerDue: fromPaisa(duePaisa),
+    totalRefunded: fromPaisa(refundedPaisa),
+    pendingCountApprox,
+    dueOrdersCount,
+  };
+}
+
+// ==========================================
+// STATUS TRANSITIONS & HISTORY (ATOMIC + GUARDED)
+// ==========================================
+
+export interface TransitionPreOrderStatusInput {
+  toStatus: PreOrderStatus;
+  note?: string;
+  publicMessage?: string;
+  notifyCustomer?: boolean;
+  allowUnpaidDeliveryOverride?: boolean;
+  overrideReason?: string;
+}
 
 export async function transitionPreOrderStatus(
   preOrderId: string,
-  toStatus: PreOrderStatus,
-  note: string,
+  input: TransitionPreOrderStatusInput,
   actor: PreOrderActor
-): Promise<void> {
+): Promise<PreOrder> {
+  const { toStatus } = input;
+  const noteTrimmed = input.note?.trim() || '';
+  const publicMessageTrimmed = input.publicMessage?.trim() || '';
+  const overrideReasonTrimmed = input.overrideReason?.trim() || '';
+
+  if (toStatus === PRE_ORDER_LOCKED_PART6_STATUS) {
+    throw new Error(
+      '"Received in Stock" is locked in Part 3. Use Receive Stock in Part 6 to update warehouse stock safely.'
+    );
+  }
+
   const now = Date.now();
   const preOrderRef = doc(db, 'preOrders', preOrderId);
   const historyId = generateId('HIST');
   const historyRef = doc(db, 'preOrders', preOrderId, 'statusHistory', historyId);
   const auditRef = doc(db, 'preOrderAudit', generateId('AUD'));
 
+  let updatedOrder!: PreOrder;
+
   await runTransaction(db, async (txn) => {
-    const snap = await txn.get(preOrderRef);
+    const [snap, ledger] = await Promise.all([
+      txn.get(preOrderRef),
+      loadAndLockOrderLedgerInTxn(txn, preOrderId),
+    ]);
     if (!snap.exists()) throw new Error('Pre-order not found.');
 
-    const order = snap.data() as PreOrder;
-    const verifiedNetPaid = fromPaisa(
-      toPaisa(order.advancePaid || 0) - toPaisa(order.refundedAmount || 0)
-    );
+    const order = { ...(snap.data() as PreOrder), id: snap.id };
+    if (order.status === toStatus) {
+      throw new Error(`Pre-order is already in "${toStatus}" status.`);
+    }
 
-    const validation = canTransitionPreOrderStatus(order.status, toStatus, verifiedNetPaid);
-    if (!validation.allowed) {
-      throw new Error(validation.reason || 'Invalid status transition.');
+    const calc = calculatePreOrderFinancials({
+      qty: order.qty,
+      sellingUnitPrice: order.sellingUnitPrice,
+      deliveryCharge: order.deliveryCharge,
+      discount: order.discount,
+      payments: ledger,
+    });
+
+    const isAdmin = isPreOrderAdminRole(actor.role);
+    const currentIdx = PRE_ORDER_FORWARD_FLOW.indexOf(order.status);
+    const targetIdx = PRE_ORDER_FORWARD_FLOW.indexOf(toStatus);
+    const isBackwardMove =
+      currentIdx !== -1 &&
+      targetIdx !== -1 &&
+      targetIdx < currentIdx &&
+      !['Delivered', 'Cancelled', 'Refunded'].includes(order.status);
+
+    if (isBackwardMove) {
+      if (!isAdmin) {
+        throw new Error('Only Admin or Super Admin can move a pre-order backward to an earlier stage.');
+      }
+      if (!noteTrimmed) {
+        throw new Error('A reason/note is required when moving a pre-order backward.');
+      }
+    } else {
+      const validation = canTransitionPreOrderStatus(
+        order.status,
+        toStatus,
+        calc.verifiedNetPaid,
+        calc.verifiedRefunded
+      );
+      if (!validation.allowed) {
+        throw new Error(validation.reason || 'Invalid status transition.');
+      }
+    }
+
+    // Special status guards
+    if (toStatus === 'Cancelled') {
+      if (!noteTrimmed) {
+        throw new Error('Cancellation reason is required.');
+      }
+      if (order.status === 'Delivered') {
+        throw new Error('Delivered pre-orders cannot be cancelled.');
+      }
+      if (toPaisa(calc.verifiedCollected) > 0 && !isAdmin) {
+        throw new Error(
+          'This pre-order has verified customer payments. Only an Admin or Super Admin can cancel it.'
+        );
+      }
+    }
+
+    let loggedOverrideReason = '';
+    if (toStatus === 'Delivered' && toPaisa(calc.dueAmount) > 0) {
+      if (!isAdmin) {
+        throw new Error(
+          `Cannot mark as Delivered while ৳${calc.dueAmount.toLocaleString()} due remains. Collect remaining payment first or ask an Admin to override.`
+        );
+      }
+      if (!input.allowUnpaidDeliveryOverride || !(overrideReasonTrimmed || noteTrimmed)) {
+        throw new Error(
+          `Remaining due is ৳${calc.dueAmount.toLocaleString()}. Admin unpaid-delivery override and a reason are required.`
+        );
+      }
+      loggedOverrideReason = overrideReasonTrimmed || noteTrimmed;
     }
 
     const trackingRef = order.trackingToken
@@ -1565,22 +2643,30 @@ export async function transitionPreOrderStatus(
       : null;
     const trackingSnap = trackingRef ? await txn.get(trackingRef) : null;
 
+    const paymentState = derivePreOrderPaymentState(
+      calc.totalAmount,
+      calc.verifiedCollected,
+      calc.verifiedRefunded,
+      toStatus
+    );
+
     const orderUpdate: Record<string, any> = {
       status: toStatus,
+      advancePaid: calc.verifiedCollected,
+      pendingAmount: calc.pendingCollected,
+      refundedAmount: calc.verifiedRefunded,
+      dueAmount: calc.dueAmount,
+      paymentCount: ledger.length,
+      paymentState,
       updatedAt: now,
       updatedBy: actor.id,
     };
 
     if (toStatus === 'Cancelled') {
       orderUpdate.isCancelled = true;
-      orderUpdate.cancellationReason = note?.trim() || 'Cancelled';
+      orderUpdate.cancellationReason = noteTrimmed;
       orderUpdate.cancelledAt = now;
       orderUpdate.cancelledBy = actor.id;
-    }
-
-    if (toStatus === 'Received in Stock') {
-      orderUpdate.stockReceived = true;
-      orderUpdate.stockReceivedAt = now;
     }
 
     txn.update(preOrderRef, sanitizeData(orderUpdate));
@@ -1590,7 +2676,11 @@ export async function transitionPreOrderStatus(
       preOrderId,
       fromStatus: order.status,
       toStatus,
-      note: note?.trim() || '',
+      note: noteTrimmed,
+      publicMessage: publicMessageTrimmed || '',
+      notifyCustomer: Boolean(input.notifyCustomer),
+      isBackwardMove,
+      overrideReason: loggedOverrideReason || '',
       changedBy: actor.id,
       changedByName: actor.name,
       timestamp: now,
@@ -1601,13 +2691,23 @@ export async function transitionPreOrderStatus(
       const trackingData = trackingSnap.data() as PublicTrackingRecord;
       const nextTimeline = [
         ...(trackingData.statusTimeline || []),
-        { status: toStatus, timestamp: now },
+        sanitizeData({
+          status: toStatus,
+          timestamp: now,
+          ...(publicMessageTrimmed ? { publicMessage: publicMessageTrimmed } : {}),
+        }),
       ];
-      txn.update(trackingRef, {
-        status: toStatus,
-        statusTimeline: nextTimeline,
-        updatedAt: now,
-      });
+      txn.update(
+        trackingRef,
+        sanitizeData({
+          status: toStatus,
+          advancePaid: calc.verifiedCollected,
+          refundedAmount: calc.verifiedRefunded,
+          dueAmount: calc.dueAmount,
+          statusTimeline: nextTimeline,
+          updatedAt: now,
+        })
+      );
     }
 
     txn.set(
@@ -1617,15 +2717,29 @@ export async function transitionPreOrderStatus(
         preOrderId,
         preOrderNumber: order.preOrderNumber,
         action: 'STATUS_CHANGED' as PreOrderAuditAction,
-        summary: `Changed ${order.preOrderNumber} status: ${order.status} -> ${toStatus}`,
-        metadata: { fromStatus: order.status, toStatus, note: note || '' },
+        summary: `Changed ${order.preOrderNumber} status: ${order.status} → ${toStatus}${
+          isBackwardMove ? ' (Backward move)' : ''
+        }${loggedOverrideReason ? ' (Unpaid delivery override)' : ''}`,
+        metadata: {
+          before: { status: order.status, isCancelled: Boolean(order.isCancelled) },
+          after: { status: toStatus, isCancelled: toStatus === 'Cancelled' },
+          note: noteTrimmed,
+          publicMessage: publicMessageTrimmed,
+          notifyCustomer: Boolean(input.notifyCustomer),
+          isBackwardMove,
+          overrideReason: loggedOverrideReason,
+        },
         userId: actor.id,
         userName: actor.name,
         userRole: actor.role,
         timestamp: now,
       })
     );
+
+    updatedOrder = { ...order, ...orderUpdate } as PreOrder;
   });
+
+  return updatedOrder;
 }
 
 export async function getPreOrderStatusHistory(
