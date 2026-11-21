@@ -941,7 +941,7 @@ export const AllPreOrdersView: React.FC<AllPreOrdersViewProps> = ({
       <PreOrderStatusDialog
         isOpen={Boolean(statusTargetOrder)}
         onClose={() => setStatusTargetOrder(null)}
-        preOrder={statusTargetOrder}
+        order={statusTargetOrder}
         user={user}
         onUpdated={fetchPage}
       />

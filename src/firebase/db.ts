@@ -554,43 +554,35 @@ export async function getCompanySettings(): Promise<CompanySettings | null> {
     prefixes: { SAT: 'SAT-INV', GZ: 'GZ-INV', RTX: 'RTX-INV' },
     onboarded: true,
     phone: '+880 1800-000000',
-    address: 'Dhaka, Bangladesh'
+    address: 'Dhaka, Bangladesh',
+    publicAppUrl: 'https://sat-erp.vercel.app',
+    trackingAutoExpiryEnabled: true,
+    trackingAutoExpiryDays: 90,
+    defaultShowCourierTracking: false,
   };
   if (!auth?.currentUser) {
-    return cached || defaultSettings;
+    return cached ? { ...defaultSettings, ...cached } : defaultSettings;
   }
   
   try {
     const docRef = doc(db, 'settings', 'company');
     const docSnap = await getDoc(docRef);
     if (docSnap.exists()) {
-      const settings = docSnap.data() as CompanySettings;
+      const settings = { ...defaultSettings, ...(docSnap.data() as CompanySettings) };
       dbCache.settings = settings;
       localStore.set('company_settings', settings);
       return settings;
     }
-    if (cached) return cached;
-    const defaultSettings: CompanySettings = {
-      companyName: 'Sky Automation Tech',
-      subBrands: ['SAT', 'GZ', 'RTX'],
-      prefixes: { SAT: 'SAT-INV', GZ: 'GZ-INV', RTX: 'RTX-INV' },
-      onboarded: true,
-      phone: '+880 1800-000000',
-      address: 'Dhaka, Bangladesh'
-    };
+    if (cached) return { ...defaultSettings, ...cached };
     return defaultSettings;
   } catch (error: any) {
     console.warn('getCompanySettings failed, using cached settings:', error);
     if (cached) {
-      dbCache.settings = cached;
-      return cached;
+      const mergedCached = { ...defaultSettings, ...cached };
+      dbCache.settings = mergedCached;
+      return mergedCached;
     }
-    return {
-      companyName: 'Sky Automation Tech',
-      subBrands: ['SAT', 'GZ', 'RTX'],
-      prefixes: { SAT: 'SAT-INV', GZ: 'GZ-INV', RTX: 'RTX-INV' },
-      onboarded: true
-    };
+    return defaultSettings;
   }
 }
 

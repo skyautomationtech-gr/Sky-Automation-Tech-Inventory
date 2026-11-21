@@ -5,23 +5,31 @@ import {
   Banknote,
   Building2,
   Calendar,
+  Check,
   CheckCircle2,
   Clock,
+  Copy,
   CreditCard,
   Edit3,
   ExternalLink,
+  Eye,
+  EyeOff,
   History,
   ImagePlus,
+  Link2,
   Lock,
   Minus,
   Package,
   Paperclip,
   Phone,
   Plus,
+  Power,
   Printer,
+  QrCode,
   Receipt,
   RefreshCw,
   RotateCcw,
+  RotateCw,
   Save,
   ShieldAlert,
   ShieldCheck,
@@ -63,11 +71,20 @@ import {
 } from '../../preOrders/calculations';
 import { uploadPreOrderImage, validateImageFile } from '../../preOrders/imageUpload';
 import {
+  buildPublicTrackingUrl,
+  isSafeTrackingTokenFormat,
+  isValidHttpsUrl,
+} from '../../preOrders/tracking';
+import {
   actorFromUser,
   getPreOrderFullDetail,
   getPreOrderSupplierPayments,
   recalculatePreOrderFromLedger,
+  regeneratePublicTrackingToken,
+  syncPublicTracking,
+  togglePublicTrackingEnabled,
   updatePreOrder,
+  updatePreOrderCourierVisibility,
   updatePreOrderPrivateCost,
   verifyPreOrderPayment,
 } from '../../firebase/preOrderDb';
@@ -103,6 +120,7 @@ import {
   RecordSupplierPaymentModal,
   ReverseSupplierPaymentModal,
 } from './SupplierPaymentModal';
+import TrackingLinkShareModal from './TrackingLinkShareModal';
 
 export interface PreOrderDetailDrawerProps {
   preOrderId: string | null;
@@ -154,6 +172,7 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
   const canVerifyPayment = hasPermission(user, rolePermissions, 'preOrderVerifyPayment');
   const canRefund = hasPermission(user, rolePermissions, 'preOrderRefund');
   const canUpdateStatus = hasPermission(user, rolePermissions, 'preOrderUpdateStatus');
+  const canManageTracking = hasPermission(user, rolePermissions, 'preOrderManageTracking') || isAdminUser;
   const canViewAudit = isAdminUser;
 
   const allowedSubBrands = useMemo<Array<'SAT' | 'GZ' | 'RTX'>>(() => {
@@ -192,6 +211,17 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
   // Part 4 interactive supplier payment states
   const [showSupplierPayModal, setShowSupplierPayModal] = useState(false);
   const [reverseSupPayTarget, setReverseSupPayTarget] = useState<PreOrderSupplierPayment | null>(null);
+
+  // Part 5 public tracking portal states
+  const [showShareTrackingModal, setShowShareTrackingModal] = useState(false);
+  const [copiedTrackingLink, setCopiedTrackingLink] = useState(false);
+  const [trackingBusy, setTrackingBusy] = useState(false);
+  const [showRegenConfirm, setShowRegenConfirm] = useState(false);
+  const [regenReason, setRegenReason] = useState('');
+  const [showToggleConfirm, setShowToggleConfirm] = useState(false);
+  const [toggleReason, setToggleReason] = useState('');
+  const [toggleTargetEnable, setToggleTargetEnable] = useState(false);
+  const [lastTrackingSyncWarning, setLastTrackingSyncWarning] = useState('');
 
   // Edit mode state
   const [isEditing, setIsEditing] = useState(false);
@@ -485,7 +515,7 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
       const selectedSupplier = suppliers.find((s) => s.id === editSupplierId);
       const actor = actorFromUser(user);
 
-      await updatePreOrder(
+      const updateRes = await updatePreOrder(
         order.id,
         {
           subBrand: editSubBrand,
@@ -543,6 +573,12 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
       }
 
       toast.success(`${order.preOrderNumber} updated successfully.`);
+      if (updateRes.trackingSyncWarning) {
+        setLastTrackingSyncWarning(updateRes.trackingSyncWarning);
+        toast.warning(updateRes.trackingSyncWarning);
+      } else {
+        setLastTrackingSyncWarning('');
+      }
       setIsEditing(false);
       await loadDetail();
       onUpdated?.();
@@ -562,8 +598,14 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
     }
     setVerifyingId(payment.id);
     try {
-      await verifyPreOrderPayment(order.id, payment.id, 'verified', actorFromUser(user));
+      const res = await verifyPreOrderPayment(order.id, payment.id, 'verified', actorFromUser(user));
       toast.success(`Verified ${formatBDT(payment.amount)} on ${order.preOrderNumber}.`);
+      if (res.trackingSyncWarning) {
+        setLastTrackingSyncWarning(res.trackingSyncWarning);
+        toast.warning(res.trackingSyncWarning);
+      } else {
+        setLastTrackingSyncWarning('');
+      }
       await loadDetail();
       onUpdated?.();
     } catch (err: any) {
@@ -580,6 +622,12 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
       const res = await recalculatePreOrderFromLedger(order.id, actorFromUser(user));
       if (res.changed) {
         toast.success('Derived totals rebuilt from payment ledger & logged to audit.');
+        if (res.trackingSyncWarning) {
+          setLastTrackingSyncWarning(res.trackingSyncWarning);
+          toast.warning(res.trackingSyncWarning);
+        } else {
+          setLastTrackingSyncWarning('');
+        }
         await loadDetail();
         onUpdated?.();
       } else {
@@ -589,6 +637,134 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
       toast.error(err?.message || 'Recalculation failed.');
     } finally {
       setRecalculating(false);
+    }
+  };
+
+  const trackingToken = (order?.trackingToken || order?.trackingTokenId || '').trim();
+  const baseUrlConfigured = isValidHttpsUrl(companySettings?.publicAppUrl);
+  const publicTrackingUrl = buildPublicTrackingUrl(companySettings?.publicAppUrl, trackingToken);
+  const trackingLinkActive = Boolean(
+    trackingToken && isSafeTrackingTokenFormat(trackingToken) && order?.trackingEnabled !== false
+  );
+  const courierVisibleToCustomer = Boolean(
+    order?.showCourierTrackingToCustomer ?? companySettings?.defaultShowCourierTracking ?? false
+  );
+
+  const handleCopyTrackingUrl = async () => {
+    if (!publicTrackingUrl) {
+      toast.error('Configure a valid https:// Public Tracking Base URL in Company Settings.');
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(publicTrackingUrl);
+      setCopiedTrackingLink(true);
+      toast.success('Customer tracking link copied.');
+      window.setTimeout(() => setCopiedTrackingLink(false), 1800);
+    } catch {
+      toast.error('Unable to copy link automatically.');
+    }
+  };
+
+  const handleResyncTracking = async () => {
+    if (!order || !canManageTracking || trackingBusy) return;
+    setTrackingBusy(true);
+    try {
+      const res = await syncPublicTracking(order.id, {
+        companySettings,
+        actor: actorFromUser(user),
+        logAudit: true,
+      });
+      if (res.ok) {
+        setLastTrackingSyncWarning('');
+        toast.success(`Resynced customer tracking portal for ${order.preOrderNumber}.`);
+        await loadDetail();
+      } else {
+        setLastTrackingSyncWarning(res.error || 'Sync failed.');
+        toast.error(res.error || 'Failed to resync tracking snapshot.');
+      }
+    } finally {
+      setTrackingBusy(false);
+    }
+  };
+
+  const handleToggleCourierVisibility = async () => {
+    if (!order || !canManageTracking || trackingBusy) return;
+    setTrackingBusy(true);
+    try {
+      const nextVal = !courierVisibleToCustomer;
+      const res = await updatePreOrderCourierVisibility(
+        order.id,
+        nextVal,
+        actorFromUser(user),
+        companySettings
+      );
+      if (res.ok) {
+        setLastTrackingSyncWarning('');
+        toast.success(
+          nextVal
+            ? 'Courier tracking is now visible on customer tracking portal.'
+            : 'Courier tracking hidden from customer tracking portal.'
+        );
+      } else {
+        setLastTrackingSyncWarning(res.error || '');
+        toast.warning(res.error || 'Flag saved, but tracking sync returned a warning.');
+      }
+      await loadDetail();
+      onUpdated?.();
+    } catch (err: any) {
+      toast.error(err?.message || 'Failed to update courier visibility.');
+    } finally {
+      setTrackingBusy(false);
+    }
+  };
+
+  const handleConfirmRegenToken = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!order || !isAdminUser || trackingBusy) return;
+    setTrackingBusy(true);
+    try {
+      await regeneratePublicTrackingToken(
+        order.id,
+        actorFromUser(user),
+        regenReason.trim(),
+        companySettings
+      );
+      setLastTrackingSyncWarning('');
+      toast.success('Generated new tracking link. Old link has been invalidated.');
+      setShowRegenConfirm(false);
+      setRegenReason('');
+      await loadDetail();
+      onUpdated?.();
+    } catch (err: any) {
+      toast.error(err?.message || 'Failed to regenerate tracking link.');
+    } finally {
+      setTrackingBusy(false);
+    }
+  };
+
+  const handleConfirmToggleTracking = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!order || !isAdminUser || trackingBusy) return;
+    setTrackingBusy(true);
+    try {
+      await togglePublicTrackingEnabled(order.id, toggleTargetEnable, actorFromUser(user), {
+        reason: toggleReason.trim(),
+        companySettings,
+      });
+      setLastTrackingSyncWarning('');
+      toast.success(
+        toggleTargetEnable
+          ? 'Customer tracking link enabled & synced.'
+          : 'Customer tracking link disabled & public data cleared.'
+      );
+      setShowToggleConfirm(false);
+      setToggleReason('');
+      await loadDetail();
+      onUpdated?.();
+    } catch (err: any) {
+      toast.error(err?.message || 'Failed to update tracking link state.');
+    } finally {
+      setTrackingBusy(false);
     }
   };
 
@@ -813,6 +989,181 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
                     : order.cancellationReason
                     ? `Reason: ${order.cancellationReason}`
                     : null}
+                </div>
+              )}
+            </div>
+
+            {/* Customer Public Tracking Portal Strip */}
+            <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div className="flex items-center gap-2">
+                  <Link2 className="w-4 h-4 text-[#D4AF37]" />
+                  <span className="text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300">
+                    Customer Tracking Portal
+                  </span>
+                  <Badge
+                    variant={
+                      !trackingToken || !isSafeTrackingTokenFormat(trackingToken)
+                        ? 'danger'
+                        : trackingLinkActive
+                        ? 'success'
+                        : 'neutral'
+                    }
+                    size="xs"
+                  >
+                    {!trackingToken || !isSafeTrackingTokenFormat(trackingToken)
+                      ? 'Missing'
+                      : trackingLinkActive
+                      ? 'Active'
+                      : 'Disabled'}
+                  </Badge>
+                </div>
+
+                <div className="flex flex-wrap items-center gap-1.5">
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="xs"
+                    disabled={!baseUrlConfigured || !trackingLinkActive}
+                    leftIcon={
+                      copiedTrackingLink ? (
+                        <Check className="w-3 h-3 text-emerald-500" />
+                      ) : (
+                        <Copy className="w-3 h-3" />
+                      )
+                    }
+                    onClick={handleCopyTrackingUrl}
+                  >
+                    {copiedTrackingLink ? 'Copied' : 'Copy Link'}
+                  </Button>
+
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    size="xs"
+                    disabled={!trackingToken}
+                    leftIcon={<QrCode className="w-3 h-3 text-[#D4AF37]" />}
+                    onClick={() => setShowShareTrackingModal(true)}
+                  >
+                    Share / QR
+                  </Button>
+
+                  {publicTrackingUrl && trackingLinkActive && (
+                    <a
+                      href={publicTrackingUrl}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="inline-flex items-center gap-1 px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-700 text-xs font-semibold text-slate-700 dark:text-slate-200 hover:border-[#D4AF37]/60"
+                    >
+                      <ExternalLink className="w-3 h-3" />
+                      Preview
+                    </a>
+                  )}
+
+                  {canManageTracking && trackingToken && (
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="xs"
+                      isLoading={trackingBusy}
+                      leftIcon={<RotateCw className="w-3 h-3" />}
+                      onClick={handleResyncTracking}
+                      title="Resync publicTracking document"
+                    >
+                      Resync
+                    </Button>
+                  )}
+                </div>
+              </div>
+
+              {!baseUrlConfigured && (
+                <div className="text-[11px] text-rose-600 dark:text-rose-400">
+                  Public base URL is not configured in Company Settings — Copy &amp; Preview are disabled until set.
+                </div>
+              )}
+
+              {lastTrackingSyncWarning && (
+                <div className="p-2 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 text-[11px] text-amber-800 dark:text-amber-200 flex items-center justify-between gap-2">
+                  <span>{lastTrackingSyncWarning}</span>
+                  {canManageTracking && (
+                    <Button type="button" variant="secondary" size="xs" onClick={handleResyncTracking}>
+                      Retry Sync
+                    </Button>
+                  )}
+                </div>
+              )}
+
+              <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-slate-100 dark:border-slate-800 text-[11px]">
+                <div className="flex items-center gap-2">
+                  {canManageTracking ? (
+                    <button
+                      type="button"
+                      disabled={trackingBusy}
+                      onClick={handleToggleCourierVisibility}
+                      className={`inline-flex items-center gap-1 px-2 py-0.5 rounded font-semibold border cursor-pointer disabled:opacity-50 ${
+                        courierVisibleToCustomer
+                          ? 'bg-sky-50 text-sky-800 border-sky-200 dark:bg-sky-950/40 dark:text-sky-300 dark:border-sky-800'
+                          : 'bg-slate-100 text-slate-600 border-slate-200 dark:bg-slate-800 dark:text-slate-400 dark:border-slate-700'
+                      }`}
+                    >
+                      {courierVisibleToCustomer ? (
+                        <>
+                          <Eye className="w-3 h-3" />
+                          Courier Shown to Customer
+                        </>
+                      ) : (
+                        <>
+                          <EyeOff className="w-3 h-3" />
+                          Courier Hidden from Customer
+                        </>
+                      )}
+                    </button>
+                  ) : (
+                    <span className="text-slate-400">
+                      {courierVisibleToCustomer ? 'Courier shown to customer' : 'Courier hidden from customer'}
+                    </span>
+                  )}
+                </div>
+
+                {isAdminUser && trackingToken && (
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      type="button"
+                      disabled={trackingBusy}
+                      onClick={() => {
+                        setToggleTargetEnable(!trackingLinkActive);
+                        setToggleReason('');
+                        setShowToggleConfirm(true);
+                      }}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-100 dark:hover:bg-slate-800 font-semibold cursor-pointer"
+                    >
+                      <Power className="w-3 h-3" />
+                      {trackingLinkActive ? 'Disable Link' : 'Enable Link'}
+                    </button>
+                    <button
+                      type="button"
+                      disabled={trackingBusy}
+                      onClick={() => {
+                        setRegenReason('');
+                        setShowRegenConfirm(true);
+                      }}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded border border-rose-200 dark:border-rose-900/60 text-rose-700 dark:text-rose-300 hover:bg-rose-50 dark:hover:bg-rose-950/40 font-semibold cursor-pointer"
+                    >
+                      <RefreshCw className="w-3 h-3" />
+                      Regenerate
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {order.trackingHistory && order.trackingHistory.length > 0 && (
+                <div className="text-[11px] text-slate-400 pt-1">
+                  Latest link event:{' '}
+                  <span className="font-semibold text-slate-600 dark:text-slate-300">
+                    {order.trackingHistory[order.trackingHistory.length - 1].action}
+                  </span>{' '}
+                  by {order.trackingHistory[order.trackingHistory.length - 1].actorName} on{' '}
+                  {formatDateTime(order.trackingHistory[order.trackingHistory.length - 1].timestamp)}
                 </div>
               )}
             </div>
@@ -2100,6 +2451,92 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
           onUpdated?.();
         }}
       />
+
+      {/* Part 5 Tracking Share, Regenerate & Disable/Enable Modals */}
+      <TrackingLinkShareModal
+        isOpen={showShareTrackingModal}
+        onClose={() => setShowShareTrackingModal(false)}
+        order={order}
+        companySettings={companySettings}
+      />
+
+      <Modal
+        isOpen={showRegenConfirm}
+        onClose={() => !trackingBusy && setShowRegenConfirm(false)}
+        title="Regenerate Customer Tracking Link"
+        subtitle={order ? `${order.preOrderNumber} • Old URL stops working immediately` : ''}
+        size="sm"
+      >
+        <form onSubmit={handleConfirmRegenToken} className="space-y-4">
+          <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 text-xs text-amber-900 dark:text-amber-200 flex items-start gap-2">
+            <ShieldAlert className="w-4 h-4 shrink-0 mt-0.5" />
+            <span>
+              <strong>Old link will stop working immediately.</strong> Any customer holding the
+              previous URL will see an unavailable/expired message.
+            </span>
+          </div>
+          <FormField label="Reason (Optional)">
+            <Input
+              value={regenReason}
+              onChange={(e) => setRegenReason(e.target.value)}
+              placeholder="e.g. Shared with wrong number..."
+            />
+          </FormField>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={trackingBusy}
+              onClick={() => setShowRegenConfirm(false)}
+            >
+              Cancel
+            </Button>
+            <Button type="submit" variant="danger" isLoading={trackingBusy}>
+              Regenerate Link
+            </Button>
+          </div>
+        </form>
+      </Modal>
+
+      <Modal
+        isOpen={showToggleConfirm}
+        onClose={() => !trackingBusy && setShowToggleConfirm(false)}
+        title={toggleTargetEnable ? 'Enable Customer Tracking Link' : 'Disable Customer Tracking Link'}
+        subtitle={order?.preOrderNumber}
+        size="sm"
+      >
+        <form onSubmit={handleConfirmToggleTracking} className="space-y-4">
+          <p className="text-xs text-slate-600 dark:text-slate-300">
+            {toggleTargetEnable
+              ? 'This will re-publish the sanitized tracking snapshot and reactivate the customer URL.'
+              : 'This immediately removes all order/customer details from publicTracking, leaving only { enabled: false }.'}
+          </p>
+          <FormField label="Reason (Optional)">
+            <Input
+              value={toggleReason}
+              onChange={(e) => setToggleReason(e.target.value)}
+              placeholder="Optional note for audit trail..."
+            />
+          </FormField>
+          <div className="flex justify-end gap-2 pt-2">
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={trackingBusy}
+              onClick={() => setShowToggleConfirm(false)}
+            >
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              variant={toggleTargetEnable ? 'primary' : 'danger'}
+              isLoading={trackingBusy}
+            >
+              {toggleTargetEnable ? 'Enable Link' : 'Disable Link'}
+            </Button>
+          </div>
+        </form>
+      </Modal>
     </>
   );
 };

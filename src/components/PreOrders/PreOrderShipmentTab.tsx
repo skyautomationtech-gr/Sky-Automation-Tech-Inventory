@@ -234,6 +234,9 @@ export const PreOrderShipmentTab: React.FC<PreOrderShipmentTabProps> = ({
           ? `Shipment saved on ${order.preOrderNumber} (Delay flagged).`
           : `Shipment details saved on ${order.preOrderNumber}.`
       );
+      if (res.trackingSyncWarning) {
+        toast.warning(res.trackingSyncWarning);
+      }
       if (res.suggestedNextStatus && res.suggestionReason) {
         setStatusSuggestion({
           nextStatus: res.suggestedNextStatus,
@@ -380,7 +383,7 @@ export const PreOrderShipmentTab: React.FC<PreOrderShipmentTabProps> = ({
     }
     setAddingEvent(true);
     try {
-      await addPreOrderShipmentEvent(
+      const eventRes = await addPreOrderShipmentEvent(
         order.id,
         {
           text: eventText.trim(),
@@ -390,6 +393,9 @@ export const PreOrderShipmentTab: React.FC<PreOrderShipmentTabProps> = ({
         actorFromUser(user)
       );
       toast.success('Shipment event added.');
+      if (eventRes.trackingSyncWarning) {
+        toast.warning(eventRes.trackingSyncWarning);
+      }
       setEventText('');
       setEventPublicMsg('');
       setEventShowToCustomer(false);

@@ -186,6 +186,13 @@ service cloud.firestore {
               'status', 'advancePaid', 'pendingAmount', 'refundedAmount', 'dueAmount',
               'paymentCount', 'paymentState', 'updatedAt', 'updatedBy', 'updatedByName',
               'lastStatusChangeAt', 'lastStatusNote'
+            ])) ||
+          ((hasPreOrderPerm('preOrderManageTracking') || isAdmin()) &&
+            request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+              'trackingToken', 'trackingTokenId', 'trackingEnabled',
+              'trackingCreatedAt', 'trackingCreatedBy', 'trackingLastRegeneratedAt',
+              'trackingHistory', 'showCourierTrackingToCustomer',
+              'updatedAt', 'updatedBy'
             ]))
         ) &&
         (
@@ -321,18 +328,12 @@ service cloud.firestore {
     }
 
     // Public Customer Tracking Links:
-    // Unauthenticated single-doc GET ONLY (no list/query, no write, no private fields)
+    // Unauthenticated single-doc GET ONLY when enabled == true (NO list/query, NO disabled reads, NO unprivileged writes)
     match /publicTracking/{token} {
-      allow get: if true;
-      allow list: if hasPreOrderPerm('preOrderView');
-      allow create: if hasPreOrderPerm('preOrderCreate') || hasPreOrderPerm('preOrderManageTracking');
-      allow update: if hasPreOrderPerm('preOrderManageTracking') ||
-        hasPreOrderPerm('preOrderUpdateStatus') ||
-        hasPreOrderPerm('preOrderEdit') ||
-        hasPreOrderPerm('preOrderCollectPayment') ||
-        hasPreOrderPerm('preOrderVerifyPayment') ||
-        hasPreOrderPerm('preOrderRefund');
-      allow delete: if isSuperAdmin();
+      allow get: if resource != null && resource.data.enabled == true;
+      allow list: if false;
+      allow create, update, delete: if isSignedIn() &&
+        (hasPreOrderPerm('preOrderManageTracking') || isSuperAdmin());
     }
 
     // Append-Only Pre-Order Audit Log

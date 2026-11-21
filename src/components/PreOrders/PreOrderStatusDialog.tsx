@@ -139,6 +139,9 @@ export const PreOrderStatusDialog: React.FC<PreOrderStatusDialogProps> = ({
         actorFromUser(user)
       );
       toast.success(`${order.preOrderNumber} moved to "${selectedStatus}".`);
+      if (updated.trackingSyncWarning) {
+        toast.warning(updated.trackingSyncWarning);
+      }
       onUpdated(updated);
       onClose();
     } catch (err: any) {

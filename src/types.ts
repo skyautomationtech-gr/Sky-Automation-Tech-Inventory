@@ -192,10 +192,16 @@ export interface SubBrandDetails {
   companyName?: string;
   address?: string;
   phone?: string;
+  whatsapp?: string;
   email?: string;
   logoUrl?: string;
   invoiceTerms?: string;
   tagline?: string;
+}
+
+export interface TrackingShareTemplates {
+  en?: string;
+  bn?: string;
 }
 
 export interface CompanySettings {
@@ -244,6 +250,13 @@ export interface CompanySettings {
     publicKey?: string;
     recipientEmail?: string;
   };
+
+  // Part 5: Customer Public Tracking Portal Settings
+  publicAppUrl?: string; // e.g. https://sat-erp.vercel.app
+  trackingAutoExpiryEnabled?: boolean;
+  trackingAutoExpiryDays?: number; // default: 90
+  defaultShowCourierTracking?: boolean;
+  trackingShareTemplates?: TrackingShareTemplates;
 }
 
 export interface Supplier {
@@ -795,6 +808,13 @@ export interface PreOrder {
   trackingNumber?: string;
   carrierTrackingUrl?: string;
   trackingToken?: string;
+  trackingTokenId?: string;
+  trackingEnabled?: boolean;
+  trackingCreatedAt?: number;
+  trackingCreatedBy?: string;
+  trackingLastRegeneratedAt?: number;
+  showCourierTrackingToCustomer?: boolean;
+  trackingHistory?: PreOrderTrackingHistoryItem[];
   shippedFromChinaAt?: string;
   estimatedDeliveryDate?: string;
   previousEstimatedArrivalDate?: string;
@@ -1002,30 +1022,73 @@ export interface PreOrderSupplierPayment {
   reversalReason?: string;
 }
 
+export interface PreOrderTrackingHistoryItem {
+  action: 'created' | 'regenerated' | 'disabled' | 'enabled' | 'expired';
+  timestamp: number;
+  actorId: string;
+  actorName: string;
+  reason?: string;
+}
+
 export interface PublicTrackingTimelineItem {
   status: PreOrderStatus;
   timestamp: number;
   publicMessage?: string;
 }
 
+export interface PublicTrackingShipmentEvent {
+  date: string;
+  time?: string;
+  timestamp: number;
+  message: string;
+}
+
+export interface PublicTrackingPaymentItem {
+  date: number; // verified or received timestamp (ms)
+  amount: number;
+  type: 'advance' | 'installment' | 'additional' | 'refund';
+  method: string;
+}
+
+export interface PublicTrackingSupportContact {
+  phone?: string;
+  whatsapp?: string;
+  email?: string;
+}
+
+/**
+ * STRICT WHITELIST-ONLY schema stored at `publicTracking/{token}`.
+ * Never store full customer name, phone, masked phone, address, email, customerId,
+ * preOrderId, supplierId/name, China cost, profit, internal notes, receipt URLs,
+ * transaction reference IDs, or staff names.
+ */
 export interface PublicTrackingRecord {
-  token: string;
-  preOrderId: string;
-  preOrderNumber: string;
-  subBrand: 'SAT' | 'GZ' | 'RTX';
-  customerName: string;
-  maskedPhone?: string;
-  productName: string;
-  qty: number;
-  totalAmount: number;
-  advancePaid: number;
-  refundedAmount: number;
-  dueAmount: number;
-  status: PreOrderStatus;
-  trackingNumber?: string;
-  courier?: string;
-  estimatedDeliveryDate?: string;
-  statusTimeline: PublicTrackingTimelineItem[];
+  enabled: boolean;
+  preOrderNo?: string; // Shown as "Order ID"
+  subBrand?: 'SAT' | 'GZ' | 'RTX';
+  brandName?: string;
+  brandLogoUrl?: string;
+  productName?: string;
+  productImageUrl?: string;
+  variant?: string;
+  color?: string;
+  model?: string;
+  qty?: number;
+  status?: PreOrderStatus;
+  statusHistory?: PublicTrackingTimelineItem[];
+  shipmentEvents?: PublicTrackingShipmentEvent[];
+  estimatedArrivalDate?: string;
+  totalAmount?: number;
+  advancePaid?: number; // Verified only
+  dueAmount?: number;
+  refundedAmount?: number;
+  paymentHistory?: PublicTrackingPaymentItem[]; // Verified entries only
+  publicNote?: string;
+  supportContact?: PublicTrackingSupportContact;
+  customerFirstName?: string; // First name only
+  courier?: string; // Included ONLY when showCourierTrackingToCustomer === true
+  trackingNumber?: string; // Included ONLY when showCourierTrackingToCustomer === true
+  carrierTrackingUrl?: string; // Included ONLY when showCourierTrackingToCustomer === true
   updatedAt: number;
 }
 
@@ -1047,6 +1110,11 @@ export type PreOrderAuditAction =
   | 'SUPPLIER_PAYMENT_RECORDED'
   | 'SUPPLIER_PAYMENT_REVERSED'
   | 'TRACKING_LINK_GENERATED'
+  | 'TRACKING_LINK_REGENERATED'
+  | 'TRACKING_LINK_DISABLED'
+  | 'TRACKING_LINK_ENABLED'
+  | 'TRACKING_LINK_SYNCED'
+  | 'TRACKING_LINK_EXPIRED'
   | 'STOCK_RECEIVED'
   | 'CONVERTED_TO_SALE';
 

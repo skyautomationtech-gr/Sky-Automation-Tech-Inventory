@@ -1,6 +1,7 @@
 import {
   collection,
   collectionGroup,
+  deleteDoc,
   doc,
   getDoc,
   getDocs,
@@ -19,8 +20,9 @@ import {
   Transaction,
 } from 'firebase/firestore';
 import { auth, db } from './config';
-import { dbCache, localStore, sanitizeData } from './db';
+import { dbCache, getCompanySettings, localStore, sanitizeData } from './db';
 import {
+  CompanySettings,
   Customer,
   PreOrder,
   PreOrderAuditAction,
@@ -42,6 +44,7 @@ import {
   PreOrderStatusHistory,
   PreOrderSupplierPayment,
   PreOrderSupplierPaymentAllocation,
+  PreOrderTrackingHistoryItem,
   PublicTrackingRecord,
   RolePermissionsMap,
   UserProfile,
@@ -67,6 +70,13 @@ import {
   mergeWithDefaultRolePermissions,
   normalizeBdPhone,
 } from '../preOrders/constants';
+import {
+  DEFAULT_TRACKING_AUTO_EXPIRY_DAYS,
+  buildDisabledPublicTrackingDoc,
+  buildWhitelistedPublicTrackingDoc,
+  generateSecureTrackingToken,
+  isSafeTrackingTokenFormat,
+} from '../preOrders/tracking';
 
 export interface PreOrderActor {
   id: string;
@@ -95,12 +105,7 @@ function generateId(prefix: string): string {
 }
 
 function generateTrackingToken(): string {
-  if (typeof crypto !== 'undefined' && typeof crypto.getRandomValues === 'function') {
-    const bytes = new Uint8Array(12);
-    crypto.getRandomValues(bytes);
-    return Array.from(bytes, (b) => b.toString(16).padStart(2, '0')).join('');
-  }
-  return `${Date.now().toString(36)}${Math.random().toString(36).slice(2, 12)}`;
+  return generateSecureTrackingToken();
 }
 
 function sanitizeIdFragment(raw: string): string {
@@ -263,6 +268,8 @@ export interface CreatePreOrderInput {
   notes?: string;
   internalNotes?: string;
   idempotencyKey?: string;
+  showCourierTrackingToCustomer?: boolean;
+  companySettings?: CompanySettings | null;
   initialAdvance?: {
     amount: number;
     method: PreOrderPaymentMethod;
@@ -280,6 +287,7 @@ export interface CreatePreOrderResult {
   trackingToken: string;
   customerId: string;
   customerCode: string;
+  trackingSyncWarning?: string;
 }
 
 export async function createPreOrder(
@@ -381,7 +389,6 @@ export async function createPreOrder(
   const historyRef = doc(db, 'preOrders', preOrderId, 'statusHistory', historyId);
   const auditId = generateId('AUD');
   const auditRef = doc(db, 'preOrderAudit', auditId);
-  const trackingRef = doc(db, 'publicTracking', trackingToken);
 
   const startStatus = getInitialPreOrderStatus(initialAdvanceAmount);
   const paymentState = derivePreOrderPaymentState(
@@ -476,7 +483,7 @@ export async function createPreOrder(
     createdNumber = `PO-${String(nextPoCount).padStart(4, '0')}`;
     txn.set(preOrderCounterRef, { count: nextPoCount, updatedAt: now }, { merge: true });
 
-    // 4. WRITE PRE-ORDER + ISOLATED PRIVATE COST + LEDGER + HISTORY + AUDIT + PUBLIC TRACKING
+    // 4. WRITE PRE-ORDER + ISOLATED PRIVATE COST + LEDGER + HISTORY + AUDIT
     const preOrderDoc: PreOrder = {
       id: preOrderId,
       preOrderNumber: createdNumber,
@@ -517,6 +524,23 @@ export async function createPreOrder(
       supplierName: input.supplierName || '',
       supplierOrderRef: input.supplierOrderRef?.trim() || '',
       trackingToken: resolvedTrackingToken,
+      trackingTokenId: resolvedTrackingToken,
+      trackingEnabled: true,
+      trackingCreatedAt: now,
+      trackingCreatedBy: actor.id,
+      showCourierTrackingToCustomer: Boolean(
+        input.showCourierTrackingToCustomer ??
+          input.companySettings?.defaultShowCourierTracking ??
+          false
+      ),
+      trackingHistory: [
+        {
+          action: 'created',
+          timestamp: now,
+          actorId: actor.id,
+          actorName: actor.name,
+        },
+      ],
       estimatedDeliveryDate: input.estimatedDeliveryDate || '',
       stockReceived: false,
       isCancelled: false,
@@ -555,25 +579,6 @@ export async function createPreOrder(
       timestamp: now,
     };
 
-    const publicTrackingDoc: PublicTrackingRecord = {
-      token: resolvedTrackingToken,
-      preOrderId,
-      preOrderNumber: createdNumber,
-      subBrand: preOrderDoc.subBrand,
-      customerName: preOrderDoc.customerName,
-      maskedPhone: maskPhoneNumber(preOrderDoc.customerPhone),
-      productName: preOrderDoc.productName,
-      qty: preOrderDoc.qty,
-      totalAmount: preOrderDoc.totalAmount,
-      advancePaid: preOrderDoc.advancePaid,
-      refundedAmount: preOrderDoc.refundedAmount,
-      dueAmount: preOrderDoc.dueAmount,
-      status: preOrderDoc.status,
-      estimatedDeliveryDate: preOrderDoc.estimatedDeliveryDate || '',
-      statusTimeline: [{ status: startStatus, timestamp: now }],
-      updatedAt: now,
-    };
-
     const auditDoc: PreOrderAuditEntry = {
       id: auditId,
       preOrderId,
@@ -596,7 +601,6 @@ export async function createPreOrder(
     txn.set(preOrderRef, sanitizeData(preOrderDoc));
     txn.set(costRef, sanitizeData(privateCostDoc));
     txn.set(historyRef, sanitizeData(statusHistoryDoc));
-    txn.set(trackingRef, sanitizeData(publicTrackingDoc));
     txn.set(auditRef, sanitizeData(auditDoc));
 
     if (initialAdvanceAmount > 0 && input.initialAdvance) {
@@ -639,12 +643,18 @@ export async function createPreOrder(
     localStore.set('customers', [createdNewCustomerRecord, ...prevCached]);
   }
 
+  // Sync sanitized whitelisted snapshot to publicTracking/{token}
+  const syncRes = await syncPublicTracking(preOrderId, {
+    companySettings: input.companySettings,
+  });
+
   return {
     id: preOrderId,
     preOrderNumber: createdNumber,
     trackingToken: resolvedTrackingToken,
     customerId: resolvedCustomerDocId,
     customerCode: resolvedCustomerCode,
+    trackingSyncWarning: syncRes.ok ? undefined : syncRes.error,
   };
 }
 
@@ -991,7 +1001,7 @@ export async function updatePreOrder(
   preOrderId: string,
   updates: UpdatePreOrderInput,
   actor: PreOrderActor
-): Promise<void> {
+): Promise<{ trackingSyncWarning?: string }> {
   const now = Date.now();
   const preOrderRef = doc(db, 'preOrders', preOrderId);
   const auditRef = doc(db, 'preOrderAudit', generateId('AUD'));
@@ -1093,11 +1103,6 @@ export async function updatePreOrder(
       throw new Error('Discount cannot exceed product subtotal.');
     }
 
-    const trackingRef = current.trackingToken
-      ? doc(db, 'publicTracking', current.trackingToken)
-      : null;
-    const trackingSnap = trackingRef ? await txn.get(trackingRef) : null;
-
     const paymentState = derivePreOrderPaymentState(
       calc.totalAmount,
       calc.verifiedCollected,
@@ -1167,24 +1172,6 @@ export async function updatePreOrder(
 
     txn.update(preOrderRef, sanitizeData(nextDoc));
 
-    if (trackingRef && trackingSnap && trackingSnap.exists()) {
-      txn.update(
-        trackingRef,
-        sanitizeData({
-          customerName: updates.customerName ?? current.customerName,
-          maskedPhone: maskPhoneNumber(nextPhone),
-          productName: updates.productName ?? current.productName,
-          qty: calc.qty,
-          totalAmount: calc.totalAmount,
-          advancePaid: calc.verifiedCollected,
-          refundedAmount: calc.verifiedRefunded,
-          dueAmount: calc.dueAmount,
-          estimatedDeliveryDate: nextEstDate,
-          updatedAt: now,
-        })
-      );
-    }
-
     const changedFieldNames = Object.keys(afterDiff);
     const auditDoc: PreOrderAuditEntry = {
       id: auditRef.id,
@@ -1207,6 +1194,9 @@ export async function updatePreOrder(
     };
     txn.set(auditRef, sanitizeData(auditDoc));
   });
+
+  const syncRes = await syncPublicTracking(preOrderId);
+  return { trackingSyncWarning: syncRes.ok ? undefined : syncRes.error };
 }
 
 export async function updatePreOrderPrivateCost(
@@ -1385,6 +1375,7 @@ export interface CollectPreOrderPaymentInput {
 export interface PaymentMutationResult {
   payment: PreOrderPayment;
   order: PreOrder;
+  trackingSyncWarning?: string;
 }
 
 export async function collectPreOrderPayment(
@@ -1490,11 +1481,6 @@ export async function collectPreOrderPayment(
       }
     }
 
-    const trackingRef = order.trackingToken
-      ? doc(db, 'publicTracking', order.trackingToken)
-      : null;
-    const trackingSnap = trackingRef ? await txn.get(trackingRef) : null;
-
     const paymentDoc: PreOrderPayment = {
       id: paymentId,
       preOrderId,
@@ -1529,18 +1515,6 @@ export async function collectPreOrderPayment(
 
     txn.set(paymentRef, sanitizeData(paymentDoc));
     txn.update(preOrderRef, sanitizeData(patch));
-
-    if (trackingRef && trackingSnap && trackingSnap.exists()) {
-      txn.update(
-        trackingRef,
-        sanitizeData({
-          advancePaid: patch.advancePaid,
-          refundedAmount: patch.refundedAmount,
-          dueAmount: patch.dueAmount,
-          updatedAt: now,
-        })
-      );
-    }
 
     txn.set(
       auditRef,
@@ -1599,7 +1573,12 @@ export async function collectPreOrderPayment(
     resultOrder = { ...order, ...patch };
   });
 
-  return { payment: resultPayment, order: resultOrder };
+  const syncRes = await syncPublicTracking(preOrderId);
+  return {
+    payment: resultPayment,
+    order: resultOrder,
+    trackingSyncWarning: syncRes.ok ? undefined : syncRes.error,
+  };
 }
 
 export async function verifyPreOrderPayment(
@@ -1608,7 +1587,7 @@ export async function verifyPreOrderPayment(
   decision: 'verified' | 'rejected',
   actor: PreOrderActor,
   rejectionReason?: string
-): Promise<PreOrder> {
+): Promise<PreOrder & { trackingSyncWarning?: string }> {
   if (decision === 'rejected' && !rejectionReason?.trim()) {
     throw new Error('Please provide a reason when rejecting a payment.');
   }
@@ -1618,7 +1597,7 @@ export async function verifyPreOrderPayment(
   const paymentRef = doc(db, 'preOrders', preOrderId, 'payments', paymentId);
   const auditRef = doc(db, 'preOrderAudit', generateId('AUD'));
 
-  let updatedOrder!: PreOrder;
+  let updatedOrder!: PreOrder & { trackingSyncWarning?: string };
 
   await runTransaction(db, async (txn) => {
     const [orderSnap, paySnap, existingLedger] = await Promise.all([
@@ -1642,11 +1621,6 @@ export async function verifyPreOrderPayment(
       );
     }
 
-    const trackingRef = order.trackingToken
-      ? doc(db, 'publicTracking', order.trackingToken)
-      : null;
-    const trackingSnap = trackingRef ? await txn.get(trackingRef) : null;
-
     const paymentPatch = {
       status: decision,
       verifiedBy: actor.id,
@@ -1668,18 +1642,6 @@ export async function verifyPreOrderPayment(
 
     txn.update(paymentRef, sanitizeData(paymentPatch));
     txn.update(preOrderRef, sanitizeData(patch));
-
-    if (trackingRef && trackingSnap && trackingSnap.exists()) {
-      txn.update(
-        trackingRef,
-        sanitizeData({
-          advancePaid: patch.advancePaid,
-          refundedAmount: patch.refundedAmount,
-          dueAmount: patch.dueAmount,
-          updatedAt: now,
-        })
-      );
-    }
 
     txn.set(
       auditRef,
@@ -1721,6 +1683,10 @@ export async function verifyPreOrderPayment(
     updatedOrder = { ...order, ...patch };
   });
 
+  const syncRes = await syncPublicTracking(preOrderId);
+  if (!syncRes.ok) {
+    updatedOrder.trackingSyncWarning = syncRes.error;
+  }
   return updatedOrder;
 }
 
@@ -1780,11 +1746,6 @@ export async function reversePreOrderPayment(
       throw new Error('This payment entry has already been reversed.');
     }
 
-    const trackingRef = order.trackingToken
-      ? doc(db, 'publicTracking', order.trackingToken)
-      : null;
-    const trackingSnap = trackingRef ? await txn.get(trackingRef) : null;
-
     const reversalDoc: PreOrderPayment = {
       id: revId,
       preOrderId,
@@ -1843,18 +1804,6 @@ export async function reversePreOrderPayment(
     txn.set(revPaymentRef, sanitizeData(reversalDoc));
     txn.update(preOrderRef, sanitizeData(patch));
 
-    if (trackingRef && trackingSnap && trackingSnap.exists()) {
-      txn.update(
-        trackingRef,
-        sanitizeData({
-          advancePaid: patch.advancePaid,
-          refundedAmount: patch.refundedAmount,
-          dueAmount: patch.dueAmount,
-          updatedAt: now,
-        })
-      );
-    }
-
     txn.set(
       auditRef,
       sanitizeData({
@@ -1892,7 +1841,12 @@ export async function reversePreOrderPayment(
     resultOrder = { ...order, ...patch };
   });
 
-  return { payment: resultPayment, order: resultOrder };
+  const syncRes = await syncPublicTracking(preOrderId);
+  return {
+    payment: resultPayment,
+    order: resultOrder,
+    trackingSyncWarning: syncRes.ok ? undefined : syncRes.error,
+  };
 }
 
 export interface RefundPreOrderPaymentInput {
@@ -1966,11 +1920,6 @@ export async function refundPreOrderPayment(
       );
     }
 
-    const trackingRef = order.trackingToken
-      ? doc(db, 'publicTracking', order.trackingToken)
-      : null;
-    const trackingSnap = trackingRef ? await txn.get(trackingRef) : null;
-
     const refundDoc: PreOrderPayment = {
       id: paymentId,
       preOrderId,
@@ -2000,18 +1949,6 @@ export async function refundPreOrderPayment(
 
     txn.set(paymentRef, sanitizeData(refundDoc));
     txn.update(preOrderRef, sanitizeData(patch));
-
-    if (trackingRef && trackingSnap && trackingSnap.exists()) {
-      txn.update(
-        trackingRef,
-        sanitizeData({
-          advancePaid: patch.advancePaid,
-          refundedAmount: patch.refundedAmount,
-          dueAmount: patch.dueAmount,
-          updatedAt: now,
-        })
-      );
-    }
 
     txn.set(
       auditRef,
@@ -2067,7 +2004,12 @@ export async function refundPreOrderPayment(
     resultOrder = { ...order, ...patch };
   });
 
-  return { payment: resultPayment, order: resultOrder };
+  const syncRes = await syncPublicTracking(preOrderId);
+  return {
+    payment: resultPayment,
+    order: resultOrder,
+    trackingSyncWarning: syncRes.ok ? undefined : syncRes.error,
+  };
 }
 
 export interface RecalculateLedgerResult {
@@ -2075,6 +2017,7 @@ export interface RecalculateLedgerResult {
   before: Record<string, any>;
   after: Record<string, any>;
   order: PreOrder;
+  trackingSyncWarning?: string;
 }
 
 export async function recalculatePreOrderFromLedger(
@@ -2128,23 +2071,7 @@ export async function recalculatePreOrderFromLedger(
       before.paymentState !== after.paymentState;
 
     if (changed) {
-      const trackingRef = order.trackingToken
-        ? doc(db, 'publicTracking', order.trackingToken)
-        : null;
-      const trackingSnap = trackingRef ? await txn.get(trackingRef) : null;
-
       txn.update(preOrderRef, sanitizeData(patch));
-      if (trackingRef && trackingSnap && trackingSnap.exists()) {
-        txn.update(
-          trackingRef,
-          sanitizeData({
-            advancePaid: patch.advancePaid,
-            refundedAmount: patch.refundedAmount,
-            dueAmount: patch.dueAmount,
-            updatedAt: now,
-          })
-        );
-      }
 
       txn.set(
         auditRef,
@@ -2174,6 +2101,13 @@ export async function recalculatePreOrderFromLedger(
       order: changed ? { ...order, ...patch } : order,
     };
   });
+
+  if (result.changed) {
+    const syncRes = await syncPublicTracking(preOrderId);
+    if (!syncRes.ok) {
+      result.trackingSyncWarning = syncRes.error;
+    }
+  }
 
   return result;
 }
@@ -2550,7 +2484,7 @@ export async function transitionPreOrderStatus(
   preOrderId: string,
   input: TransitionPreOrderStatusInput,
   actor: PreOrderActor
-): Promise<PreOrder> {
+): Promise<PreOrder & { trackingSyncWarning?: string }> {
   const { toStatus } = input;
   const noteTrimmed = input.note?.trim() || '';
   const publicMessageTrimmed = input.publicMessage?.trim() || '';
@@ -2568,7 +2502,7 @@ export async function transitionPreOrderStatus(
   const historyRef = doc(db, 'preOrders', preOrderId, 'statusHistory', historyId);
   const auditRef = doc(db, 'preOrderAudit', generateId('AUD'));
 
-  let updatedOrder!: PreOrder;
+  let updatedOrder!: PreOrder & { trackingSyncWarning?: string };
 
   await runTransaction(db, async (txn) => {
     const [snap, ledger] = await Promise.all([
@@ -2648,11 +2582,6 @@ export async function transitionPreOrderStatus(
       loggedOverrideReason = overrideReasonTrimmed || noteTrimmed;
     }
 
-    const trackingRef = order.trackingToken
-      ? doc(db, 'publicTracking', order.trackingToken)
-      : null;
-    const trackingSnap = trackingRef ? await txn.get(trackingRef) : null;
-
     const paymentState = derivePreOrderPaymentState(
       calc.totalAmount,
       calc.verifiedCollected,
@@ -2668,6 +2597,7 @@ export async function transitionPreOrderStatus(
       dueAmount: calc.dueAmount,
       paymentCount: ledger.length,
       paymentState,
+      lastStatusChangeAt: now,
       updatedAt: now,
       updatedBy: actor.id,
     };
@@ -2696,29 +2626,6 @@ export async function transitionPreOrderStatus(
       timestamp: now,
     };
     txn.set(historyRef, sanitizeData(historyDoc));
-
-    if (trackingRef && trackingSnap && trackingSnap.exists()) {
-      const trackingData = trackingSnap.data() as PublicTrackingRecord;
-      const nextTimeline = [
-        ...(trackingData.statusTimeline || []),
-        sanitizeData({
-          status: toStatus,
-          timestamp: now,
-          ...(publicMessageTrimmed ? { publicMessage: publicMessageTrimmed } : {}),
-        }),
-      ];
-      txn.update(
-        trackingRef,
-        sanitizeData({
-          status: toStatus,
-          advancePaid: calc.verifiedCollected,
-          refundedAmount: calc.verifiedRefunded,
-          dueAmount: calc.dueAmount,
-          statusTimeline: nextTimeline,
-          updatedAt: now,
-        })
-      );
-    }
 
     txn.set(
       auditRef,
@@ -2749,6 +2656,10 @@ export async function transitionPreOrderStatus(
     updatedOrder = { ...order, ...orderUpdate } as PreOrder;
   });
 
+  const syncRes = await syncPublicTracking(preOrderId);
+  if (!syncRes.ok) {
+    updatedOrder.trackingSyncWarning = syncRes.error;
+  }
   return updatedOrder;
 }
 
@@ -2780,6 +2691,7 @@ export interface UpsertPreOrderShipmentResult {
   suggestedNextStatus?: PreOrderStatus;
   suggestionReason?: string;
   isDelayed: boolean;
+  trackingSyncWarning?: string;
 }
 
 export async function upsertPreOrderShipment(
@@ -2807,11 +2719,6 @@ export async function upsertPreOrderShipment(
     const prevShipment = prevShipmentSnap.exists()
       ? (prevShipmentSnap.data() as PreOrderShipment)
       : ({} as Partial<PreOrderShipment>);
-
-    const trackingRef = order.trackingToken
-      ? doc(db, 'publicTracking', order.trackingToken)
-      : null;
-    const trackingSnap = trackingRef ? await txn.get(trackingRef) : null;
 
     const prevEta = prevShipment.estimatedArrivalDate || order.estimatedDeliveryDate || '';
     const nextEta =
@@ -2958,30 +2865,6 @@ export async function upsertPreOrderShipment(
       txn.set(eventRef, sanitizeData(eventDoc));
     }
 
-    if (trackingRef && trackingSnap && trackingSnap.exists()) {
-      const trackingData = trackingSnap.data() as PublicTrackingRecord;
-      const nextTimeline = [...(trackingData.statusTimeline || [])];
-      if (showToCustomer) {
-        nextTimeline.push(
-          sanitizeData({
-            status: order.status,
-            timestamp: now,
-            publicMessage: publicMessage?.trim() || eventText,
-          })
-        );
-      }
-      txn.update(
-        trackingRef,
-        sanitizeData({
-          trackingNumber: summaryTrackingNo,
-          courier: summaryCourier,
-          estimatedDeliveryDate: nextEta,
-          statusTimeline: nextTimeline,
-          updatedAt: now,
-        })
-      );
-    }
-
     txn.set(
       auditRef,
       sanitizeData({
@@ -3037,6 +2920,11 @@ export async function upsertPreOrderShipment(
       isDelayed: nextDelayed,
     };
   });
+
+  const syncRes = await syncPublicTracking(preOrderId);
+  if (!syncRes.ok) {
+    result.trackingSyncWarning = syncRes.error;
+  }
 
   return result;
 }
@@ -3270,7 +3158,7 @@ export async function addPreOrderShipmentEvent(
     publicMessage?: string;
   },
   actor: PreOrderActor
-): Promise<PreOrderShipmentEvent> {
+): Promise<PreOrderShipmentEvent & { trackingSyncWarning?: string }> {
   if (!input.text?.trim()) {
     throw new Error('Event update text is required.');
   }
@@ -3281,18 +3169,12 @@ export async function addPreOrderShipmentEvent(
   const eventRef = doc(db, 'preOrders', preOrderId, 'shipmentEvents', eventId);
   const auditRef = doc(db, 'preOrderAudit', generateId('AUD'));
 
-  let createdEvent!: PreOrderShipmentEvent;
+  let createdEvent!: PreOrderShipmentEvent & { trackingSyncWarning?: string };
 
   await runTransaction(db, async (txn) => {
     const orderSnap = await txn.get(preOrderRef);
     if (!orderSnap.exists()) throw new Error('Pre-order not found.');
     const order = orderSnap.data() as PreOrder;
-
-    const trackingRef =
-      input.showToCustomer && order.trackingToken
-        ? doc(db, 'publicTracking', order.trackingToken)
-        : null;
-    const trackingSnap = trackingRef ? await txn.get(trackingRef) : null;
 
     createdEvent = {
       id: eventId,
@@ -3310,25 +3192,6 @@ export async function addPreOrderShipmentEvent(
 
     txn.set(eventRef, sanitizeData(createdEvent));
 
-    if (trackingRef && trackingSnap && trackingSnap.exists()) {
-      const tData = trackingSnap.data() as PublicTrackingRecord;
-      const nextTimeline = [
-        ...(tData.statusTimeline || []),
-        sanitizeData({
-          status: order.status,
-          timestamp: now,
-          publicMessage: createdEvent.publicMessage || createdEvent.text,
-        }),
-      ];
-      txn.update(
-        trackingRef,
-        sanitizeData({
-          statusTimeline: nextTimeline,
-          updatedAt: now,
-        })
-      );
-    }
-
     txn.set(
       auditRef,
       sanitizeData({
@@ -3345,6 +3208,13 @@ export async function addPreOrderShipmentEvent(
       })
     );
   });
+
+  if (createdEvent.showToCustomer) {
+    const syncRes = await syncPublicTracking(preOrderId);
+    if (!syncRes.ok) {
+      createdEvent.trackingSyncWarning = syncRes.error;
+    }
+  }
 
   return createdEvent;
 }
@@ -3395,7 +3265,6 @@ export async function batchUpdatePreOrderShipments(
   const dateStr = nowDate.toISOString().split('T')[0];
   const timeStr = nowDate.toTimeString().slice(0, 5);
 
-  // Use atomic writeBatch (safe up to ~100 orders in a single batch; chunk by 80 orders just in case)
   const CHUNK_SIZE = 80;
   let updatedCount = 0;
 
@@ -3417,9 +3286,6 @@ export async function batchUpdatePreOrderShipments(
         preOrderId: order.id,
         updatedAt: now,
         updatedBy: actor.id,
-      };
-      const trackingUpdate: Record<string, any> = {
-        updatedAt: now,
       };
       const afterDiff: Record<string, any> = {};
       const beforeDiff: Record<string, any> = {};
@@ -3461,16 +3327,13 @@ export async function batchUpdatePreOrderShipments(
         } else {
           changeNotes.push(`ETA set to ${nextEta}`);
         }
-        trackingUpdate.estimatedDeliveryDate = nextEta;
       }
 
       if (patch.trackingNumber?.trim()) {
-        trackingUpdate.trackingNumber = patch.trackingNumber.trim();
         changeNotes.push(`Tracking No: ${patch.trackingNumber.trim()}`);
       }
       if (patch.freightForwarder?.trim()) {
         orderUpdate.courier = patch.freightForwarder.trim();
-        trackingUpdate.courier = patch.freightForwarder.trim();
         changeNotes.push(`Forwarder: ${patch.freightForwarder.trim()}`);
       }
       if (patch.customsStatus?.trim()) {
@@ -3479,10 +3342,6 @@ export async function batchUpdatePreOrderShipments(
 
       batch.update(preOrderRef, sanitizeData(orderUpdate));
       batch.set(shipmentRef, sanitizeData(shipmentUpdate), { merge: true });
-
-      if (order.trackingToken && Object.keys(trackingUpdate).length > 1) {
-        batch.update(doc(db, 'publicTracking', order.trackingToken), sanitizeData(trackingUpdate));
-      }
 
       const summaryText =
         changeNotes.length > 0
@@ -3531,16 +3390,537 @@ export async function batchUpdatePreOrderShipments(
     await batch.commit();
   }
 
+  // Resync publicTracking snapshots cleanly via centralized builder
+  const sharedSettings = await getCompanySettings().catch(() => null);
+  await Promise.allSettled(
+    orders.map((o) => syncPublicTracking(o.id, { companySettings: sharedSettings }))
+  );
+
   return updatedCount;
 }
 
+// ==========================================
+// PART 5: CENTRALIZED PUBLIC TRACKING ENGINE & LIFECYCLE
+// ==========================================
+
+export interface SyncPublicTrackingResult {
+  ok: boolean;
+  error?: string;
+}
+
+/**
+ * Rebuilds the strict whitelist-only `publicTracking/{token}` document from real Firestore data.
+ * Never writes full name, phone, address, costs, profits, internal notes, receipt URLs, or staff names.
+ */
+export async function syncPublicTracking(
+  preOrderId: string,
+  options?: {
+    companySettings?: CompanySettings | null;
+    actor?: PreOrderActor;
+    logAudit?: boolean;
+  }
+): Promise<SyncPublicTrackingResult> {
+  try {
+    const order = await getPreOrderById(preOrderId);
+    if (!order) {
+      return { ok: false, error: 'Pre-order not found for tracking sync.' };
+    }
+
+    const token = (order.trackingToken || order.trackingTokenId || '').trim();
+    if (!token) {
+      return { ok: false, error: 'Pre-order does not have a tracking token yet.' };
+    }
+
+    const trackingRef = doc(db, 'publicTracking', token);
+    const now = Date.now();
+
+    if (order.trackingEnabled === false) {
+      await setDoc(trackingRef, sanitizeData(buildDisabledPublicTrackingDoc(now)));
+      return { ok: true };
+    }
+
+    const [payments, statusHistory, shipmentEvents, companySettings] = await Promise.all([
+      getPreOrderPayments(preOrderId, 100),
+      getPreOrderStatusHistory(preOrderId, 100),
+      getPreOrderShipmentEvents(preOrderId, 100),
+      options?.companySettings !== undefined
+        ? Promise.resolve(options.companySettings)
+        : getCompanySettings().catch(() => null),
+    ]);
+
+    const whitelistedDoc = buildWhitelistedPublicTrackingDoc({
+      order,
+      payments,
+      statusHistory,
+      shipmentEvents,
+      companySettings,
+      now,
+    });
+
+    await setDoc(trackingRef, sanitizeData(whitelistedDoc));
+
+    if (options?.logAudit && options?.actor) {
+      const auditRef = doc(db, 'preOrderAudit', generateId('AUD'));
+      await setDoc(
+        auditRef,
+        sanitizeData({
+          id: auditRef.id,
+          preOrderId: order.id,
+          preOrderNumber: order.preOrderNumber,
+          action: 'TRACKING_LINK_SYNCED' as PreOrderAuditAction,
+          summary: `Manually resynced customer tracking snapshot for ${order.preOrderNumber}`,
+          userId: options.actor.id,
+          userName: options.actor.name,
+          userRole: options.actor.role,
+          timestamp: now,
+        })
+      ).catch(() => {});
+    }
+
+    return { ok: true };
+  } catch (err: any) {
+    const msg =
+      err?.code === 'permission-denied'
+        ? 'Tracking link sync requires "Manage Tracking & Links" permission.'
+        : err?.message || 'Failed to sync public tracking document.';
+    return { ok: false, error: msg };
+  }
+}
+
+/**
+ * Admin/Super Admin: Regenerates a 256-bit cryptographically random token for a pre-order.
+ * Atomically creates the new `publicTracking/{newToken}`, removes the old `publicTracking/{oldToken}`,
+ * updates `preOrders/{id}` metadata + trackingHistory, and logs audit.
+ */
+export async function regeneratePublicTrackingToken(
+  preOrderId: string,
+  actor: PreOrderActor,
+  reason?: string,
+  companySettings?: CompanySettings | null
+): Promise<{ token: string; order: PreOrder }> {
+  if (!isPreOrderAdminRole(actor.role)) {
+    throw new Error('Only Admin or Super Admin can regenerate customer tracking links.');
+  }
+
+  const [payments, statusHistory, shipmentEvents, resolvedSettings] = await Promise.all([
+    getPreOrderPayments(preOrderId, 100),
+    getPreOrderStatusHistory(preOrderId, 100),
+    getPreOrderShipmentEvents(preOrderId, 100),
+    companySettings !== undefined
+      ? Promise.resolve(companySettings)
+      : getCompanySettings().catch(() => null),
+  ]);
+
+  const now = Date.now();
+  const newToken = generateSecureTrackingToken();
+  const preOrderRef = doc(db, 'preOrders', preOrderId);
+  const newTrackingRef = doc(db, 'publicTracking', newToken);
+  const auditRef = doc(db, 'preOrderAudit', generateId('AUD'));
+
+  let updatedOrder!: PreOrder;
+  let oldTokenToDelete = '';
+
+  await runTransaction(db, async (txn) => {
+    const orderSnap = await txn.get(preOrderRef);
+    if (!orderSnap.exists()) throw new Error('Pre-order not found.');
+    const order = { ...(orderSnap.data() as PreOrder), id: orderSnap.id };
+
+    oldTokenToDelete = (order.trackingToken || order.trackingTokenId || '').trim();
+
+    const historyItem: PreOrderTrackingHistoryItem = {
+      action: 'regenerated',
+      timestamp: now,
+      actorId: actor.id,
+      actorName: actor.name,
+      ...(reason?.trim() ? { reason: reason.trim() } : {}),
+    };
+    const nextTrackingHistory = [...(order.trackingHistory || []), historyItem];
+
+    const orderPatch: Partial<PreOrder> = {
+      trackingToken: newToken,
+      trackingTokenId: newToken,
+      trackingEnabled: true,
+      trackingCreatedAt: order.trackingCreatedAt || now,
+      trackingCreatedBy: order.trackingCreatedBy || actor.id,
+      trackingLastRegeneratedAt: now,
+      trackingHistory: nextTrackingHistory,
+      updatedAt: now,
+      updatedBy: actor.id,
+    };
+
+    const nextOrderObj: PreOrder = { ...order, ...orderPatch };
+    const whitelistedDoc = buildWhitelistedPublicTrackingDoc({
+      order: nextOrderObj,
+      payments,
+      statusHistory,
+      shipmentEvents,
+      companySettings: resolvedSettings,
+      now,
+    });
+
+    txn.set(newTrackingRef, sanitizeData(whitelistedDoc));
+    if (oldTokenToDelete && oldTokenToDelete !== newToken) {
+      txn.delete(doc(db, 'publicTracking', oldTokenToDelete));
+    }
+    txn.update(preOrderRef, sanitizeData(orderPatch));
+    txn.set(
+      auditRef,
+      sanitizeData({
+        id: auditRef.id,
+        preOrderId,
+        preOrderNumber: order.preOrderNumber,
+        action: 'TRACKING_LINK_REGENERATED' as PreOrderAuditAction,
+        summary: `Regenerated public tracking link for ${order.preOrderNumber} (previous token invalidated)`,
+        metadata: { reason: reason?.trim() || '' },
+        userId: actor.id,
+        userName: actor.name,
+        userRole: actor.role,
+        timestamp: now,
+      })
+    );
+
+    updatedOrder = nextOrderObj;
+  });
+
+  return { token: newToken, order: updatedOrder };
+}
+
+/**
+ * Admin/Super Admin: Disables or enables an existing tracking link.
+ * When disabled, strips all customer/order data from `publicTracking/{token}` leaving ONLY `{ enabled: false, updatedAt }`.
+ */
+export async function togglePublicTrackingEnabled(
+  preOrderId: string,
+  enabled: boolean,
+  actor: PreOrderActor,
+  options?: {
+    reason?: string;
+    isExpiry?: boolean;
+    companySettings?: CompanySettings | null;
+  }
+): Promise<PreOrder> {
+  if (!isPreOrderAdminRole(actor.role)) {
+    throw new Error('Only Admin or Super Admin can enable or disable tracking links.');
+  }
+
+  const [payments, statusHistory, shipmentEvents, resolvedSettings] = enabled
+    ? await Promise.all([
+        getPreOrderPayments(preOrderId, 100),
+        getPreOrderStatusHistory(preOrderId, 100),
+        getPreOrderShipmentEvents(preOrderId, 100),
+        options?.companySettings !== undefined
+          ? Promise.resolve(options.companySettings)
+          : getCompanySettings().catch(() => null),
+      ])
+    : [[], [], [], null];
+
+  const now = Date.now();
+  const preOrderRef = doc(db, 'preOrders', preOrderId);
+  const auditRef = doc(db, 'preOrderAudit', generateId('AUD'));
+  let updatedOrder!: PreOrder;
+
+  await runTransaction(db, async (txn) => {
+    const orderSnap = await txn.get(preOrderRef);
+    if (!orderSnap.exists()) throw new Error('Pre-order not found.');
+    const order = { ...(orderSnap.data() as PreOrder), id: orderSnap.id };
+
+    let token = (order.trackingToken || order.trackingTokenId || '').trim();
+    if (!token) {
+      token = generateSecureTrackingToken();
+    }
+
+    const actionType: PreOrderTrackingHistoryItem['action'] = !enabled
+      ? options?.isExpiry
+        ? 'expired'
+        : 'disabled'
+      : 'enabled';
+
+    const historyItem: PreOrderTrackingHistoryItem = {
+      action: actionType,
+      timestamp: now,
+      actorId: actor.id,
+      actorName: actor.name,
+      ...(options?.reason?.trim() ? { reason: options.reason.trim() } : {}),
+    };
+
+    const orderPatch: Partial<PreOrder> = {
+      trackingToken: token,
+      trackingTokenId: token,
+      trackingEnabled: enabled,
+      trackingCreatedAt: order.trackingCreatedAt || now,
+      trackingCreatedBy: order.trackingCreatedBy || actor.id,
+      trackingHistory: [...(order.trackingHistory || []), historyItem],
+      updatedAt: now,
+      updatedBy: actor.id,
+    };
+
+    const nextOrderObj: PreOrder = { ...order, ...orderPatch };
+    const trackingRef = doc(db, 'publicTracking', token);
+
+    if (!enabled) {
+      txn.set(trackingRef, sanitizeData(buildDisabledPublicTrackingDoc(now)));
+    } else {
+      const whitelisted = buildWhitelistedPublicTrackingDoc({
+        order: nextOrderObj,
+        payments,
+        statusHistory,
+        shipmentEvents,
+        companySettings: resolvedSettings,
+        now,
+      });
+      txn.set(trackingRef, sanitizeData(whitelisted));
+    }
+
+    txn.update(preOrderRef, sanitizeData(orderPatch));
+    txn.set(
+      auditRef,
+      sanitizeData({
+        id: auditRef.id,
+        preOrderId,
+        preOrderNumber: order.preOrderNumber,
+        action: (actionType === 'expired'
+          ? 'TRACKING_LINK_EXPIRED'
+          : actionType === 'disabled'
+          ? 'TRACKING_LINK_DISABLED'
+          : 'TRACKING_LINK_ENABLED') as PreOrderAuditAction,
+        summary: `${
+          actionType === 'expired'
+            ? 'Auto-expired'
+            : actionType === 'disabled'
+            ? 'Disabled'
+            : 'Enabled'
+        } public tracking link for ${order.preOrderNumber}`,
+        metadata: { enabled, reason: options?.reason?.trim() || '' },
+        userId: actor.id,
+        userName: actor.name,
+        userRole: actor.role,
+        timestamp: now,
+      })
+    );
+
+    updatedOrder = nextOrderObj;
+  });
+
+  return updatedOrder;
+}
+
+export async function updatePreOrderCourierVisibility(
+  preOrderId: string,
+  showCourier: boolean,
+  actor: PreOrderActor,
+  companySettings?: CompanySettings | null
+): Promise<SyncPublicTrackingResult> {
+  const now = Date.now();
+  await updateDoc(
+    doc(db, 'preOrders', preOrderId),
+    sanitizeData({
+      showCourierTrackingToCustomer: Boolean(showCourier),
+      updatedAt: now,
+      updatedBy: actor.id,
+    })
+  );
+  return syncPublicTracking(preOrderId, { companySettings });
+}
+
+export interface BulkGenerateTrackingResult {
+  scanned: number;
+  generated: number;
+  synced: number;
+  failed: number;
+}
+
+/**
+ * One-time Admin utility: scans existing Pre-Orders and creates/syncs missing 256-bit public tracking links.
+ */
+export async function generateMissingTrackingLinks(
+  actor: PreOrderActor,
+  companySettings?: CompanySettings | null
+): Promise<BulkGenerateTrackingResult> {
+  if (!isPreOrderAdminRole(actor.role)) {
+    throw new Error('Only Admin or Super Admin can bulk-generate tracking links.');
+  }
+
+  const resolvedSettings =
+    companySettings !== undefined
+      ? companySettings
+      : await getCompanySettings().catch(() => null);
+
+  const snap = await getDocs(
+    query(collection(db, 'preOrders'), orderBy('createdAt', 'desc'), limit(250))
+  );
+
+  let scanned = 0;
+  let generated = 0;
+  let synced = 0;
+  let failed = 0;
+  const now = Date.now();
+
+  for (const d of snap.docs) {
+    scanned++;
+    const order = { ...(d.data() as PreOrder), id: d.id };
+    const existingToken = (order.trackingToken || order.trackingTokenId || '').trim();
+    const hasValidToken = Boolean(existingToken && isSafeTrackingTokenFormat(existingToken));
+
+    try {
+      if (!hasValidToken) {
+        const newToken = generateSecureTrackingToken();
+        const historyItem: PreOrderTrackingHistoryItem = {
+          action: 'created',
+          timestamp: now,
+          actorId: actor.id,
+          actorName: actor.name,
+          reason: 'Bulk-generated tracking link for existing pre-order',
+        };
+
+        await updateDoc(
+          doc(db, 'preOrders', order.id),
+          sanitizeData({
+            trackingToken: newToken,
+            trackingTokenId: newToken,
+            trackingEnabled: order.trackingEnabled ?? true,
+            trackingCreatedAt: order.trackingCreatedAt || now,
+            trackingCreatedBy: order.trackingCreatedBy || actor.id,
+            trackingHistory: [...(order.trackingHistory || []), historyItem],
+            updatedAt: now,
+            updatedBy: actor.id,
+          })
+        );
+
+        const syncRes = await syncPublicTracking(order.id, {
+          companySettings: resolvedSettings,
+        });
+        if (syncRes.ok) {
+          generated++;
+        } else {
+          failed++;
+        }
+      } else {
+        // Check if publicTracking doc exists or needs upgrade to strict whitelist schema
+        const pubSnap = await getDoc(doc(db, 'publicTracking', existingToken)).catch(() => null);
+        const needsRepair =
+          !pubSnap ||
+          !pubSnap.exists() ||
+          !order.trackingTokenId ||
+          order.trackingEnabled === undefined;
+
+        if (needsRepair) {
+          if (!order.trackingTokenId || order.trackingEnabled === undefined) {
+            await updateDoc(
+              doc(db, 'preOrders', order.id),
+              sanitizeData({
+                trackingTokenId: existingToken,
+                trackingEnabled: order.trackingEnabled ?? true,
+                trackingCreatedAt: order.trackingCreatedAt || order.createdAt || now,
+                trackingCreatedBy: order.trackingCreatedBy || order.createdBy || actor.id,
+                updatedAt: now,
+                updatedBy: actor.id,
+              })
+            );
+          }
+          const syncRes = await syncPublicTracking(order.id, {
+            companySettings: resolvedSettings,
+          });
+          if (syncRes.ok) synced++;
+          else failed++;
+        }
+      }
+    } catch {
+      failed++;
+    }
+  }
+
+  return { scanned, generated, synced, failed };
+}
+
+/**
+ * Checks completed/terminal pre-orders for tracking link auto-expiry (configured N days after Delivered/Cancelled/Refunded).
+ */
+export async function checkAndExpireCompletedTrackingLinks(
+  orders: PreOrder[],
+  actor: PreOrderActor,
+  companySettings?: CompanySettings | null
+): Promise<{ expiredCount: number; expiredOrderIds: string[] }> {
+  if (!isPreOrderAdminRole(actor.role)) {
+    return { expiredCount: 0, expiredOrderIds: [] };
+  }
+  if (!companySettings?.trackingAutoExpiryEnabled) {
+    return { expiredCount: 0, expiredOrderIds: [] };
+  }
+
+  const days = Math.max(1, Number(companySettings.trackingAutoExpiryDays || DEFAULT_TRACKING_AUTO_EXPIRY_DAYS));
+  const cutoffMs = days * 24 * 60 * 60 * 1000;
+  const now = Date.now();
+  const expiredOrderIds: string[] = [];
+
+  for (const order of orders) {
+    if (order.trackingEnabled === false) continue;
+    if (!order.trackingToken && !order.trackingTokenId) continue;
+    if (!['Delivered', 'Cancelled', 'Refunded'].includes(order.status)) continue;
+
+    const completedAt = Number(
+      order.cancelledAt || (order as any).lastStatusChangeAt || order.updatedAt || order.createdAt || 0
+    );
+    if (completedAt > 0 && now - completedAt >= cutoffMs) {
+      try {
+        await togglePublicTrackingEnabled(order.id, false, actor, {
+          reason: `Auto-expired ${days} days after order reached "${order.status}"`,
+          isExpiry: true,
+          companySettings,
+        });
+        expiredOrderIds.push(order.id);
+      } catch {
+        // Skip silently; next Admin check can retry
+      }
+    }
+  }
+
+  return {
+    expiredCount: expiredOrderIds.length,
+    expiredOrderIds,
+  };
+}
+
+export type PublicTrackingFetchResult =
+  | { status: 'ok'; record: PublicTrackingRecord }
+  | { status: 'not_found' }
+  | { status: 'network_error'; message: string };
+
+/**
+ * UNAUTHENTICATED SINGLE-DOCUMENT LOOKUP ONLY.
+ * Executes ONLY `getDoc(doc(db, 'publicTracking', token))`.
+ * Never queries any other collection, never calls auth, never console.logs token or data.
+ */
 export async function getPublicTrackingByToken(
   token: string
-): Promise<PublicTrackingRecord | null> {
-  if (!token?.trim()) return null;
-  const snap = await getDoc(doc(db, 'publicTracking', token.trim()));
-  if (!snap.exists()) return null;
-  return snap.data() as PublicTrackingRecord;
+): Promise<PublicTrackingFetchResult> {
+  const cleanToken = (token || '').trim();
+  if (!isSafeTrackingTokenFormat(cleanToken)) {
+    return { status: 'not_found' };
+  }
+
+  try {
+    const snap = await getDoc(doc(db, 'publicTracking', cleanToken));
+    if (!snap.exists()) {
+      return { status: 'not_found' };
+    }
+    const data = snap.data() as PublicTrackingRecord;
+    if (data.enabled !== true) {
+      return { status: 'not_found' };
+    }
+    return { status: 'ok', record: data };
+  } catch (err: any) {
+    const code = String(err?.code || '');
+    // Firestore returns 'permission-denied' when doc does not exist OR enabled == false
+    // under rule `allow get: if resource.data.enabled == true;`.
+    // Never reveal whether the token ever existed.
+    if (code === 'permission-denied' || code === 'not-found') {
+      return { status: 'not_found' };
+    }
+    return {
+      status: 'network_error',
+      message: 'Unable to reach tracking server right now. Check your internet connection and retry.',
+    };
+  }
 }
 
 // ==========================================

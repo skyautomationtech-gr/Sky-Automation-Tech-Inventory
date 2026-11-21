@@ -202,6 +202,9 @@ export const CollectPaymentModal: React.FC<CollectPaymentModalProps> = ({
           ? `Collected & verified ${formatBDT(res.payment.amount)} on ${order.preOrderNumber}.`
           : `Recorded ${formatBDT(res.payment.amount)} as Pending Verification on ${order.preOrderNumber}.`
       );
+      if (res.trackingSyncWarning) {
+        toast.warning(res.trackingSyncWarning);
+      }
       onSuccess(res.payment, res.order);
       onClose();
     } catch (err: any) {
@@ -514,6 +517,9 @@ export const RefundPaymentModal: React.FC<RefundPaymentModalProps> = ({
         actorFromUser(user)
       );
       toast.success(`Refund of ${formatBDT(res.payment.amount)} recorded on ${order.preOrderNumber}.`);
+      if (res.trackingSyncWarning) {
+        toast.warning(res.trackingSyncWarning);
+      }
       onSuccess(res.payment, res.order);
       onClose();
     } catch (err: any) {
@@ -653,13 +659,16 @@ export const ReversePaymentModal: React.FC<ReversePaymentModalProps> = ({
 
     setSubmitting(true);
     try {
-      await reversePreOrderPayment(
+      const res = await reversePreOrderPayment(
         payment.preOrderId,
         payment.id,
         reason.trim(),
         actorFromUser(user)
       );
       toast.success(`Created reversal entry for ${payment.preOrderNumber} (${formatBDT(payment.amount)}).`);
+      if (res.trackingSyncWarning) {
+        toast.warning(res.trackingSyncWarning);
+      }
       onSuccess();
       onClose();
     } catch (err: any) {
@@ -758,7 +767,7 @@ export const RejectPaymentModal: React.FC<RejectPaymentModalProps> = ({
 
     setSubmitting(true);
     try {
-      await verifyPreOrderPayment(
+      const res = await verifyPreOrderPayment(
         payment.preOrderId,
         payment.id,
         'rejected',
@@ -766,6 +775,9 @@ export const RejectPaymentModal: React.FC<RejectPaymentModalProps> = ({
         reason.trim()
       );
       toast.success(`Payment ${payment.preOrderNumber} (${formatBDT(payment.amount)}) rejected.`);
+      if (res.trackingSyncWarning) {
+        toast.warning(res.trackingSyncWarning);
+      }
       onSuccess();
       onClose();
     } catch (err: any) {

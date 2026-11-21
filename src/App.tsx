@@ -93,6 +93,8 @@ import AllPreOrdersView from './components/PreOrders/AllPreOrdersView';
 import PaymentManagementView from './components/PreOrders/PaymentManagementView';
 import PreOrderSupplierManagementView from './components/PreOrders/PreOrderSupplierManagementView';
 import ShipmentTrackingView from './components/PreOrders/ShipmentTrackingView';
+import CustomerTrackingLinksView from './components/PreOrders/CustomerTrackingLinksView';
+import PublicTrackingPortal from './components/PreOrders/PublicTrackingPortal';
 import NotificationCenter from './components/NotificationCenter';
 import { PublicInvoiceVerification } from './components/PublicInvoiceVerification';
 import ErrorBoundary from './components/ErrorBoundary';
@@ -102,6 +104,21 @@ import { TopBar } from './components/TopBar';
 import { Breadcrumbs } from './components/Breadcrumbs';
 import { WelcomeTour } from './components/WelcomeTour';
 import { ThemeProvider, ToastProvider, ThemeToggle, ConfirmDialog } from './design-system';
+
+const parsePublicTrackingRoute = (): { isTrackingRoute: boolean; token: string } => {
+  if (typeof window === 'undefined') return { isTrackingRoute: false, token: '' };
+  const pathname = window.location.pathname;
+  if (!/^\/track(\/|$)/i.test(pathname)) {
+    return { isTrackingRoute: false, token: '' };
+  }
+  const match = pathname.match(/^\/track\/([^/?#]+)/i);
+  if (!match || !match[1]) return { isTrackingRoute: true, token: '' };
+  try {
+    return { isTrackingRoute: true, token: decodeURIComponent(match[1]).trim() };
+  } catch {
+    return { isTrackingRoute: true, token: match[1].trim() };
+  }
+};
 
 // Mock/Fallback Data in case of Firestore permission/network errors
 const MOCK_PRODUCTS: Product[] = [];
@@ -371,6 +388,25 @@ export default function App() {
   }, []);
 
   useEffect(() => {
+    const handlePopState = () => {
+      setPublicTrackingRoute(parsePublicTrackingRoute());
+    };
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  const [publicTrackingRoute, setPublicTrackingRoute] = useState<{
+    isTrackingRoute: boolean;
+    token: string;
+  }>(() => parsePublicTrackingRoute());
+
+  useEffect(() => {
+    // Public customer tracking route /track/:token executes ZERO auth listeners or ERP fetches
+    if (publicTrackingRoute.isTrackingRoute) {
+      setAuthChecking(false);
+      return;
+    }
+
     let isMounted = true;
     
     // If Firebase project was deleted or unlinked, immediately switch to local sandbox mode without failing
@@ -531,7 +567,7 @@ export default function App() {
       isMounted = false;
       unsubscribe();
     };
-  }, []);
+  }, [publicTrackingRoute.isTrackingRoute]);
 
   // Fetch application data
   const refreshApplicationData = async () => {
@@ -584,7 +620,7 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (user && firebaseAuthed && !isOnboarding && !isOfflineDemoMode) {
+    if (!publicTrackingRoute.isTrackingRoute && user && firebaseAuthed && !isOnboarding && !isOfflineDemoMode) {
       getRolePermissions()
         .then((perms) => setRolePermissions(perms))
         .catch(() => {});
@@ -619,7 +655,7 @@ export default function App() {
         unsubModels();
       };
     }
-  }, [user, firebaseAuthed, isOnboarding, isOfflineDemoMode]);
+  }, [publicTrackingRoute.isTrackingRoute, user, firebaseAuthed, isOnboarding, isOfflineDemoMode]);
 
   // Handle Auth success from Login Screen
   const handleAuthSuccess = async (profile: UserProfile) => {
@@ -950,6 +986,15 @@ export default function App() {
     return true;
   };
 
+  // Standalone zero-auth Customer Public Tracking Portal (/track/:token)
+  if (publicTrackingRoute.isTrackingRoute) {
+    return (
+      <ErrorBoundary fallbackTitle="Order Tracking Unavailable">
+        <PublicTrackingPortal token={publicTrackingRoute.token} />
+      </ErrorBoundary>
+    );
+  }
+
   // If public verification requested via QR code scan
   if (isPublicVerification) {
     return (
@@ -1148,6 +1193,7 @@ export default function App() {
               rolePermissions={rolePermissions}
               products={products}
               categories={categories}
+              companySettings={companySettings}
               onDirtyChange={setPreOrderCreateDirty}
               onCancel={() => {
                 setPreOrderCreateDirty(false);
@@ -1208,12 +1254,25 @@ export default function App() {
           </ErrorBoundary>
         )}
 
+        {currentTab === 'preorder_links' && (
+          <ErrorBoundary fallbackTitle="Customer Tracking Links encountered an issue">
+            <CustomerTrackingLinksView
+              user={user}
+              rolePermissions={rolePermissions}
+              categories={categories}
+              companySettings={companySettings}
+              onNavigateSettings={() => navigateToTab('settings')}
+            />
+          </ErrorBoundary>
+        )}
+
         {isPreOrderTab(currentTab) &&
           currentTab !== 'preorder_create' &&
           currentTab !== 'preorder_list' &&
           currentTab !== 'preorder_payments' &&
           currentTab !== 'preorder_suppliers' &&
-          currentTab !== 'preorder_tracking' && (
+          currentTab !== 'preorder_tracking' &&
+          currentTab !== 'preorder_links' && (
             <ErrorBoundary fallbackTitle="Pre-Order Management encountered an issue">
               <PreOrderPlaceholderView
                 tab={currentTab}

@@ -29,9 +29,17 @@ import {
   Check,
   Calculator,
   Wallet,
-  Briefcase
+  Briefcase,
+  Link2
 } from 'lucide-react';
 import { getAccountingBaselineSettings, saveAccountingBaselineSettings } from '../firebase/db';
+import {
+  DEFAULT_PUBLIC_APP_URL,
+  DEFAULT_TRACKING_AUTO_EXPIRY_DAYS,
+  DEFAULT_TRACKING_SHARE_TEMPLATE_BN,
+  DEFAULT_TRACKING_SHARE_TEMPLATE_EN,
+  isValidHttpsUrl,
+} from '../preOrders/tracking';
 
 interface CompanySettingsViewProps {
   user: UserProfile | null;
@@ -50,7 +58,7 @@ export default function CompanySettingsView({
   const isPrivileged = isSuperAdmin || user?.role === 'admin';
 
   // Active Tab
-  const [activeTab, setActiveTab] = useState<'main' | 'subbrands' | 'invoice' | 'inventory' | 'integrations' | 'preview' | 'accounting'>('main');
+  const [activeTab, setActiveTab] = useState<'main' | 'subbrands' | 'invoice' | 'inventory' | 'integrations' | 'tracking' | 'preview' | 'accounting'>('main');
   const [selectedSubBrand, setSelectedSubBrand] = useState<'SAT' | 'GZ' | 'RTX'>('SAT');
 
   // Accounting Baseline Form State
@@ -87,6 +95,7 @@ export default function CompanySettingsView({
       tagline: 'Smart solutions, better future',
       address: 'House #12, Road #3, Block-A, Banasree, Dhaka',
       phone: '01577351518',
+      whatsapp: '01577351518',
       email: 'skyautomationtech@gmail.com',
       logoUrl: '/sat_logo.jpg',
       invoiceTerms: 'Goods once sold are non-refundable. Please verify items at delivery.'
@@ -96,6 +105,7 @@ export default function CompanySettingsView({
       tagline: 'Your trusted gadget shop',
       address: 'House #12, Road #3, Block-A, Banasree, Dhaka',
       phone: '01577351518',
+      whatsapp: '01577351518',
       email: 'gadgetzu.bd@gmail.com',
       logoUrl: '/gz_logo.jpg',
       invoiceTerms: 'Goods once sold are non-refundable. Please verify items at delivery.'
@@ -105,6 +115,7 @@ export default function CompanySettingsView({
       tagline: 'Next-gen gaming & tech accessories',
       address: 'House #12, Road #3, Block-A, Banasree, Dhaka',
       phone: '01577351518',
+      whatsapp: '01577351518',
       email: 'rtxgadget.bd@gmail.com',
       logoUrl: '/rtx_logo.jpg',
       invoiceTerms: 'Goods once sold are non-refundable. Please verify items at delivery.'
@@ -124,6 +135,14 @@ export default function CompanySettingsView({
   const [emailJsTemplateId, setEmailJsTemplateId] = useState('');
   const [emailJsPublicKey, setEmailJsPublicKey] = useState('');
   const [emailJsRecipient, setEmailJsRecipient] = useState('');
+
+  // Public Tracking Portal Settings
+  const [publicAppUrl, setPublicAppUrl] = useState(DEFAULT_PUBLIC_APP_URL);
+  const [trackingAutoExpiryEnabled, setTrackingAutoExpiryEnabled] = useState(true);
+  const [trackingAutoExpiryDays, setTrackingAutoExpiryDays] = useState(DEFAULT_TRACKING_AUTO_EXPIRY_DAYS);
+  const [defaultShowCourierTracking, setDefaultShowCourierTracking] = useState(false);
+  const [trackingTemplateEn, setTrackingTemplateEn] = useState(DEFAULT_TRACKING_SHARE_TEMPLATE_EN);
+  const [trackingTemplateBn, setTrackingTemplateBn] = useState(DEFAULT_TRACKING_SHARE_TEMPLATE_BN);
 
   // UI state
   const [saving, setSaving] = useState(false);
@@ -156,6 +175,7 @@ export default function CompanySettingsView({
             tagline: companySettings.subBrandDetails.SAT?.tagline || 'Smart solutions, better future',
             address: companySettings.subBrandDetails.SAT?.address || 'House #12, Road #3, Block-A, Banasree, Dhaka',
             phone: companySettings.subBrandDetails.SAT?.phone || '01577351518',
+            whatsapp: companySettings.subBrandDetails.SAT?.whatsapp || companySettings.subBrandDetails.SAT?.phone || '01577351518',
             email: companySettings.subBrandDetails.SAT?.email || 'skyautomationtech@gmail.com',
             logoUrl: companySettings.subBrandDetails.SAT?.logoUrl || '/sat_logo.jpg',
             invoiceTerms: companySettings.subBrandDetails.SAT?.invoiceTerms || 'Goods once sold are non-refundable. Please verify items at delivery.'
@@ -165,6 +185,7 @@ export default function CompanySettingsView({
             tagline: companySettings.subBrandDetails.GZ?.tagline || 'Your trusted gadget shop',
             address: companySettings.subBrandDetails.GZ?.address || 'House #12, Road #3, Block-A, Banasree, Dhaka',
             phone: companySettings.subBrandDetails.GZ?.phone || '01577351518',
+            whatsapp: companySettings.subBrandDetails.GZ?.whatsapp || companySettings.subBrandDetails.GZ?.phone || '01577351518',
             email: companySettings.subBrandDetails.GZ?.email || 'gadgetzu.bd@gmail.com',
             logoUrl: companySettings.subBrandDetails.GZ?.logoUrl || '/gz_logo.jpg',
             invoiceTerms: companySettings.subBrandDetails.GZ?.invoiceTerms || 'Goods once sold are non-refundable. Please verify items at delivery.'
@@ -174,6 +195,7 @@ export default function CompanySettingsView({
             tagline: companySettings.subBrandDetails.RTX?.tagline || 'Next-gen gaming & tech accessories',
             address: companySettings.subBrandDetails.RTX?.address || 'House #12, Road #3, Block-A, Banasree, Dhaka',
             phone: companySettings.subBrandDetails.RTX?.phone || '01577351518',
+            whatsapp: companySettings.subBrandDetails.RTX?.whatsapp || companySettings.subBrandDetails.RTX?.phone || '01577351518',
             email: companySettings.subBrandDetails.RTX?.email || 'rtxgadget.bd@gmail.com',
             logoUrl: companySettings.subBrandDetails.RTX?.logoUrl || '/rtx_logo.jpg',
             invoiceTerms: companySettings.subBrandDetails.RTX?.invoiceTerms || 'Goods once sold are non-refundable. Please verify items at delivery.'
@@ -192,6 +214,19 @@ export default function CompanySettingsView({
         setEmailJsPublicKey(companySettings.emailJsConfig.publicKey || '');
         setEmailJsRecipient(companySettings.emailJsConfig.recipientEmail || '');
       }
+
+      setPublicAppUrl(companySettings.publicAppUrl ?? DEFAULT_PUBLIC_APP_URL);
+      setTrackingAutoExpiryEnabled(companySettings.trackingAutoExpiryEnabled ?? true);
+      setTrackingAutoExpiryDays(
+        Number(companySettings.trackingAutoExpiryDays || DEFAULT_TRACKING_AUTO_EXPIRY_DAYS)
+      );
+      setDefaultShowCourierTracking(Boolean(companySettings.defaultShowCourierTracking));
+      setTrackingTemplateEn(
+        companySettings.trackingShareTemplates?.en || DEFAULT_TRACKING_SHARE_TEMPLATE_EN
+      );
+      setTrackingTemplateBn(
+        companySettings.trackingShareTemplates?.bn || DEFAULT_TRACKING_SHARE_TEMPLATE_BN
+      );
     }
   }, [companySettings]);
 
@@ -295,6 +330,13 @@ export default function CompanySettingsView({
       return;
     }
 
+    const cleanPublicAppUrl = publicAppUrl.trim().replace(/\/+$/, '');
+    if (cleanPublicAppUrl && !isValidHttpsUrl(cleanPublicAppUrl)) {
+      setErrorMsg('Public Tracking Base URL must be a valid https:// URL (e.g. https://sat-erp.vercel.app).');
+      setActiveTab('tracking');
+      return;
+    }
+
     setSaving(true);
     setErrorMsg('');
     setSuccessMsg('');
@@ -334,7 +376,15 @@ export default function CompanySettingsView({
           templateId: emailJsTemplateId.trim(),
           publicKey: emailJsPublicKey.trim(),
           recipientEmail: emailJsRecipient.trim()
-        }
+        },
+        publicAppUrl: cleanPublicAppUrl,
+        trackingAutoExpiryEnabled,
+        trackingAutoExpiryDays: Math.max(1, Number(trackingAutoExpiryDays) || DEFAULT_TRACKING_AUTO_EXPIRY_DAYS),
+        defaultShowCourierTracking,
+        trackingShareTemplates: {
+          en: trackingTemplateEn.trim() || DEFAULT_TRACKING_SHARE_TEMPLATE_EN,
+          bn: trackingTemplateBn.trim() || DEFAULT_TRACKING_SHARE_TEMPLATE_BN,
+        },
       };
 
       await onSave(payload);
@@ -360,6 +410,13 @@ export default function CompanySettingsView({
       prefixes: { SAT: satPrefix, GZ: gzPrefix, RTX: rtxPrefix },
       subBrandDetails: subBrands,
       thresholds: { lowStockThreshold, agingBucket1, agingBucket2, supplierTerms },
+      publicTrackingPortal: {
+        publicAppUrl,
+        trackingAutoExpiryEnabled,
+        trackingAutoExpiryDays,
+        defaultShowCourierTracking,
+        trackingShareTemplates: { en: trackingTemplateEn, bn: trackingTemplateBn },
+      },
       exportedAt: new Date().toISOString()
     };
 
@@ -541,6 +598,22 @@ export default function CompanySettingsView({
 
           <button
             type="button"
+            onClick={() => setActiveTab('tracking')}
+            className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+              activeTab === 'tracking'
+                ? 'bg-slate-900 dark:bg-slate-800 text-amber-400 shadow-2xs'
+                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-50 dark:hover:bg-slate-800/50'
+            }`}
+          >
+            <div className="flex items-center gap-2">
+              <Link2 size={15} className={activeTab === 'tracking' ? 'text-amber-400' : 'text-slate-400'} />
+              <span>Public Tracking Portal</span>
+            </div>
+            <span className="text-[10px] font-mono opacity-60">06</span>
+          </button>
+
+          <button
+            type="button"
             onClick={() => setActiveTab('accounting')}
             className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer ${
               activeTab === 'accounting'
@@ -552,7 +625,7 @@ export default function CompanySettingsView({
               <Calculator size={15} className={activeTab === 'accounting' ? 'text-slate-950' : 'text-amber-500'} />
               <span>Accounting Baseline</span>
             </div>
-            <span className="text-[10px] font-mono opacity-60">06</span>
+            <span className="text-[10px] font-mono opacity-60">07</span>
           </button>
 
           <button
@@ -568,7 +641,7 @@ export default function CompanySettingsView({
               <Eye size={15} className="text-amber-600 dark:text-amber-400" />
               <span>Live Invoice Preview</span>
             </div>
-            <span className="text-[10px] font-mono opacity-60">07</span>
+            <span className="text-[10px] font-mono opacity-60">08</span>
           </button>
         </div>
 
@@ -834,7 +907,7 @@ export default function CompanySettingsView({
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
                     Physical Address
@@ -857,6 +930,20 @@ export default function CompanySettingsView({
                     disabled={!isSuperAdmin}
                     value={subBrands[selectedSubBrand].phone || ''}
                     onChange={(e) => handleSubBrandFieldChange(selectedSubBrand, 'phone', e.target.value)}
+                    className="w-full bg-white border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 font-mono font-bold focus:outline-hidden disabled:opacity-60"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
+                    Support WhatsApp (For Tracking Portal)
+                  </label>
+                  <input
+                    type="text"
+                    disabled={!isSuperAdmin}
+                    value={subBrands[selectedSubBrand].whatsapp || ''}
+                    onChange={(e) => handleSubBrandFieldChange(selectedSubBrand, 'whatsapp', e.target.value)}
+                    placeholder="e.g. 01577351518"
                     className="w-full bg-white border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 font-mono font-bold focus:outline-hidden disabled:opacity-60"
                   />
                 </div>
@@ -1202,6 +1289,185 @@ export default function CompanySettingsView({
                     className="w-full bg-white border border-slate-200 rounded-xl p-2 text-xs disabled:opacity-60"
                   />
                 </div>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* ========================================================================= */}
+        {/* PART 5B: CUSTOMER PUBLIC TRACKING PORTAL SETTINGS */}
+        {/* ========================================================================= */}
+        {activeTab === 'tracking' && (
+          <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs space-y-5 animate-in fade-in duration-150">
+            <div className="border-b border-slate-100 pb-3">
+              <span className="text-[10px] font-mono font-bold text-amber-600 uppercase tracking-widest block">
+                SECTION 6
+              </span>
+              <h3 className="text-sm font-black text-slate-900 flex items-center gap-2 mt-0.5">
+                <Link2 size={16} className="text-amber-500" />
+                Customer Public Tracking Portal Settings
+              </h3>
+              <p className="text-xs text-slate-500 mt-0.5">
+                Configure your hosted domain URL, automatic link expiry rules, courier privacy default, and WhatsApp/SMS share templates.
+              </p>
+            </div>
+
+            {/* Public Base URL */}
+            <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-700">
+                  Public App Base URL (Vercel Hosted SPA) *
+                </label>
+                {publicAppUrl.trim() ? (
+                  isValidHttpsUrl(publicAppUrl) ? (
+                    <span className="text-[11px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md">
+                      Valid HTTPS Base URL
+                    </span>
+                  ) : (
+                    <span className="text-[11px] font-semibold text-rose-700 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded-md">
+                      Must start with https://
+                    </span>
+                  )
+                ) : (
+                  <span className="text-[11px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-md">
+                    Unconfigured — Copy &amp; Share disabled
+                  </span>
+                )}
+              </div>
+              <input
+                type="url"
+                disabled={!isSuperAdmin}
+                value={publicAppUrl}
+                onChange={(e) => setPublicAppUrl(e.target.value)}
+                placeholder="https://sat-erp.vercel.app"
+                className="w-full bg-white border border-slate-200 rounded-xl py-2 px-3 text-xs font-mono text-slate-900 focus:outline-hidden focus:border-amber-400 disabled:opacity-60"
+              />
+              <p className="text-[11px] text-slate-500">
+                Sample generated URL:{' '}
+                <span className="font-mono text-slate-700">
+                  {isValidHttpsUrl(publicAppUrl)
+                    ? `${publicAppUrl.trim().replace(/\/+$/, '')}/track/<256-bit-token>`
+                    : 'Enter a valid https:// URL above'}
+                </span>
+              </p>
+            </div>
+
+            {/* Auto-Expiry & Default Courier Visibility */}
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-3">
+                <label className="flex items-start gap-2.5 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    disabled={!isSuperAdmin}
+                    checked={trackingAutoExpiryEnabled}
+                    onChange={(e) => setTrackingAutoExpiryEnabled(e.target.checked)}
+                    className="mt-0.5 rounded border-slate-300 text-amber-500 focus:ring-amber-500"
+                  />
+                  <div>
+                    <span className="block text-xs font-bold text-slate-800">
+                      Auto-expire completed tracking links
+                    </span>
+                    <span className="block text-[11px] text-slate-500 mt-0.5">
+                      Automatically disable &amp; strip public tracking snapshots N days after Delivered, Cancelled, or Refunded.
+                    </span>
+                  </div>
+                </label>
+
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">
+                    Auto-Expiry Days After Completion
+                  </label>
+                  <input
+                    type="number"
+                    min={1}
+                    max={365}
+                    disabled={!isSuperAdmin || !trackingAutoExpiryEnabled}
+                    value={trackingAutoExpiryDays}
+                    onChange={(e) =>
+                      setTrackingAutoExpiryDays(Math.max(1, Number(e.target.value) || 90))
+                    }
+                    className="w-32 bg-white border border-slate-200 rounded-xl py-2 px-3 text-xs font-mono font-bold text-slate-900 disabled:opacity-50"
+                  />
+                </div>
+              </div>
+
+              <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-2.5">
+                <label className="flex items-start gap-2.5 cursor-pointer select-none">
+                  <input
+                    type="checkbox"
+                    disabled={!isSuperAdmin}
+                    checked={defaultShowCourierTracking}
+                    onChange={(e) => setDefaultShowCourierTracking(e.target.checked)}
+                    className="mt-0.5 rounded border-slate-300 text-amber-500 focus:ring-amber-500"
+                  />
+                  <div>
+                    <span className="block text-xs font-bold text-slate-800">
+                      Show courier tracking to customers by default
+                    </span>
+                    <span className="block text-[11px] text-slate-500 mt-0.5">
+                      When unchecked (recommended default), courier name, tracking number, and carrier URL stay hidden until toggled per order.
+                    </span>
+                  </div>
+                </label>
+              </div>
+            </div>
+
+            {/* WhatsApp / SMS Share Message Templates */}
+            <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-4">
+              <div>
+                <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
+                  Share Message Templates (English &amp; বাংলা)
+                </h4>
+                <p className="text-[11px] text-slate-500 mt-1">
+                  Supported variables:{' '}
+                  <span className="font-mono text-slate-700">
+                    {'{firstName}'}, {'{orderId}'}, {'{productName}'}, {'{brandName}'}, {'{status}'}, {'{trackingUrl}'}, {'{totalAmount}'}, {'{dueAmount}'}
+                  </span>
+                </p>
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-xs font-semibold text-slate-700">English Template</label>
+                  {isSuperAdmin && (
+                    <button
+                      type="button"
+                      onClick={() => setTrackingTemplateEn(DEFAULT_TRACKING_SHARE_TEMPLATE_EN)}
+                      className="text-[11px] font-semibold text-amber-600 hover:underline cursor-pointer"
+                    >
+                      Reset Default
+                    </button>
+                  )}
+                </div>
+                <textarea
+                  rows={2}
+                  disabled={!isSuperAdmin}
+                  value={trackingTemplateEn}
+                  onChange={(e) => setTrackingTemplateEn(e.target.value)}
+                  className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800 focus:outline-hidden focus:border-amber-400 disabled:opacity-60"
+                />
+              </div>
+
+              <div>
+                <div className="flex items-center justify-between mb-1">
+                  <label className="text-xs font-semibold text-slate-700">বাংলা টেমপ্লেট (Bangla Template)</label>
+                  {isSuperAdmin && (
+                    <button
+                      type="button"
+                      onClick={() => setTrackingTemplateBn(DEFAULT_TRACKING_SHARE_TEMPLATE_BN)}
+                      className="text-[11px] font-semibold text-amber-600 hover:underline cursor-pointer"
+                    >
+                      Reset Default
+                    </button>
+                  )}
+                </div>
+                <textarea
+                  rows={2}
+                  disabled={!isSuperAdmin}
+                  value={trackingTemplateBn}
+                  onChange={(e) => setTrackingTemplateBn(e.target.value)}
+                  className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800 focus:outline-hidden focus:border-amber-400 disabled:opacity-60"
+                />
               </div>
             </div>
           </div>

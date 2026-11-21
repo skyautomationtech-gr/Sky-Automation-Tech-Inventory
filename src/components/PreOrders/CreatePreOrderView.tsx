@@ -22,6 +22,7 @@ import {
 } from 'lucide-react';
 import {
   Category,
+  CompanySettings,
   Customer,
   PreOrderPaymentMethod,
   Product,
@@ -71,6 +72,7 @@ export interface CreatePreOrderViewProps {
   rolePermissions: RolePermissionsMap | null;
   products: Product[];
   categories: Category[];
+  companySettings?: CompanySettings | null;
   onCancel: () => void;
   onCreated: (result: CreatePreOrderResult) => void;
   onDirtyChange?: (dirty: boolean) => void;
@@ -95,6 +97,7 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
   rolePermissions,
   products,
   categories,
+  companySettings,
   onCancel,
   onCreated,
   onDirtyChange,
@@ -643,6 +646,7 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
           notes: notes.trim(),
           internalNotes: canViewProfit ? internalNotes.trim() : '',
           idempotencyKey: idempotencyKeyRef.current,
+          companySettings,
           initialAdvance:
             parsedAdvance > 0
               ? {
@@ -662,6 +666,9 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
       toast.success(
         `Pre-Order ${result.preOrderNumber} created (${startStatus}).`
       );
+      if (result.trackingSyncWarning) {
+        toast.warning(result.trackingSyncWarning);
+      }
       onCreated(result);
     } catch (err: any) {
       console.error('Create Pre-Order failed:', err);
