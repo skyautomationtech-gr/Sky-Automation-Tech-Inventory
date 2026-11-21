@@ -459,28 +459,71 @@
       "type": "object",
       "properties": {
         "preOrderId": { "type": "string" },
-        "chinaTrackingNo": { "type": "string" },
-        "bdTrackingNo": { "type": "string" },
+        "supplierOrderRef": { "type": "string" },
+        "chinaOrderDate": { "type": "string" },
+        "shippingMethod": { "type": "string" },
         "freightForwarder": { "type": "string" },
-        "bdCourier": { "type": "string" },
+        "forwarderContact": { "type": "string" },
+        "trackingNumber": { "type": "string" },
+        "carrierTrackingUrl": { "type": "string" },
+        "shippedFromChinaAt": { "type": "string" },
         "estimatedArrivalDate": { "type": "string" },
+        "previousEstimatedArrivalDate": { "type": "string" },
+        "isDelayed": { "type": "boolean" },
+        "arrivedBdAt": { "type": "string" },
+        "customsStatus": { "type": "string" },
+        "customsClearanceDate": { "type": "string" },
         "updatedAt": { "type": "number" }
+      }
+    },
+    "PreOrderShipmentDoc": {
+      "title": "PreOrderShipmentDoc",
+      "description": "Uploaded commercial invoices, packing lists, B/L, and customs papers",
+      "type": "object",
+      "properties": {
+        "preOrderId": { "type": "string" },
+        "docType": { "type": "string" },
+        "fileName": { "type": "string" },
+        "fileUrl": { "type": "string" },
+        "uploadedBy": { "type": "string" },
+        "uploadedAt": { "type": "number" },
+        "isDeleted": { "type": "boolean" }
+      }
+    },
+    "PreOrderShipmentEvent": {
+      "title": "PreOrderShipmentEvent",
+      "description": "Append-only shipment milestone events log",
+      "type": "object",
+      "properties": {
+        "preOrderId": { "type": "string" },
+        "date": { "type": "string" },
+        "time": { "type": "string" },
+        "timestamp": { "type": "number" },
+        "staffId": { "type": "string" },
+        "text": { "type": "string" },
+        "showToCustomer": { "type": "boolean" }
       }
     },
     "PreOrderSupplierPayment": {
       "title": "PreOrderSupplierPayment",
-      "description": "Append-only supplier disbursement ledger for pre-orders",
+      "description": "Append-only supplier disbursement ledger for pre-orders with multi-order allocations & reversals",
       "type": "object",
       "properties": {
+        "type": { "type": "string" },
         "preOrderId": { "type": "string" },
+        "preOrderIds": { "type": "array" },
+        "allocations": { "type": "array" },
         "supplierId": { "type": "string" },
         "amount": { "type": "number" },
         "currency": { "type": "string" },
         "amountBdt": { "type": "number" },
         "method": { "type": "string" },
+        "receiptUrl": { "type": "string" },
+        "category": { "type": "string" },
         "idempotencyKey": { "type": "string" },
         "date": { "type": "string" },
-        "createdAt": { "type": "number" }
+        "createdAt": { "type": "number" },
+        "reversesPaymentId": { "type": "string" }
       }
     },
     "PublicTrackingRecord": {

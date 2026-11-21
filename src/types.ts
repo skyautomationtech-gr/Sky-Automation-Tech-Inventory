@@ -273,6 +273,14 @@ export interface Supplier {
   logoUrl?: string;
   documentUrls?: string[];
   subBrand?: 'SAT' | 'GZ' | 'RTX' | 'ALL' | '';
+  // Optional China / Pre-Order Supplier metadata
+  isChinaSupplier?: boolean;
+  whatsapp?: string;
+  wechatId?: string;
+  city?: string;
+  country?: string;
+  platform?: '1688' | 'Taobao' | 'AliExpress' | 'Alibaba' | 'Direct factory' | 'Agent' | 'Other' | string;
+  shopUrl?: string;
   totalPurchases: number;
   totalPaid: number;
   outstandingDue: number;
@@ -779,10 +787,21 @@ export interface PreOrder {
   supplierId?: string;
   supplierName?: string;
   supplierOrderRef?: string;
+  chinaOrderDate?: string;
+  shippingMethod?: 'Air' | 'Sea' | 'Express courier' | string;
+  freightForwarder?: string;
+  forwarderContact?: string;
   courier?: string;
   trackingNumber?: string;
+  carrierTrackingUrl?: string;
   trackingToken?: string;
+  shippedFromChinaAt?: string;
   estimatedDeliveryDate?: string;
+  previousEstimatedArrivalDate?: string;
+  arrivedBdAt?: string;
+  customsStatus?: 'Not started' | 'In progress' | 'Cleared' | 'Held/Issue' | string;
+  customsClearanceDate?: string;
+  isDelayed?: boolean;
 
   // Conversion & Stock flags
   stockReceived?: boolean;
@@ -807,13 +826,26 @@ export interface PreOrder {
 }
 
 /**
- * Restricted cost/profit/internal note subdocument stored at `preOrders/{id}/private/cost`
- * Read/write restricted exclusively to roles holding `preOrderViewProfit`.
+ * Restricted cost/profit/shipping-expense/internal note subdocument stored at `preOrders/{id}/private/cost`.
+ * Read/write restricted exclusively to roles holding `preOrderSupplier` or `preOrderViewProfit`.
  */
+export interface PreOrderShippingExpensesBreakdown {
+  internationalFreight: number;
+  customsDuty: number;
+  localTransport: number;
+  handlingOther: number;
+  freightReceiptUrl?: string;
+  customsReceiptUrl?: string;
+  localReceiptUrl?: string;
+  handlingReceiptUrl?: string;
+}
+
 export interface PreOrderPrivateCost {
   preOrderId: string;
   chinaUnitCost: number;
-  shippingCost: number;
+  shippingCost: number; // Estimated shipping cost
+  actualShippingCost?: number; // Sum of shippingExpenses breakdown
+  shippingExpenses?: PreOrderShippingExpensesBreakdown;
   supplierUnitCost?: number;
   expectedProfit: number;
   internalNotes?: string;
@@ -866,27 +898,90 @@ export interface PreOrderStatusHistory {
   timestamp: number;
 }
 
+export type PreOrderShippingMethod = 'Air' | 'Sea' | 'Express courier';
+export type PreOrderCustomsStatus = 'Not started' | 'In progress' | 'Cleared' | 'Held/Issue';
+
 export interface PreOrderShipment {
   preOrderId: string;
   supplierOrderRef?: string;
+  chinaOrderDate?: string; // YYYY-MM-DD
+  shippingMethod?: PreOrderShippingMethod | string;
   chinaCourier?: string;
   chinaTrackingNo?: string;
   freightForwarder?: string;
+  forwarderContact?: string;
   bdCourier?: string;
   bdTrackingNo?: string;
   trackingNumber?: string;
-  shippedFromChinaAt?: string;
-  arrivedBdAt?: string;
-  estimatedArrivalDate?: string;
+  carrierTrackingUrl?: string;
+  shippedFromChinaAt?: string; // YYYY-MM-DD
+  estimatedArrivalDate?: string; // YYYY-MM-DD
+  previousEstimatedArrivalDate?: string; // YYYY-MM-DD
+  isDelayed?: boolean;
+  arrivedBdAt?: string; // YYYY-MM-DD
+  customsStatus?: PreOrderCustomsStatus | string;
+  customsClearanceDate?: string; // YYYY-MM-DD
   notes?: string;
   updatedBy: string;
   updatedAt: number;
 }
 
-export interface PreOrderSupplierPayment {
+export type PreOrderShipmentDocType =
+  | 'invoice'
+  | 'packing_list'
+  | 'bill_of_lading'
+  | 'customs_papers'
+  | 'photo'
+  | 'other';
+
+export interface PreOrderShipmentDoc {
   id: string;
   preOrderId: string;
+  preOrderNumber?: string;
+  docType: PreOrderShipmentDocType | string;
+  fileName: string;
+  fileUrl: string;
+  storagePath?: string;
+  contentType?: string;
+  fileSize?: number;
+  note?: string;
+  uploadedBy: string;
+  uploadedByName: string;
+  uploadedAt: number;
+  isDeleted?: boolean;
+  deletedBy?: string;
+  deletedByName?: string;
+  deletedAt?: number;
+  deleteReason?: string;
+}
+
+export interface PreOrderShipmentEvent {
+  id: string;
+  preOrderId: string;
+  date: string; // YYYY-MM-DD
+  time: string; // HH:mm
+  timestamp: number;
+  staffId: string;
+  staffName: string;
+  text: string;
+  showToCustomer: boolean;
+  publicMessage?: string;
+  source?: 'auto' | 'manual';
+}
+
+export interface PreOrderSupplierPaymentAllocation {
+  preOrderId: string;
   preOrderNumber: string;
+  amountBdt: number;
+}
+
+export interface PreOrderSupplierPayment {
+  id: string;
+  type?: 'payment' | 'reversal';
+  preOrderId: string; // First allocated order ID or 'MULTI'
+  preOrderNumber: string; // Comma summary or single PO number
+  preOrderIds?: string[]; // All linked order IDs for Firestore array-contains queries
+  allocations?: PreOrderSupplierPaymentAllocation[];
   supplierId: string;
   supplierName: string;
   amount: number;
@@ -895,12 +990,16 @@ export interface PreOrderSupplierPayment {
   amountBdt: number;
   method: string;
   referenceNo?: string;
+  receiptUrl?: string;
   note?: string;
+  category?: 'Pre-Order Supplier Payment' | string;
   idempotencyKey: string;
   date: string; // YYYY-MM-DD
   recordedBy: string;
   recordedByName: string;
   createdAt: number;
+  reversesPaymentId?: string;
+  reversalReason?: string;
 }
 
 export interface PublicTrackingTimelineItem {
@@ -942,7 +1041,11 @@ export type PreOrderAuditAction =
   | 'REFUND_RECORDED'
   | 'LEDGER_RECALCULATED'
   | 'SHIPMENT_UPDATED'
+  | 'SHIPMENT_DOC_UPLOADED'
+  | 'SHIPMENT_DOC_DELETED'
+  | 'SHIPMENT_EVENT_ADDED'
   | 'SUPPLIER_PAYMENT_RECORDED'
+  | 'SUPPLIER_PAYMENT_REVERSED'
   | 'TRACKING_LINK_GENERATED'
   | 'STOCK_RECEIVED'
   | 'CONVERTED_TO_SALE';

@@ -111,3 +111,76 @@ export async function uploadPreOrderImage(
 
   return { url: compressed.dataUrl, storageUploaded: false };
 }
+
+const ALLOWED_DOC_TYPES = ['image/jpeg', 'image/jpg', 'image/png', 'image/webp', 'application/pdf'];
+const MAX_DOC_SIZE_BYTES = 5 * 1024 * 1024; // 5MB strict limit
+
+export function validatePreOrderDocumentFile(file: File): string | null {
+  const mime = (file.type || '').toLowerCase();
+  const ext = file.name.split('.').pop()?.toLowerCase() || '';
+  const validExt = ['jpg', 'jpeg', 'png', 'webp', 'pdf'].includes(ext);
+  if (!ALLOWED_DOC_TYPES.includes(mime) && !validExt) {
+    return 'Unsupported file type. Allowed formats: JPG, PNG, WebP, or PDF.';
+  }
+  if (file.size > MAX_DOC_SIZE_BYTES) {
+    return 'File size exceeds the 5MB maximum limit.';
+  }
+  return null;
+}
+
+export interface UploadedPreOrderDocument {
+  url: string;
+  storagePath: string;
+  contentType: string;
+  fileSize: number;
+  fileName: string;
+}
+
+/**
+ * Validates (JPG/PNG/WebP/PDF, <= 5MB), compresses images if > 1.2MB,
+ * and uploads to Firebase Storage under preOrders/{preOrderId}/docs/{timestamp}_{safeName}.
+ */
+export async function uploadPreOrderDocument(
+  preOrderId: string,
+  file: File
+): Promise<UploadedPreOrderDocument> {
+  const err = validatePreOrderDocumentFile(file);
+  if (err) throw new Error(err);
+  if (!storage) {
+    throw new Error('Firebase Storage is not initialized.');
+  }
+
+  const safeBase = file.name.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 64) || 'document';
+  const isPdf =
+    file.type.toLowerCase() === 'application/pdf' ||
+    file.name.toLowerCase().endsWith('.pdf');
+
+  let uploadBody: Blob = file;
+  let contentType = file.type || (isPdf ? 'application/pdf' : 'image/jpeg');
+  let finalName = safeBase;
+  let finalSize = file.size;
+
+  if (!isPdf && file.size > 1.2 * 1024 * 1024) {
+    const compressed = await compressImageFile(file, 1400, 0.82);
+    uploadBody = compressed.blob;
+    contentType = 'image/jpeg';
+    finalSize = compressed.sizeBytes;
+    if (!finalName.toLowerCase().endsWith('.jpg') && !finalName.toLowerCase().endsWith('.jpeg')) {
+      finalName = `${finalName}.jpg`;
+    }
+  }
+
+  const storagePath = `preOrders/${preOrderId}/docs/${Date.now()}_${finalName}`;
+  const storageRef = ref(storage, storagePath);
+  const snap = await uploadBytes(storageRef, uploadBody, { contentType });
+  const url = await getDownloadURL(snap.ref);
+
+  return {
+    url,
+    storagePath,
+    contentType,
+    fileSize: finalSize,
+    fileName: file.name,
+  };
+}
+

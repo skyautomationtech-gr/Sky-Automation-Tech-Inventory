@@ -195,3 +195,76 @@ export function canTransitionPreOrderStatus(
 
   return { allowed: true };
 }
+
+export interface ShippingExpensesInput {
+  internationalFreight?: number;
+  customsDuty?: number;
+  localTransport?: number;
+  handlingOther?: number;
+}
+
+export function calculateActualShippingCost(input?: ShippingExpensesInput | null): number {
+  if (!input) return 0;
+  const sumPaisa =
+    Math.max(0, toPaisa(input.internationalFreight)) +
+    Math.max(0, toPaisa(input.customsDuty)) +
+    Math.max(0, toPaisa(input.localTransport)) +
+    Math.max(0, toPaisa(input.handlingOther));
+  return fromPaisa(sumPaisa);
+}
+
+export interface SupplierPaymentLike {
+  id: string;
+  type?: 'payment' | 'reversal';
+  preOrderId: string;
+  allocations?: Array<{ preOrderId: string; amountBdt: number }>;
+  amountBdt: number;
+  reversesPaymentId?: string;
+}
+
+export interface PerOrderSupplierSummary {
+  chinaCostTotal: number;
+  paidToSupplier: number;
+  supplierDue: number;
+}
+
+export function calculatePerOrderSupplierSummary(input: {
+  qty: number;
+  chinaUnitCost: number;
+  preOrderId: string;
+  supplierPayments: SupplierPaymentLike[];
+}): PerOrderSupplierSummary {
+  const safeQty = Math.max(0, Math.round(Number(input.qty) || 0));
+  const unitCostPaisa = Math.max(0, toPaisa(input.chinaUnitCost));
+  const chinaCostTotalPaisa = safeQty * unitCostPaisa;
+
+  const extractOrderAllocatedPaisa = (p: SupplierPaymentLike): number => {
+    if (Array.isArray(p.allocations) && p.allocations.length > 0) {
+      return p.allocations
+        .filter((a) => a.preOrderId === input.preOrderId)
+        .reduce((acc, a) => acc + Math.max(0, toPaisa(a.amountBdt)), 0);
+    }
+    return p.preOrderId === input.preOrderId ? Math.max(0, toPaisa(p.amountBdt)) : 0;
+  };
+
+  let paidPaisa = 0;
+  for (const p of input.supplierPayments || []) {
+    const portionPaisa = extractOrderAllocatedPaisa(p);
+    if (portionPaisa <= 0) continue;
+    if (p.type === 'reversal') {
+      paidPaisa -= portionPaisa;
+    } else {
+      paidPaisa += portionPaisa;
+    }
+  }
+
+  const netPaidPaisa = Math.max(0, paidPaisa);
+  const duePaisa = Math.max(0, chinaCostTotalPaisa - netPaidPaisa);
+
+  return {
+    chinaCostTotal: fromPaisa(chinaCostTotalPaisa),
+    paidToSupplier: fromPaisa(netPaidPaisa),
+    supplierDue: fromPaisa(duePaisa),
+  };
+}
+

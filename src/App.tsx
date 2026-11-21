@@ -91,6 +91,8 @@ import PreOrderPlaceholderView from './components/PreOrders/PreOrderPlaceholderV
 import CreatePreOrderView from './components/PreOrders/CreatePreOrderView';
 import AllPreOrdersView from './components/PreOrders/AllPreOrdersView';
 import PaymentManagementView from './components/PreOrders/PaymentManagementView';
+import PreOrderSupplierManagementView from './components/PreOrders/PreOrderSupplierManagementView';
+import ShipmentTrackingView from './components/PreOrders/ShipmentTrackingView';
 import NotificationCenter from './components/NotificationCenter';
 import { PublicInvoiceVerification } from './components/PublicInvoiceVerification';
 import ErrorBoundary from './components/ErrorBoundary';
@@ -1184,10 +1186,34 @@ export default function App() {
           </ErrorBoundary>
         )}
 
+        {currentTab === 'preorder_suppliers' && (
+          <ErrorBoundary fallbackTitle="Pre-Order Supplier Management encountered an issue">
+            <PreOrderSupplierManagementView
+              user={user}
+              rolePermissions={rolePermissions}
+              categories={categories}
+              companySettings={companySettings}
+            />
+          </ErrorBoundary>
+        )}
+
+        {currentTab === 'preorder_tracking' && (
+          <ErrorBoundary fallbackTitle="Pre-Order Shipment Tracking encountered an issue">
+            <ShipmentTrackingView
+              user={user}
+              rolePermissions={rolePermissions}
+              categories={categories}
+              companySettings={companySettings}
+            />
+          </ErrorBoundary>
+        )}
+
         {isPreOrderTab(currentTab) &&
           currentTab !== 'preorder_create' &&
           currentTab !== 'preorder_list' &&
-          currentTab !== 'preorder_payments' && (
+          currentTab !== 'preorder_payments' &&
+          currentTab !== 'preorder_suppliers' &&
+          currentTab !== 'preorder_tracking' && (
             <ErrorBoundary fallbackTitle="Pre-Order Management encountered an issue">
               <PreOrderPlaceholderView
                 tab={currentTab}

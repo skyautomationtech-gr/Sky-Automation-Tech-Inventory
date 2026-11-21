@@ -3,16 +3,19 @@ import {
   AlertCircle,
   ArrowRightLeft,
   Banknote,
+  Building2,
   Calendar,
   CheckCircle2,
   Clock,
   CreditCard,
   Edit3,
+  ExternalLink,
   History,
   ImagePlus,
   Lock,
   Minus,
   Package,
+  Paperclip,
   Phone,
   Plus,
   Printer,
@@ -23,6 +26,7 @@ import {
   ShieldAlert,
   ShieldCheck,
   Trash2,
+  Truck,
   User,
   Wallet,
   X,
@@ -36,6 +40,7 @@ import {
   PreOrderPayment,
   PreOrderPrivateCost,
   PreOrderStatusHistory,
+  PreOrderSupplierPayment,
   RolePermissionsMap,
   Supplier,
   UserProfile,
@@ -51,11 +56,16 @@ import {
   isValidBdPhone,
   normalizeBdPhone,
 } from '../../preOrders/constants';
-import { calculatePreOrderFinancials, toPaisa } from '../../preOrders/calculations';
+import {
+  calculatePerOrderSupplierSummary,
+  calculatePreOrderFinancials,
+  toPaisa,
+} from '../../preOrders/calculations';
 import { uploadPreOrderImage, validateImageFile } from '../../preOrders/imageUpload';
 import {
   actorFromUser,
   getPreOrderFullDetail,
+  getPreOrderSupplierPayments,
   recalculatePreOrderFromLedger,
   updatePreOrder,
   updatePreOrderPrivateCost,
@@ -88,6 +98,11 @@ import {
   ReversePaymentModal,
 } from './PreOrderPaymentModals';
 import PreOrderPaymentReceiptModal from './PreOrderPaymentReceiptModal';
+import PreOrderShipmentTab from './PreOrderShipmentTab';
+import {
+  RecordSupplierPaymentModal,
+  ReverseSupplierPaymentModal,
+} from './SupplierPaymentModal';
 
 export interface PreOrderDetailDrawerProps {
   preOrderId: string | null;
@@ -103,7 +118,7 @@ export interface PreOrderDetailDrawerProps {
   onUpdated?: () => void;
 }
 
-type DetailTab = 'overview' | 'payments' | 'timeline' | 'audit';
+type DetailTab = 'overview' | 'payments' | 'shipment' | 'supplier' | 'timeline' | 'audit';
 
 function formatDateTime(ts?: number): string {
   if (!ts) return '—';
@@ -134,6 +149,7 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
   const isAdminUser = isPreOrderAdminRole(user.role);
   const canEdit = hasPermission(user, rolePermissions, 'preOrderEdit');
   const canViewProfit = hasPermission(user, rolePermissions, 'preOrderViewProfit');
+  const canViewSupplier = hasPermission(user, rolePermissions, 'preOrderSupplier') || isAdminUser;
   const canCollectPayment = hasPermission(user, rolePermissions, 'preOrderCollectPayment');
   const canVerifyPayment = hasPermission(user, rolePermissions, 'preOrderVerifyPayment');
   const canRefund = hasPermission(user, rolePermissions, 'preOrderRefund');
@@ -159,6 +175,7 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
   const [statusHistory, setStatusHistory] = useState<PreOrderStatusHistory[]>([]);
   const [privateCost, setPrivateCost] = useState<PreOrderPrivateCost | null>(null);
   const [auditLogs, setAuditLogs] = useState<PreOrderAuditEntry[]>([]);
+  const [orderSupplierPayments, setOrderSupplierPayments] = useState<PreOrderSupplierPayment[]>([]);
   const [receiptModalUrl, setReceiptModalUrl] = useState<string | null>(null);
 
   // Part 3 interactive workflow states
@@ -171,6 +188,10 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
   const [verifyingId, setVerifyingId] = useState<string | null>(null);
   const [recalculating, setRecalculating] = useState(false);
   const [timelineFilter, setTimelineFilter] = useState<'all' | 'status' | 'payments'>('all');
+
+  // Part 4 interactive supplier payment states
+  const [showSupplierPayModal, setShowSupplierPayModal] = useState(false);
+  const [reverseSupPayTarget, setReverseSupPayTarget] = useState<PreOrderSupplierPayment | null>(null);
 
   // Edit mode state
   const [isEditing, setIsEditing] = useState(false);
@@ -239,10 +260,16 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
     setLoading(true);
     setLoadError('');
     try {
-      const detail = await getPreOrderFullDetail(preOrderId, {
-        canViewProfit,
-        canViewAudit,
-      });
+      const [detail, supPays] = await Promise.all([
+        getPreOrderFullDetail(preOrderId, {
+          canViewProfit,
+          canViewSupplier,
+          canViewAudit,
+        }),
+        canViewSupplier
+          ? getPreOrderSupplierPayments(preOrderId, 100).catch(() => [] as PreOrderSupplierPayment[])
+          : Promise.resolve([] as PreOrderSupplierPayment[]),
+      ]);
       if (!detail) {
         setLoadError('Pre-order record could not be found.');
         setOrder(null);
@@ -253,6 +280,7 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
       setStatusHistory(detail.statusHistory);
       setPrivateCost(detail.privateCost);
       setAuditLogs(detail.auditLogs);
+      setOrderSupplierPayments(supPays);
       hydrateEditForm(detail.order, detail.privateCost);
       const locked = PRE_ORDER_EDIT_LOCKED_STATUSES.includes(detail.order.status);
       if (initialEditMode && canEdit && !locked) {
@@ -264,7 +292,7 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
     } finally {
       setLoading(false);
     }
-  }, [preOrderId, canViewProfit, canViewAudit, hydrateEditForm]);
+  }, [preOrderId, canViewProfit, canViewSupplier, canViewAudit, hydrateEditForm]);
 
   useEffect(() => {
     if (isOpen && preOrderId) {
@@ -564,6 +592,31 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
     }
   };
 
+  const linkedSupplierObj = useMemo(
+    () => (order?.supplierId ? suppliers.find((s) => s.id === order.supplierId) || null : null),
+    [order?.supplierId, suppliers]
+  );
+
+  const perOrderSupplierSummary = useMemo(() => {
+    if (!order || !canViewSupplier) return null;
+    return calculatePerOrderSupplierSummary({
+      qty: order.qty,
+      chinaUnitCost: privateCost?.chinaUnitCost || 0,
+      preOrderId: order.id,
+      supplierPayments: orderSupplierPayments,
+    });
+  }, [order, canViewSupplier, privateCost?.chinaUnitCost, orderSupplierPayments]);
+
+  const reversedSupPayIds = useMemo(() => {
+    const set = new Set<string>();
+    orderSupplierPayments.forEach((p) => {
+      if (p.type === 'reversal' && p.reversesPaymentId) {
+        set.add(p.reversesPaymentId);
+      }
+    });
+    return set;
+  }, [orderSupplierPayments]);
+
   const tabs: Array<{ id: DetailTab; label: string; icon: React.ReactNode }> = [
     { id: 'overview', label: 'Overview', icon: <Package className="w-3.5 h-3.5" /> },
     {
@@ -571,6 +624,20 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
       label: `Payments (${payments.length})`,
       icon: <CreditCard className="w-3.5 h-3.5" />,
     },
+    {
+      id: 'shipment',
+      label: 'Shipment',
+      icon: <Truck className="w-3.5 h-3.5" />,
+    },
+    ...(canViewSupplier
+      ? [
+          {
+            id: 'supplier' as DetailTab,
+            label: 'Supplier',
+            icon: <Building2 className="w-3.5 h-3.5" />,
+          },
+        ]
+      : []),
     {
       id: 'timeline',
       label: `Timeline (${statusHistory.length + payments.length})`,
@@ -1646,7 +1713,194 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
               </div>
             )}
 
-            {/* TAB 4: AUDIT (ADMIN / SUPER ADMIN ONLY) */}
+            {/* TAB 3: SHIPMENT & CHINA ORDER LOGISTICS */}
+            {activeTab === 'shipment' && (
+              <PreOrderShipmentTab
+                order={order}
+                privateCost={privateCost}
+                user={user}
+                rolePermissions={rolePermissions}
+                onRefreshParent={async () => {
+                  await loadDetail();
+                  onUpdated?.();
+                }}
+                onOpenStatusDialog={() => setShowStatusDialog(true)}
+              />
+            )}
+
+            {/* TAB 4: PER-ORDER SUPPLIER & CHINA COST LEDGER (preOrderSupplier ONLY) */}
+            {activeTab === 'supplier' && canViewSupplier && (
+              <div className="space-y-4">
+                <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/40 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
+                        <Building2 className="w-3.5 h-3.5" />
+                        Linked China / Pre-Order Supplier
+                      </h4>
+                      <div className="mt-1 text-sm font-bold text-slate-900 dark:text-slate-100">
+                        {linkedSupplierObj?.name || order.supplierName || 'No supplier assigned yet'}
+                      </div>
+                      {linkedSupplierObj && (
+                        <div className="text-[11px] text-slate-500 flex flex-wrap items-center gap-2 mt-0.5">
+                          <span className="font-mono">{linkedSupplierObj.supplierCode}</span>
+                          {linkedSupplierObj.platform && (
+                            <Badge variant="info" size="xs">{linkedSupplierObj.platform}</Badge>
+                          )}
+                          {linkedSupplierObj.phone && <span>Phone: {linkedSupplierObj.phone}</span>}
+                          {linkedSupplierObj.wechatId && <span>WeChat: {linkedSupplierObj.wechatId}</span>}
+                          {linkedSupplierObj.shopUrl && (
+                            <a
+                              href={
+                                linkedSupplierObj.shopUrl.startsWith('http')
+                                  ? linkedSupplierObj.shopUrl
+                                  : `https://${linkedSupplierObj.shopUrl}`
+                              }
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="inline-flex items-center gap-1 text-[#93741E] dark:text-[#E2C255] font-semibold hover:underline"
+                            >
+                              Store <ExternalLink className="w-3 h-3" />
+                            </a>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    {linkedSupplierObj ? (
+                      <Button
+                        type="button"
+                        variant="primary"
+                        size="xs"
+                        leftIcon={<Banknote className="w-3.5 h-3.5" />}
+                        onClick={() => setShowSupplierPayModal(true)}
+                      >
+                        Record Supplier Payment
+                      </Button>
+                    ) : (
+                      <span className="text-[11px] text-amber-700 dark:text-amber-400">
+                        Assign a supplier via Edit Pre-Order to record supplier payments.
+                      </span>
+                    )}
+                  </div>
+
+                  {perOrderSupplierSummary && (
+                    <div className="grid grid-cols-3 gap-3 pt-3 border-t border-slate-200/70 dark:border-slate-800 text-xs tabular-nums">
+                      <div>
+                        <div className="text-slate-400">China Cost Total (Qty {order.qty})</div>
+                        <div className="font-mono font-bold text-sm text-slate-900 dark:text-slate-100 mt-0.5">
+                          {formatBDT(perOrderSupplierSummary.chinaCostTotal)}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-slate-400">Paid to Supplier</div>
+                        <div className="font-mono font-bold text-sm text-emerald-700 dark:text-emerald-400 mt-0.5">
+                          {formatBDT(perOrderSupplierSummary.paidToSupplier)}
+                        </div>
+                      </div>
+                      <div>
+                        <div className="text-slate-400">Supplier Due</div>
+                        <div
+                          className={`font-mono font-bold text-sm mt-0.5 ${
+                            perOrderSupplierSummary.supplierDue > 0
+                              ? 'text-amber-700 dark:text-amber-400'
+                              : 'text-emerald-700 dark:text-emerald-400'
+                          }`}
+                        >
+                          {formatBDT(perOrderSupplierSummary.supplierDue)}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                {/* Supplier Payments Ledger for this Pre-Order */}
+                <div className="space-y-2.5">
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500">
+                    Supplier Disbursement Entries ({orderSupplierPayments.length})
+                  </h4>
+                  {orderSupplierPayments.length === 0 ? (
+                    <div className="p-6 rounded-xl border border-dashed border-slate-200 dark:border-slate-800 text-center text-xs text-slate-500">
+                      No supplier payments allocated to {order.preOrderNumber} yet.
+                    </div>
+                  ) : (
+                    orderSupplierPayments.map((sp) => {
+                      const isReversal = sp.type === 'reversal';
+                      const isReversed = reversedSupPayIds.has(sp.id);
+                      const thisAlloc = sp.allocations?.find((a) => a.preOrderId === order.id);
+                      const effectiveBdt = thisAlloc ? thisAlloc.amountBdt : sp.amountBdt;
+
+                      return (
+                        <div
+                          key={sp.id}
+                          className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex flex-wrap items-center justify-between gap-2 text-xs tabular-nums"
+                        >
+                          <div className="space-y-1">
+                            <div className="flex flex-wrap items-center gap-2">
+                              <span
+                                className={`font-mono font-bold text-sm ${
+                                  isReversal
+                                    ? 'text-rose-600 dark:text-rose-400'
+                                    : 'text-slate-900 dark:text-slate-100'
+                                }`}
+                              >
+                                {isReversal ? '-' : ''}
+                                {formatBDT(effectiveBdt)}
+                              </span>
+                              {thisAlloc && sp.allocations && sp.allocations.length > 1 && (
+                                <Badge variant="neutral" size="xs">
+                                  Allocated from {formatBDT(sp.amountBdt)} batch
+                                </Badge>
+                              )}
+                              <Badge variant={isReversal ? 'danger' : 'info'} size="xs">
+                                {isReversal ? 'Reversal' : sp.method}
+                              </Badge>
+                              {isReversed && (
+                                <Badge variant="warning" size="xs">
+                                  Reversed
+                                </Badge>
+                              )}
+                            </div>
+                            <div className="text-[11px] text-slate-500">
+                              Date: <span className="font-mono">{sp.date}</span>
+                              {sp.referenceNo ? ` • Ref: ${sp.referenceNo}` : ''}
+                              {' • '}Recorded by {sp.recordedByName}
+                            </div>
+                            {sp.note && <div className="text-[11px] text-slate-600 dark:text-slate-300">{sp.note}</div>}
+                          </div>
+
+                          <div className="flex items-center gap-2">
+                            {sp.receiptUrl && (
+                              <a
+                                href={sp.receiptUrl}
+                                target="_blank"
+                                rel="noopener noreferrer"
+                                className="inline-flex items-center gap-1 px-2 py-1 rounded-lg border border-slate-200 dark:border-slate-700 text-[11px] font-semibold"
+                              >
+                                <Paperclip className="w-3 h-3" /> Receipt
+                              </a>
+                            )}
+                            {isAdminUser && !isReversal && !isReversed && (
+                              <Button
+                                type="button"
+                                variant="danger"
+                                size="xs"
+                                leftIcon={<RotateCcw className="w-3 h-3" />}
+                                onClick={() => setReverseSupPayTarget(sp)}
+                              >
+                                Reverse
+                              </Button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* TAB 5: AUDIT (ADMIN / SUPER ADMIN ONLY) */}
             {activeTab === 'audit' && canViewAudit && (
               <div className="space-y-3">
                 {auditLogs.length === 0 ? (
@@ -1819,6 +2073,32 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
         order={order}
         payment={printableReceiptPayment}
         companySettings={companySettings}
+      />
+
+      {/* Part 4 Supplier Payment & Reversal Modals */}
+      <RecordSupplierPaymentModal
+        isOpen={showSupplierPayModal}
+        onClose={() => setShowSupplierPayModal(false)}
+        supplier={linkedSupplierObj}
+        supplierOrders={order ? [order] : []}
+        preSelectedOrderId={order?.id}
+        suggestedAmountBdt={perOrderSupplierSummary?.supplierDue || 0}
+        user={user}
+        onSuccess={() => {
+          loadDetail();
+          onUpdated?.();
+        }}
+      />
+
+      <ReverseSupplierPaymentModal
+        isOpen={Boolean(reverseSupPayTarget)}
+        onClose={() => setReverseSupPayTarget(null)}
+        payment={reverseSupPayTarget}
+        user={user}
+        onSuccess={() => {
+          loadDetail();
+          onUpdated?.();
+        }}
       />
     </>
   );

@@ -151,14 +151,15 @@ service cloud.firestore {
     match /preOrders/{preOrderId} {
       allow read: if hasPreOrderPerm('preOrderView');
 
-      // Restricted fields (chinaUnitCost, expectedProfit, internalNotes, supplierUnitCost, shippingCost)
+      // Restricted fields (chinaUnitCost, expectedProfit, internalNotes, supplierUnitCost, shippingCost, shippingExpenses breakdown)
       // MUST live in preOrders/{id}/private/cost so unauthorized roles cannot read them.
       allow create: if hasPreOrderPerm('preOrderCreate') &&
         request.resource.data.preOrderNumber is string &&
         request.resource.data.qty is number &&
         request.resource.data.qty > 0 &&
         !request.resource.data.keys().hasAny([
-          'chinaUnitCost', 'shippingCost', 'expectedProfit', 'internalNotes', 'supplierUnitCost'
+          'chinaUnitCost', 'shippingCost', 'expectedProfit', 'internalNotes', 'supplierUnitCost',
+          'actualShippingCost', 'internationalFreight', 'customsDuty', 'localTransport', 'handlingOther', 'shippingExpenses'
         ]);
 
       allow update: if (
@@ -172,7 +173,8 @@ service cloud.firestore {
           hasPreOrderPerm('preOrderManageTracking')
         ) &&
         !request.resource.data.keys().hasAny([
-          'chinaUnitCost', 'shippingCost', 'expectedProfit', 'internalNotes', 'supplierUnitCost'
+          'chinaUnitCost', 'shippingCost', 'expectedProfit', 'internalNotes', 'supplierUnitCost',
+          'actualShippingCost', 'internationalFreight', 'customsDuty', 'localTransport', 'handlingOther', 'shippingExpenses'
         ]) &&
         request.resource.data.preOrderNumber == resource.data.preOrderNumber &&
         request.resource.data.createdBy == resource.data.createdBy &&
@@ -207,12 +209,12 @@ service cloud.firestore {
 
       allow delete: if false;
 
-      // Restricted Cost / Profit / Internal Notes Subdocument
+      // Restricted Cost / Profit / Shipping Expense Breakdown / Internal Notes Subdocument
       match /private/cost {
-        allow read: if hasPreOrderPerm('preOrderViewProfit');
-        allow create: if hasPreOrderPerm('preOrderCreate') || hasPreOrderPerm('preOrderViewProfit');
-        allow update: if hasPreOrderPerm('preOrderViewProfit') &&
-          (hasPreOrderPerm('preOrderEdit') || isAdmin());
+        allow read: if hasPreOrderPerm('preOrderSupplier') || hasPreOrderPerm('preOrderViewProfit');
+        allow create: if hasPreOrderPerm('preOrderCreate') || hasPreOrderPerm('preOrderSupplier') || hasPreOrderPerm('preOrderViewProfit');
+        allow update: if (hasPreOrderPerm('preOrderSupplier') || hasPreOrderPerm('preOrderViewProfit')) &&
+          (hasPreOrderPerm('preOrderEdit') || hasPreOrderPerm('preOrderManageTracking') || hasPreOrderPerm('preOrderSupplier') || isAdmin());
         allow delete: if false;
       }
 
@@ -260,23 +262,61 @@ service cloud.firestore {
         allow update, delete: if false;
       }
 
-      // Shipment Details Subdocument
+      // Shipment Details Subdocument (logistics only — cost/expense fields forbidden)
       match /shipment/{docId} {
         allow read: if hasPreOrderPerm('preOrderView');
-        allow create, update: if hasPreOrderPerm('preOrderManageTracking') || hasPreOrderPerm('preOrderUpdateStatus');
+        allow create, update: if (hasPreOrderPerm('preOrderManageTracking') || hasPreOrderPerm('preOrderUpdateStatus')) &&
+          !request.resource.data.keys().hasAny([
+            'chinaUnitCost', 'shippingCost', 'expectedProfit', 'internalNotes', 'supplierUnitCost',
+            'actualShippingCost', 'internationalFreight', 'customsDuty', 'localTransport', 'handlingOther', 'shippingExpenses'
+          ]);
         allow delete: if false;
+      }
+
+      // Shipment Documents Subcollection (Admin-only soft delete, no hard delete)
+      match /shipmentDocs/{docId} {
+        allow read: if hasPreOrderPerm('preOrderView');
+        allow create: if hasPreOrderPerm('preOrderManageTracking') &&
+          request.resource.data.fileUrl is string &&
+          request.resource.data.fileName is string &&
+          request.resource.data.get('isDeleted', false) == false;
+        allow update: if isAdmin() &&
+          request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'isDeleted', 'deletedBy', 'deletedByName', 'deletedAt', 'deleteReason'
+          ]) &&
+          request.resource.data.isDeleted == true;
+        allow delete: if false;
+      }
+
+      // Append-Only Shipment Events Log
+      match /shipmentEvents/{eventId} {
+        allow read: if hasPreOrderPerm('preOrderView');
+        allow create: if (hasPreOrderPerm('preOrderManageTracking') || hasPreOrderPerm('preOrderUpdateStatus')) &&
+          request.resource.data.text is string &&
+          request.resource.data.text.size() > 0;
+        allow update, delete: if false;
       }
     }
 
-    // Append-Only Pre-Order Supplier Payments
+    // Append-Only Pre-Order Supplier Payments (Strictly restricted to preOrderSupplier or Admin)
     match /preOrderSupplierPayments/{paymentId} {
-      allow read: if hasPreOrderPerm('preOrderSupplier') ||
-        hasPreOrderPerm('preOrderViewProfit') ||
-        hasPreOrderPerm('preOrderReports');
-      allow create: if hasPreOrderPerm('preOrderSupplier') &&
+      allow read: if hasPreOrderPerm('preOrderSupplier') || isAdmin();
+      allow create: if (
+          (request.resource.data.get('type', 'payment') == 'reversal' &&
+            isAdmin() &&
+            request.resource.data.reversesPaymentId is string &&
+            request.resource.data.reversesPaymentId.size() > 0) ||
+          (request.resource.data.get('type', 'payment') == 'payment' &&
+            hasPreOrderPerm('preOrderSupplier'))
+        ) &&
         request.resource.data.amount is number &&
         request.resource.data.amount > 0 &&
-        request.resource.data.idempotencyKey is string;
+        request.resource.data.amountBdt is number &&
+        request.resource.data.amountBdt > 0 &&
+        request.resource.data.idempotencyKey is string &&
+        request.resource.data.idempotencyKey.size() > 0 &&
+        (!request.resource.data.keys().hasAny(['allocations']) ||
+          (request.resource.data.allocations is list && request.resource.data.allocations.size() <= 50));
       allow update, delete: if false;
     }
 

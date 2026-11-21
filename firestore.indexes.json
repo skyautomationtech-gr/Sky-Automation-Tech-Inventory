@@ -91,6 +91,38 @@
       ]
     },
     {
+      "collectionGroup": "preOrderSupplierPayments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "supplierId", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "preOrderSupplierPayments",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "preOrderIds", "arrayConfig": "CONTAINS" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "preOrders",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "estimatedDeliveryDate", "order": "ASCENDING" }
+      ]
+    },
+    {
+      "collectionGroup": "preOrders",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "customsStatus", "order": "ASCENDING" },
+        { "fieldPath": "estimatedDeliveryDate", "order": "ASCENDING" }
+      ]
+    },
+    {
       "collectionGroup": "preOrders",
       "queryScope": "COLLECTION",
       "fields": [

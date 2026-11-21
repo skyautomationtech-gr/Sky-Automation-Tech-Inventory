@@ -12,6 +12,7 @@ import {
   startAfter,
   updateDoc,
   where,
+  writeBatch,
   arrayUnion,
   DocumentData,
   QueryDocumentSnapshot,
@@ -24,6 +25,7 @@ import {
   PreOrder,
   PreOrderAuditAction,
   PreOrderAuditEntry,
+  PreOrderCustomsStatus,
   PreOrderNotification,
   PreOrderPayment,
   PreOrderPaymentMethod,
@@ -32,14 +34,20 @@ import {
   PreOrderPaymentType,
   PreOrderPrivateCost,
   PreOrderShipment,
+  PreOrderShipmentDoc,
+  PreOrderShipmentEvent,
+  PreOrderShippingExpensesBreakdown,
+  PreOrderShippingMethod,
   PreOrderStatus,
   PreOrderStatusHistory,
   PreOrderSupplierPayment,
+  PreOrderSupplierPaymentAllocation,
   PublicTrackingRecord,
   RolePermissionsMap,
   UserProfile,
 } from '../types';
 import {
+  calculateActualShippingCost,
   calculatePreOrderFinancials,
   canTransitionPreOrderStatus,
   derivePreOrderPaymentState,
@@ -917,15 +925,17 @@ export interface PreOrderFullDetail {
 
 export async function getPreOrderFullDetail(
   preOrderId: string,
-  options: { canViewProfit: boolean; canViewAudit: boolean }
+  options: { canViewProfit: boolean; canViewSupplier?: boolean; canViewAudit: boolean }
 ): Promise<PreOrderFullDetail | null> {
   const order = await getPreOrderById(preOrderId);
   if (!order) return null;
 
+  const canReadPrivateCost = Boolean(options.canViewProfit || options.canViewSupplier);
+
   const [payments, statusHistory, privateCost, auditLogs] = await Promise.all([
     getPreOrderPayments(preOrderId, 100),
     getPreOrderStatusHistory(preOrderId, 100),
-    options.canViewProfit ? getPreOrderPrivateCost(preOrderId) : Promise.resolve(null),
+    canReadPrivateCost ? getPreOrderPrivateCost(preOrderId) : Promise.resolve(null),
     options.canViewAudit
       ? getPreOrderAuditLogs(preOrderId, 100).catch(() => [] as PreOrderAuditEntry[])
       : Promise.resolve([] as PreOrderAuditEntry[]),
@@ -2756,61 +2766,217 @@ export async function getPreOrderStatusHistory(
 }
 
 // ==========================================
-// SHIPMENT SUB-DOCUMENT & PUBLIC TRACKING
+// SHIPMENT SUB-DOCUMENT, EXPENSES, DOCS, EVENTS & PUBLIC TRACKING
 // ==========================================
+
+export interface UpsertPreOrderShipmentInput
+  extends Omit<PreOrderShipment, 'preOrderId' | 'updatedBy' | 'updatedAt' | 'previousEstimatedArrivalDate'> {
+  showToCustomer?: boolean;
+  publicMessage?: string;
+}
+
+export interface UpsertPreOrderShipmentResult {
+  shipment: PreOrderShipment;
+  suggestedNextStatus?: PreOrderStatus;
+  suggestionReason?: string;
+  isDelayed: boolean;
+}
 
 export async function upsertPreOrderShipment(
   preOrderId: string,
-  shipmentInput: Omit<PreOrderShipment, 'preOrderId' | 'updatedBy' | 'updatedAt'>,
+  shipmentInput: UpsertPreOrderShipmentInput,
   actor: PreOrderActor
-): Promise<void> {
+): Promise<UpsertPreOrderShipmentResult> {
   const now = Date.now();
   const preOrderRef = doc(db, 'preOrders', preOrderId);
   const shipmentRef = doc(db, 'preOrders', preOrderId, 'shipment', 'details');
   const auditRef = doc(db, 'preOrderAudit', generateId('AUD'));
+  const eventRef = doc(db, 'preOrders', preOrderId, 'shipmentEvents', generateId('SHPEVT'));
+
+  const { showToCustomer, publicMessage, ...cleanShipmentFields } = shipmentInput;
+
+  let result!: UpsertPreOrderShipmentResult;
 
   await runTransaction(db, async (txn) => {
-    const orderSnap = await txn.get(preOrderRef);
+    const [orderSnap, prevShipmentSnap] = await Promise.all([
+      txn.get(preOrderRef),
+      txn.get(shipmentRef),
+    ]);
     if (!orderSnap.exists()) throw new Error('Pre-order not found.');
-    const order = orderSnap.data() as PreOrder;
+    const order = { ...(orderSnap.data() as PreOrder), id: orderSnap.id };
+    const prevShipment = prevShipmentSnap.exists()
+      ? (prevShipmentSnap.data() as PreOrderShipment)
+      : ({} as Partial<PreOrderShipment>);
 
     const trackingRef = order.trackingToken
       ? doc(db, 'publicTracking', order.trackingToken)
       : null;
     const trackingSnap = trackingRef ? await txn.get(trackingRef) : null;
 
+    const prevEta = prevShipment.estimatedArrivalDate || order.estimatedDeliveryDate || '';
+    const nextEta =
+      cleanShipmentFields.estimatedArrivalDate !== undefined
+        ? cleanShipmentFields.estimatedArrivalDate
+        : prevEta;
+
+    const etaPushedLater = Boolean(prevEta && nextEta && nextEta > prevEta);
+    const nextDelayed =
+      cleanShipmentFields.isDelayed !== undefined
+        ? Boolean(cleanShipmentFields.isDelayed) || etaPushedLater
+        : Boolean(prevShipment.isDelayed || order.isDelayed || etaPushedLater);
+
     const shipmentDoc: PreOrderShipment = {
-      ...shipmentInput,
+      ...prevShipment,
+      ...cleanShipmentFields,
       preOrderId,
+      estimatedArrivalDate: nextEta,
+      previousEstimatedArrivalDate: etaPushedLater
+        ? prevEta
+        : prevShipment.previousEstimatedArrivalDate || order.previousEstimatedArrivalDate || '',
+      isDelayed: nextDelayed,
       updatedBy: actor.id,
       updatedAt: now,
     };
-    txn.set(shipmentRef, sanitizeData(shipmentDoc), { merge: true });
+
+    // Strip any restricted cost keys in case of accidental spread
+    const safeShipmentDoc = { ...shipmentDoc } as Record<string, any>;
+    for (const forbidden of [
+      'chinaUnitCost',
+      'shippingCost',
+      'expectedProfit',
+      'internalNotes',
+      'supplierUnitCost',
+      'actualShippingCost',
+      'internationalFreight',
+      'customsDuty',
+      'localTransport',
+      'handlingOther',
+      'shippingExpenses',
+    ]) {
+      delete safeShipmentDoc[forbidden];
+    }
+
+    txn.set(shipmentRef, sanitizeData(safeShipmentDoc), { merge: true });
 
     const summaryTrackingNo =
-      shipmentInput.bdTrackingNo || shipmentInput.trackingNumber || shipmentInput.chinaTrackingNo || '';
-    const summaryCourier = shipmentInput.bdCourier || shipmentInput.freightForwarder || '';
+      shipmentDoc.trackingNumber ||
+      shipmentDoc.bdTrackingNo ||
+      shipmentDoc.chinaTrackingNo ||
+      order.trackingNumber ||
+      '';
+    const summaryCourier =
+      shipmentDoc.bdCourier || shipmentDoc.freightForwarder || order.courier || '';
 
-    txn.update(
-      preOrderRef,
-      sanitizeData({
-        trackingNumber: summaryTrackingNo,
-        courier: summaryCourier,
-        estimatedDeliveryDate:
-          shipmentInput.estimatedArrivalDate || order.estimatedDeliveryDate || '',
-        updatedAt: now,
-        updatedBy: actor.id,
-      })
-    );
+    const orderPatch = {
+      supplierOrderRef:
+        shipmentDoc.supplierOrderRef !== undefined
+          ? shipmentDoc.supplierOrderRef
+          : order.supplierOrderRef || '',
+      chinaOrderDate: shipmentDoc.chinaOrderDate || '',
+      shippingMethod: shipmentDoc.shippingMethod || '',
+      freightForwarder: shipmentDoc.freightForwarder || '',
+      forwarderContact: shipmentDoc.forwarderContact || '',
+      trackingNumber: summaryTrackingNo,
+      carrierTrackingUrl: shipmentDoc.carrierTrackingUrl || '',
+      courier: summaryCourier,
+      shippedFromChinaAt: shipmentDoc.shippedFromChinaAt || '',
+      estimatedDeliveryDate: nextEta,
+      previousEstimatedArrivalDate: shipmentDoc.previousEstimatedArrivalDate || '',
+      arrivedBdAt: shipmentDoc.arrivedBdAt || '',
+      customsStatus: shipmentDoc.customsStatus || 'Not started',
+      customsClearanceDate: shipmentDoc.customsClearanceDate || '',
+      isDelayed: nextDelayed,
+      updatedAt: now,
+      updatedBy: actor.id,
+    };
+
+    txn.update(preOrderRef, sanitizeData(orderPatch));
+
+    // Diff for audit & auto shipment event
+    const compareKeys: Array<keyof PreOrderShipment> = [
+      'supplierOrderRef',
+      'chinaOrderDate',
+      'shippingMethod',
+      'freightForwarder',
+      'forwarderContact',
+      'trackingNumber',
+      'carrierTrackingUrl',
+      'shippedFromChinaAt',
+      'estimatedArrivalDate',
+      'arrivedBdAt',
+      'customsStatus',
+      'customsClearanceDate',
+    ];
+    const beforeDiff: Record<string, any> = {};
+    const afterDiff: Record<string, any> = {};
+    const autoChangeNotes: string[] = [];
+
+    for (const k of compareKeys) {
+      const oldV = (prevShipment as any)[k] ?? (order as any)[k] ?? '';
+      const newV = (shipmentDoc as any)[k] ?? '';
+      if (String(oldV) !== String(newV)) {
+        beforeDiff[k] = oldV;
+        afterDiff[k] = newV;
+        if (k === 'trackingNumber' && newV) {
+          autoChangeNotes.push(`Tracking No set to ${newV}`);
+        } else if (k === 'customsStatus' && newV) {
+          autoChangeNotes.push(`Customs status: ${newV}`);
+        } else if (k === 'shippedFromChinaAt' && newV) {
+          autoChangeNotes.push(`Dispatched from China (${newV})`);
+        } else if (k === 'arrivedBdAt' && newV) {
+          autoChangeNotes.push(`Arrived in Bangladesh (${newV})`);
+        } else if (k === 'estimatedArrivalDate' && newV) {
+          autoChangeNotes.push(
+            etaPushedLater
+              ? `Expected arrival delayed from ${prevEta} to ${newV}`
+              : `Expected arrival updated to ${newV}`
+          );
+        }
+      }
+    }
+
+    const nowDateObj = new Date(now);
+    const eventText =
+      autoChangeNotes.length > 0
+        ? autoChangeNotes.join(' • ')
+        : `Updated shipment details (${shipmentDoc.shippingMethod || 'Logistics'})`;
+
+    if (autoChangeNotes.length > 0 || showToCustomer) {
+      const eventDoc: PreOrderShipmentEvent = {
+        id: eventRef.id,
+        preOrderId,
+        date: nowDateObj.toISOString().split('T')[0],
+        time: nowDateObj.toTimeString().slice(0, 5),
+        timestamp: now,
+        staffId: actor.id,
+        staffName: actor.name,
+        text: eventText,
+        showToCustomer: Boolean(showToCustomer),
+        publicMessage: publicMessage?.trim() || (showToCustomer ? eventText : ''),
+        source: 'auto',
+      };
+      txn.set(eventRef, sanitizeData(eventDoc));
+    }
 
     if (trackingRef && trackingSnap && trackingSnap.exists()) {
+      const trackingData = trackingSnap.data() as PublicTrackingRecord;
+      const nextTimeline = [...(trackingData.statusTimeline || [])];
+      if (showToCustomer) {
+        nextTimeline.push(
+          sanitizeData({
+            status: order.status,
+            timestamp: now,
+            publicMessage: publicMessage?.trim() || eventText,
+          })
+        );
+      }
       txn.update(
         trackingRef,
         sanitizeData({
           trackingNumber: summaryTrackingNo,
           courier: summaryCourier,
-          estimatedDeliveryDate:
-            shipmentInput.estimatedArrivalDate || order.estimatedDeliveryDate || '',
+          estimatedDeliveryDate: nextEta,
+          statusTimeline: nextTimeline,
           updatedAt: now,
         })
       );
@@ -2823,7 +2989,255 @@ export async function upsertPreOrderShipment(
         preOrderId,
         preOrderNumber: order.preOrderNumber,
         action: 'SHIPMENT_UPDATED' as PreOrderAuditAction,
-        summary: `Updated shipment info on ${order.preOrderNumber}`,
+        summary:
+          autoChangeNotes.length > 0
+            ? `${order.preOrderNumber}: ${autoChangeNotes.join(', ')}`
+            : `Updated shipment details on ${order.preOrderNumber}`,
+        metadata: {
+          before: beforeDiff,
+          after: afterDiff,
+          isDelayed: nextDelayed,
+        },
+        userId: actor.id,
+        userName: actor.name,
+        userRole: actor.role,
+        timestamp: now,
+      })
+    );
+
+    // Non-forcing status suggestions
+    let suggestedNextStatus: PreOrderStatus | undefined;
+    let suggestionReason: string | undefined;
+
+    if (
+      shipmentDoc.customsStatus === 'Cleared' &&
+      Boolean(shipmentDoc.arrivedBdAt) &&
+      ['Ordered from China', 'China Warehouse', 'International Shipment', 'Customs Clearance'].includes(
+        order.status
+      )
+    ) {
+      suggestedNextStatus = 'Arrived in Bangladesh';
+      suggestionReason =
+        'Customs is Cleared and BD Arrival Date is set. Update order status to "Arrived in Bangladesh"?';
+    } else if (
+      Boolean(shipmentDoc.trackingNumber) &&
+      ['Advance Received', 'Order Confirmed', 'Ordered from China', 'China Warehouse'].includes(
+        order.status
+      )
+    ) {
+      suggestedNextStatus = 'International Shipment';
+      suggestionReason =
+        'Tracking number has been saved. Update order status to "International Shipment"?';
+    }
+
+    result = {
+      shipment: shipmentDoc,
+      suggestedNextStatus,
+      suggestionReason,
+      isDelayed: nextDelayed,
+    };
+  });
+
+  return result;
+}
+
+export async function getPreOrderShipment(
+  preOrderId: string
+): Promise<PreOrderShipment | null> {
+  const snap = await getDoc(doc(db, 'preOrders', preOrderId, 'shipment', 'details'));
+  if (!snap.exists()) return null;
+  return snap.data() as PreOrderShipment;
+}
+
+/**
+ * Restricted Shipping Expenses breakdown saved inside `preOrders/{id}/private/cost`
+ * so staff without `preOrderSupplier` / `preOrderViewProfit` are blocked in both UI and Firestore rules.
+ */
+export async function updatePreOrderShippingExpenses(
+  preOrderId: string,
+  breakdown: PreOrderShippingExpensesBreakdown,
+  actor: PreOrderActor
+): Promise<{ actualShippingCost: number; shippingExpenses: PreOrderShippingExpensesBreakdown }> {
+  const freight = roundMoney(breakdown.internationalFreight);
+  const customs = roundMoney(breakdown.customsDuty);
+  const local = roundMoney(breakdown.localTransport);
+  const handling = roundMoney(breakdown.handlingOther);
+
+  if (freight < 0 || customs < 0 || local < 0 || handling < 0) {
+    throw new Error('Shipping expense amounts cannot be negative.');
+  }
+
+  const sanitizedBreakdown: PreOrderShippingExpensesBreakdown = {
+    internationalFreight: freight,
+    customsDuty: customs,
+    localTransport: local,
+    handlingOther: handling,
+    freightReceiptUrl: breakdown.freightReceiptUrl || '',
+    customsReceiptUrl: breakdown.customsReceiptUrl || '',
+    localReceiptUrl: breakdown.localReceiptUrl || '',
+    handlingReceiptUrl: breakdown.handlingReceiptUrl || '',
+  };
+  const actualShippingCost = calculateActualShippingCost(sanitizedBreakdown);
+
+  const now = Date.now();
+  const preOrderRef = doc(db, 'preOrders', preOrderId);
+  const costRef = doc(db, 'preOrders', preOrderId, 'private', 'cost');
+  const auditRef = doc(db, 'preOrderAudit', generateId('AUD'));
+
+  await runTransaction(db, async (txn) => {
+    const [orderSnap, costSnap] = await Promise.all([txn.get(preOrderRef), txn.get(costRef)]);
+    if (!orderSnap.exists()) throw new Error('Pre-order not found.');
+    const order = orderSnap.data() as PreOrder;
+    const prevCost = costSnap.exists() ? (costSnap.data() as PreOrderPrivateCost) : null;
+
+    const nextCostPatch: Partial<PreOrderPrivateCost> = {
+      preOrderId,
+      chinaUnitCost: prevCost?.chinaUnitCost ?? 0,
+      shippingCost: prevCost?.shippingCost ?? 0,
+      expectedProfit: prevCost?.expectedProfit ?? 0,
+      shippingExpenses: sanitizedBreakdown,
+      actualShippingCost,
+      updatedAt: now,
+      updatedBy: actor.id,
+    };
+
+    txn.set(costRef, sanitizeData(nextCostPatch), { merge: true });
+    txn.set(
+      auditRef,
+      sanitizeData({
+        id: auditRef.id,
+        preOrderId,
+        preOrderNumber: order.preOrderNumber,
+        action: 'PRIVATE_COST_UPDATED' as PreOrderAuditAction,
+        summary: `Updated restricted shipping expense breakdown on ${order.preOrderNumber} (Actual total: ৳${actualShippingCost.toLocaleString()})`,
+        metadata: {
+          before: { actualShippingCost: prevCost?.actualShippingCost ?? 0 },
+          after: { actualShippingCost },
+        },
+        userId: actor.id,
+        userName: actor.name,
+        userRole: actor.role,
+        timestamp: now,
+      })
+    );
+  });
+
+  return { actualShippingCost, shippingExpenses: sanitizedBreakdown };
+}
+
+export async function getPreOrderShipmentDocs(
+  preOrderId: string,
+  includeDeleted: boolean = false
+): Promise<PreOrderShipmentDoc[]> {
+  const q = query(
+    collection(db, 'preOrders', preOrderId, 'shipmentDocs'),
+    orderBy('uploadedAt', 'desc'),
+    limit(100)
+  );
+  const snap = await getDocs(q);
+  const docs = snap.docs.map((d) => ({ ...(d.data() as PreOrderShipmentDoc), id: d.id }));
+  return includeDeleted ? docs : docs.filter((d) => !d.isDeleted);
+}
+
+export async function addPreOrderShipmentDoc(
+  preOrderId: string,
+  input: Omit<
+    PreOrderShipmentDoc,
+    'id' | 'preOrderId' | 'uploadedBy' | 'uploadedByName' | 'uploadedAt' | 'isDeleted'
+  >,
+  actor: PreOrderActor
+): Promise<PreOrderShipmentDoc> {
+  const now = Date.now();
+  const docId = generateId('SHPDOC');
+  const preOrderRef = doc(db, 'preOrders', preOrderId);
+  const docRef = doc(db, 'preOrders', preOrderId, 'shipmentDocs', docId);
+  const auditRef = doc(db, 'preOrderAudit', generateId('AUD'));
+
+  let createdDoc!: PreOrderShipmentDoc;
+
+  await runTransaction(db, async (txn) => {
+    const orderSnap = await txn.get(preOrderRef);
+    if (!orderSnap.exists()) throw new Error('Pre-order not found.');
+    const order = orderSnap.data() as PreOrder;
+
+    createdDoc = {
+      id: docId,
+      preOrderId,
+      preOrderNumber: order.preOrderNumber,
+      docType: input.docType,
+      fileName: input.fileName,
+      fileUrl: input.fileUrl,
+      storagePath: input.storagePath || '',
+      contentType: input.contentType || '',
+      fileSize: input.fileSize || 0,
+      note: input.note?.trim() || '',
+      uploadedBy: actor.id,
+      uploadedByName: actor.name,
+      uploadedAt: now,
+      isDeleted: false,
+    };
+
+    txn.set(docRef, sanitizeData(createdDoc));
+    txn.set(
+      auditRef,
+      sanitizeData({
+        id: auditRef.id,
+        preOrderId,
+        preOrderNumber: order.preOrderNumber,
+        action: 'SHIPMENT_DOC_UPLOADED' as PreOrderAuditAction,
+        summary: `Uploaded ${input.docType} document "${input.fileName}" on ${order.preOrderNumber}`,
+        metadata: { docId, docType: input.docType, fileName: input.fileName },
+        userId: actor.id,
+        userName: actor.name,
+        userRole: actor.role,
+        timestamp: now,
+      })
+    );
+  });
+
+  return createdDoc;
+}
+
+export async function softDeletePreOrderShipmentDoc(
+  preOrderId: string,
+  docId: string,
+  reason: string,
+  actor: PreOrderActor
+): Promise<void> {
+  if (!isPreOrderAdminRole(actor.role)) {
+    throw new Error('Only Admin or Super Admin can delete shipment documents.');
+  }
+  const now = Date.now();
+  const preOrderRef = doc(db, 'preOrders', preOrderId);
+  const docRef = doc(db, 'preOrders', preOrderId, 'shipmentDocs', docId);
+  const auditRef = doc(db, 'preOrderAudit', generateId('AUD'));
+
+  await runTransaction(db, async (txn) => {
+    const [orderSnap, docSnap] = await Promise.all([txn.get(preOrderRef), txn.get(docRef)]);
+    if (!orderSnap.exists()) throw new Error('Pre-order not found.');
+    if (!docSnap.exists()) throw new Error('Document not found.');
+    const order = orderSnap.data() as PreOrder;
+    const prevDoc = docSnap.data() as PreOrderShipmentDoc;
+
+    txn.update(
+      docRef,
+      sanitizeData({
+        isDeleted: true,
+        deletedBy: actor.id,
+        deletedByName: actor.name,
+        deletedAt: now,
+        deleteReason: reason?.trim() || 'Removed by Admin',
+      })
+    );
+    txn.set(
+      auditRef,
+      sanitizeData({
+        id: auditRef.id,
+        preOrderId,
+        preOrderNumber: order.preOrderNumber,
+        action: 'SHIPMENT_DOC_DELETED' as PreOrderAuditAction,
+        summary: `Soft-deleted shipment document "${prevDoc.fileName}" on ${order.preOrderNumber}`,
+        metadata: { docId, fileName: prevDoc.fileName, deleteReason: reason?.trim() || '' },
         userId: actor.id,
         userName: actor.name,
         userRole: actor.role,
@@ -2833,12 +3247,291 @@ export async function upsertPreOrderShipment(
   });
 }
 
-export async function getPreOrderShipment(
-  preOrderId: string
-): Promise<PreOrderShipment | null> {
-  const snap = await getDoc(doc(db, 'preOrders', preOrderId, 'shipment', 'details'));
-  if (!snap.exists()) return null;
-  return snap.data() as PreOrderShipment;
+export async function getPreOrderShipmentEvents(
+  preOrderId: string,
+  limitCount: number = 100
+): Promise<PreOrderShipmentEvent[]> {
+  const q = query(
+    collection(db, 'preOrders', preOrderId, 'shipmentEvents'),
+    orderBy('timestamp', 'desc'),
+    limit(limitCount)
+  );
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => ({ ...(d.data() as PreOrderShipmentEvent), id: d.id }));
+}
+
+export async function addPreOrderShipmentEvent(
+  preOrderId: string,
+  input: {
+    text: string;
+    date?: string;
+    time?: string;
+    showToCustomer: boolean;
+    publicMessage?: string;
+  },
+  actor: PreOrderActor
+): Promise<PreOrderShipmentEvent> {
+  if (!input.text?.trim()) {
+    throw new Error('Event update text is required.');
+  }
+  const now = Date.now();
+  const nowDate = new Date(now);
+  const eventId = generateId('SHPEVT');
+  const preOrderRef = doc(db, 'preOrders', preOrderId);
+  const eventRef = doc(db, 'preOrders', preOrderId, 'shipmentEvents', eventId);
+  const auditRef = doc(db, 'preOrderAudit', generateId('AUD'));
+
+  let createdEvent!: PreOrderShipmentEvent;
+
+  await runTransaction(db, async (txn) => {
+    const orderSnap = await txn.get(preOrderRef);
+    if (!orderSnap.exists()) throw new Error('Pre-order not found.');
+    const order = orderSnap.data() as PreOrder;
+
+    const trackingRef =
+      input.showToCustomer && order.trackingToken
+        ? doc(db, 'publicTracking', order.trackingToken)
+        : null;
+    const trackingSnap = trackingRef ? await txn.get(trackingRef) : null;
+
+    createdEvent = {
+      id: eventId,
+      preOrderId,
+      date: input.date || nowDate.toISOString().split('T')[0],
+      time: input.time || nowDate.toTimeString().slice(0, 5),
+      timestamp: now,
+      staffId: actor.id,
+      staffName: actor.name,
+      text: input.text.trim(),
+      showToCustomer: Boolean(input.showToCustomer),
+      publicMessage: input.publicMessage?.trim() || (input.showToCustomer ? input.text.trim() : ''),
+      source: 'manual',
+    };
+
+    txn.set(eventRef, sanitizeData(createdEvent));
+
+    if (trackingRef && trackingSnap && trackingSnap.exists()) {
+      const tData = trackingSnap.data() as PublicTrackingRecord;
+      const nextTimeline = [
+        ...(tData.statusTimeline || []),
+        sanitizeData({
+          status: order.status,
+          timestamp: now,
+          publicMessage: createdEvent.publicMessage || createdEvent.text,
+        }),
+      ];
+      txn.update(
+        trackingRef,
+        sanitizeData({
+          statusTimeline: nextTimeline,
+          updatedAt: now,
+        })
+      );
+    }
+
+    txn.set(
+      auditRef,
+      sanitizeData({
+        id: auditRef.id,
+        preOrderId,
+        preOrderNumber: order.preOrderNumber,
+        action: 'SHIPMENT_EVENT_ADDED' as PreOrderAuditAction,
+        summary: `Added shipment update on ${order.preOrderNumber}: "${createdEvent.text}"`,
+        metadata: { eventId, showToCustomer: createdEvent.showToCustomer },
+        userId: actor.id,
+        userName: actor.name,
+        userRole: actor.role,
+        timestamp: now,
+      })
+    );
+  });
+
+  return createdEvent;
+}
+
+export async function queryShipmentTrackingOrders(options: {
+  allowedSubBrands?: Array<'SAT' | 'GZ' | 'RTX'>;
+  limitCount?: number;
+} = {}): Promise<PreOrder[]> {
+  const pageSize = Math.min(Math.max(options.limitCount || 150, 20), 250);
+  const q = query(
+    collection(db, 'preOrders'),
+    orderBy('updatedAt', 'desc'),
+    limit(pageSize)
+  );
+  const snap = await getDocs(q);
+  const rows = snap.docs.map((d) => ({ ...(d.data() as PreOrder), id: d.id }));
+  if (options.allowedSubBrands && options.allowedSubBrands.length > 0 && options.allowedSubBrands.length < 3) {
+    return rows.filter((r) => options.allowedSubBrands!.includes(r.subBrand));
+  }
+  return rows;
+}
+
+export interface BatchShipmentPatchInput {
+  freightForwarder?: string;
+  forwarderContact?: string;
+  shippingMethod?: PreOrderShippingMethod | string;
+  trackingNumber?: string;
+  carrierTrackingUrl?: string;
+  shippedFromChinaAt?: string;
+  estimatedArrivalDate?: string;
+  customsStatus?: PreOrderCustomsStatus | string;
+}
+
+export async function batchUpdatePreOrderShipments(
+  orders: PreOrder[],
+  patch: BatchShipmentPatchInput,
+  actor: PreOrderActor
+): Promise<number> {
+  if (!orders || orders.length === 0) return 0;
+
+  const hasAnyField = Object.values(patch).some((v) => v !== undefined && String(v).trim() !== '');
+  if (!hasAnyField) {
+    throw new Error('Enter at least one shipment field to apply in batch.');
+  }
+
+  const now = Date.now();
+  const nowDate = new Date(now);
+  const dateStr = nowDate.toISOString().split('T')[0];
+  const timeStr = nowDate.toTimeString().slice(0, 5);
+
+  // Use atomic writeBatch (safe up to ~100 orders in a single batch; chunk by 80 orders just in case)
+  const CHUNK_SIZE = 80;
+  let updatedCount = 0;
+
+  for (let i = 0; i < orders.length; i += CHUNK_SIZE) {
+    const chunk = orders.slice(i, i + CHUNK_SIZE);
+    const batch = writeBatch(db);
+
+    for (const order of chunk) {
+      const preOrderRef = doc(db, 'preOrders', order.id);
+      const shipmentRef = doc(db, 'preOrders', order.id, 'shipment', 'details');
+      const auditRef = doc(db, 'preOrderAudit', generateId('AUD'));
+      const eventRef = doc(db, 'preOrders', order.id, 'shipmentEvents', generateId('SHPEVT'));
+
+      const orderUpdate: Record<string, any> = {
+        updatedAt: now,
+        updatedBy: actor.id,
+      };
+      const shipmentUpdate: Record<string, any> = {
+        preOrderId: order.id,
+        updatedAt: now,
+        updatedBy: actor.id,
+      };
+      const trackingUpdate: Record<string, any> = {
+        updatedAt: now,
+      };
+      const afterDiff: Record<string, any> = {};
+      const beforeDiff: Record<string, any> = {};
+      const changeNotes: string[] = [];
+
+      const applyField = (key: keyof BatchShipmentPatchInput, orderKey: string = key) => {
+        const val = patch[key];
+        if (val === undefined || String(val).trim() === '') return;
+        const cleanVal = String(val).trim();
+        const prevVal = (order as any)[orderKey] || '';
+        beforeDiff[orderKey] = prevVal;
+        afterDiff[orderKey] = cleanVal;
+        orderUpdate[orderKey] = cleanVal;
+        shipmentUpdate[key] = cleanVal;
+      };
+
+      applyField('freightForwarder');
+      applyField('forwarderContact');
+      applyField('shippingMethod');
+      applyField('trackingNumber');
+      applyField('carrierTrackingUrl');
+      applyField('shippedFromChinaAt');
+      applyField('customsStatus');
+
+      if (patch.estimatedArrivalDate?.trim()) {
+        const nextEta = patch.estimatedArrivalDate.trim();
+        const prevEta = order.estimatedDeliveryDate || '';
+        const pushedLater = Boolean(prevEta && nextEta > prevEta);
+        beforeDiff.estimatedDeliveryDate = prevEta;
+        afterDiff.estimatedDeliveryDate = nextEta;
+        orderUpdate.estimatedDeliveryDate = nextEta;
+        shipmentUpdate.estimatedArrivalDate = nextEta;
+        if (pushedLater) {
+          orderUpdate.previousEstimatedArrivalDate = prevEta;
+          orderUpdate.isDelayed = true;
+          shipmentUpdate.previousEstimatedArrivalDate = prevEta;
+          shipmentUpdate.isDelayed = true;
+          changeNotes.push(`ETA delayed to ${nextEta}`);
+        } else {
+          changeNotes.push(`ETA set to ${nextEta}`);
+        }
+        trackingUpdate.estimatedDeliveryDate = nextEta;
+      }
+
+      if (patch.trackingNumber?.trim()) {
+        trackingUpdate.trackingNumber = patch.trackingNumber.trim();
+        changeNotes.push(`Tracking No: ${patch.trackingNumber.trim()}`);
+      }
+      if (patch.freightForwarder?.trim()) {
+        orderUpdate.courier = patch.freightForwarder.trim();
+        trackingUpdate.courier = patch.freightForwarder.trim();
+        changeNotes.push(`Forwarder: ${patch.freightForwarder.trim()}`);
+      }
+      if (patch.customsStatus?.trim()) {
+        changeNotes.push(`Customs: ${patch.customsStatus.trim()}`);
+      }
+
+      batch.update(preOrderRef, sanitizeData(orderUpdate));
+      batch.set(shipmentRef, sanitizeData(shipmentUpdate), { merge: true });
+
+      if (order.trackingToken && Object.keys(trackingUpdate).length > 1) {
+        batch.update(doc(db, 'publicTracking', order.trackingToken), sanitizeData(trackingUpdate));
+      }
+
+      const summaryText =
+        changeNotes.length > 0
+          ? `Batch shipment update: ${changeNotes.join(' • ')}`
+          : 'Batch shipment update applied';
+
+      batch.set(
+        eventRef,
+        sanitizeData({
+          id: eventRef.id,
+          preOrderId: order.id,
+          date: dateStr,
+          time: timeStr,
+          timestamp: now,
+          staffId: actor.id,
+          staffName: actor.name,
+          text: summaryText,
+          showToCustomer: false,
+          source: 'auto',
+        } as PreOrderShipmentEvent)
+      );
+
+      batch.set(
+        auditRef,
+        sanitizeData({
+          id: auditRef.id,
+          preOrderId: order.id,
+          preOrderNumber: order.preOrderNumber,
+          action: 'SHIPMENT_UPDATED' as PreOrderAuditAction,
+          summary: `${order.preOrderNumber}: ${summaryText}`,
+          metadata: {
+            batch: true,
+            before: beforeDiff,
+            after: afterDiff,
+          },
+          userId: actor.id,
+          userName: actor.name,
+          userRole: actor.role,
+          timestamp: now,
+        })
+      );
+
+      updatedCount++;
+    }
+
+    await batch.commit();
+  }
+
+  return updatedCount;
 }
 
 export async function getPublicTrackingByToken(
@@ -2851,13 +3544,26 @@ export async function getPublicTrackingByToken(
 }
 
 // ==========================================
-// SUPPLIER PAYMENTS (APPEND-ONLY)
+// SUPPLIER PAYMENTS (APPEND-ONLY, MULTI-ORDER ALLOCATION & REVERSALS)
 // ==========================================
 
-export type AddPreOrderSupplierPaymentInput = Omit<
-  PreOrderSupplierPayment,
-  'id' | 'recordedBy' | 'recordedByName' | 'createdAt'
->;
+export interface AddPreOrderSupplierPaymentInput {
+  supplierId: string;
+  supplierName: string;
+  amount: number;
+  currency: 'BDT' | 'RMB' | 'USD' | string;
+  exchangeRate?: number;
+  amountBdt: number;
+  method: string;
+  referenceNo?: string;
+  receiptUrl?: string;
+  note?: string;
+  date: string;
+  idempotencyKey: string;
+  allocations?: PreOrderSupplierPaymentAllocation[];
+  preOrderId?: string;
+  preOrderNumber?: string;
+}
 
 export async function addPreOrderSupplierPayment(
   input: AddPreOrderSupplierPaymentInput,
@@ -2868,63 +3574,344 @@ export async function addPreOrderSupplierPayment(
   if (safeAmount <= 0 || safeAmountBdt <= 0) {
     throw new Error('Supplier payment amount must be greater than zero.');
   }
+  if (!input.supplierId) {
+    throw new Error('Supplier is required.');
+  }
   if (!input.idempotencyKey?.trim()) {
     throw new Error('idempotencyKey is required.');
   }
 
+  const cleanAllocations: PreOrderSupplierPaymentAllocation[] = (input.allocations || [])
+    .filter((a) => a.preOrderId && roundMoney(a.amountBdt) > 0)
+    .map((a) => ({
+      preOrderId: a.preOrderId,
+      preOrderNumber: a.preOrderNumber || a.preOrderId,
+      amountBdt: roundMoney(a.amountBdt),
+    }));
+
+  if (cleanAllocations.length > 0) {
+    const allocSumPaisa = cleanAllocations.reduce((s, a) => s + toPaisa(a.amountBdt), 0);
+    if (allocSumPaisa !== toPaisa(safeAmountBdt)) {
+      throw new Error(
+        `Allocated sum (৳${fromPaisa(allocSumPaisa).toLocaleString()}) must equal total payment (৳${safeAmountBdt.toLocaleString()}).`
+      );
+    }
+  } else if (input.preOrderId && input.preOrderId !== 'UNALLOCATED') {
+    cleanAllocations.push({
+      preOrderId: input.preOrderId,
+      preOrderNumber: input.preOrderNumber || input.preOrderId,
+      amountBdt: safeAmountBdt,
+    });
+  }
+
+  const preOrderIds = cleanAllocations.map((a) => a.preOrderId);
+  const primaryPreOrderId =
+    cleanAllocations.length === 1
+      ? cleanAllocations[0].preOrderId
+      : cleanAllocations.length > 1
+      ? 'MULTI'
+      : 'UNALLOCATED';
+  const summaryNumbers =
+    cleanAllocations.length > 0
+      ? cleanAllocations.map((a) => a.preOrderNumber).join(', ')
+      : input.preOrderNumber || 'General Advance';
+
   const now = Date.now();
   const paymentId = `SUPPAY_${sanitizeIdFragment(input.idempotencyKey.trim())}`;
   const payRef = doc(db, 'preOrderSupplierPayments', paymentId);
-  const auditRef = doc(db, 'preOrderAudit', generateId('AUD'));
 
   await runTransaction(db, async (txn) => {
     const existing = await txn.get(payRef);
     if (existing.exists()) return;
 
     const record: PreOrderSupplierPayment = {
-      ...input,
       id: paymentId,
+      type: 'payment',
+      preOrderId: primaryPreOrderId,
+      preOrderNumber: summaryNumbers,
+      preOrderIds,
+      allocations: cleanAllocations,
+      supplierId: input.supplierId,
+      supplierName: input.supplierName,
       amount: safeAmount,
+      currency: input.currency || 'BDT',
+      exchangeRate: input.exchangeRate,
       amountBdt: safeAmountBdt,
+      method: input.method,
+      referenceNo: input.referenceNo?.trim() || '',
+      receiptUrl: input.receiptUrl || '',
+      note: input.note?.trim() || '',
+      category: 'Pre-Order Supplier Payment',
+      idempotencyKey: input.idempotencyKey.trim(),
+      date: input.date || getTodayIsoDate(),
       recordedBy: actor.id,
       recordedByName: actor.name,
       createdAt: now,
     };
 
     txn.set(payRef, sanitizeData(record));
-    txn.set(
-      auditRef,
-      sanitizeData({
-        id: auditRef.id,
-        preOrderId: input.preOrderId,
-        preOrderNumber: input.preOrderNumber,
-        action: 'SUPPLIER_PAYMENT_RECORDED' as PreOrderAuditAction,
-        summary: `Recorded supplier payment of ${safeAmount} ${input.currency} (৳${safeAmountBdt}) to ${input.supplierName}`,
-        metadata: { paymentId, supplierId: input.supplierId, amountBdt: safeAmountBdt },
-        userId: actor.id,
-        userName: actor.name,
-        userRole: actor.role,
-        timestamp: now,
-      })
-    );
+
+    if (cleanAllocations.length > 0) {
+      for (const alloc of cleanAllocations) {
+        const auditRef = doc(db, 'preOrderAudit', generateId('AUD'));
+        txn.set(
+          auditRef,
+          sanitizeData({
+            id: auditRef.id,
+            preOrderId: alloc.preOrderId,
+            preOrderNumber: alloc.preOrderNumber,
+            action: 'SUPPLIER_PAYMENT_RECORDED' as PreOrderAuditAction,
+            summary: `Recorded supplier payment of ৳${alloc.amountBdt.toLocaleString()} to ${input.supplierName} (${input.currency} ${safeAmount} batch)`,
+            metadata: {
+              paymentId,
+              supplierId: input.supplierId,
+              allocatedBdt: alloc.amountBdt,
+              totalBatchBdt: safeAmountBdt,
+              method: input.method,
+            },
+            userId: actor.id,
+            userName: actor.name,
+            userRole: actor.role,
+            timestamp: now,
+          })
+        );
+      }
+    } else {
+      const auditRef = doc(db, 'preOrderAudit', generateId('AUD'));
+      txn.set(
+        auditRef,
+        sanitizeData({
+          id: auditRef.id,
+          preOrderId: 'SUPPLIER_' + input.supplierId,
+          preOrderNumber: summaryNumbers,
+          action: 'SUPPLIER_PAYMENT_RECORDED' as PreOrderAuditAction,
+          summary: `Recorded unallocated supplier payment of ${safeAmount} ${input.currency} (৳${safeAmountBdt.toLocaleString()}) to ${input.supplierName}`,
+          metadata: { paymentId, supplierId: input.supplierId, amountBdt: safeAmountBdt },
+          userId: actor.id,
+          userName: actor.name,
+          userRole: actor.role,
+          timestamp: now,
+        })
+      );
+    }
   });
 
   return paymentId;
 }
 
+export async function reversePreOrderSupplierPayment(
+  originalPaymentId: string,
+  reason: string,
+  actor: PreOrderActor
+): Promise<string> {
+  if (!isPreOrderAdminRole(actor.role)) {
+    throw new Error('Only Admin or Super Admin can reverse a supplier payment.');
+  }
+  if (!reason?.trim()) {
+    throw new Error('Reversal reason is required.');
+  }
+
+  const now = Date.now();
+  const revId = `SUPREV_${sanitizeIdFragment(originalPaymentId)}`;
+  const origRef = doc(db, 'preOrderSupplierPayments', originalPaymentId);
+  const revRef = doc(db, 'preOrderSupplierPayments', revId);
+
+  await runTransaction(db, async (txn) => {
+    const [origSnap, revSnap] = await Promise.all([txn.get(origRef), txn.get(revRef)]);
+    if (!origSnap.exists()) throw new Error('Original supplier payment not found.');
+    if (revSnap.exists()) return;
+
+    const orig = { ...(origSnap.data() as PreOrderSupplierPayment), id: origSnap.id };
+    if (orig.type === 'reversal') {
+      throw new Error('A reversal entry cannot itself be reversed.');
+    }
+
+    const revRecord: PreOrderSupplierPayment = {
+      id: revId,
+      type: 'reversal',
+      preOrderId: orig.preOrderId,
+      preOrderNumber: orig.preOrderNumber,
+      preOrderIds: orig.preOrderIds || (orig.preOrderId && orig.preOrderId !== 'MULTI' && orig.preOrderId !== 'UNALLOCATED' ? [orig.preOrderId] : []),
+      allocations: orig.allocations || [],
+      supplierId: orig.supplierId,
+      supplierName: orig.supplierName,
+      amount: roundMoney(orig.amount),
+      currency: orig.currency,
+      exchangeRate: orig.exchangeRate,
+      amountBdt: roundMoney(orig.amountBdt),
+      method: orig.method,
+      referenceNo: orig.referenceNo || '',
+      note: `Reversal of ${originalPaymentId}: ${reason.trim()}`,
+      category: 'Pre-Order Supplier Payment',
+      reversesPaymentId: originalPaymentId,
+      reversalReason: reason.trim(),
+      idempotencyKey: revId,
+      date: getTodayIsoDate(),
+      recordedBy: actor.id,
+      recordedByName: actor.name,
+      createdAt: now,
+    };
+
+    txn.set(revRef, sanitizeData(revRecord));
+
+    const targetAllocations =
+      orig.allocations && orig.allocations.length > 0
+        ? orig.allocations
+        : [
+            {
+              preOrderId: orig.preOrderId || 'SUPPLIER_' + orig.supplierId,
+              preOrderNumber: orig.preOrderNumber || orig.supplierName,
+              amountBdt: orig.amountBdt,
+            },
+          ];
+
+    for (const alloc of targetAllocations) {
+      const auditRef = doc(db, 'preOrderAudit', generateId('AUD'));
+      txn.set(
+        auditRef,
+        sanitizeData({
+          id: auditRef.id,
+          preOrderId: alloc.preOrderId,
+          preOrderNumber: alloc.preOrderNumber,
+          action: 'SUPPLIER_PAYMENT_REVERSED' as PreOrderAuditAction,
+          summary: `Reversed supplier payment ${originalPaymentId} (-৳${alloc.amountBdt.toLocaleString()}) to ${orig.supplierName}: ${reason.trim()}`,
+          metadata: {
+            reversalId: revId,
+            reversesPaymentId: originalPaymentId,
+            supplierId: orig.supplierId,
+            amountBdt: alloc.amountBdt,
+          },
+          userId: actor.id,
+          userName: actor.name,
+          userRole: actor.role,
+          timestamp: now,
+        })
+      );
+    }
+  });
+
+  return revId;
+}
+
 export async function getPreOrderSupplierPayments(
   preOrderId?: string,
-  limitCount: number = 50
+  limitCount: number = 100
 ): Promise<PreOrderSupplierPayment[]> {
-  const constraints: any[] = [];
   if (preOrderId) {
-    constraints.push(where('preOrderId', '==', preOrderId));
+    // Support both legacy single preOrderId and new multi-order preOrderIds array-contains
+    const [byArraySnap, bySingleSnap] = await Promise.all([
+      getDocs(
+        query(
+          collection(db, 'preOrderSupplierPayments'),
+          where('preOrderIds', 'array-contains', preOrderId),
+          orderBy('createdAt', 'desc'),
+          limit(limitCount)
+        )
+      ).catch(() => null),
+      getDocs(
+        query(
+          collection(db, 'preOrderSupplierPayments'),
+          where('preOrderId', '==', preOrderId),
+          orderBy('createdAt', 'desc'),
+          limit(limitCount)
+        )
+      ).catch(() => null),
+    ]);
+
+    const map = new Map<string, PreOrderSupplierPayment>();
+    byArraySnap?.docs.forEach((d) =>
+      map.set(d.id, { ...(d.data() as PreOrderSupplierPayment), id: d.id })
+    );
+    bySingleSnap?.docs.forEach((d) =>
+      map.set(d.id, { ...(d.data() as PreOrderSupplierPayment), id: d.id })
+    );
+    return Array.from(map.values()).sort((a, b) => b.createdAt - a.createdAt);
   }
-  constraints.push(orderBy('createdAt', 'desc'));
-  constraints.push(limit(limitCount));
-  const q = query(collection(db, 'preOrderSupplierPayments'), ...constraints);
+
+  const q = query(
+    collection(db, 'preOrderSupplierPayments'),
+    orderBy('createdAt', 'desc'),
+    limit(limitCount)
+  );
   const snap = await getDocs(q);
   return snap.docs.map((d) => ({ ...(d.data() as PreOrderSupplierPayment), id: d.id }));
+}
+
+export async function getPreOrderSupplierPaymentsBySupplier(
+  supplierId: string,
+  limitCount: number = 200
+): Promise<PreOrderSupplierPayment[]> {
+  try {
+    const q = query(
+      collection(db, 'preOrderSupplierPayments'),
+      where('supplierId', '==', supplierId),
+      orderBy('createdAt', 'desc'),
+      limit(limitCount)
+    );
+    const snap = await getDocs(q);
+    return snap.docs.map((d) => ({ ...(d.data() as PreOrderSupplierPayment), id: d.id }));
+  } catch (err: any) {
+    if (err?.code === 'failed-precondition') {
+      const qFallback = query(
+        collection(db, 'preOrderSupplierPayments'),
+        where('supplierId', '==', supplierId),
+        limit(limitCount)
+      );
+      const snap = await getDocs(qFallback);
+      return snap.docs
+        .map((d) => ({ ...(d.data() as PreOrderSupplierPayment), id: d.id }))
+        .sort((a, b) => b.createdAt - a.createdAt);
+    }
+    throw err;
+  }
+}
+
+export async function getPreOrdersBySupplier(
+  supplierId: string,
+  limitCount: number = 150
+): Promise<PreOrder[]> {
+  try {
+    const q = query(
+      collection(db, 'preOrders'),
+      where('supplierId', '==', supplierId),
+      orderBy('createdAt', 'desc'),
+      limit(limitCount)
+    );
+    const snap = await getDocs(q);
+    return snap.docs.map((d) => ({ ...(d.data() as PreOrder), id: d.id }));
+  } catch (err: any) {
+    if (err?.code === 'failed-precondition') {
+      const qFallback = query(
+        collection(db, 'preOrders'),
+        where('supplierId', '==', supplierId),
+        limit(limitCount)
+      );
+      const snap = await getDocs(qFallback);
+      return snap.docs
+        .map((d) => ({ ...(d.data() as PreOrder), id: d.id }))
+        .sort((a, b) => b.createdAt - a.createdAt);
+    }
+    throw err;
+  }
+}
+
+export async function getPreOrderPrivateCostsMap(
+  preOrderIds: string[]
+): Promise<Record<string, PreOrderPrivateCost>> {
+  const uniqueIds = Array.from(new Set(preOrderIds.filter(Boolean))).slice(0, 120);
+  const map: Record<string, PreOrderPrivateCost> = {};
+  if (uniqueIds.length === 0) return map;
+
+  const entries = await Promise.all(
+    uniqueIds.map(async (id) => {
+      const cost = await getPreOrderPrivateCost(id);
+      return { id, cost };
+    })
+  );
+  for (const e of entries) {
+    if (e.cost) map[e.id] = e.cost;
+  }
+  return map;
 }
 
 // ==========================================

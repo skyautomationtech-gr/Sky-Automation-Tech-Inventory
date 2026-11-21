@@ -3644,7 +3644,76 @@ export async function migrateExistingSupplierCodes(): Promise<{ totalMigrated: n
   }
 }
 
+export function findDuplicateSupplier(
+  suppliersList: Supplier[],
+  name: string,
+  phone: string,
+  excludeId?: string
+): { duplicateByPhone: Supplier | null; duplicateByName: Supplier | null } {
+  const normPhone = (phone || '').replace(/\D/g, '');
+  const normName = (name || '').trim().toLowerCase();
+  let duplicateByPhone: Supplier | null = null;
+  let duplicateByName: Supplier | null = null;
+
+  for (const s of suppliersList) {
+    if (excludeId && s.id === excludeId) continue;
+    const sPhone = (s.phone || '').replace(/\D/g, '');
+    if (normPhone.length >= 6 && sPhone && sPhone === normPhone) {
+      duplicateByPhone = s;
+    }
+    const sName = (s.name || '').trim().toLowerCase();
+    if (normName && sName === normName) {
+      duplicateByName = s;
+    }
+  }
+  return { duplicateByPhone, duplicateByName };
+}
+
+function mapSupplierDoc(docSnap: any): Supplier {
+  const data = docSnap.data();
+  const openingBal = data.openingBalance ?? 0;
+  const totalPurch = data.totalPurchases || 0;
+  const totalPd = data.totalPaid || 0;
+  const currentBal = openingBal + totalPurch - totalPd;
+  return {
+    id: docSnap.id,
+    supplierCode: data.supplierCode || `SUP-${docSnap.id.substring(0, 4)}`,
+    name: data.name || '',
+    companyName: data.companyName || '',
+    contactPerson: data.contactPerson || '',
+    phone: data.phone || '',
+    email: data.email || '',
+    address: data.address || '',
+    supplierType: data.supplierType || 'Distributor',
+    productCategory: data.productCategory || '',
+    paymentMethod: data.paymentMethod || 'Cash',
+    openingBalance: openingBal,
+    currentBalance: currentBal,
+    creditLimit: data.creditLimit || 0,
+    creditDays: data.creditDays || 30,
+    bankInfo: data.bankInfo || {},
+    status: data.status || 'active',
+    notes: data.notes || '',
+    logoUrl: data.logoUrl || '',
+    documentUrls: data.documentUrls || [],
+    subBrand: data.subBrand || '',
+    isChinaSupplier: Boolean(data.isChinaSupplier),
+    whatsapp: data.whatsapp || '',
+    wechatId: data.wechatId || '',
+    city: data.city || '',
+    country: data.country || '',
+    platform: data.platform || '',
+    shopUrl: data.shopUrl || '',
+    totalPurchases: totalPurch,
+    totalPaid: totalPd,
+    outstandingDue: currentBal,
+    createdAt: data.createdAt || Date.now(),
+    createdBy: data.createdBy || '',
+  } as Supplier;
+}
+
 export async function getSuppliers(): Promise<Supplier[]> {
+  if (!auth?.currentUser) return [];
   if (dbCache.suppliers) return dbCache.suppliers;
   const cached = localStore.get<Supplier[]>('suppliers');
   try {
@@ -3652,40 +3721,8 @@ export async function getSuppliers(): Promise<Supplier[]> {
     const q = query(colRef, orderBy('createdAt', 'desc'));
     const snapshot = await getDocs(q);
     const list: Supplier[] = [];
-    snapshot.forEach(docSnap => {
-      const data = docSnap.data();
-      const openingBal = data.openingBalance ?? 0;
-      const totalPurch = data.totalPurchases || 0;
-      const totalPd = data.totalPaid || 0;
-      const currentBal = openingBal + totalPurch - totalPd;
-      list.push({ 
-        id: docSnap.id, 
-        supplierCode: data.supplierCode || `SUP-${docSnap.id.substring(0, 4)}`,
-        name: data.name || '',
-        companyName: data.companyName || '',
-        contactPerson: data.contactPerson || '',
-        phone: data.phone || '',
-        email: data.email || '',
-        address: data.address || '',
-        supplierType: data.supplierType || 'Distributor',
-        productCategory: data.productCategory || '',
-        paymentMethod: data.paymentMethod || 'Cash',
-        openingBalance: openingBal,
-        currentBalance: currentBal,
-        creditLimit: data.creditLimit || 0,
-        creditDays: data.creditDays || 30,
-        bankInfo: data.bankInfo || {},
-        status: data.status || 'active',
-        notes: data.notes || '',
-        logoUrl: data.logoUrl || '',
-        documentUrls: data.documentUrls || [],
-        subBrand: data.subBrand || '',
-        totalPurchases: totalPurch,
-        totalPaid: totalPd,
-        outstandingDue: currentBal,
-        createdAt: data.createdAt || Date.now(),
-        createdBy: data.createdBy || ''
-      } as Supplier);
+    snapshot.forEach((docSnap) => {
+      list.push(mapSupplierDoc(docSnap));
     });
     dbCache.suppliers = list;
     localStore.set('suppliers', list);
@@ -3701,45 +3738,14 @@ export async function getSuppliers(): Promise<Supplier[]> {
 }
 
 export function subscribeToSuppliers(callback: (suppliers: Supplier[]) => void): () => void {
+  if (!auth?.currentUser) return () => {};
   try {
     const colRef = collection(db, 'suppliers');
     const q = query(colRef, orderBy('createdAt', 'desc'));
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const list: Supplier[] = [];
-      snapshot.forEach(docSnap => {
-        const data = docSnap.data();
-        const openingBal = data.openingBalance ?? 0;
-        const totalPurch = data.totalPurchases || 0;
-        const totalPd = data.totalPaid || 0;
-        const currentBal = openingBal + totalPurch - totalPd;
-        list.push({ 
-          id: docSnap.id, 
-          supplierCode: data.supplierCode || `SUP-${docSnap.id.substring(0, 4)}`,
-          name: data.name || '',
-          companyName: data.companyName || '',
-          contactPerson: data.contactPerson || '',
-          phone: data.phone || '',
-          email: data.email || '',
-          address: data.address || '',
-          supplierType: data.supplierType || 'Distributor',
-          productCategory: data.productCategory || '',
-          paymentMethod: data.paymentMethod || 'Cash',
-          openingBalance: openingBal,
-          currentBalance: currentBal,
-          creditLimit: data.creditLimit || 0,
-          creditDays: data.creditDays || 30,
-          bankInfo: data.bankInfo || {},
-          status: data.status || 'active',
-          notes: data.notes || '',
-          logoUrl: data.logoUrl || '',
-          documentUrls: data.documentUrls || [],
-          subBrand: data.subBrand || '',
-          totalPurchases: totalPurch,
-          totalPaid: totalPd,
-          outstandingDue: currentBal,
-          createdAt: data.createdAt || Date.now(),
-          createdBy: data.createdBy || ''
-        } as Supplier);
+      snapshot.forEach((docSnap) => {
+        list.push(mapSupplierDoc(docSnap));
       });
       dbCache.suppliers = list;
       localStore.set('suppliers', list);
