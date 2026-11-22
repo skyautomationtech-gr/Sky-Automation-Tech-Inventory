@@ -346,7 +346,12 @@ export default function DuePayments({ user, requireCheckIn }: DuePaymentsProps) 
                   return (
                     <tr key={order.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors">
                       <td className="py-3 pl-2 font-mono font-bold text-slate-900 dark:text-white">
-                        #{order.id.slice(-6).toUpperCase()}
+                        <div>#{order.id.slice(-6).toUpperCase()}</div>
+                        {order.source === 'pre_order' && order.preOrderNumber && (
+                          <span className="inline-block mt-0.5 px-1.5 py-0.5 text-[9px] font-bold rounded bg-amber-100 text-amber-800 border border-amber-200">
+                            PO: {order.preOrderNumber}
+                          </span>
+                        )}
                       </td>
                       <td className="py-3">
                         <div className="font-bold text-slate-900 dark:text-white">{order.customerName}</div>
@@ -495,22 +500,28 @@ export default function DuePayments({ user, requireCheckIn }: DuePaymentsProps) 
                   selectedOrderForDetails.paymentHistory.map((ph, idx) => (
                     <div key={idx} className="flex items-center justify-between p-2.5 rounded-xl bg-slate-50 dark:bg-slate-800/40 border border-slate-200/50 dark:border-slate-700">
                       <div>
-                        <div className="font-bold text-slate-900 dark:text-white">৳ {ph.amount.toLocaleString()} ({ph.method})</div>
+                        <div className="font-bold text-slate-900 dark:text-white">৳ {ph.amount.toLocaleString()} ({ph.label || ph.method})</div>
                         <div className="text-[10px] text-slate-400">{new Date(ph.date).toLocaleString()} by {ph.recordedBy || 'Operator'}</div>
                       </div>
-                      <button
-                        onClick={() => setDeletePaymentConfirm({
-                          isOpen: true,
-                          orderId: selectedOrderForDetails.id,
-                          paymentIndex: idx,
-                          amount: ph.amount,
-                          method: ph.method,
-                          date: ph.date
-                        })}
-                        className="p-1 text-rose-500 hover:text-rose-700 cursor-pointer"
-                      >
-                        <Trash2 size={15} />
-                      </button>
+                      {ph.isPreOrderAdvance ? (
+                        <span className="px-2 py-0.5 text-[10px] font-bold rounded bg-amber-100 text-amber-800 border border-amber-200">
+                          PO Advance
+                        </span>
+                      ) : (
+                        <button
+                          onClick={() => setDeletePaymentConfirm({
+                            isOpen: true,
+                            orderId: selectedOrderForDetails.id,
+                            paymentIndex: idx,
+                            amount: ph.amount,
+                            method: ph.method,
+                            date: ph.date
+                          })}
+                          className="p-1 text-rose-500 hover:text-rose-700 cursor-pointer"
+                        >
+                          <Trash2 size={15} />
+                        </button>
+                      )}
                     </div>
                   ))
                 ) : (

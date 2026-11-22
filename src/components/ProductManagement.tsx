@@ -61,7 +61,9 @@ import {
   addProductModel,
   updateProductModel,
   deleteProductModel,
-  getUniqueBarcodeValue
+  getUniqueBarcodeValue,
+  getProductAvailableStock,
+  getVariantAvailableStock
 } from '../firebase/db';
 
 interface ProductManagementProps {
@@ -202,11 +204,27 @@ export default function ProductManagement({
     setFormError('');
     setFormSuccess('');
     try {
+      const reservedSum = (product.variants || []).reduce((s, v) => s + (Number(v.reservedQty) || 0), 0);
+      const nextStock = Number(inlineStock) || 0;
+      if (nextStock < reservedSum) {
+        setFormError(`Cannot reduce stock below ${reservedSum} pcs currently reserved for Pre-Orders.`);
+        setTimeout(() => setFormError(''), 4000);
+        return;
+      }
+
       const newVariants = [...(product.variants || [])];
       if (newVariants.length > 0) {
-        newVariants[0] = { ...newVariants[0], stock: Number(inlineStock) || 0 };
+        const otherVariantsStock = newVariants.slice(1).reduce((s, v) => s + (Number(v.stock) || 0), 0);
+        const firstReserved = Number(newVariants[0].reservedQty) || 0;
+        const firstNewStock = Math.max(0, nextStock - otherVariantsStock);
+        if (firstNewStock < firstReserved) {
+          setFormError(`First variant has ${firstReserved} pcs reserved for Pre-Orders.`);
+          setTimeout(() => setFormError(''), 4000);
+          return;
+        }
+        newVariants[0] = { ...newVariants[0], stock: firstNewStock };
       } else {
-        newVariants.push({ id: '1', color: 'Default', model: 'Standard', stock: Number(inlineStock) || 0 });
+        newVariants.push({ id: '1', color: 'Default', model: 'Standard', stock: nextStock });
       }
 
       await updateProduct(product.id, {
@@ -899,6 +917,19 @@ export default function ProductManagement({
       generatedInSession.add(mainBarcodeValue);
     }
 
+    for (const v of formVariants) {
+      const cleanColor = v.color.trim();
+      const cleanModel = v.model.trim();
+      const existingV = editModeProduct?.variants?.find(ev => ev.id === v.id || (ev.color === cleanColor && ev.model === cleanModel));
+      const reservedQty = Number(existingV?.reservedQty ?? v.reservedQty) || 0;
+      if (Number(v.stock) < reservedQty) {
+        setFormError(`Variant "${cleanColor} ${cleanModel}" has ${reservedQty} pcs reserved for Pre-Orders and cannot go below ${reservedQty}.`);
+        setSubmitting(false);
+        setWizardStep(2);
+        return;
+      }
+    }
+
     const updatedVariants = formVariants.map(v => {
       const cleanColor = v.color.trim();
       const cleanModel = v.model.trim();
@@ -906,7 +937,7 @@ export default function ProductManagement({
       const vModelCode = cleanModel.toUpperCase().replace(/[^A-Z0-9]/g, '-').replace(/-+/g, '-');
       const oldLongBarcodeValue = `${finalSku}-${vColorCode}-${vModelCode}`;
 
-      // Get existing variant to reuse its barcode value if it exists and is valid
+      // Get existing variant to reuse its barcode value and preserve reservedQty
       const existingV = editModeProduct?.variants?.find(ev => ev.id === v.id || (ev.color === cleanColor && ev.model === cleanModel));
       let vBarcodeValue = v.barcodeValue || existingV?.barcodeValue;
 
@@ -915,11 +946,13 @@ export default function ProductManagement({
         generatedInSession.add(vBarcodeValue);
       }
 
+      const preservedReserved = Number(existingV?.reservedQty ?? v.reservedQty) || 0;
       return {
         ...v,
         color: cleanColor,
         model: cleanModel,
         stock: Number(v.stock),
+        ...(preservedReserved > 0 ? { reservedQty: preservedReserved } : {}),
         barcodeValue: vBarcodeValue
       };
     });
@@ -943,7 +976,9 @@ export default function ProductManagement({
       createdAt: editModeProduct ? editModeProduct.createdAt : Date.now(),
       barcodeValue: mainBarcodeValue,
       status: finalStatus,
-      rejectionReason: finalStatus === 'pending_review' ? '' : (editModeProduct?.rejectionReason || '')
+      rejectionReason: finalStatus === 'pending_review' ? '' : (editModeProduct?.rejectionReason || ''),
+      ...(editModeProduct?.reservedQty !== undefined ? { reservedQty: editModeProduct.reservedQty } : {}),
+      ...(editModeProduct?.reservedForPreOrders ? { reservedForPreOrders: editModeProduct.reservedForPreOrders } : {})
     };
 
     try {
@@ -1469,19 +1504,16 @@ export default function ProductManagement({
     const matchesBrand = !filterBrand || product.brand === filterBrand;
     const matchesSubBrand = !filterSubBrand || product.subBrand === filterSubBrand;
     
-    const variantsList = Array.isArray(product.variants) ? product.variants : [];
-    const totalQty = variantsList.length > 0 
-      ? variantsList.reduce((sum, v) => sum + (v.stock || 0), 0)
-      : (product.totalStock ?? 0);
+    const availQty = getProductAvailableStock(product);
     const threshold = product.reorderThreshold ?? 5;
 
     let matchesStock = true;
     if (filterStockStatus === 'instock') {
-      matchesStock = totalQty > threshold;
+      matchesStock = availQty > threshold;
     } else if (filterStockStatus === 'lowstock') {
-      matchesStock = totalQty > 0 && totalQty <= threshold;
+      matchesStock = availQty > 0 && availQty <= threshold;
     } else if (filterStockStatus === 'out') {
-      matchesStock = totalQty === 0;
+      matchesStock = availQty <= 0;
     }
 
     const matchesStatus = product.status === 'approved';
@@ -1589,9 +1621,9 @@ export default function ProductManagement({
             }`}
           >
             Out of Stock
-            {products.filter(p => p.stockStatus === 'out_of_stock' && !p.archived).length > 0 && (
+            {products.filter(p => (p.stockStatus === 'out_of_stock' || getProductAvailableStock(p) <= 0) && !p.archived).length > 0 && (
               <span className="px-1.5 py-0.5 bg-red-500 text-white text-[9px] font-black rounded-full leading-none">
-                {products.filter(p => p.stockStatus === 'out_of_stock' && !p.archived).length}
+                {products.filter(p => (p.stockStatus === 'out_of_stock' || getProductAvailableStock(p) <= 0) && !p.archived).length}
               </span>
             )}
           </button>
@@ -1941,7 +1973,9 @@ export default function ProductManagement({
                       ) : (
                         sortedProducts.map((product) => {
                           const totalQty = (product.variants || []).reduce((s, v) => s + (v.stock || 0), 0);
-                          const isLow = totalQty <= (product.reorderThreshold ?? 5);
+                          const reservedQty = Number(product.reservedQty) || 0;
+                          const availQty = getProductAvailableStock(product);
+                          const isLow = availQty <= (product.reorderThreshold ?? 5);
                           const defaultImg = product.images?.[0] || 'https://images.unsplash.com/photo-1546868871-7041f2a55e12?auto=format&fit=crop&q=80&w=150';
 
                           return (
@@ -2018,15 +2052,20 @@ export default function ProductManagement({
                                 ) : (
                                   <>
                                     <span className={`inline-block font-mono font-black px-2 py-0.5 rounded-full ${
-                                      totalQty === 0 
+                                      availQty <= 0 
                                         ? 'bg-red-100 text-red-700' 
                                         : isLow 
                                         ? 'bg-amber-100 text-amber-800' 
                                         : 'bg-teal-50 text-teal-700'
                                     }`}>
-                                      {totalQty} pcs
+                                      {reservedQty > 0 ? `${availQty} avail` : `${totalQty} pcs`}
                                     </span>
-                                    {isLow && totalQty > 0 && (
+                                    {reservedQty > 0 && (
+                                      <p className="text-[10px] text-amber-700 mt-1 font-mono font-bold" title={(product.reservedForPreOrders || []).map(r => `${r.preOrderNumber}: ${r.qty}`).join(', ')}>
+                                        Total: {totalQty} • Reserved: {reservedQty}
+                                      </p>
+                                    )}
+                                    {isLow && availQty > 0 && (
                                       <p className="text-[9px] text-amber-600 mt-1 font-sans italic font-medium">Reorder Alert</p>
                                     )}
                                   </>
@@ -2125,7 +2164,9 @@ export default function ProductManagement({
                   ) : (
                     sortedProducts.map((product) => {
                       const totalQty = (product.variants || []).reduce((s, v) => s + (v.stock || 0), 0);
-                      const isLow = totalQty <= (product.reorderThreshold ?? 5);
+                      const reservedQty = Number(product.reservedQty) || 0;
+                      const availQty = getProductAvailableStock(product);
+                      const isLow = availQty <= (product.reorderThreshold ?? 5);
                       const defaultImg = product.images?.[0] || 'https://images.unsplash.com/photo-1546868871-7041f2a55e12?auto=format&fit=crop&q=80&w=150';
 
                       return (
@@ -2165,12 +2206,17 @@ export default function ProductManagement({
                                   {product.subBrand}
                                 </span>
                               </div>
-                              <div className="absolute bottom-2 left-2">
+                              <div className="absolute bottom-2 left-2 flex flex-wrap gap-1">
                                 <span className={`text-xs font-bold px-2 py-0.5 rounded-md shadow-xs ${
-                                  totalQty === 0 ? 'bg-rose-500 text-white' : isLow ? 'bg-amber-500 text-slate-950' : 'bg-emerald-600 text-white'
+                                  availQty <= 0 ? 'bg-rose-500 text-white' : isLow ? 'bg-amber-500 text-slate-950' : 'bg-emerald-600 text-white'
                                 }`}>
-                                  {totalQty === 0 ? 'Out of Stock' : `${totalQty} in stock`}
+                                  {availQty <= 0 ? (reservedQty > 0 ? '0 Avail (Reserved)' : 'Out of Stock') : reservedQty > 0 ? `${availQty} avail / ${totalQty}` : `${totalQty} in stock`}
                                 </span>
+                                {reservedQty > 0 && (
+                                  <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-amber-400 text-slate-950 shadow-xs">
+                                    Res: {reservedQty}
+                                  </span>
+                                )}
                               </div>
                             </div>
 
@@ -2230,7 +2276,9 @@ export default function ProductManagement({
                 ) : (
                   sortedProducts.map((product) => {
                     const totalQty = (product.variants || []).reduce((s, v) => s + (v.stock || 0), 0);
-                    const isLow = totalQty <= (product.reorderThreshold ?? 5);
+                    const reservedQty = Number(product.reservedQty) || 0;
+                    const availQty = getProductAvailableStock(product);
+                    const isLow = availQty <= (product.reorderThreshold ?? 5);
                     const defaultImg = product.images?.[0] || 'https://images.unsplash.com/photo-1546868871-7041f2a55e12?auto=format&fit=crop&q=80&w=150';
 
                     return (
@@ -2279,11 +2327,11 @@ export default function ProductManagement({
                             </div>
 
                             {/* Stock Badge */}
-                            <div className="absolute bottom-1.5 left-1.5">
+                            <div className="absolute bottom-1.5 left-1.5 flex gap-1 flex-wrap">
                               <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded shadow-xs ${
-                                totalQty === 0 ? 'bg-rose-500 text-white' : isLow ? 'bg-amber-500 text-slate-950' : 'bg-emerald-600/90 text-white'
+                                availQty <= 0 ? 'bg-rose-500 text-white' : isLow ? 'bg-amber-500 text-slate-950' : 'bg-emerald-600/90 text-white'
                               }`}>
-                                {totalQty === 0 ? 'Out' : `${totalQty} in stock`}
+                                {availQty <= 0 ? (reservedQty > 0 ? 'Out (Res)' : 'Out') : reservedQty > 0 ? `${availQty} avail` : `${totalQty} in stock`}
                               </span>
                             </div>
                           </div>
@@ -2585,17 +2633,28 @@ export default function ProductManagement({
                           </span>
                         </div>
                         <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                          {(selectedProduct.variants || []).map((v) => (
-                            <div key={v.id} className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-center font-mono relative shadow-3xs">
-                              {v.stock === 0 && (
-                                 <span className="absolute -top-1.5 -right-1.5 bg-rose-600 text-white text-[9px] font-black uppercase px-2 py-0.5 rounded-full shadow-xs z-10">Out</span>
-                              )}
-                              <p className="text-xs font-bold text-slate-600 truncate">{v.color} • {v.model}</p>
-                              <p className={`text-base font-black mt-1 ${v.stock === 0 ? 'text-rose-600' : 'text-slate-900'}`}>
-                                {v.stock} pcs
-                              </p>
-                            </div>
-                          ))}
+                          {(selectedProduct.variants || []).map((v) => {
+                            const avail = getVariantAvailableStock(v);
+                            const res = Number(v.reservedQty) || 0;
+                            return (
+                              <div key={v.id} className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-center font-mono relative shadow-3xs">
+                                {avail <= 0 && (
+                                   <span className="absolute -top-1.5 -right-1.5 bg-rose-600 text-white text-[9px] font-black uppercase px-2 py-0.5 rounded-full shadow-xs z-10">
+                                     {res > 0 ? 'Reserved' : 'Out'}
+                                   </span>
+                                )}
+                                <p className="text-xs font-bold text-slate-600 truncate">{v.color} • {v.model}</p>
+                                <p className={`text-base font-black mt-1 ${avail <= 0 ? 'text-rose-600' : 'text-slate-900'}`}>
+                                  {res > 0 ? `${avail} avail` : `${v.stock} pcs`}
+                                </p>
+                                {res > 0 && (
+                                  <p className="text-[10px] font-bold text-amber-700 mt-0.5">
+                                    Total: {v.stock} • Res: {res}
+                                  </p>
+                                )}
+                              </div>
+                            );
+                          })}
                         </div>
                       </div>
 
@@ -3636,15 +3695,17 @@ export default function ProductManagement({
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
-                {products.filter(p => p.stockStatus === 'out_of_stock' && !p.archived).length === 0 ? (
+                {products.filter(p => (p.stockStatus === 'out_of_stock' || getProductAvailableStock(p) <= 0) && !p.archived).length === 0 ? (
                   <tr>
                     <td colSpan={6} className="py-10 text-center text-slate-400 italic">
                       No out of stock products found.
                     </td>
                   </tr>
                 ) : (
-                  products.filter(p => p.stockStatus === 'out_of_stock' && !p.archived).map((product) => {
+                  products.filter(p => (p.stockStatus === 'out_of_stock' || getProductAvailableStock(p) <= 0) && !p.archived).map((product) => {
                     const defaultImg = product.images?.[0] || 'https://images.unsplash.com/photo-1546868871-7041f2a55e12?auto=format&fit=crop&q=80&w=150';
+                    const totalQty = (product.variants || []).reduce((s, v) => s + (v.stock || 0), 0);
+                    const reservedQty = Number(product.reservedQty) || 0;
                     return (
                       <tr key={product.id} className="hover:bg-slate-50/50 transition-colors">
                         <td className="py-3 px-4">
@@ -3665,6 +3726,11 @@ export default function ProductManagement({
                             <span className="bg-slate-100 text-slate-500 text-[9px] font-mono font-bold px-1 rounded">
                               {product.category}
                             </span>
+                            {reservedQty > 0 && (
+                              <span className="bg-amber-100 text-amber-800 text-[9px] font-mono font-bold px-1.5 rounded">
+                                {(product.reservedForPreOrders || []).map(r => r.preOrderNumber).join(', ') || 'Pre-Order Reserved'}
+                              </span>
+                            )}
                           </div>
                         </td>
                         <td className="py-3 px-3 text-center">
@@ -3682,7 +3748,13 @@ export default function ProductManagement({
                           <p className="font-bold text-slate-900">৳ {product.sellingPrice.toLocaleString()}</p>
                         </td>
                         <td className="py-3 px-3 text-center">
-                           <span className="text-rose-600 font-black text-sm bg-rose-50 px-2 py-1 rounded-md">0 pcs</span>
+                           {reservedQty > 0 && totalQty > 0 ? (
+                             <span className="text-amber-700 font-black text-xs bg-amber-50 border border-amber-200 px-2 py-1 rounded-md">
+                               0 avail (Res: {reservedQty} / {totalQty})
+                             </span>
+                           ) : (
+                             <span className="text-rose-600 font-black text-sm bg-rose-50 px-2 py-1 rounded-md">0 pcs</span>
+                           )}
                         </td>
                         <td className="py-3 px-4 text-center">
                           <button

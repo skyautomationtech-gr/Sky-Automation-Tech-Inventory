@@ -138,8 +138,10 @@ export const NetProfitBreakdownModal: React.FC<NetProfitBreakdownModalProps> = (
         const subBrand = prodInfo?.subBrand || order.subBrand || 'SAT';
         const sku = prodInfo?.sku || '';
         
-        // Accurate cost price: from product profile or fallback to 70% of sale price
-        const unitCost = prodInfo?.costPrice !== undefined && prodInfo.costPrice > 0 
+        // Accurate cost price: snapshotted line item costPrice (e.g. pre-order landed cost), product profile, or 70% fallback
+        const unitCost = (item.costPrice !== undefined && Number(item.costPrice) > 0)
+          ? Number(item.costPrice)
+          : prodInfo?.costPrice !== undefined && prodInfo.costPrice > 0 
           ? prodInfo.costPrice 
           : (item.unitPrice * 0.7);
 
@@ -231,7 +233,9 @@ export const NetProfitBreakdownModal: React.FC<NetProfitBreakdownModalProps> = (
       let orderCost = 0;
       const itemsList = (order.items || []).map(item => {
         const prodInfo = productCostMap.get(item.productId);
-        const cost = prodInfo?.costPrice !== undefined && prodInfo.costPrice > 0 
+        const cost = (item.costPrice !== undefined && Number(item.costPrice) > 0)
+          ? Number(item.costPrice)
+          : prodInfo?.costPrice !== undefined && prodInfo.costPrice > 0 
           ? prodInfo.costPrice 
           : (item.unitPrice * 0.7);
         const itemQty = Number(item.qty) || 1;
@@ -245,7 +249,9 @@ export const NetProfitBreakdownModal: React.FC<NetProfitBreakdownModalProps> = (
         };
       });
 
-      const effectiveTotal = (order.amountPaid && order.amountPaid > 0) ? order.amountPaid : order.totalAmount;
+      const effectiveTotal = order.source === 'pre_order'
+        ? (Number(order.totalAmount) || 0)
+        : ((order.amountPaid && order.amountPaid > 0) ? order.amountPaid : order.totalAmount);
       const profit = effectiveTotal - orderCost;
       const margin = effectiveTotal > 0 ? (profit / effectiveTotal) * 100 : 0;
 
@@ -308,13 +314,17 @@ export const NetProfitBreakdownModal: React.FC<NetProfitBreakdownModalProps> = (
       let orderCost = 0;
       (order.items || []).forEach(item => {
         const prodInfo = productCostMap.get(item.productId);
-        const cost = prodInfo?.costPrice !== undefined && prodInfo.costPrice > 0 
+        const cost = (item.costPrice !== undefined && Number(item.costPrice) > 0)
+          ? Number(item.costPrice)
+          : prodInfo?.costPrice !== undefined && prodInfo.costPrice > 0 
           ? prodInfo.costPrice 
           : (item.unitPrice * 0.7);
         orderCost += cost * (Number(item.qty) || 1);
       });
 
-      const effectiveTotal = (order.amountPaid && order.amountPaid > 0) ? order.amountPaid : order.totalAmount;
+      const effectiveTotal = order.source === 'pre_order'
+        ? (Number(order.totalAmount) || 0)
+        : ((order.amountPaid && order.amountPaid > 0) ? order.amountPaid : order.totalAmount);
       const profit = effectiveTotal - orderCost;
 
       // Brand

@@ -18,6 +18,7 @@ import {
   XCircle,
 } from 'lucide-react';
 import {
+  Brand,
   Category,
   CompanySettings,
   PreOrder,
@@ -25,6 +26,7 @@ import {
   PreOrderPaymentMethod,
   PreOrderPaymentStatus,
   PreOrderPaymentType,
+  Product,
   RolePermissionsMap,
   Supplier,
   UserProfile,
@@ -72,7 +74,10 @@ export interface PaymentManagementViewProps {
   user: UserProfile;
   rolePermissions: RolePermissionsMap | null;
   categories: Category[];
+  brands?: Brand[];
+  products?: Product[];
   companySettings?: CompanySettings | null;
+  onNavigate?: (tab: string, subAction?: string, initialId?: string | null) => void;
 }
 
 type PaymentPageTab = 'ledger' | 'pending' | 'due_list';
@@ -98,7 +103,10 @@ export const PaymentManagementView: React.FC<PaymentManagementViewProps> = ({
   user,
   rolePermissions,
   categories,
+  brands,
+  products,
   companySettings,
+  onNavigate,
 }) => {
   const toast = useToast();
 
@@ -873,16 +881,27 @@ export const PaymentManagementView: React.FC<PaymentManagementViewProps> = ({
                             <MessageCircle className="w-3 h-3" />
                             WhatsApp
                           </a>
-                          {canCollect && (
+                          {ord.convertedSaleId || ord.convertedOrderId ? (
                             <Button
                               type="button"
-                              variant="primary"
+                              variant="secondary"
                               size="xs"
-                              onClick={() => setCollectOrder(ord)}
-                              leftIcon={<Banknote className="w-3 h-3" />}
+                              onClick={() => onNavigate?.('receivables')}
                             >
-                              Collect
+                              Via Due Payments ({ord.convertedInvoiceNumber || 'Invoice'})
                             </Button>
+                          ) : (
+                            canCollect && (
+                              <Button
+                                type="button"
+                                variant="primary"
+                                size="xs"
+                                onClick={() => setCollectOrder(ord)}
+                                leftIcon={<Banknote className="w-3 h-3" />}
+                              >
+                                Collect
+                              </Button>
+                            )
                           )}
                         </div>
                       </td>
@@ -904,8 +923,11 @@ export const PaymentManagementView: React.FC<PaymentManagementViewProps> = ({
         user={user}
         rolePermissions={rolePermissions}
         categories={categories}
+        brands={brands}
+        products={products}
         suppliers={suppliers}
         companySettings={companySettings}
+        onNavigate={onNavigate}
         onUpdated={refreshAll}
       />
 

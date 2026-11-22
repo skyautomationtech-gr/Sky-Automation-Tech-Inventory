@@ -1213,8 +1213,11 @@ export default function App() {
               user={user}
               rolePermissions={rolePermissions}
               categories={categories}
+              brands={brands}
+              products={products}
               companySettings={companySettings}
               onCreateNew={() => navigateToTab('preorder_create')}
+              onNavigate={navigateToTab}
               initialSelectedPreOrderId={selectedPreOrderId}
               onClearInitialSelected={() => setSelectedPreOrderId(null)}
             />
@@ -1227,7 +1230,10 @@ export default function App() {
               user={user}
               rolePermissions={rolePermissions}
               categories={categories}
+              brands={brands}
+              products={products}
               companySettings={companySettings}
+              onNavigate={navigateToTab}
             />
           </ErrorBoundary>
         )}

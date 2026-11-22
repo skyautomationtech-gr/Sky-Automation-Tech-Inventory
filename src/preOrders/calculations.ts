@@ -268,3 +268,118 @@ export function calculatePerOrderSupplierSummary(input: {
   };
 }
 
+export function isCashDrawerMethod(method?: string | null): boolean {
+  const m = String(method || '').trim().toLowerCase();
+  return m === 'cash' || m === 'cash on delivery' || m === 'cod';
+}
+
+export interface ReceiptLandedCostInput {
+  orderedQty: number;
+  receivedGoodQty: number;
+  damagedQty: number;
+  chinaUnitCost: number;
+  actualShippingCost?: number;
+  estimatedShippingCost?: number;
+  alreadyAllocatedShippingCost?: number;
+}
+
+export interface ReceiptLandedCostResult {
+  totalUnitsThisReceipt: number;
+  chinaUnitCost: number;
+  totalShippingPool: number;
+  shippingCostPerUnit: number;
+  shippingCostPortion: number;
+  unitLandedCost: number;
+  totalGoodLandedCost: number;
+  damagedCostLoss: number;
+}
+
+/**
+ * Pure integer-safe landed cost breakdown for partial or full pre-order stock receipts.
+ * Uses actualShippingCost when > 0, otherwise falls back to estimatedShippingCost.
+ */
+export function calculatePreOrderReceiptCost(input: ReceiptLandedCostInput): ReceiptLandedCostResult {
+  const orderedQty = Math.max(1, Math.round(Number(input.orderedQty) || 1));
+  const goodQty = Math.max(0, Math.round(Number(input.receivedGoodQty) || 0));
+  const damagedQty = Math.max(0, Math.round(Number(input.damagedQty) || 0));
+  const totalUnits = goodQty + damagedQty;
+
+  const chinaUnitPaisa = Math.max(0, toPaisa(input.chinaUnitCost));
+  const actualShipPaisa = Math.max(0, toPaisa(input.actualShippingCost));
+  const estShipPaisa = Math.max(0, toPaisa(input.estimatedShippingCost));
+  const totalShippingPoolPaisa = actualShipPaisa > 0 ? actualShipPaisa : estShipPaisa;
+
+  const shippingPerUnitPaisa = Math.round(totalShippingPoolPaisa / orderedQty);
+  const unitLandedPaisa = chinaUnitPaisa + shippingPerUnitPaisa;
+  const totalGoodLandedPaisa = goodQty * unitLandedPaisa;
+  const damagedLossPaisa = damagedQty * unitLandedPaisa;
+  const shippingPortionPaisa = totalUnits * shippingPerUnitPaisa;
+
+  return {
+    totalUnitsThisReceipt: totalUnits,
+    chinaUnitCost: fromPaisa(chinaUnitPaisa),
+    totalShippingPool: fromPaisa(totalShippingPoolPaisa),
+    shippingCostPerUnit: fromPaisa(shippingPerUnitPaisa),
+    shippingCostPortion: fromPaisa(shippingPortionPaisa),
+    unitLandedCost: fromPaisa(unitLandedPaisa),
+    totalGoodLandedCost: fromPaisa(totalGoodLandedPaisa),
+    damagedCostLoss: fromPaisa(damagedLossPaisa),
+  };
+}
+
+export interface SaleConversionBreakdown {
+  subtotal: number;
+  deliveryCharge: number;
+  discount: number;
+  totalAmount: number;
+  advanceApplied: number;
+  remainingDue: number;
+  unitCostPrice: number;
+  totalCogs: number;
+  recognizedProfit: number;
+}
+
+export function calculateSaleConversionBreakdown(input: {
+  qty: number;
+  sellingUnitPrice: number;
+  deliveryCharge?: number;
+  discount?: number;
+  verifiedNetPaid: number;
+  unitLandedCost?: number;
+  fallbackChinaUnitCost?: number;
+  fallbackShippingCost?: number;
+}): SaleConversionBreakdown {
+  const summary = calculatePreOrderFinancials({
+    qty: input.qty,
+    sellingUnitPrice: input.sellingUnitPrice,
+    deliveryCharge: input.deliveryCharge,
+    discount: input.discount,
+  });
+
+  const safeQty = Math.max(1, summary.qty || 1);
+  const explicitUnitLandedPaisa = Math.max(0, toPaisa(input.unitLandedCost));
+  const fallbackUnitPaisa =
+    Math.max(0, toPaisa(input.fallbackChinaUnitCost)) +
+    Math.round(Math.max(0, toPaisa(input.fallbackShippingCost)) / safeQty);
+  const unitCostPaisa = explicitUnitLandedPaisa > 0 ? explicitUnitLandedPaisa : fallbackUnitPaisa;
+
+  const totalCogsPaisa = unitCostPaisa * safeQty;
+  const totalAmountPaisa = toPaisa(summary.totalAmount);
+  const paidPaisa = Math.min(totalAmountPaisa, Math.max(0, toPaisa(input.verifiedNetPaid)));
+  const remainingDuePaisa = Math.max(0, totalAmountPaisa - paidPaisa);
+  const profitPaisa = totalAmountPaisa - totalCogsPaisa;
+
+  return {
+    subtotal: summary.subtotal,
+    deliveryCharge: summary.deliveryCharge,
+    discount: summary.discount,
+    totalAmount: summary.totalAmount,
+    advanceApplied: fromPaisa(paidPaisa),
+    remainingDue: fromPaisa(remainingDuePaisa),
+    unitCostPrice: fromPaisa(unitCostPaisa),
+    totalCogs: fromPaisa(totalCogsPaisa),
+    recognizedProfit: fromPaisa(profitPaisa),
+  };
+}
+
+

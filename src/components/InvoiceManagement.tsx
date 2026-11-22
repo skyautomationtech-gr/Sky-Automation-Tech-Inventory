@@ -516,6 +516,11 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                   >
                     <td className="py-3.5 px-6 font-mono font-bold text-slate-800">
                       {inv.invoiceNumber || 'N/A'}
+                      {inv.preOrderNumber && (
+                        <span className="ml-2 inline-block bg-amber-100 text-amber-800 text-[9px] font-bold px-1.5 py-0.5 rounded-sm uppercase tracking-wide">
+                          {inv.preOrderNumber}
+                        </span>
+                      )}
                       {inv.voided && (
                         <span className="ml-2 inline-block bg-red-100 text-red-700 text-[8px] font-bold px-1.5 py-0.5 rounded-sm uppercase tracking-wide">
                           Void
@@ -838,7 +843,10 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                       <div className="bg-[#f8fafc] border-2 border-[#94a3b8] rounded-xl overflow-hidden shadow-xs">
                         <div className="bg-[#0f172a] text-[#ffffff] px-4 py-2 flex justify-between items-center text-xs font-black">
                           <span className="tracking-wide">INVOICE #{selectedInvoice.invoiceNumber || 'N/A'}</span>
-                          <span className="text-[#e2e8f0] font-bold">Order Ref: {selectedInvoice.orderId ? selectedInvoice.orderId.substring(0, 10) : 'N/A'}</span>
+                          <span className="text-[#e2e8f0] font-bold">
+                            {selectedInvoice.preOrderNumber ? `Pre-Order Ref: ${selectedInvoice.preOrderNumber} | ` : ''}
+                            Order Ref: {selectedInvoice.orderId ? selectedInvoice.orderId.substring(0, 10) : 'N/A'}
+                          </span>
                         </div>
                         <div className="p-3 grid grid-cols-4 gap-3 text-xs divide-x-2 divide-[#cbd5e1]">
                           <div className="pr-2">
@@ -972,7 +980,7 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                                   {relatedOrder.paymentHistory.map((ph, idx) => (
                                     <tr key={idx} className="border-b border-[#e2e8f0] last:border-0 font-bold">
                                       <td className="py-0.5 text-[#0f172a] font-bold">{new Date(ph.date).toLocaleDateString('en-GB')}</td>
-                                      <td className="py-0.5 text-[#0f172a] font-bold">{ph.method}</td>
+                                      <td className="py-0.5 text-[#0f172a] font-bold">{ph.label || ph.method}</td>
                                       <td className="py-0.5 text-[#047857] font-black text-right">৳{ph.amount.toLocaleString()}</td>
                                     </tr>
                                   ))}

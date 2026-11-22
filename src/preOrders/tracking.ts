@@ -187,6 +187,7 @@ export interface BuildWhitelistedPublicTrackingInput {
   payments: PreOrderPayment[];
   statusHistory: PreOrderStatusHistory[];
   shipmentEvents: PreOrderShipmentEvent[];
+  postConversionPayments?: Array<{ date: number; amount: number; method: string; isPreOrderAdvance?: boolean }>;
   companySettings?: CompanySettings | null;
   now?: number;
 }
@@ -250,23 +251,34 @@ export function buildWhitelistedPublicTrackingDoc(
       .map((p) => String(p.reversesPaymentId))
   );
 
-  const sanitizedPaymentHistory: PublicTrackingPaymentItem[] = payments
-    .filter(
-      (p) =>
-        p.status === 'verified' &&
-        (p.type === 'advance' ||
-          p.type === 'installment' ||
-          p.type === 'additional' ||
-          p.type === 'refund') &&
-        !reversedIds.has(p.id)
-    )
-    .sort((a, b) => Number(b.receivedAt || b.createdAt || 0) - Number(a.receivedAt || a.createdAt || 0))
+  const sanitizedPostConversion: PublicTrackingPaymentItem[] = (input.postConversionPayments || [])
+    .filter((p) => !p.isPreOrderAdvance && Number(p.amount || 0) > 0)
     .map((p) => ({
-      date: Number(p.receivedAt || p.createdAt || now),
+      date: Number(p.date || now),
       amount: Number(p.amount || 0),
-      type: p.type as 'advance' | 'installment' | 'additional' | 'refund',
+      type: 'installment' as const,
       method: String(p.method || 'Cash'),
     }));
+
+  const sanitizedPaymentHistory: PublicTrackingPaymentItem[] = [
+    ...payments
+      .filter(
+        (p) =>
+          p.status === 'verified' &&
+          (p.type === 'advance' ||
+            p.type === 'installment' ||
+            p.type === 'additional' ||
+            p.type === 'refund') &&
+          !reversedIds.has(p.id)
+      )
+      .map((p) => ({
+        date: Number(p.receivedAt || p.createdAt || now),
+        amount: Number(p.amount || 0),
+        type: p.type as 'advance' | 'installment' | 'additional' | 'refund',
+        method: String(p.method || 'Cash'),
+      })),
+    ...sanitizedPostConversion,
+  ].sort((a, b) => b.date - a.date);
 
   const defaultBrandLogo = BRAND_LOGOS[subBrand] || '/sat_logo.jpg';
   const brandLogoUrl = sanitizePublicImageUrl(brandInfo.logoUrl, defaultBrandLogo);

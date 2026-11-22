@@ -14,7 +14,7 @@ import {
   Coins,
 } from 'lucide-react';
 import { Product, Variant, StockLog, StockLogType, UserProfile } from '../types';
-import { addStockLog, updateProduct, getStockLogs } from '../firebase/db';
+import { addStockLog, updateProduct, getStockLogs, getVariantAvailableStock } from '../firebase/db';
 
 interface StockOperationsProps {
   products: Product[];
@@ -146,8 +146,14 @@ export default function StockOperations({
           setSubmitting(false);
           return;
         }
-        if (qty > currentStock) {
-          setError(`Insufficient stock. Current variant inventory is only ${currentStock} units.`);
+        const availStock = getVariantAvailableStock(selectedVariant);
+        const reserved = Number(selectedVariant.reservedQty) || 0;
+        if (qty > availStock) {
+          setError(
+            reserved > 0
+              ? `Insufficient available stock. Available is ${availStock} units (${reserved} units reserved for Pre-Orders out of ${currentStock} total).`
+              : `Insufficient stock. Current variant inventory is only ${currentStock} units.`
+          );
           setSubmitting(false);
           return;
         }
@@ -157,6 +163,12 @@ export default function StockOperations({
       } else if (activeAction === 'adjust') {
         if (physicalCount < 0) {
           setError('Physical count cannot be negative.');
+          setSubmitting(false);
+          return;
+        }
+        const minAllowed = Number(selectedVariant.reservedQty) || 0;
+        if (physicalCount < minAllowed) {
+          setError(`Cannot adjust physical count below ${minAllowed} units currently reserved for Pre-Orders.`);
           setSubmitting(false);
           return;
         }
@@ -474,12 +486,21 @@ export default function StockOperations({
                     required
                   >
                     <option value="">-- Choose Variant --</option>
-                    {selectedProduct.variants.map(v => (
-                      <option key={v.id} value={v.id}>
-                        {v.color} - {v.model} (Currently {v.stock} in stock)
-                      </option>
-                    ))}
+                    {selectedProduct.variants.map(v => {
+                      const avail = getVariantAvailableStock(v);
+                      const res = Number(v.reservedQty) || 0;
+                      return (
+                        <option key={v.id} value={v.id}>
+                          {v.color} - {v.model} (Avail: {avail} / Total: {v.stock}{res > 0 ? ` / Reserved: ${res}` : ''})
+                        </option>
+                      );
+                    })}
                   </select>
+                  {selectedVariant && (Number(selectedVariant.reservedQty) || 0) > 0 && (
+                    <p className="mt-1.5 text-xs font-semibold text-amber-700 bg-amber-50 border border-amber-200 rounded-lg px-2.5 py-1.5">
+                      Total: {selectedVariant.stock} • Reserved for Pre-Orders: {selectedVariant.reservedQty} • Available for Stock OUT: {getVariantAvailableStock(selectedVariant)}
+                    </p>
+                  )}
                 </div>
               )}
 

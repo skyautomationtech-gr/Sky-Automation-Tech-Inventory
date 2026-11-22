@@ -18,13 +18,16 @@ import {
   Plus,
   RefreshCw,
   RotateCcw,
+  ShieldCheck,
 } from 'lucide-react';
 import {
+  Brand,
   Category,
   CompanySettings,
   PreOrder,
   PreOrderPaymentState,
   PreOrderStatus,
+  Product,
   RolePermissionsMap,
   Supplier,
   UserProfile,
@@ -33,6 +36,7 @@ import {
   PRE_ORDER_STATUSES,
   formatBDT,
   hasPermission,
+  isPreOrderAdminRole,
   isPreOrderOverdue,
 } from '../../preOrders/constants';
 import { getSuppliers } from '../../firebase/db';
@@ -52,13 +56,17 @@ import {
 } from './PreOrderStatusBadge';
 import PreOrderDetailDrawer from './PreOrderDetailDrawer';
 import PreOrderStatusDialog from './PreOrderStatusDialog';
+import PreOrderIntegrityModal from './PreOrderIntegrityModal';
 
 export interface AllPreOrdersViewProps {
   user: UserProfile;
   rolePermissions: RolePermissionsMap | null;
   categories: Category[];
+  brands?: Brand[];
+  products?: Product[];
   companySettings?: CompanySettings | null;
   onCreateNew: () => void;
+  onNavigate?: (tab: string, subAction?: string, initialId?: string | null) => void;
   initialSelectedPreOrderId?: string | null;
   onClearInitialSelected?: () => void;
 }
@@ -67,11 +75,15 @@ export const AllPreOrdersView: React.FC<AllPreOrdersViewProps> = ({
   user,
   rolePermissions,
   categories,
+  brands,
+  products,
   companySettings,
   onCreateNew,
+  onNavigate,
   initialSelectedPreOrderId,
   onClearInitialSelected,
 }) => {
+  const isAdmin = isPreOrderAdminRole(user.role);
   const canView = hasPermission(user, rolePermissions, 'preOrderView');
   const canCreate = hasPermission(user, rolePermissions, 'preOrderCreate');
 
@@ -123,6 +135,7 @@ export const AllPreOrdersView: React.FC<AllPreOrdersViewProps> = ({
   const [drawerEditMode, setDrawerEditMode] = useState(false);
   const [openMenuRowId, setOpenMenuRowId] = useState<string | null>(null);
   const [statusTargetOrder, setStatusTargetOrder] = useState<PreOrder | null>(null);
+  const [showIntegrityModal, setShowIntegrityModal] = useState(false);
 
   const canEdit = hasPermission(user, rolePermissions, 'preOrderEdit');
   const canUpdateStatus = hasPermission(user, rolePermissions, 'preOrderUpdateStatus');
@@ -325,6 +338,17 @@ export const AllPreOrdersView: React.FC<AllPreOrdersViewProps> = ({
         </div>
 
         <div className="flex items-center gap-2.5">
+          {isAdmin && (
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              onClick={() => setShowIntegrityModal(true)}
+              leftIcon={<ShieldCheck className="w-3.5 h-3.5 text-[#D4AF37]" />}
+            >
+              Integrity Check
+            </Button>
+          )}
           <Button
             type="button"
             variant="secondary"
@@ -714,6 +738,16 @@ export const AllPreOrdersView: React.FC<AllPreOrdersViewProps> = ({
                       <td className="px-4 py-3 whitespace-nowrap">
                         <div className="flex flex-col items-start gap-1">
                           <PreOrderStatusBadge status={row.status} size="xs" />
+                          {row.convertedInvoiceNumber && (
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-100 text-emerald-800 border border-emerald-200 dark:bg-emerald-950/50 dark:text-emerald-300 dark:border-emerald-800">
+                              {row.convertedInvoiceNumber}
+                            </span>
+                          )}
+                          {!row.convertedSaleId && (row.stockReceivedQty || 0) > 0 && (
+                            <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-100 text-amber-800 border border-amber-200 dark:bg-amber-950/50 dark:text-amber-300 dark:border-amber-800">
+                              Reserved: {row.stockReceivedQty}/{row.qty}
+                            </span>
+                          )}
                           {row.status === 'Cancelled' &&
                             (row.advancePaid || 0) - (row.refundedAmount || 0) > 0 && (
                               <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-bold bg-rose-100 text-rose-800 border border-rose-200 dark:bg-rose-950/50 dark:text-rose-300 dark:border-rose-800">
@@ -932,8 +966,11 @@ export const AllPreOrdersView: React.FC<AllPreOrdersViewProps> = ({
         user={user}
         rolePermissions={rolePermissions}
         categories={categories}
+        brands={brands}
+        products={products}
         suppliers={suppliers}
         companySettings={companySettings}
+        onNavigate={onNavigate}
         onUpdated={fetchPage}
       />
 
@@ -945,6 +982,18 @@ export const AllPreOrdersView: React.FC<AllPreOrdersViewProps> = ({
         user={user}
         onUpdated={fetchPage}
       />
+
+      {/* Admin Integrity Check Modal */}
+      {isAdmin && (
+        <PreOrderIntegrityModal
+          isOpen={showIntegrityModal}
+          onClose={() => setShowIntegrityModal(false)}
+          onSelectPreOrder={(poId) => {
+            setDrawerEditMode(false);
+            setActiveDrawerId(poId);
+          }}
+        />
+      )}
     </div>
   );
 };

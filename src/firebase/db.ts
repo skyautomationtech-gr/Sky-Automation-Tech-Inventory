@@ -962,6 +962,42 @@ export async function deleteProductModel(id: string): Promise<void> {
 // PRODUCT OPERATIONS
 // ==========================================
 
+export function getVariantAvailableStock(variant: Pick<Variant, 'stock' | 'reservedQty'> | undefined | null): number {
+  if (!variant) return 0;
+  return Math.max(0, (Number(variant.stock) || 0) - Math.max(0, Number(variant.reservedQty) || 0));
+}
+
+export function getProductAvailableStock(
+  product: Pick<Product, 'totalStock' | 'variants' | 'reservedQty'> | undefined | null,
+  variantId?: string
+): number {
+  if (!product) return 0;
+  if (variantId) {
+    const v = (product.variants || []).find((item) => item.id === variantId);
+    return getVariantAvailableStock(v);
+  }
+  const totalStock =
+    Array.isArray(product.variants) && product.variants.length > 0
+      ? product.variants.reduce((acc, v) => acc + (Number(v.stock) || 0), 0)
+      : Number(product.totalStock) || 0;
+  const variantReservedSum = Array.isArray(product.variants)
+    ? product.variants.reduce((acc, v) => acc + Math.max(0, Number(v.reservedQty) || 0), 0)
+    : 0;
+  const reservedQty = Math.max(Number(product.reservedQty) || 0, variantReservedSum);
+  return Math.max(0, totalStock - reservedQty);
+}
+
+export function computeAvailableStockStatus(
+  totalStock: number,
+  reservedQty: number = 0,
+  reorderThreshold?: number
+): 'in_stock' | 'low_stock' | 'out_of_stock' {
+  const available = Math.max(0, (Number(totalStock) || 0) - Math.max(0, Number(reservedQty) || 0));
+  if (available <= 0) return 'out_of_stock';
+  if (reorderThreshold !== undefined && available <= reorderThreshold) return 'low_stock';
+  return 'in_stock';
+}
+
 export function normalizeProduct(id: string, data: any): Product {
   const sellingPrice = Number(data.sellingPrice ?? data.price ?? data.costPrice ?? 0);
   const costPrice = Number(data.costPrice ?? data.price ?? 0);
@@ -985,6 +1021,8 @@ export function normalizeProduct(id: string, data: any): Product {
         color: v.color || 'Standard',
         model: v.model || 'Standard',
         stock: Number(v.stock) || 0,
+        reservedQty: Math.max(0, Number(v.reservedQty) || 0),
+        reservedForPreOrders: Array.isArray(v.reservedForPreOrders) ? v.reservedForPreOrders : [],
         barcodeValue: v.barcodeValue || ''
       }))
     : [{
@@ -992,24 +1030,36 @@ export function normalizeProduct(id: string, data: any): Product {
         color: 'Standard',
         model: 'Standard',
         stock: Number(data.stock ?? data.totalStock ?? 0),
+        reservedQty: Math.max(0, Number(data.reservedQty) || 0),
+        reservedForPreOrders: Array.isArray(data.reservedForPreOrders) ? data.reservedForPreOrders : [],
         barcodeValue: data.barcodeValue || ''
       }];
 
-  const totalStock = data.totalStock !== undefined 
-    ? Number(data.totalStock) 
-    : variants.reduce((acc, v) => acc + (v.stock || 0), 0);
+  const variantStockSum = variants.reduce((acc, v) => acc + (v.stock || 0), 0);
+  const totalStock = Array.isArray(data.variants) && data.variants.length > 0
+    ? variantStockSum
+    : Number(data.totalStock ?? variantStockSum);
+
+  const variantReservedSum = variants.reduce((acc, v) => acc + (v.reservedQty || 0), 0);
+  const reservedQty = Math.max(Number(data.reservedQty) || 0, variantReservedSum);
+  const reservedForPreOrders = Array.isArray(data.reservedForPreOrders)
+    ? data.reservedForPreOrders
+    : variants.flatMap((v) => v.reservedForPreOrders || []);
 
   const reorderThreshold = Number(data.reorderThreshold ?? 5);
+  const availableStock = Math.max(0, totalStock - reservedQty);
 
   let stockStatus: 'in_stock' | 'low_stock' | 'out_of_stock' = data.stockStatus;
   if (!stockStatus) {
-    if (totalStock <= 0) {
+    if (availableStock <= 0) {
       stockStatus = 'out_of_stock';
-    } else if (totalStock <= reorderThreshold) {
+    } else if (availableStock <= reorderThreshold) {
       stockStatus = 'low_stock';
     } else {
       stockStatus = 'in_stock';
     }
+  } else if (availableStock <= 0) {
+    stockStatus = 'out_of_stock';
   }
 
   return {
@@ -1031,6 +1081,8 @@ export function normalizeProduct(id: string, data: any): Product {
     imageUrls,
     variants,
     totalStock,
+    reservedQty,
+    reservedForPreOrders,
     archived: Boolean(data.archived),
     createdAt: data.createdAt || Date.now(),
     barcodeValue: data.barcodeValue || '',
@@ -1125,7 +1177,11 @@ export async function syncProductStockStatuses(): Promise<void> {
     qSnapshot.forEach((docSnap) => {
       const data = docSnap.data();
       const totalStock = data.variants?.reduce((sum: number, v: any) => sum + (v.stock || 0), 0) ?? 0;
-      const expectedStatus = totalStock <= 0 ? 'out_of_stock' : 'in_stock';
+      const reservedQty = Math.max(
+        Number(data.reservedQty) || 0,
+        data.variants?.reduce((sum: number, v: any) => sum + (v.reservedQty || 0), 0) ?? 0
+      );
+      const expectedStatus = Math.max(0, totalStock - reservedQty) <= 0 ? 'out_of_stock' : 'in_stock';
       if (data.stockStatus !== expectedStatus) {
         updateDoc(docSnap.ref, { stockStatus: expectedStatus }).catch(err => console.error('Failed sync product stockStatus:', err));
       }
@@ -1140,9 +1196,15 @@ export async function addProduct(product: Omit<Product, 'id'>, userId: string, u
   try {
     const colRef = collection(db, 'products');
     const totalQty = product.variants.reduce((acc, v) => acc + (v.stock || 0), 0);
-    const stockStatus = totalQty <= 0 ? 'out_of_stock' : 'in_stock';
+    const reservedQty = Math.max(
+      Number(product.reservedQty) || 0,
+      product.variants.reduce((acc, v) => acc + (v.reservedQty || 0), 0)
+    );
+    const stockStatus = Math.max(0, totalQty - reservedQty) <= 0 ? 'out_of_stock' : 'in_stock';
     const sanitizedProduct = sanitizeData({
       ...product,
+      totalStock: totalQty,
+      reservedQty,
       stockStatus,
       createdAt: Date.now()
     });
@@ -1180,7 +1242,13 @@ export async function updateProduct(id: string, updatedFields: Partial<Product>)
     const payload = { ...updatedFields };
     if (payload.variants && !payload.stockStatus) {
       const totalQty = payload.variants.reduce((acc, v) => acc + (v.stock || 0), 0);
-      payload.stockStatus = totalQty <= 0 ? 'out_of_stock' : 'in_stock';
+      const reservedQty = Math.max(
+        Number(payload.reservedQty) || 0,
+        payload.variants.reduce((acc, v) => acc + (v.reservedQty || 0), 0)
+      );
+      payload.totalStock = totalQty;
+      payload.reservedQty = reservedQty;
+      payload.stockStatus = Math.max(0, totalQty - reservedQty) <= 0 ? 'out_of_stock' : 'in_stock';
     }
     const docRef = doc(db, 'products', id);
     const sanitizedData = sanitizeData(payload);
@@ -2554,6 +2622,12 @@ export async function updateOrderAndHandleStock(
             const updatedVariants = productData.variants.map((v: Variant) => {
               if (v.id === item.variantId) {
                 const beforeQty = v.stock;
+                const avail = updatedOrder.source === 'pre_order' ? beforeQty : getVariantAvailableStock(v);
+                if (updatedOrder.source !== 'pre_order' && item.qty > avail) {
+                  throw new Error(
+                    `Insufficient available stock for ${productData.name} (${v.color} / ${v.model}). Available: ${avail} (${v.reservedQty || 0} reserved for Pre-Orders).`
+                  );
+                }
                 const afterQty = Math.max(0, beforeQty - item.qty);
                 
                 const logRef = doc(collection(db, 'stockLogs'));
@@ -2569,6 +2643,7 @@ export async function updateOrderAndHandleStock(
                   beforeQty,
                   afterQty,
                   orderId,
+                  variantId: v.id,
                   refNo: `ORDER-${orderId}`
                 };
                 transaction.set(logRef, sanitizeData(stockLog));
@@ -2579,8 +2654,14 @@ export async function updateOrderAndHandleStock(
             });
             const productRef = doc(db, 'products', item.productId);
             const deductTotalStock = updatedVariants.reduce((sum: number, v: Variant) => sum + (v.stock || 0), 0);
-            const deductStockStatus = deductTotalStock <= 0 ? 'out_of_stock' : 'in_stock';
-            transaction.update(productRef, { variants: updatedVariants, stockStatus: deductStockStatus });
+            const reservedTotal = updatedVariants.reduce((sum: number, v: Variant) => sum + (v.reservedQty || 0), 0);
+            const deductStockStatus = computeAvailableStockStatus(deductTotalStock, reservedTotal);
+            transaction.update(productRef, {
+              variants: updatedVariants,
+              totalStock: deductTotalStock,
+              reservedQty: reservedTotal,
+              stockStatus: deductStockStatus,
+            });
           }
         }
       } else if (shouldRestore) {
@@ -2610,6 +2691,7 @@ export async function updateOrderAndHandleStock(
                   beforeQty,
                   afterQty,
                   orderId,
+                  variantId: v.id,
                   refNo: `ORDER-RESTORE-${orderId}`
                 };
                 transaction.set(logRef, sanitizeData(stockLog));
@@ -2620,8 +2702,14 @@ export async function updateOrderAndHandleStock(
             });
             const productRef = doc(db, 'products', item.productId);
             const restoreTotalStock = updatedVariants.reduce((sum: number, v: Variant) => sum + (v.stock || 0), 0);
-            const restoreStockStatus = restoreTotalStock <= 0 ? 'out_of_stock' : 'in_stock';
-            transaction.update(productRef, { variants: updatedVariants, stockStatus: restoreStockStatus });
+            const reservedTotal = updatedVariants.reduce((sum: number, v: Variant) => sum + (v.reservedQty || 0), 0);
+            const restoreStockStatus = computeAvailableStockStatus(restoreTotalStock, reservedTotal);
+            transaction.update(productRef, {
+              variants: updatedVariants,
+              totalStock: restoreTotalStock,
+              reservedQty: reservedTotal,
+              stockStatus: restoreStockStatus,
+            });
           }
         }
       }
@@ -2818,8 +2906,14 @@ export async function updateOrderFullDetails(
 
               const productRef = doc(db, 'products', productId);
               const totalStock = updatedVariants.reduce((sum: number, v: Variant) => sum + (v.stock || 0), 0);
-              const stockStatus = totalStock <= 0 ? 'out_of_stock' : 'in_stock';
-              transaction.update(productRef, { variants: updatedVariants, stockStatus });
+              const reservedTotal = updatedVariants.reduce((sum: number, v: Variant) => sum + (v.reservedQty || 0), 0);
+              const stockStatus = computeAvailableStockStatus(totalStock, reservedTotal);
+              transaction.update(productRef, {
+                variants: updatedVariants,
+                totalStock,
+                reservedQty: reservedTotal,
+                stockStatus,
+              });
             }
           }
         }
@@ -3169,6 +3263,7 @@ export async function recordOrderPayment(
   userId: string,
   userName: string
 ): Promise<void> {
+  let linkedPreOrderId = '';
   try {
     const orderRef = doc(db, 'orders', orderId);
     await runTransaction(db, async (transaction) => {
@@ -3184,6 +3279,15 @@ export async function recordOrderPayment(
       if (order.invoiceId) {
         const invoiceRef = doc(db, 'invoices', order.invoiceId);
         invoiceSnap = await transaction.get(invoiceRef);
+      }
+
+      let preOrderSnap = null;
+      const preOrderRef =
+        order.source === 'pre_order' && order.preOrderId
+          ? doc(db, 'preOrders', order.preOrderId)
+          : null;
+      if (preOrderRef) {
+        preOrderSnap = await transaction.get(preOrderRef);
       }
       
       // Now perform all calculations and writes
@@ -3215,18 +3319,39 @@ export async function recordOrderPayment(
       
       // Update active invoice if exists
       if (invoiceSnap && invoiceSnap.exists() && !invoiceSnap.data().voided) {
-        const invoiceRef = doc(db, 'invoices', order.invoiceId);
+        const invoiceRef = doc(db, 'invoices', order.invoiceId!);
         transaction.update(invoiceRef, {
           amountPaid: newAmountPaid,
           amountDue: newAmountDue,
           paymentStatus: newPaymentStatus
         });
       }
+
+      // Sync linked Pre-Order due/paid & paymentState (without touching accountingPostings or double-counting cash)
+      if (preOrderRef && preOrderSnap && preOrderSnap.exists()) {
+        linkedPreOrderId = preOrderRef.id;
+        transaction.update(
+          preOrderRef,
+          sanitizeData({
+            advancePaid: newAmountPaid,
+            dueAmount: newAmountDue,
+            paymentState: newAmountDue <= 0 ? 'fully_paid' : newAmountPaid > 0 ? 'partially_paid' : 'unpaid',
+            updatedAt: Date.now(),
+            updatedBy: userId,
+          })
+        );
+      }
     });
 
     // Invalidate caches to ensure real-time accounting & dashboard sync
     dbCache.orders = null;
     dbCache.invoices = null;
+
+    if (linkedPreOrderId) {
+      void import('./preOrderDb')
+        .then((m) => m.syncPublicTracking(linkedPreOrderId))
+        .catch(() => {});
+    }
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, `orders/${orderId}/recordPayment`);
   }
@@ -3236,6 +3361,7 @@ export async function deleteOrderPayment(
   orderId: string,
   paymentIndex: number
 ): Promise<Order> {
+  let linkedPreOrderId = '';
   try {
     const orderRef = doc(db, 'orders', orderId);
     let updatedOrderResult: Order | null = null;
@@ -3254,9 +3380,24 @@ export async function deleteOrderPayment(
         invoiceSnap = await transaction.get(invoiceRef);
       }
 
+      let preOrderSnap = null;
+      const preOrderRef =
+        order.source === 'pre_order' && order.preOrderId
+          ? doc(db, 'preOrders', order.preOrderId)
+          : null;
+      if (preOrderRef) {
+        preOrderSnap = await transaction.get(preOrderRef);
+      }
+
       const paymentHistory = [...(order.paymentHistory || [])];
       if (paymentIndex < 0 || paymentIndex >= paymentHistory.length) {
         throw new Error('Payment record index out of range');
+      }
+
+      if (paymentHistory[paymentIndex]?.isPreOrderAdvance) {
+        throw new Error(
+          'Pre-Order advance entry cannot be deleted from Order payment history. Manage pre-order reversals from Pre-Order Management.'
+        );
       }
 
       // Remove payment record at paymentIndex
@@ -3284,12 +3425,25 @@ export async function deleteOrderPayment(
       transaction.update(orderRef, orderUpdates);
 
       if (invoiceSnap && invoiceSnap.exists() && !invoiceSnap.data().voided) {
-        const invoiceRef = doc(db, 'invoices', order.invoiceId);
+        const invoiceRef = doc(db, 'invoices', order.invoiceId!);
         transaction.update(invoiceRef, {
           amountPaid: newAmountPaid,
           amountDue: newAmountDue,
           paymentStatus: newPaymentStatus
         });
+      }
+
+      if (preOrderRef && preOrderSnap && preOrderSnap.exists()) {
+        linkedPreOrderId = preOrderRef.id;
+        transaction.update(
+          preOrderRef,
+          sanitizeData({
+            advancePaid: newAmountPaid,
+            dueAmount: newAmountDue,
+            paymentState: newAmountDue <= 0 ? 'fully_paid' : newAmountPaid > 0 ? 'partially_paid' : 'unpaid',
+            updatedAt: Date.now(),
+          })
+        );
       }
 
       updatedOrderResult = {
@@ -3306,6 +3460,12 @@ export async function deleteOrderPayment(
     }
     dbCache.orders = null;
     dbCache.invoices = null;
+
+    if (linkedPreOrderId) {
+      void import('./preOrderDb')
+        .then((m) => m.syncPublicTracking(linkedPreOrderId))
+        .catch(() => {});
+    }
 
     return updatedOrderResult!;
   } catch (error) {

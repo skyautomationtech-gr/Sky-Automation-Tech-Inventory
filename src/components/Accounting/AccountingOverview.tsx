@@ -34,7 +34,8 @@ import {
   Expense, 
   Order,
   AccountingBaselineSettings,
-  CashTransaction
+  CashTransaction,
+  AccountingPosting
 } from '../../types';
 import { 
   subscribeToAccountingBaselineSettings,
@@ -53,6 +54,8 @@ import {
   clearAllAccountingData,
   DEFAULT_ACCOUNTING_BASELINE 
 } from '../../firebase/db';
+import { subscribeToAccountingPostings } from '../../firebase/preOrderDb';
+import { summarizePreOrderAccounting } from '../../preOrders/accounting';
 
 interface AccountingOverviewProps {
   user: UserProfile;
@@ -72,6 +75,7 @@ export const AccountingOverview: React.FC<AccountingOverviewProps> = ({ user, on
   const [receivables, setReceivables] = useState<OtherReceivable[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
+  const [poPostings, setPoPostings] = useState<AccountingPosting[]>([]);
   
   // Modals state
   const [showSettingsModal, setShowSettingsModal] = useState(false);
@@ -127,6 +131,7 @@ export const AccountingOverview: React.FC<AccountingOverviewProps> = ({ user, on
     const unsubRec = subscribeToOtherReceivables(setReceivables);
     const unsubExp = subscribeToExpenses(setExpenses);
     const unsubOrd = subscribeToOrders(setOrders);
+    const unsubPoPostings = subscribeToAccountingPostings(setPoPostings, 500);
 
     return () => {
       unsubBase();
@@ -138,10 +143,16 @@ export const AccountingOverview: React.FC<AccountingOverviewProps> = ({ user, on
       unsubRec();
       unsubExp();
       unsubOrd();
+      unsubPoPostings();
     };
   }, []);
 
   const cutoffTimestamp = baseline?.cutoffTimestamp || 0;
+
+  const preOrderSummary = useMemo(
+    () => summarizePreOrderAccounting(poPostings, cutoffTimestamp),
+    [poPostings, cutoffTimestamp]
+  );
 
   const postCutoffCashTxns = useMemo(() => {
     return cashTxns.filter(t => (t.timestamp || 0) >= cutoffTimestamp);
@@ -201,6 +212,7 @@ export const AccountingOverview: React.FC<AccountingOverviewProps> = ({ user, on
     if (!o) return;
     const history = Array.isArray(o.paymentHistory) ? o.paymentHistory : [];
     history.forEach(p => {
+      if (p.isPreOrderAdvance) return; // Pre-order advances are posted in accountingPostings (no double count)
       const pDate = p.date || 0;
       const isCash = p.method === 'Cash' || (p.method as string) === 'Cash on Delivery';
       if (isCash && pDate >= cutoffTimestamp) {
@@ -224,7 +236,7 @@ export const AccountingOverview: React.FC<AccountingOverviewProps> = ({ user, on
 
   let newOrdersCashIncome = 0;
   postCutoffOrders.forEach(o => {
-    if (!o || o.status === 'Returned/Cancelled') return;
+    if (!o || o.status === 'Returned/Cancelled' || o.source === 'pre_order') return;
     const history = Array.isArray(o.paymentHistory) ? o.paymentHistory : [];
     const isCashOrder = o.paymentMethod === 'Cash' || (o.paymentMethod as string) === 'Cash on Delivery';
     
@@ -264,11 +276,13 @@ export const AccountingOverview: React.FC<AccountingOverviewProps> = ({ user, on
     (Number(baseline.baselineCash) || 2250) +
     cashInPostCutoff +
     dueCashCollectedPostCutoff +
-    newOrdersCashIncome -
+    newOrdersCashIncome +
+    preOrderSummary.postCutoffCashDelta -
     cashOutPostCutoff -
     cashExpensesPostCutoff -
     cashPurchasesPostCutoff
   );
+  const ownCashInHand = totalCashInHand - preOrderSummary.customerAdvancesLiability;
 
   const addedInvestmentsPostCutoff = postCutoffInvestments.reduce((s, i) => s + (Number(i.amount) || 0), 0);
   const totalInvestment = (Number(baseline.baselineInvestment) || 39550) + addedInvestmentsPostCutoff;
@@ -285,6 +299,10 @@ export const AccountingOverview: React.FC<AccountingOverviewProps> = ({ user, on
     if (order.status === 'Returned/Cancelled') return 0;
     const saleRevenue = Number(order.totalAmount) || 0;
     const items = Array.isArray(order.items) ? order.items : [];
+    if (order.source === 'pre_order') {
+      const cogs = items.reduce((sum, it) => sum + ((Number(it.costPrice) || 0) * (Number(it.qty) || 1)), 0);
+      return saleRevenue - cogs;
+    }
     const cost = items.reduce((sum, it) => sum + ((Number(it.unitPrice) || 0) * (Number(it.qty) || 1)), 0);
     return saleRevenue - cost;
   };
@@ -292,13 +310,13 @@ export const AccountingOverview: React.FC<AccountingOverviewProps> = ({ user, on
   const todayDeliveredOrders = postCutoffOrders.filter(o => 
     (o.status === 'Delivered' || o.paymentStatus === 'Paid') && isToday(o.createdAt)
   );
-  const todayGrossProfit = todayDeliveredOrders.reduce((s, o) => s + getOrderNetProfit(o), 0);
+  const todayGrossProfit = todayDeliveredOrders.reduce((s, o) => s + getOrderNetProfit(o), 0) + preOrderSummary.todayOtherIncome;
   const todayNetProfit = todayGrossProfit - todayExpenses;
 
   const monthDeliveredOrders = postCutoffOrders.filter(o => 
     (o.status === 'Delivered' || o.paymentStatus === 'Paid') && isCurrentMonth(o.createdAt)
   );
-  const monthGrossProfit = monthDeliveredOrders.reduce((s, o) => s + getOrderNetProfit(o), 0);
+  const monthGrossProfit = monthDeliveredOrders.reduce((s, o) => s + getOrderNetProfit(o), 0) + preOrderSummary.monthOtherIncome;
   const monthNetProfit = monthGrossProfit - monthExpenses;
 
   const handleSaveBaseline = async (e: React.FormEvent) => {
@@ -451,7 +469,18 @@ export const AccountingOverview: React.FC<AccountingOverviewProps> = ({ user, on
             </div>
             <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-2 leading-relaxed">
               ভিত্তি ক্যাশ: ৳{Number(baseline.baselineCash || 2250).toLocaleString()} {dueCashCollectedPostCutoff > 0 && `+ বকেয়া: ৳${dueCashCollectedPostCutoff.toLocaleString()}`} {newOrdersCashIncome > 0 && `+ অর্ডার: ৳${newOrdersCashIncome.toLocaleString()}`}
+              {preOrderSummary.postCutoffCashDelta !== 0 && ` ${preOrderSummary.postCutoffCashDelta >= 0 ? '+' : '-'} প্রি-অর্ডার: ৳${Math.abs(preOrderSummary.postCutoffCashDelta).toLocaleString()}`}
             </p>
+            {(preOrderSummary.customerAdvancesLiability > 0 || preOrderSummary.postingCount > 0) && (
+              <div className="mt-2 pt-2 border-t border-slate-100 dark:border-slate-800 flex items-center justify-between text-[11px]">
+                <span className="text-amber-600 dark:text-amber-400 font-semibold">
+                  Adv. Held: ৳{preOrderSummary.customerAdvancesLiability.toLocaleString()}
+                </span>
+                <span className="font-bold text-slate-800 dark:text-slate-200 font-mono">
+                  Own Cash: ৳{ownCashInHand.toLocaleString()}
+                </span>
+              </div>
+            )}
           </div>
 
           <div className="mt-5 pt-3.5 border-t border-slate-100 dark:border-slate-800 flex items-center gap-2">
@@ -606,6 +635,63 @@ export const AccountingOverview: React.FC<AccountingOverviewProps> = ({ user, on
 
       </div>
 
+      {/* Pre-Order Financial Position Strip */}
+      <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-3">
+          <div>
+            <h3 className="text-sm font-bold text-slate-900 dark:text-white flex items-center gap-2">
+              <ShoppingBag size={16} className="text-amber-500" />
+              Pre-Order Financial Position (প্রি-অর্ডার অ্যাকাউন্টিং)
+            </h3>
+            <p className="text-[11px] text-slate-500 dark:text-slate-400">
+              Customer advances remain a liability until converted to sale or refunded. Bank/MFS net flow: {preOrderSummary.totalBankMfsDeltaAllTime >= 0 ? '+' : '-'}৳{Math.abs(preOrderSummary.totalBankMfsDeltaAllTime).toLocaleString()}.
+            </p>
+          </div>
+          <span className="text-[11px] font-mono font-bold text-slate-500 dark:text-slate-400">
+            {preOrderSummary.postingCount} postings
+          </span>
+        </div>
+
+        <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 text-xs">
+          <div className="p-3 rounded-xl bg-amber-500/10 border border-amber-500/20">
+            <div className="text-[10px] font-bold uppercase text-amber-700 dark:text-amber-400">Customer Advances (Liability)</div>
+            <div className="text-base font-black font-mono text-amber-700 dark:text-amber-300 mt-1 tabular-nums">
+              ৳{preOrderSummary.customerAdvancesLiability.toLocaleString()}
+            </div>
+          </div>
+          <div className="p-3 rounded-xl bg-blue-500/10 border border-blue-500/20">
+            <div className="text-[10px] font-bold uppercase text-blue-700 dark:text-blue-400">Inventory in Transit</div>
+            <div className="text-base font-black font-mono text-blue-700 dark:text-blue-300 mt-1 tabular-nums">
+              ৳{preOrderSummary.inventoryInTransit.toLocaleString()}
+            </div>
+          </div>
+          <div className="p-3 rounded-xl bg-indigo-500/10 border border-indigo-500/20">
+            <div className="text-[10px] font-bold uppercase text-indigo-700 dark:text-indigo-400">Pre-Order Inventory</div>
+            <div className="text-base font-black font-mono text-indigo-700 dark:text-indigo-300 mt-1 tabular-nums">
+              ৳{preOrderSummary.preOrderInventoryValue.toLocaleString()}
+            </div>
+          </div>
+          <div className="p-3 rounded-xl bg-emerald-500/10 border border-emerald-500/20">
+            <div className="text-[10px] font-bold uppercase text-emerald-700 dark:text-emerald-400">Other Income (Cancel Fee)</div>
+            <div className="text-base font-black font-mono text-emerald-700 dark:text-emerald-300 mt-1 tabular-nums">
+              ৳{preOrderSummary.cancellationIncome.toLocaleString()}
+            </div>
+          </div>
+          <div className="p-3 rounded-xl bg-teal-500/10 border border-teal-500/20">
+            <div className="text-[10px] font-bold uppercase text-teal-700 dark:text-teal-400">Supplier Refunds Recv.</div>
+            <div className="text-base font-black font-mono text-teal-700 dark:text-teal-300 mt-1 tabular-nums">
+              ৳{preOrderSummary.supplierRefundsReceivable.toLocaleString()}
+            </div>
+          </div>
+          <div className="p-3 rounded-xl bg-rose-500/10 border border-rose-500/20">
+            <div className="text-[10px] font-bold uppercase text-rose-700 dark:text-rose-400">Pre-Order Losses</div>
+            <div className="text-base font-black font-mono text-rose-700 dark:text-rose-300 mt-1 tabular-nums">
+              ৳{preOrderSummary.cancelledLosses.toLocaleString()}
+            </div>
+          </div>
+        </div>
+      </div>
+
       {/* Two-Column Clean Reconciliation Statement Ledger */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
         
@@ -706,9 +792,25 @@ export const AccountingOverview: React.FC<AccountingOverviewProps> = ({ user, on
                 <span className="text-slate-600 dark:text-slate-400">ক্যাশ ব্যয়/উত্তোলন (Cash Out & Exp)</span>
                 <span className="font-bold text-rose-600 dark:text-rose-400 tabular-nums">- ৳{(cashOutPostCutoff + cashExpensesPostCutoff + cashPurchasesPostCutoff).toLocaleString()}</span>
               </div>
+              {preOrderSummary.postCutoffCashDelta !== 0 && (
+                <div className="flex justify-between py-2 border-b border-slate-100 dark:border-slate-800">
+                  <span className="text-slate-600 dark:text-slate-400">প্রি-অর্ডার নিট ক্যাশ (Pre-Order Cash Flow)</span>
+                  <span className={`font-bold tabular-nums ${preOrderSummary.postCutoffCashDelta >= 0 ? 'text-emerald-600 dark:text-emerald-400' : 'text-rose-600 dark:text-rose-400'}`}>
+                    {preOrderSummary.postCutoffCashDelta >= 0 ? '+ ' : '- '}৳{Math.abs(preOrderSummary.postCutoffCashDelta).toLocaleString()}
+                  </span>
+                </div>
+              )}
               <div className="flex justify-between py-3 bg-emerald-500/10 border border-emerald-500/20 px-4 rounded-xl text-sm font-black">
-                <span className="text-emerald-700 dark:text-emerald-400">হাতে নিট ক্যাশ ব্যালেন্স</span>
+                <span className="text-emerald-700 dark:text-emerald-400">Total Cash in Hand (মোট ক্যাশ)</span>
                 <span className="text-emerald-700 dark:text-emerald-400 tabular-nums">৳{totalCashInHand.toLocaleString()}</span>
+              </div>
+              <div className="flex justify-between py-2 border-b border-slate-100 dark:border-slate-800">
+                <span className="text-amber-700 dark:text-amber-400 font-semibold">- Customer Advances held (Liability)</span>
+                <span className="font-bold text-amber-700 dark:text-amber-400 tabular-nums">- ৳{preOrderSummary.customerAdvancesLiability.toLocaleString()}</span>
+              </div>
+              <div className="flex justify-between py-2.5 bg-slate-100 dark:bg-slate-800 px-4 rounded-xl text-sm font-black">
+                <span className="text-slate-900 dark:text-white">= Own Cash (নিজস্ব ক্যাশ)</span>
+                <span className="text-slate-900 dark:text-white tabular-nums">৳{ownCashInHand.toLocaleString()}</span>
               </div>
             </div>
           </div>

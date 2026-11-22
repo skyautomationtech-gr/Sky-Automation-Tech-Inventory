@@ -101,11 +101,21 @@ export interface AttendanceRecord {
   isManualEntry?: boolean;
 }
 
+export interface ProductPreOrderReservation {
+  preOrderId: string;
+  preOrderNumber: string;
+  variantId: string;
+  qty: number;
+  receivedAt: number;
+}
+
 export interface Variant {
   id: string;
   color: string;
   model: string;
   stock: number;
+  reservedQty?: number;
+  reservedForPreOrders?: ProductPreOrderReservation[];
   barcodeValue?: string;
 }
 
@@ -128,6 +138,8 @@ export interface Product {
   imageUrls?: string[];
   variants: Variant[];
   totalStock?: number;
+  reservedQty?: number;
+  reservedForPreOrders?: ProductPreOrderReservation[];
   archived: boolean;
   createdAt: number;
   barcodeValue?: string;
@@ -158,6 +170,8 @@ export interface StockLog {
   refNo?: string;
   supplierName?: string;
   orderId?: string;
+  preOrderId?: string;
+  variantId?: string;
   purchasePrice?: number;
 }
 
@@ -354,6 +368,7 @@ export interface OrderItem {
   variantLabel: string;
   qty: number;
   unitPrice: number;
+  costPrice?: number; // Landed cost snapshot per unit (used for exact pre-order COGS)
 }
 
 export interface OrderStatusHistory {
@@ -367,6 +382,9 @@ export interface OrderPaymentHistory {
   method: string;
   date: number;
   recordedBy: string;
+  label?: string;
+  isPreOrderAdvance?: boolean;
+  preOrderPaymentId?: string;
 }
 
 export interface Order {
@@ -394,6 +412,10 @@ export interface Order {
   createdAt: number;
   invoiceId?: string;
   paymentHistory?: OrderPaymentHistory[];
+  source?: 'regular' | 'pre_order' | string;
+  preOrderId?: string;
+  preOrderNumber?: string;
+  stockDeductedOnConvert?: boolean;
 }
 
 export interface Invoice {
@@ -420,6 +442,9 @@ export interface Invoice {
   voidedReason?: string;
   voidedBy?: string;
   voidedAt?: number;
+  source?: 'regular' | 'pre_order' | string;
+  preOrderId?: string;
+  preOrderNumber?: string;
 }
 
 export type ExpenseCategory = 
@@ -826,7 +851,15 @@ export interface PreOrder {
   // Conversion & Stock flags
   stockReceived?: boolean;
   stockReceivedAt?: number;
+  stockReceivedQty?: number;
+  damagedQty?: number;
+  stockReturnedToSupplierQty?: number;
+  landedCostTotal?: number;
+  unitLandedCost?: number;
   convertedOrderId?: string;
+  convertedSaleId?: string;
+  convertedInvoiceId?: string;
+  convertedInvoiceNumber?: string;
   convertedAt?: number;
 
   // Cancellation metadata
@@ -834,6 +867,7 @@ export interface PreOrder {
   cancellationReason?: string;
   cancelledAt?: number;
   cancelledBy?: string;
+  cancellation?: PreOrderCancellationSummary;
 
   // Idempotency & Audit
   idempotencyKey?: string;
@@ -854,6 +888,8 @@ export interface PreOrderShippingExpensesBreakdown {
   customsDuty: number;
   localTransport: number;
   handlingOther: number;
+  paymentMethod?: 'Cash' | 'bKash' | 'Nagad' | 'Rocket' | 'Bank' | 'Card' | string;
+  shippingExpenseSeq?: number;
   freightReceiptUrl?: string;
   customsReceiptUrl?: string;
   localReceiptUrl?: string;
@@ -1116,7 +1152,8 @@ export type PreOrderAuditAction =
   | 'TRACKING_LINK_SYNCED'
   | 'TRACKING_LINK_EXPIRED'
   | 'STOCK_RECEIVED'
-  | 'CONVERTED_TO_SALE';
+  | 'CONVERTED_TO_SALE'
+  | 'CANCEL_RECONCILED';
 
 export interface PreOrderAuditEntry {
   id: string;
@@ -1143,4 +1180,125 @@ export interface PreOrderNotification {
   createdAt: number;
   createdBy: string;
 }
+
+export interface PreOrderReceipt {
+  id: string;
+  preOrderId: string;
+  preOrderNumber: string;
+  subBrand: 'SAT' | 'GZ' | 'RTX';
+  receivedQty: number;
+  damagedQty: number;
+  productId: string;
+  productName: string;
+  variantId: string;
+  variantLabel: string;
+  chinaUnitCost: number;
+  shippingCostPerUnit: number;
+  shippingCostPortion: number;
+  unitLandedCost: number;
+  totalGoodLandedCost: number;
+  damagedCostLoss: number;
+  damagedLossId?: string;
+  damagedLossPending?: boolean;
+  note?: string;
+  idempotencyKey: string;
+  receivedBy: string;
+  receivedByName: string;
+  receivedAt: number;
+}
+
+export type AccountingPostingType =
+  | 'advance_verified'
+  | 'supplier_payment'
+  | 'shipping_expense'
+  | 'inventory_received'
+  | 'convert_to_sale'
+  | 'customer_refund'
+  | 'cancel_charge'
+  | 'supplier_refund_receivable'
+  | 'supplier_loss'
+  | 'stock_released'
+  | 'stock_returned_supplier'
+  | 'reversal';
+
+export interface AccountingPosting {
+  id: string; // Deterministic ID: po_{preOrderId}_...
+  preOrderId: string;
+  preOrderNumber: string;
+  subBrand: 'SAT' | 'GZ' | 'RTX';
+  type: AccountingPostingType;
+  direction?: 'normal' | 'reversal';
+  reversesPostingId?: string;
+  sourceDocId?: string;
+  method?: string;
+  isCashDrawer?: boolean;
+  cashDelta: number;
+  bankMfsDelta: number;
+  customerAdvanceDelta: number;
+  inventoryInTransitDelta: number;
+  inventoryStockDelta: number;
+  salesIncomeDelta: number;
+  cogsDelta: number;
+  profitDelta: number;
+  otherIncomeDelta: number;
+  receivableDelta: number;
+  lossDelta: number;
+  note?: string;
+  actorId: string;
+  actorName: string;
+  timestamp: number;
+}
+
+export interface PreOrderConversionLock {
+  preOrderId: string;
+  preOrderNumber: string;
+  orderId: string;
+  invoiceId: string;
+  invoiceNumber: string;
+  convertedAt: number;
+  convertedBy: string;
+}
+
+export type CancelCustomerResolution = 'full_refund' | 'partial_refund' | 'no_refund' | 'none';
+export type CancelSupplierResolution = 'receivable' | 'loss' | 'keep_stock' | 'none';
+export type CancelStockResolution = 'release_normal' | 'return_supplier' | 'none';
+
+export interface PreOrderCancellationSummary {
+  reason: string;
+  customerResolution: CancelCustomerResolution;
+  customerRefundAmount: number;
+  customerRefundMethod?: string;
+  customerRefundPaymentId?: string;
+  retainedChargeAmount: number;
+  retainedChargeReason?: string;
+  supplierResolution: CancelSupplierResolution;
+  supplierSettledAmount: number;
+  supplierReceivableId?: string;
+  supplierLossId?: string;
+  stockResolution: CancelStockResolution;
+  releasedOrReturnedQty: number;
+  cancelledBy: string;
+  cancelledByName: string;
+  cancelledAt: number;
+}
+
+export interface PreOrderIntegrityIssue {
+  preOrderId: string;
+  preOrderNumber: string;
+  severity: 'error' | 'warning';
+  code: string;
+  message: string;
+  expected?: number | string;
+  actual?: number | string;
+}
+
+export interface PreOrderIntegrityReport {
+  checkedCount: number;
+  issueCount: number;
+  errorCount: number;
+  warningCount: number;
+  issues: PreOrderIntegrityIssue[];
+  checkedAt: number;
+}
+
 

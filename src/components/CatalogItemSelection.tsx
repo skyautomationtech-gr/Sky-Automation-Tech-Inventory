@@ -19,6 +19,7 @@ import {
   ChevronRight,
   Layers
 } from 'lucide-react';
+import { getProductAvailableStock, getVariantAvailableStock } from '../firebase/db';
 
 interface CatalogItemSelectionProps {
   products: Product[];
@@ -69,7 +70,7 @@ export default function CatalogItemSelection({
                             p.sku.toLowerCase().includes(searchQuery.toLowerCase());
       const matchesCategory = selectedCategory === 'All' || p.category === selectedCategory;
       const matchesBrand = selectedBrand === 'All' || p.brand === selectedBrand;
-      const matchesStockStatus = p.stockStatus !== 'out_of_stock';
+      const matchesStockStatus = p.stockStatus !== 'out_of_stock' && getProductAvailableStock(p) > 0;
       return matchesSearch && matchesCategory && matchesBrand && matchesStockStatus;
     });
   }, [products, searchQuery, selectedCategory, selectedBrand]);
@@ -142,10 +143,18 @@ export default function CatalogItemSelection({
     }
   };
 
-  // Quantity stepper
+  // Quantity stepper (respects available stock excluding reserved pre-order units)
   const handleQtyChange = (product: Product, delta: number) => {
-    const current = getSelection(product).qty;
-    const newQty = Math.max(1, current + delta);
+    const sel = getSelection(product);
+    const variant = product.variants?.find(v => v.id === sel.variantId) || product.variants?.[0];
+    const maxAvail = variant ? getVariantAvailableStock(variant) : getProductAvailableStock(product);
+    const requested = sel.qty + delta;
+    if (delta > 0 && maxAvail > 0 && requested > maxAvail) {
+      const reserved = variant ? (Number(variant.reservedQty) || 0) : (Number(product.reservedQty) || 0);
+      setAddedNotification(`Max ${maxAvail} available${reserved > 0 ? ` (${reserved} reserved for pre-orders)` : ''}`);
+      setTimeout(() => setAddedNotification(null), 2500);
+    }
+    const newQty = Math.max(1, maxAvail > 0 ? Math.min(maxAvail, requested) : requested);
     updateSelection(product.id, { qty: newQty });
   };
 
@@ -153,11 +162,25 @@ export default function CatalogItemSelection({
   const handleAddToCart = (product: Product) => {
     const sel = getSelection(product);
     const variant = product.variants?.find(v => v.id === sel.variantId) || product.variants?.[0];
-    
+    const maxAvail = variant ? getVariantAvailableStock(variant) : getProductAvailableStock(product);
+    const reserved = variant ? (Number(variant.reservedQty) || 0) : (Number(product.reservedQty) || 0);
+
     const vLabel = variant 
       ? (`${variant.color || ''} ${variant.model || ''}`.trim() || 'Standard') 
       : 'Standard';
     const vId = variant ? variant.id : 'no-variant';
+
+    const existingInCart = orderItems.find(item => item.productId === product.id && item.variantId === vId)?.qty || 0;
+    if (maxAvail <= 0 || existingInCart + sel.qty > maxAvail) {
+      const remaining = Math.max(0, maxAvail - existingInCart);
+      setAddedNotification(
+        remaining === 0
+          ? `Cannot add: 0 available (${reserved} reserved for pre-orders)`
+          : `Only ${remaining} more unit(s) available (${reserved} reserved for pre-orders)`
+      );
+      setTimeout(() => setAddedNotification(null), 3000);
+      return;
+    }
 
     const newItem: OrderItem = {
       productId: product.id,
@@ -187,11 +210,25 @@ export default function CatalogItemSelection({
   const handleBuyNow = (product: Product) => {
     const sel = getSelection(product);
     const variant = product.variants?.find(v => v.id === sel.variantId) || product.variants?.[0];
-    
+    const maxAvail = variant ? getVariantAvailableStock(variant) : getProductAvailableStock(product);
+    const reserved = variant ? (Number(variant.reservedQty) || 0) : (Number(product.reservedQty) || 0);
+
     const vLabel = variant 
       ? (`${variant.color || ''} ${variant.model || ''}`.trim() || 'Standard') 
       : 'Standard';
     const vId = variant ? variant.id : 'no-variant';
+
+    const existingInCart = orderItems.find(item => item.productId === product.id && item.variantId === vId)?.qty || 0;
+    if (maxAvail <= 0 || existingInCart + sel.qty > maxAvail) {
+      const remaining = Math.max(0, maxAvail - existingInCart);
+      setAddedNotification(
+        remaining === 0
+          ? `Cannot buy: 0 available (${reserved} reserved for pre-orders)`
+          : `Only ${remaining} unit(s) available (${reserved} reserved for pre-orders)`
+      );
+      setTimeout(() => setAddedNotification(null), 3000);
+      return;
+    }
 
     const newItem: OrderItem = {
       productId: product.id,
@@ -218,8 +255,22 @@ export default function CatalogItemSelection({
   const updateCartQty = (index: number, delta: number) => {
     setOrderItems(prev => {
       const copy = [...prev];
-      const newQty = copy[index].qty + delta;
+      const item = copy[index];
+      const newQty = item.qty + delta;
       if (newQty < 1) return copy;
+      if (delta > 0) {
+        const prod = products.find(p => p.id === item.productId);
+        const variant = prod?.variants?.find(v => v.id === item.variantId);
+        if (prod) {
+          const maxAvail = variant ? getVariantAvailableStock(variant) : getProductAvailableStock(prod);
+          if (newQty > maxAvail) {
+            const reserved = variant ? (Number(variant.reservedQty) || 0) : (Number(prod.reservedQty) || 0);
+            setAddedNotification(`Max ${maxAvail} unit(s) available${reserved > 0 ? ` (${reserved} reserved for pre-orders)` : ''}`);
+            setTimeout(() => setAddedNotification(null), 2500);
+            return copy;
+          }
+        }
+      }
       copy[index].qty = newQty;
       return copy;
     });
@@ -373,11 +424,12 @@ export default function CatalogItemSelection({
           {filteredProducts.map(product => {
             const currentSel = getSelection(product);
             const activeVariant = product.variants?.find(v => v.id === currentSel.variantId) || product.variants?.[0];
-            const activeStock = activeVariant ? activeVariant.stock : undefined;
+            const activeStock = activeVariant ? getVariantAvailableStock(activeVariant) : getProductAvailableStock(product);
+            const activeReserved = activeVariant ? (Number(activeVariant.reservedQty) || 0) : (Number(product.reservedQty) || 0);
             const uniqueColors = Array.from(new Set(product.variants?.map(v => v.color).filter(Boolean) || [])) as string[];
             const uniqueModels = Array.from(new Set(product.variants?.map(v => v.model).filter(Boolean) || [])) as string[];
-            const isOutOfStock = activeStock === 0 || product.stockStatus === 'out_of_stock';
-            const isLowStock = !isOutOfStock && activeStock !== undefined && activeStock <= (product.reorderThreshold || 5);
+            const isOutOfStock = activeStock <= 0 || product.stockStatus === 'out_of_stock';
+            const isLowStock = !isOutOfStock && activeStock <= (product.reorderThreshold || 5);
 
             return (
               <div 
@@ -413,23 +465,28 @@ export default function CatalogItemSelection({
                           {product.subBrand}
                         </span>
                       )}
+                      {activeReserved > 0 && (
+                        <span className="bg-amber-500/95 text-slate-950 text-[9px] font-bold px-1.5 py-0.5 rounded shadow-xs">
+                          Res: {activeReserved}
+                        </span>
+                      )}
                     </div>
 
                     {/* Stock Badge - 10-11px text, small padding */}
                     <div className="absolute bottom-1.5 right-1.5">
                       {isOutOfStock ? (
                         <span className="bg-rose-500 text-white text-[10px] font-bold px-1.5 py-0.5 rounded shadow-xs">
-                          Out
+                          {activeReserved > 0 ? 'Out (Reserved)' : 'Out'}
                         </span>
                       ) : isLowStock ? (
                         <span className="bg-amber-500 text-slate-950 text-[10px] font-bold px-1.5 py-0.5 rounded shadow-xs">
                           Low: {activeStock}
                         </span>
-                      ) : activeStock !== undefined ? (
+                      ) : (
                         <span className="bg-emerald-600/90 text-white text-[10px] font-bold px-1.5 py-0.5 rounded shadow-xs">
-                          {activeStock} in stock
+                          {activeStock} avail
                         </span>
-                      ) : null}
+                      )}
                     </div>
                   </div>
 

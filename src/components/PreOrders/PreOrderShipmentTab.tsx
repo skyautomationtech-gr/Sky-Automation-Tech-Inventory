@@ -136,6 +136,7 @@ export const PreOrderShipmentTab: React.FC<PreOrderShipmentTabProps> = ({
   const [expCustoms, setExpCustoms] = useState('0');
   const [expLocal, setExpLocal] = useState('0');
   const [expHandling, setExpHandling] = useState('0');
+  const [expPaymentMethod, setExpPaymentMethod] = useState('Cash');
   const [freightReceiptUrl, setFreightReceiptUrl] = useState('');
   const [customsReceiptUrl, setCustomsReceiptUrl] = useState('');
   const [localReceiptUrl, setLocalReceiptUrl] = useState('');
@@ -199,6 +200,7 @@ export const PreOrderShipmentTab: React.FC<PreOrderShipmentTabProps> = ({
     setExpCustoms(String(breakdown?.customsDuty ?? 0));
     setExpLocal(String(breakdown?.localTransport ?? 0));
     setExpHandling(String(breakdown?.handlingOther ?? 0));
+    setExpPaymentMethod(breakdown?.paymentMethod || 'Cash');
     setFreightReceiptUrl(breakdown?.freightReceiptUrl || '');
     setCustomsReceiptUrl(breakdown?.customsReceiptUrl || '');
     setLocalReceiptUrl(breakdown?.localReceiptUrl || '');
@@ -296,6 +298,7 @@ export const PreOrderShipmentTab: React.FC<PreOrderShipmentTabProps> = ({
         customsDuty: Number(expCustoms || 0),
         localTransport: Number(expLocal || 0),
         handlingOther: Number(expHandling || 0),
+        paymentMethod: expPaymentMethod || 'Cash',
         freightReceiptUrl,
         customsReceiptUrl,
         localReceiptUrl,
@@ -740,7 +743,24 @@ export const PreOrderShipmentTab: React.FC<PreOrderShipmentTabProps> = ({
             ))}
           </div>
 
-          <div className="flex justify-end pt-2 border-t border-amber-200/60 dark:border-amber-900/40">
+          <div className="flex flex-wrap items-end justify-between gap-3 pt-2 border-t border-amber-200/60 dark:border-amber-900/40">
+            <div className="w-52">
+              <FormField label="Paid Via (Cash / Bank / MFS)">
+                <Select
+                  options={[
+                    { value: 'Cash', label: 'Cash Drawer' },
+                    { value: 'bKash', label: 'bKash' },
+                    { value: 'Nagad', label: 'Nagad' },
+                    { value: 'Rocket', label: 'Rocket' },
+                    { value: 'Bank Transfer', label: 'Bank Transfer' },
+                    { value: 'Card', label: 'Card' },
+                  ]}
+                  value={expPaymentMethod}
+                  onChange={(val) => setExpPaymentMethod(val)}
+                  searchable={false}
+                />
+              </FormField>
+            </div>
             <Button
               type="submit"
               variant="secondary"

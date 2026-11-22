@@ -135,9 +135,15 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    match /settings/invoiceCounters {
+      allow read: if isSignedIn();
+      allow create, update: if isAdmin() || hasPreOrderPerm('preOrderConvertSale');
+      allow delete: if false;
+    }
+
     match /settings/{settingId} {
-      allow read: if isSignedIn() && !(settingId in ['rolePermissions', 'preOrderCounter', 'customerCounter', 'supplierCounter']);
-      allow write: if isAdmin() && !(settingId in ['rolePermissions', 'preOrderCounter', 'customerCounter', 'supplierCounter']);
+      allow read: if isSignedIn() && !(settingId in ['rolePermissions', 'preOrderCounter', 'customerCounter', 'supplierCounter', 'invoiceCounters']);
+      allow write: if isAdmin() && !(settingId in ['rolePermissions', 'preOrderCounter', 'customerCounter', 'supplierCounter', 'invoiceCounters']);
     }
 
     // ==========================================
@@ -184,7 +190,8 @@ service cloud.firestore {
           (resource.data.status == 'Cancelled' &&
             request.resource.data.diff(resource.data).affectedKeys().hasOnly([
               'status', 'advancePaid', 'pendingAmount', 'refundedAmount', 'dueAmount',
-              'paymentCount', 'paymentState', 'updatedAt', 'updatedBy', 'updatedByName',
+              'paymentCount', 'paymentState', 'isCancelled', 'cancellation', 'receivedQty',
+              'updatedAt', 'updatedBy', 'updatedByName',
               'lastStatusChangeAt', 'lastStatusNote'
             ])) ||
           ((hasPreOrderPerm('preOrderManageTracking') || isAdmin()) &&
@@ -194,6 +201,17 @@ service cloud.firestore {
               'trackingHistory', 'showCourierTrackingToCustomer',
               'updatedAt', 'updatedBy'
             ]))
+        ) &&
+        // Lock converted Sale/Invoice financial fields (price, qty, subtotal, discount, delivery, total, convertedSaleId)
+        (
+          resource.data.get('convertedSaleId', '') == '' ||
+          (
+            request.resource.data.get('convertedSaleId', '') == resource.data.get('convertedSaleId', '') &&
+            !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+              'qty', 'sellingUnitPrice', 'subtotal', 'deliveryCharge', 'discount', 'totalAmount',
+              'cancellation', 'isCancelled'
+            ])
+          )
         ) &&
         (
           request.resource.data.status == resource.data.status ||
@@ -303,6 +321,16 @@ service cloud.firestore {
           request.resource.data.text.size() > 0;
         allow update, delete: if false;
       }
+
+      // Append-Only Warehouse Stock Receipts (damagedQty > 0 restricted to Admin/Super Admin)
+      match /receipts/{receiptId} {
+        allow read: if hasPreOrderPerm('preOrderView');
+        allow create: if (hasPreOrderPerm('preOrderReceiveStock') || isAdmin()) &&
+          request.resource.data.receivedQty is number &&
+          request.resource.data.receivedQty >= 0 &&
+          (request.resource.data.get('damagedQty', 0) == 0 || isAdmin());
+        allow update, delete: if false;
+      }
     }
 
     // Append-Only Pre-Order Supplier Payments (Strictly restricted to preOrderSupplier or Admin)
@@ -352,16 +380,57 @@ service cloud.firestore {
       allow delete: if isSuperAdmin();
     }
 
+    // Immutable Append-Only Pre-Order Accounting Postings Ledger
+    match /accountingPostings/{postingId} {
+      allow read: if hasPreOrderPerm('preOrderView') || hasPreOrderPerm('preOrderReports') || isAdmin();
+      allow create: if isSignedIn() &&
+        request.resource.data.preOrderId is string &&
+        request.resource.data.type is string &&
+        (
+          isAdmin() ||
+          hasPreOrderPerm('preOrderCollectPayment') ||
+          hasPreOrderPerm('preOrderVerifyPayment') ||
+          hasPreOrderPerm('preOrderReceiveStock') ||
+          hasPreOrderPerm('preOrderConvertSale') ||
+          hasPreOrderPerm('preOrderSupplier') ||
+          hasPreOrderPerm('preOrderRefund') ||
+          hasPreOrderPerm('preOrderUpdateStatus')
+        );
+      allow update, delete: if false;
+    }
+
+    // Idempotency Lock Docs for Pre-Order -> Sale Conversion
+    match /preOrderConversions/{preOrderId} {
+      allow read: if hasPreOrderPerm('preOrderView') || isAdmin();
+      allow create: if (hasPreOrderPerm('preOrderConvertSale') || isAdmin()) &&
+        request.resource.data.preOrderId == preOrderId &&
+        request.resource.data.orderId is string;
+      allow update, delete: if false;
+    }
+
     // ==========================================
     // EXISTING PLATFORM COLLECTIONS
     // ==========================================
-    match /products/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /products/{docId} {
+      allow read: if isSignedIn();
+      allow create: if isAdmin() || (hasPreOrderPerm('preOrderReceiveStock') && request.resource.data.status == 'pending_review');
+      allow update: if isAdmin() || hasPreOrderPerm('preOrderReceiveStock') || hasPreOrderPerm('preOrderConvertSale') || hasPreOrderPerm('preOrderUpdateStatus');
+      allow delete: if isAdmin();
+    }
     match /categories/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
     match /brands/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
     match /productColors/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
     match /productModels/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
-    match /orders/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
-    match /invoices/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /orders/{docId} {
+      allow read: if isSignedIn();
+      allow create, update: if isAdmin() || hasPreOrderPerm('preOrderConvertSale');
+      allow delete: if isAdmin();
+    }
+    match /invoices/{docId} {
+      allow read: if isSignedIn();
+      allow create, update: if isAdmin() || hasPreOrderPerm('preOrderConvertSale');
+      allow delete: if isAdmin();
+    }
     match /customers/{docId} {
       allow read: if isSignedIn();
       allow create, update: if isAdmin() || hasPreOrderPerm('preOrderCreate') || hasPreOrderPerm('preOrderEdit');
@@ -378,7 +447,11 @@ service cloud.firestore {
       allow update, delete: if isAdmin() || hasPreOrderPerm('preOrderSupplier');
     }
     match /supplierPayments/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
-    match /stockLogs/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /stockLogs/{docId} {
+      allow read: if isSignedIn();
+      allow create: if isAdmin() || hasPreOrderPerm('preOrderReceiveStock') || hasPreOrderPerm('preOrderConvertSale') || hasPreOrderPerm('preOrderUpdateStatus');
+      allow update, delete: if isAdmin();
+    }
     match /stockPurchases/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
     match /expenses/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
     match /incomes/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
@@ -387,9 +460,17 @@ service cloud.firestore {
     match /auditLogs/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
     match /investments/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
     match /companyPurchases/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
-    match /companyLosses/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /companyLosses/{docId} {
+      allow read: if isSignedIn();
+      allow create: if isAdmin() || hasPreOrderPerm('preOrderReceiveStock') || hasPreOrderPerm('preOrderUpdateStatus') || hasPreOrderPerm('preOrderRefund');
+      allow update, delete: if isAdmin();
+    }
     match /cashReconciliations/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
-    match /otherReceivables/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /otherReceivables/{docId} {
+      allow read: if isSignedIn();
+      allow create: if isAdmin() || hasPreOrderPerm('preOrderUpdateStatus') || hasPreOrderPerm('preOrderRefund') || hasPreOrderPerm('preOrderSupplier');
+      allow update, delete: if isAdmin();
+    }
     match /paymentPlatformLedger/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
     match /importShippingCosts/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
     match /chartOfAccounts/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }

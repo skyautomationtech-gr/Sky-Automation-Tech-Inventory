@@ -25,6 +25,7 @@ export interface PreOrderStatusDialogProps {
   order: PreOrder | null;
   user: UserProfile;
   onUpdated: (updatedOrder: PreOrder) => void;
+  onOpenCancelReconcile?: (order: PreOrder) => void;
 }
 
 export const PreOrderStatusDialog: React.FC<PreOrderStatusDialogProps> = ({
@@ -33,6 +34,7 @@ export const PreOrderStatusDialog: React.FC<PreOrderStatusDialogProps> = ({
   order,
   user,
   onUpdated,
+  onOpenCancelReconcile,
 }) => {
   const toast = useToast();
   const isAdmin = isPreOrderAdminRole(user.role);
@@ -175,9 +177,28 @@ export const PreOrderStatusDialog: React.FC<PreOrderStatusDialogProps> = ({
         <div className="p-2.5 rounded-xl bg-slate-100/80 dark:bg-slate-800/60 border border-slate-200 dark:border-slate-700 text-[11px] text-slate-600 dark:text-slate-300 flex items-center gap-2">
           <Lock className="w-3.5 h-3.5 text-slate-500 shrink-0" />
           <span>
-            <strong>Received in Stock</strong> is hidden/locked in Part 3 — use <em>Receive Stock</em> in Part 6 when stock arrives in warehouse.
+            <strong>Received in Stock</strong> is updated automatically via the <em>Receive Stock</em> action when inventory arrives at the BD warehouse.
           </span>
         </div>
+
+        {isCancelSelected && onOpenCancelReconcile && (
+          <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800 text-xs text-rose-800 dark:text-rose-200 flex flex-wrap items-center justify-between gap-2">
+            <span>
+              Cancellations with deposits, supplier payments, or stock use the guided reconciliation workflow.
+            </span>
+            <Button
+              type="button"
+              variant="danger"
+              size="xs"
+              onClick={() => {
+                onClose();
+                onOpenCancelReconcile(order);
+              }}
+            >
+              Open Cancel &amp; Reconcile
+            </Button>
+          </div>
+        )}
 
         {statusOptions.length === 0 ? (
           <div className="p-4 rounded-xl border border-dashed border-slate-300 dark:border-slate-700 text-center text-xs text-slate-500">

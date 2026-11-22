@@ -65,8 +65,10 @@ import {
   ExpensePaymentMethod,
   Income, 
   IncomeCategory, 
-  IncomePaymentMethod 
+  IncomePaymentMethod,
+  AccountingPosting
 } from '../types';
+import { subscribeToAccountingPostings } from '../firebase/preOrderDb';
 
 interface FinancialOverviewProps {
   user: UserProfile;
@@ -165,6 +167,7 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
   const [stockLogs, setStockLogs] = useState<StockLog[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [incomes, setIncomes] = useState<Income[]>([]);
+  const [poPostings, setPoPostings] = useState<AccountingPosting[]>([]);
   const [loading, setLoading] = useState(true);
 
   // Global Filters (applies to summary calculation)
@@ -295,10 +298,14 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
     const unsubOrd = subscribeToOrders((allOrders) => {
       setOrders(allOrders || []);
     });
+    const unsubPoPostings = subscribeToAccountingPostings((postings) => {
+      setPoPostings(postings || []);
+    }, 500);
     return () => {
       unsubExp();
       unsubInc();
       unsubOrd();
+      unsubPoPostings();
     };
   }, []);
 
@@ -344,7 +351,9 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
         const orderDateStr = new Date(order.createdAt).toISOString().split('T')[0];
         const orderTimeStr = new Date(order.createdAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         
-        const effectiveAmount = (order.amountPaid && order.amountPaid > 0) ? order.amountPaid : order.totalAmount;
+        const effectiveAmount = order.source === 'pre_order'
+          ? (Number(order.totalAmount) || 0)
+          : ((order.amountPaid && order.amountPaid > 0) ? order.amountPaid : order.totalAmount);
         
         let pMethod: IncomePaymentMethod = 'Cash';
         if (order.paymentMethod === 'bKash') pMethod = 'bKash';
@@ -375,10 +384,32 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
       });
   }, [orders]);
 
-  // Combined Incomes (Auto Sales + Manual Incomes)
+  const preOrderCancelIncomes = useMemo(() => {
+    return poPostings
+      .filter((p) => (Number(p.otherIncomeDelta) || 0) !== 0)
+      .map((p) => {
+        const ts = Number(p.timestamp) || Date.now();
+        return {
+          id: `po_inc_${p.id}`,
+          incomeId: p.preOrderNumber || p.id,
+          category: 'Other Income' as IncomeCategory,
+          amount: Number(p.otherIncomeDelta) || 0,
+          date: new Date(ts).toISOString().split('T')[0],
+          time: new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+          paymentMethod: 'Cash' as IncomePaymentMethod,
+          notes: p.note || 'Other Income – Cancellation Charges',
+          subBrand: p.subBrand || '',
+          addedBy: p.actorName || 'Pre-Order System',
+          createdAt: ts,
+          source: 'manual' as const,
+        } as Income;
+      });
+  }, [poPostings]);
+
+  // Combined Incomes (Auto Sales + Manual Incomes + Pre-Order Cancellation Income)
   const allCombinedIncomes = useMemo(() => {
-    return [...incomes, ...autoSalesIncomes].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-  }, [incomes, autoSalesIncomes]);
+    return [...incomes, ...preOrderCancelIncomes, ...autoSalesIncomes].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  }, [incomes, preOrderCancelIncomes, autoSalesIncomes]);
 
   // Recalculated values based on filters (applied to metrics)
   const financialMetrics = useMemo(() => {
@@ -417,7 +448,9 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
     orders.forEach(order => {
       if (salesOrderIds.has(order.id) && order.status !== 'Returned/Cancelled') {
         const orderCost = (order.items || []).reduce((sum, item) => {
-          const cost = productCostMap.has(item.productId)
+          const cost = (item.costPrice !== undefined && Number(item.costPrice) > 0)
+            ? Number(item.costPrice)
+            : productCostMap.has(item.productId)
             ? productCostMap.get(item.productId)!
             : (item.unitPrice * 0.7); // Fallback to 70% cost if costPrice not specified
           return sum + (cost * (item.qty || 1));

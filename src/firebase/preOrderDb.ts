@@ -15,19 +15,41 @@ import {
   where,
   writeBatch,
   arrayUnion,
+  onSnapshot,
   DocumentData,
   QueryDocumentSnapshot,
   Transaction,
 } from 'firebase/firestore';
 import { auth, db } from './config';
-import { dbCache, getCompanySettings, localStore, sanitizeData } from './db';
 import {
+  computeAvailableStockStatus,
+  dbCache,
+  getCompanySettings,
+  getProducts,
+  getUniqueBarcodeValue,
+  localStore,
+  sanitizeData,
+} from './db';
+import {
+  AccountingPosting,
+  CancelCustomerResolution,
+  CancelStockResolution,
+  CancelSupplierResolution,
+  CompanyLoss,
   CompanySettings,
   Customer,
+  Invoice,
+  Order,
+  OrderItem,
+  OrderPaymentHistory,
+  OtherReceivable,
   PreOrder,
   PreOrderAuditAction,
   PreOrderAuditEntry,
+  PreOrderCancellationSummary,
+  PreOrderConversionLock,
   PreOrderCustomsStatus,
+  PreOrderIntegrityReport,
   PreOrderNotification,
   PreOrderPayment,
   PreOrderPaymentMethod,
@@ -35,6 +57,7 @@ import {
   PreOrderPaymentStatus,
   PreOrderPaymentType,
   PreOrderPrivateCost,
+  PreOrderReceipt,
   PreOrderShipment,
   PreOrderShipmentDoc,
   PreOrderShipmentEvent,
@@ -45,13 +68,20 @@ import {
   PreOrderSupplierPayment,
   PreOrderSupplierPaymentAllocation,
   PreOrderTrackingHistoryItem,
+  Product,
+  ProductPreOrderReservation,
   PublicTrackingRecord,
   RolePermissionsMap,
+  StockLog,
   UserProfile,
+  Variant,
 } from '../types';
 import {
   calculateActualShippingCost,
+  calculatePerOrderSupplierSummary,
   calculatePreOrderFinancials,
+  calculatePreOrderReceiptCost,
+  calculateSaleConversionBreakdown,
   canTransitionPreOrderStatus,
   derivePreOrderPaymentState,
   fromPaisa,
@@ -59,6 +89,25 @@ import {
   roundMoney,
   toPaisa,
 } from '../preOrders/calculations';
+import {
+  analyzePreOrderIntegrity,
+  buildAdvanceVerifiedPosting,
+  buildCancellationChargePosting,
+  buildConvertToSalePosting,
+  buildCustomerRefundPosting,
+  buildInventoryReceivedPosting,
+  buildReversalPosting,
+  buildShippingExpensePosting,
+  buildStockReleasedPosting,
+  buildStockReturnedSupplierPosting,
+  buildSupplierLossPosting,
+  buildSupplierPaymentPosting,
+  buildSupplierReceivablePosting,
+  getAdvanceVerifiedPostingId,
+  getConvertToSalePostingId,
+  getCustomerRefundPostingId,
+  getSupplierPaymentPostingId,
+} from '../preOrders/accounting';
 import {
   PRE_ORDER_EDIT_LOCKED_STATUSES,
   PRE_ORDER_FORWARD_FLOW,
@@ -634,6 +683,20 @@ export async function createPreOrder(
           : {}),
       };
       txn.set(paymentRef, sanitizeData(paymentDoc));
+
+      if (shouldAutoVerify) {
+        const advancePosting = buildAdvanceVerifiedPosting({
+          preOrderId,
+          preOrderNumber: createdNumber,
+          subBrand: preOrderDoc.subBrand,
+          paymentId,
+          amount: initialAdvanceAmount,
+          method: input.initialAdvance.method,
+          note: input.initialAdvance.note?.trim() || 'Initial advance payment (auto-verified)',
+          actor: { actorId: actor.id, actorName: actor.name, timestamp: now },
+        });
+        txn.set(doc(db, 'accountingPostings', advancePosting.id), sanitizeData(advancePosting));
+      }
     }
   });
 
@@ -1019,6 +1082,8 @@ export async function updatePreOrder(
       throw new Error(`Pre-orders with status "${current.status}" are locked from editing.`);
     }
 
+    const isConverted = Boolean(current.convertedSaleId || current.convertedOrderId);
+
     const hasAnyPayment =
       activePayments.length > 0 ||
       Number(current.paymentCount || 0) > 0 ||
@@ -1033,6 +1098,12 @@ export async function updatePreOrder(
         toPaisa(updates.deliveryCharge) !== toPaisa(current.deliveryCharge)) ||
       (updates.discount !== undefined &&
         toPaisa(updates.discount) !== toPaisa(current.discount));
+
+    if (isConverted && financialFieldChanged) {
+      throw new Error(
+        'Quantity, unit price, delivery charge, and discount are locked after conversion to a Sales Order & Invoice.'
+      );
+    }
 
     if (hasAnyPayment && !isAdminRole(actor.role)) {
       if (
@@ -1437,6 +1508,11 @@ export async function collectPreOrderPayment(
     if (['Delivered', 'Cancelled', 'Refunded'].includes(order.status)) {
       throw new Error(`Cannot collect payment while pre-order status is "${order.status}".`);
     }
+    if (order.convertedSaleId || order.convertedOrderId) {
+      throw new Error(
+        `This pre-order has already been converted to Invoice ${order.convertedInvoiceNumber || ''}. Collect remaining due on the Invoice / Due Payments screen to prevent double collection.`
+      );
+    }
 
     const currentCalc = calculatePreOrderFinancials({
       qty: order.qty,
@@ -1515,6 +1591,20 @@ export async function collectPreOrderPayment(
 
     txn.set(paymentRef, sanitizeData(paymentDoc));
     txn.update(preOrderRef, sanitizeData(patch));
+
+    if (nextStatus === 'verified') {
+      const advancePosting = buildAdvanceVerifiedPosting({
+        preOrderId,
+        preOrderNumber: order.preOrderNumber,
+        subBrand: order.subBrand,
+        paymentId,
+        amount: safeAmount,
+        method: input.method,
+        note: input.note?.trim() || `${input.type} payment (auto-verified)`,
+        actor: { actorId: actor.id, actorName: actor.name, timestamp: now },
+      });
+      txn.set(doc(db, 'accountingPostings', advancePosting.id), sanitizeData(advancePosting));
+    }
 
     txn.set(
       auditRef,
@@ -1643,6 +1733,34 @@ export async function verifyPreOrderPayment(
     txn.update(paymentRef, sanitizeData(paymentPatch));
     txn.update(preOrderRef, sanitizeData(patch));
 
+    if (decision === 'verified') {
+      if (payment.type === 'refund') {
+        const refundPosting = buildCustomerRefundPosting({
+          preOrderId,
+          preOrderNumber: order.preOrderNumber,
+          subBrand: order.subBrand,
+          paymentId,
+          refundAmount: payment.amount,
+          method: payment.method,
+          note: payment.note || 'Verified customer refund',
+          actor: { actorId: actor.id, actorName: actor.name, timestamp: now },
+        });
+        txn.set(doc(db, 'accountingPostings', refundPosting.id), sanitizeData(refundPosting));
+      } else if (payment.type !== 'reversal') {
+        const advancePosting = buildAdvanceVerifiedPosting({
+          preOrderId,
+          preOrderNumber: order.preOrderNumber,
+          subBrand: order.subBrand,
+          paymentId,
+          amount: payment.amount,
+          method: payment.method,
+          note: payment.note || `Verified ${payment.type} payment`,
+          actor: { actorId: actor.id, actorName: actor.name, timestamp: now },
+        });
+        txn.set(doc(db, 'accountingPostings', advancePosting.id), sanitizeData(advancePosting));
+      }
+    }
+
     txn.set(
       auditRef,
       sanitizeData({
@@ -1714,12 +1832,25 @@ export async function reversePreOrderPayment(
   let resultOrder!: PreOrder;
 
   await runTransaction(db, async (txn) => {
-    const [orderSnap, origSnap, revSnap, existingLedger] = await Promise.all([
-      txn.get(preOrderRef),
-      txn.get(origPaymentRef),
-      txn.get(revPaymentRef),
-      loadAndLockOrderLedgerInTxn(txn, preOrderId),
-    ]);
+    const origCollectionPostingRef = doc(
+      db,
+      'accountingPostings',
+      getAdvanceVerifiedPostingId(preOrderId, originalPaymentId)
+    );
+    const origRefundPostingRef = doc(
+      db,
+      'accountingPostings',
+      getCustomerRefundPostingId(preOrderId, originalPaymentId)
+    );
+    const [orderSnap, origSnap, revSnap, existingLedger, origCollectionPostingSnap, origRefundPostingSnap] =
+      await Promise.all([
+        txn.get(preOrderRef),
+        txn.get(origPaymentRef),
+        txn.get(revPaymentRef),
+        loadAndLockOrderLedgerInTxn(txn, preOrderId),
+        txn.get(origCollectionPostingRef),
+        txn.get(origRefundPostingRef),
+      ]);
 
     if (!orderSnap.exists()) throw new Error('Pre-order not found.');
     if (!origSnap.exists()) throw new Error('Original payment entry not found.');
@@ -1803,6 +1934,18 @@ export async function reversePreOrderPayment(
     // Append-only: NEVER overwrite or delete the original payment doc
     txn.set(revPaymentRef, sanitizeData(reversalDoc));
     txn.update(preOrderRef, sanitizeData(patch));
+
+    const targetOrigPostingSnap =
+      orig.type === 'refund' ? origRefundPostingSnap : origCollectionPostingSnap;
+    if (targetOrigPostingSnap.exists()) {
+      const revPosting = buildReversalPosting(
+        targetOrigPostingSnap.data() as AccountingPosting,
+        revId,
+        reason.trim(),
+        { actorId: actor.id, actorName: actor.name, timestamp: now }
+      );
+      txn.set(doc(db, 'accountingPostings', revPosting.id), sanitizeData(revPosting));
+    }
 
     txn.set(
       auditRef,
@@ -1949,6 +2092,18 @@ export async function refundPreOrderPayment(
 
     txn.set(paymentRef, sanitizeData(refundDoc));
     txn.update(preOrderRef, sanitizeData(patch));
+
+    const refundPosting = buildCustomerRefundPosting({
+      preOrderId,
+      preOrderNumber: order.preOrderNumber,
+      subBrand: order.subBrand,
+      paymentId,
+      refundAmount: safeAmount,
+      method: input.method,
+      note: input.reason.trim(),
+      actor: { actorId: actor.id, actorName: actor.name, timestamp: now },
+    });
+    txn.set(doc(db, 'accountingPostings', refundPosting.id), sanitizeData(refundPosting));
 
     txn.set(
       auditRef,
@@ -2505,13 +2660,20 @@ export async function transitionPreOrderStatus(
   let updatedOrder!: PreOrder & { trackingSyncWarning?: string };
 
   await runTransaction(db, async (txn) => {
-    const [snap, ledger] = await Promise.all([
-      txn.get(preOrderRef),
-      loadAndLockOrderLedgerInTxn(txn, preOrderId),
-    ]);
-    if (!snap.exists()) throw new Error('Pre-order not found.');
+    const preReadSnap = await txn.get(preOrderRef);
+    if (!preReadSnap.exists()) throw new Error('Pre-order not found.');
+    const prelimOrder = { ...(preReadSnap.data() as PreOrder), id: preReadSnap.id };
+    const convertedOrderRef =
+      prelimOrder.convertedSaleId || prelimOrder.convertedOrderId
+        ? doc(db, 'orders', (prelimOrder.convertedSaleId || prelimOrder.convertedOrderId)!)
+        : null;
 
-    const order = { ...(snap.data() as PreOrder), id: snap.id };
+    const [ledger, convertedOrderSnap] = await Promise.all([
+      loadAndLockOrderLedgerInTxn(txn, preOrderId),
+      convertedOrderRef ? txn.get(convertedOrderRef) : Promise.resolve(null),
+    ]);
+
+    const order = prelimOrder;
     if (order.status === toStatus) {
       throw new Error(`Pre-order is already in "${toStatus}" status.`);
     }
@@ -2554,47 +2716,65 @@ export async function transitionPreOrderStatus(
 
     // Special status guards
     if (toStatus === 'Cancelled') {
+      if (order.convertedSaleId || order.convertedOrderId) {
+        throw new Error(
+          'This pre-order has already been converted to a Sales Order & Invoice. Cancel it from Order Desk instead.'
+        );
+      }
+      if (toPaisa(calc.verifiedNetPaid) > 0 || Number(order.stockReceivedQty || 0) > 0) {
+        throw new Error(
+          'This pre-order has verified customer payments or received stock. Use the "Cancel & Reconcile" workflow to settle refunds, supplier balance, and inventory safely.'
+        );
+      }
       if (!noteTrimmed) {
         throw new Error('Cancellation reason is required.');
       }
       if (order.status === 'Delivered') {
         throw new Error('Delivered pre-orders cannot be cancelled.');
       }
-      if (toPaisa(calc.verifiedCollected) > 0 && !isAdmin) {
-        throw new Error(
-          'This pre-order has verified customer payments. Only an Admin or Super Admin can cancel it.'
-        );
-      }
     }
 
+    // When converted to Sale/Invoice, check converted Order/Invoice remaining due too
+    const convertedOrderData =
+      convertedOrderSnap && convertedOrderSnap.exists() ? (convertedOrderSnap.data() as Order) : null;
+    const effectiveRemainingDue = convertedOrderData
+      ? roundMoney(convertedOrderData.amountDue || 0)
+      : calc.dueAmount;
+
     let loggedOverrideReason = '';
-    if (toStatus === 'Delivered' && toPaisa(calc.dueAmount) > 0) {
+    if (toStatus === 'Delivered' && toPaisa(effectiveRemainingDue) > 0) {
       if (!isAdmin) {
         throw new Error(
-          `Cannot mark as Delivered while ৳${calc.dueAmount.toLocaleString()} due remains. Collect remaining payment first or ask an Admin to override.`
+          `Cannot mark as Delivered while ৳${effectiveRemainingDue.toLocaleString()} due remains. Collect remaining payment first or ask an Admin to override.`
         );
       }
       if (!input.allowUnpaidDeliveryOverride || !(overrideReasonTrimmed || noteTrimmed)) {
         throw new Error(
-          `Remaining due is ৳${calc.dueAmount.toLocaleString()}. Admin unpaid-delivery override and a reason are required.`
+          `Remaining due is ৳${effectiveRemainingDue.toLocaleString()}. Admin unpaid-delivery override and a reason are required.`
         );
       }
       loggedOverrideReason = overrideReasonTrimmed || noteTrimmed;
     }
 
-    const paymentState = derivePreOrderPaymentState(
-      calc.totalAmount,
-      calc.verifiedCollected,
-      calc.verifiedRefunded,
-      toStatus
-    );
+    const paymentState = convertedOrderData
+      ? effectiveRemainingDue <= 0
+        ? 'fully_paid'
+        : Number(convertedOrderData.amountPaid || 0) > 0
+        ? 'partially_paid'
+        : 'unpaid'
+      : derivePreOrderPaymentState(
+          calc.totalAmount,
+          calc.verifiedCollected,
+          calc.verifiedRefunded,
+          toStatus
+        );
 
     const orderUpdate: Record<string, any> = {
       status: toStatus,
-      advancePaid: calc.verifiedCollected,
+      advancePaid: convertedOrderData ? roundMoney(convertedOrderData.amountPaid || 0) : calc.verifiedCollected,
       pendingAmount: calc.pendingCollected,
       refundedAmount: calc.verifiedRefunded,
-      dueAmount: calc.dueAmount,
+      dueAmount: effectiveRemainingDue,
       paymentCount: ledger.length,
       paymentState,
       lastStatusChangeAt: now,
@@ -2955,11 +3135,14 @@ export async function updatePreOrderShippingExpenses(
     throw new Error('Shipping expense amounts cannot be negative.');
   }
 
+  const paymentMethod = (breakdown.paymentMethod || 'Cash').trim() || 'Cash';
+
   const sanitizedBreakdown: PreOrderShippingExpensesBreakdown = {
     internationalFreight: freight,
     customsDuty: customs,
     localTransport: local,
     handlingOther: handling,
+    paymentMethod,
     freightReceiptUrl: breakdown.freightReceiptUrl || '',
     customsReceiptUrl: breakdown.customsReceiptUrl || '',
     localReceiptUrl: breakdown.localReceiptUrl || '',
@@ -2977,6 +3160,16 @@ export async function updatePreOrderShippingExpenses(
     if (!orderSnap.exists()) throw new Error('Pre-order not found.');
     const order = orderSnap.data() as PreOrder;
     const prevCost = costSnap.exists() ? (costSnap.data() as PreOrderPrivateCost) : null;
+    const prevActual = roundMoney(
+      prevCost?.actualShippingCost ??
+        calculateActualShippingCost(prevCost?.shippingExpenses) ??
+        0
+    );
+    const prevSeq = Number(prevCost?.shippingExpenses?.shippingExpenseSeq || 0);
+    const nextSeq = prevSeq + 1;
+    sanitizedBreakdown.shippingExpenseSeq = nextSeq;
+
+    const deltaShipping = fromPaisa(toPaisa(actualShippingCost) - toPaisa(prevActual));
 
     const nextCostPatch: Partial<PreOrderPrivateCost> = {
       preOrderId,
@@ -2990,6 +3183,21 @@ export async function updatePreOrderShippingExpenses(
     };
 
     txn.set(costRef, sanitizeData(nextCostPatch), { merge: true });
+
+    if (Math.abs(toPaisa(deltaShipping)) > 0) {
+      const shipPosting = buildShippingExpensePosting({
+        preOrderId,
+        preOrderNumber: order.preOrderNumber,
+        subBrand: order.subBrand,
+        expenseSeqOrId: `seq${nextSeq}`,
+        deltaAmount: deltaShipping,
+        method: paymentMethod,
+        note: `Shipping expense ${deltaShipping >= 0 ? 'added' : 'adjusted'} (${paymentMethod}): ৳${deltaShipping.toLocaleString()}`,
+        actor: { actorId: actor.id, actorName: actor.name, timestamp: now },
+      });
+      txn.set(doc(db, 'accountingPostings', shipPosting.id), sanitizeData(shipPosting));
+    }
+
     txn.set(
       auditRef,
       sanitizeData({
@@ -2997,10 +3205,10 @@ export async function updatePreOrderShippingExpenses(
         preOrderId,
         preOrderNumber: order.preOrderNumber,
         action: 'PRIVATE_COST_UPDATED' as PreOrderAuditAction,
-        summary: `Updated restricted shipping expense breakdown on ${order.preOrderNumber} (Actual total: ৳${actualShippingCost.toLocaleString()})`,
+        summary: `Updated restricted shipping expense breakdown on ${order.preOrderNumber} (Actual total: ৳${actualShippingCost.toLocaleString()}, via ${paymentMethod})`,
         metadata: {
-          before: { actualShippingCost: prevCost?.actualShippingCost ?? 0 },
-          after: { actualShippingCost },
+          before: { actualShippingCost: prevActual },
+          after: { actualShippingCost, paymentMethod, deltaShipping },
         },
         userId: actor.id,
         userName: actor.name,
@@ -3439,20 +3647,26 @@ export async function syncPublicTracking(
       return { ok: true };
     }
 
-    const [payments, statusHistory, shipmentEvents, companySettings] = await Promise.all([
+    const saleId = order.convertedSaleId || order.convertedOrderId;
+    const [payments, statusHistory, shipmentEvents, companySettings, convertedOrdSnap] = await Promise.all([
       getPreOrderPayments(preOrderId, 100),
       getPreOrderStatusHistory(preOrderId, 100),
       getPreOrderShipmentEvents(preOrderId, 100),
       options?.companySettings !== undefined
         ? Promise.resolve(options.companySettings)
         : getCompanySettings().catch(() => null),
+      saleId ? getDoc(doc(db, 'orders', saleId)).catch(() => null) : Promise.resolve(null),
     ]);
+
+    const convertedOrderData =
+      convertedOrdSnap && convertedOrdSnap.exists() ? (convertedOrdSnap.data() as Order) : null;
 
     const whitelistedDoc = buildWhitelistedPublicTrackingDoc({
       order,
       payments,
       statusHistory,
       shipmentEvents,
+      postConversionPayments: convertedOrderData?.paymentHistory || [],
       companySettings,
       now,
     });
@@ -4004,6 +4218,19 @@ export async function addPreOrderSupplierPayment(
     const existing = await txn.get(payRef);
     if (existing.exists()) return;
 
+    // Fetch allocated pre-orders upfront before any writes to resolve exact subBrand
+    const allocSubBrandMap: Record<string, 'SAT' | 'GZ' | 'RTX'> = {};
+    if (cleanAllocations.length > 0) {
+      const allocSnaps = await Promise.all(
+        cleanAllocations.map((alloc) => txn.get(doc(db, 'preOrders', alloc.preOrderId)))
+      );
+      allocSnaps.forEach((snap, idx) => {
+        const alloc = cleanAllocations[idx];
+        const sb = snap.exists() ? (snap.data()?.subBrand as 'SAT' | 'GZ' | 'RTX' | undefined) : undefined;
+        allocSubBrandMap[alloc.preOrderId] = sb === 'GZ' || sb === 'RTX' ? sb : 'SAT';
+      });
+    }
+
     const record: PreOrderSupplierPayment = {
       id: paymentId,
       type: 'payment',
@@ -4055,6 +4282,18 @@ export async function addPreOrderSupplierPayment(
             timestamp: now,
           })
         );
+
+        const supPosting = buildSupplierPaymentPosting({
+          preOrderId: alloc.preOrderId,
+          preOrderNumber: alloc.preOrderNumber,
+          subBrand: allocSubBrandMap[alloc.preOrderId] || 'SAT',
+          supplierPaymentId: paymentId,
+          amountBdt: alloc.amountBdt,
+          method: input.method,
+          note: `Supplier payment to ${input.supplierName} (${input.method})`,
+          actor: { actorId: actor.id, actorName: actor.name, timestamp: now },
+        });
+        txn.set(doc(db, 'accountingPostings', supPosting.id), sanitizeData(supPosting));
       }
     } else {
       const auditRef = doc(db, 'preOrderAudit', generateId('AUD'));
@@ -4073,6 +4312,18 @@ export async function addPreOrderSupplierPayment(
           timestamp: now,
         })
       );
+
+      const unallocPosting = buildSupplierPaymentPosting({
+        preOrderId: `SUPPLIER_${input.supplierId}`,
+        preOrderNumber: input.supplierName || 'General Supplier Advance',
+        subBrand: 'SAT',
+        supplierPaymentId: paymentId,
+        amountBdt: safeAmountBdt,
+        method: input.method,
+        note: `Unallocated advance to ${input.supplierName} (${input.method})`,
+        actor: { actorId: actor.id, actorName: actor.name, timestamp: now },
+      });
+      txn.set(doc(db, 'accountingPostings', unallocPosting.id), sanitizeData(unallocPosting));
     }
   });
 
@@ -4096,8 +4347,30 @@ export async function reversePreOrderSupplierPayment(
   const origRef = doc(db, 'preOrderSupplierPayments', originalPaymentId);
   const revRef = doc(db, 'preOrderSupplierPayments', revId);
 
+  // Pre-fetch original payment to locate its deterministic accountingPostings docs cleanly before txn writes
+  const preOrigSnap = await getDoc(origRef);
+  const preOrig = preOrigSnap.exists() ? (preOrigSnap.data() as PreOrderSupplierPayment) : null;
+  const candidatePostingKeys: string[] = [];
+  if (preOrig) {
+    if (Array.isArray(preOrig.allocations) && preOrig.allocations.length > 0) {
+      preOrig.allocations.forEach((a) =>
+        candidatePostingKeys.push(getSupplierPaymentPostingId(a.preOrderId, originalPaymentId))
+      );
+    } else if (preOrig.preOrderId && preOrig.preOrderId !== 'MULTI' && preOrig.preOrderId !== 'UNALLOCATED') {
+      candidatePostingKeys.push(getSupplierPaymentPostingId(preOrig.preOrderId, originalPaymentId));
+    } else {
+      candidatePostingKeys.push(
+        getSupplierPaymentPostingId(`SUPPLIER_${preOrig.supplierId}`, originalPaymentId)
+      );
+    }
+  }
+
   await runTransaction(db, async (txn) => {
-    const [origSnap, revSnap] = await Promise.all([txn.get(origRef), txn.get(revRef)]);
+    const [origSnap, revSnap, ...origPostingSnaps] = await Promise.all([
+      txn.get(origRef),
+      txn.get(revRef),
+      ...candidatePostingKeys.map((pid) => txn.get(doc(db, 'accountingPostings', pid))),
+    ]);
     if (!origSnap.exists()) throw new Error('Original supplier payment not found.');
     if (revSnap.exists()) return;
 
@@ -4133,6 +4406,18 @@ export async function reversePreOrderSupplierPayment(
     };
 
     txn.set(revRef, sanitizeData(revRecord));
+
+    for (const pSnap of origPostingSnaps) {
+      if (pSnap.exists()) {
+        const revPosting = buildReversalPosting(
+          pSnap.data() as AccountingPosting,
+          revId,
+          reason.trim(),
+          { actorId: actor.id, actorName: actor.name, timestamp: now }
+        );
+        txn.set(doc(db, 'accountingPostings', revPosting.id), sanitizeData(revPosting));
+      }
+    }
 
     const targetAllocations =
       orig.allocations && orig.allocations.length > 0
@@ -4333,3 +4618,1588 @@ export async function markPreOrderNotificationRead(
     readBy: arrayUnion(userId),
   });
 }
+
+// ==========================================
+// PART 6: RECEIVE STOCK, CONVERT TO SALE, CANCEL & RECONCILE, POSTINGS & INTEGRITY
+// ==========================================
+
+export async function getPreOrderReceipts(
+  preOrderId: string,
+  limitCount: number = 50
+): Promise<PreOrderReceipt[]> {
+  const q = query(
+    collection(db, 'preOrders', preOrderId, 'receipts'),
+    orderBy('receivedAt', 'desc'),
+    limit(limitCount)
+  );
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => ({ ...(d.data() as PreOrderReceipt), id: d.id }));
+}
+
+export async function getPreOrderAccountingPostings(
+  preOrderId?: string,
+  limitCount: number = 250
+): Promise<AccountingPosting[]> {
+  const constraints: any[] = [];
+  if (preOrderId) {
+    constraints.push(where('preOrderId', '==', preOrderId));
+  }
+  constraints.push(orderBy('timestamp', 'desc'));
+  constraints.push(limit(limitCount));
+  try {
+    const snap = await getDocs(query(collection(db, 'accountingPostings'), ...constraints));
+    return snap.docs.map((d) => ({ ...(d.data() as AccountingPosting), id: d.id }));
+  } catch (err: any) {
+    if (err?.code === 'failed-precondition' && preOrderId) {
+      const fallbackSnap = await getDocs(
+        query(collection(db, 'accountingPostings'), where('preOrderId', '==', preOrderId), limit(limitCount))
+      );
+      return fallbackSnap.docs
+        .map((d) => ({ ...(d.data() as AccountingPosting), id: d.id }))
+        .sort((a, b) => b.timestamp - a.timestamp);
+    }
+    if (err?.code === 'permission-denied') return [];
+    throw err;
+  }
+}
+
+export function subscribeToAccountingPostings(
+  callback: (postings: AccountingPosting[]) => void,
+  limitCount: number = 400
+): () => void {
+  try {
+    const q = query(
+      collection(db, 'accountingPostings'),
+      orderBy('timestamp', 'desc'),
+      limit(limitCount)
+    );
+    return onSnapshot(
+      q,
+      (snap) => {
+        const rows = snap.docs.map((d) => ({ ...(d.data() as AccountingPosting), id: d.id }));
+        callback(rows);
+      },
+      () => {
+        getPreOrderAccountingPostings(undefined, limitCount)
+          .then(callback)
+          .catch(() => callback([]));
+      }
+    );
+  } catch {
+    return () => {};
+  }
+}
+
+export interface ReceivePreOrderStockInput {
+  receivedQty: number;
+  damagedQty?: number;
+  productId?: string; // Existing product ID if linking
+  variantId?: string; // Existing variant ID if linking
+  newProductDetails?: {
+    name?: string;
+    sku?: string;
+    category?: string;
+    brand?: string;
+    color?: string;
+    model?: string;
+    reorderThreshold?: number;
+  };
+  note?: string;
+  idempotencyKey: string;
+}
+
+export interface ReceivePreOrderStockResult {
+  receipt: PreOrderReceipt;
+  order: PreOrder;
+  productId: string;
+  variantId: string;
+  createdNewProduct: boolean;
+  productStatus: 'approved' | 'pending_review' | 'rejected';
+  trackingSyncWarning?: string;
+}
+
+export async function receivePreOrderStock(
+  preOrderId: string,
+  input: ReceivePreOrderStockInput,
+  actor: PreOrderActor
+): Promise<ReceivePreOrderStockResult> {
+  const goodQty = Math.round(Number(input.receivedQty) || 0);
+  const damagedQty = Math.round(Number(input.damagedQty) || 0);
+  if (goodQty < 0 || damagedQty < 0 || goodQty + damagedQty <= 0) {
+    throw new Error('Enter at least 1 good or damaged unit to receive.');
+  }
+  if (!input.idempotencyKey?.trim()) {
+    throw new Error('Idempotency key is required to receive stock safely.');
+  }
+  if (damagedQty > 0 && !isPreOrderAdminRole(actor.role)) {
+    throw new Error('Logging damaged/missing pre-order units to Company Losses requires Admin or Super Admin approval.');
+  }
+
+  const now = Date.now();
+  const safeKey = sanitizeIdFragment(input.idempotencyKey.trim());
+  const receiptId = `RCPT_${safeKey}`;
+
+  // Fetch existing products list upfront if we might generate a new unique barcode
+  const existingProducts = await getProducts(true).catch(() => [] as Product[]);
+
+  const preOrderRef = doc(db, 'preOrders', preOrderId);
+  const costRef = doc(db, 'preOrders', preOrderId, 'private', 'cost');
+  const receiptRef = doc(db, 'preOrders', preOrderId, 'receipts', receiptId);
+  const auditRef = doc(db, 'preOrderAudit', generateId('AUD'));
+  const historyRef = doc(db, 'preOrders', preOrderId, 'statusHistory', generateId('HIST'));
+
+  let result!: ReceivePreOrderStockResult;
+
+  await runTransaction(db, async (txn) => {
+    const preSnap = await txn.get(preOrderRef);
+    if (!preSnap.exists()) throw new Error('Pre-order not found.');
+    const prelimOrder = { ...(preSnap.data() as PreOrder), id: preSnap.id };
+
+    const targetProductId = (input.productId || prelimOrder.linkedProductId || '').trim();
+    const productRef = targetProductId ? doc(db, 'products', targetProductId) : null;
+
+    const [receiptSnap, costSnap, productSnap] = await Promise.all([
+      txn.get(receiptRef),
+      txn.get(costRef),
+      productRef ? txn.get(productRef) : Promise.resolve(null),
+    ]);
+
+    if (receiptSnap.exists()) {
+      const prevReceipt = { ...(receiptSnap.data() as PreOrderReceipt), id: receiptSnap.id };
+      result = {
+        receipt: prevReceipt,
+        order: prelimOrder,
+        productId: prevReceipt.productId,
+        variantId: prevReceipt.variantId,
+        createdNewProduct: false,
+        productStatus: 'approved',
+      };
+      return;
+    }
+
+    if (prelimOrder.convertedSaleId || prelimOrder.convertedOrderId) {
+      throw new Error('This pre-order has already been converted to a Sales Order.');
+    }
+    if (['Delivered', 'Cancelled', 'Refunded'].includes(prelimOrder.status)) {
+      throw new Error(`Cannot receive stock while pre-order status is "${prelimOrder.status}".`);
+    }
+
+    const allowedReceiveStages: PreOrderStatus[] = [
+      'Arrived in Bangladesh',
+      'Received in Stock',
+      'Ready for Delivery',
+    ];
+    if (!allowedReceiveStages.includes(prelimOrder.status) && !isPreOrderAdminRole(actor.role)) {
+      throw new Error(
+        `Order must be "Arrived in Bangladesh" before staff can receive stock (current: "${prelimOrder.status}").`
+      );
+    }
+
+    const prevGood = Math.max(0, Number(prelimOrder.stockReceivedQty) || 0);
+    const prevDamaged = Math.max(0, Number(prelimOrder.damagedQty) || 0);
+    const remainingToReceive = Math.max(0, prelimOrder.qty - (prevGood + prevDamaged));
+    if (goodQty + damagedQty > remainingToReceive) {
+      throw new Error(
+        `Cannot receive ${goodQty + damagedQty} units. Only ${remainingToReceive} unit(s) remain unreceived for ${prelimOrder.preOrderNumber}.`
+      );
+    }
+
+    const privCost = costSnap.exists() ? (costSnap.data() as PreOrderPrivateCost) : null;
+    const actualShip =
+      calculateActualShippingCost(privCost?.shippingExpenses) ||
+      Number(privCost?.actualShippingCost || 0);
+
+    const landed = calculatePreOrderReceiptCost({
+      orderedQty: prelimOrder.qty,
+      receivedGoodQty: goodQty,
+      damagedQty,
+      chinaUnitCost: privCost?.chinaUnitCost || 0,
+      actualShippingCost: actualShip,
+      estimatedShippingCost: privCost?.shippingCost || 0,
+    });
+
+    // Resolve or create Product + Variant with reservation
+    let resolvedProductId = '';
+    let resolvedVariantId = '';
+    let resolvedProductName = prelimOrder.productName;
+    let resolvedVariantLabel = `${prelimOrder.color || 'Standard'} / ${prelimOrder.model || 'Standard'}`;
+    let createdNewProduct = false;
+    let resolvedProductStatus: 'approved' | 'pending_review' | 'rejected' = 'approved';
+
+    const reservationEntry: ProductPreOrderReservation = {
+      preOrderId,
+      preOrderNumber: prelimOrder.preOrderNumber,
+      variantId: '',
+      qty: goodQty,
+      receivedAt: now,
+    };
+
+    if (productSnap && productSnap.exists()) {
+      const prodData = productSnap.data() as Product;
+      resolvedProductId = productSnap.id;
+      resolvedProductName = prodData.name;
+      resolvedProductStatus = prodData.status || 'approved';
+
+      const targetVarId = (input.variantId || prelimOrder.linkedVariantId || '').trim();
+      const variants: Variant[] = Array.isArray(prodData.variants) ? [...prodData.variants] : [];
+      let matchedIdx = variants.findIndex((v) => v.id === targetVarId);
+      if (matchedIdx === -1 && variants.length > 0) {
+        matchedIdx = 0;
+      }
+
+      if (matchedIdx === -1) {
+        resolvedVariantId = 'v-1';
+        reservationEntry.variantId = resolvedVariantId;
+        variants.push({
+          id: resolvedVariantId,
+          color: prelimOrder.color || input.newProductDetails?.color || 'Standard',
+          model: prelimOrder.model || input.newProductDetails?.model || 'Standard',
+          stock: goodQty,
+          reservedQty: goodQty,
+          reservedForPreOrders: goodQty > 0 ? [reservationEntry] : [],
+          barcodeValue: getUniqueBarcodeValue(prodData.subBrand || prelimOrder.subBrand, existingProducts),
+        });
+        resolvedVariantLabel = `${variants[0].color} / ${variants[0].model}`;
+      } else {
+        const targetVar = variants[matchedIdx];
+        resolvedVariantId = targetVar.id;
+        resolvedVariantLabel = `${targetVar.color} / ${targetVar.model}`;
+        reservationEntry.variantId = resolvedVariantId;
+
+        const beforeVarStock = Number(targetVar.stock) || 0;
+        const afterVarStock = beforeVarStock + goodQty;
+        const prevVarRes = Math.max(0, Number(targetVar.reservedQty) || 0);
+        const existingVarReservations = Array.isArray(targetVar.reservedForPreOrders)
+          ? [...targetVar.reservedForPreOrders]
+          : [];
+
+        if (goodQty > 0) {
+          const existingPoIdx = existingVarReservations.findIndex((r) => r.preOrderId === preOrderId);
+          if (existingPoIdx >= 0) {
+            existingVarReservations[existingPoIdx] = {
+              ...existingVarReservations[existingPoIdx],
+              qty: existingVarReservations[existingPoIdx].qty + goodQty,
+              receivedAt: now,
+            };
+          } else {
+            existingVarReservations.push(reservationEntry);
+          }
+        }
+
+        variants[matchedIdx] = {
+          ...targetVar,
+          stock: afterVarStock,
+          reservedQty: prevVarRes + goodQty,
+          reservedForPreOrders: existingVarReservations,
+        };
+
+        if (goodQty > 0) {
+          const stockLogRef = doc(collection(db, 'stockLogs'));
+          const stockLog: Omit<StockLog, 'id'> = {
+            productId: resolvedProductId,
+            productName: resolvedProductName,
+            type: 'in',
+            qty: goodQty,
+            reason: 'Pre-Order Receive',
+            userId: actor.id,
+            userName: actor.name,
+            timestamp: now,
+            beforeQty: beforeVarStock,
+            afterQty: afterVarStock,
+            refNo: prelimOrder.preOrderNumber,
+            supplierName: prelimOrder.supplierName || '',
+            preOrderId,
+            variantId: resolvedVariantId,
+            purchasePrice: landed.unitLandedCost,
+          };
+          txn.set(stockLogRef, sanitizeData(stockLog));
+        }
+      }
+
+      const prodTotalStock = variants.reduce((s, v) => s + (Number(v.stock) || 0), 0);
+      const prodTotalReserved = variants.reduce((s, v) => s + Math.max(0, Number(v.reservedQty) || 0), 0);
+      const nextProdReservations = variants.flatMap((v) => v.reservedForPreOrders || []);
+      const nextStockStatus = computeAvailableStockStatus(
+        prodTotalStock,
+        prodTotalReserved,
+        prodData.reorderThreshold
+      );
+
+      const productPatch: Partial<Product> = {
+        variants,
+        totalStock: prodTotalStock,
+        reservedQty: prodTotalReserved,
+        reservedForPreOrders: nextProdReservations,
+        stockStatus: nextStockStatus,
+        ...(landed.unitLandedCost > 0 ? { costPrice: landed.unitLandedCost } : {}),
+      };
+      txn.update(productRef!, sanitizeData(productPatch));
+    } else {
+      // Auto-create new Product using existing SKU/CODE128 barcode & approval rule
+      createdNewProduct = true;
+      const newProdRef = doc(collection(db, 'products'));
+      resolvedProductId = newProdRef.id;
+      resolvedVariantId = 'v-1';
+      reservationEntry.variantId = resolvedVariantId;
+
+      const isSuperAdminActor = actor.role === 'superadmin' || actor.role === 'super_admin';
+      resolvedProductStatus = isSuperAdminActor ? 'approved' : 'pending_review';
+
+      const productName = input.newProductDetails?.name?.trim() || prelimOrder.productName;
+      const color = input.newProductDetails?.color?.trim() || prelimOrder.color || 'Standard';
+      const model = input.newProductDetails?.model?.trim() || prelimOrder.model || 'Standard';
+      const category = input.newProductDetails?.category?.trim() || prelimOrder.category || 'Pre-Order';
+      const brand = input.newProductDetails?.brand?.trim() || prelimOrder.supplierName || 'Pre-Order Import';
+      const sku =
+        input.newProductDetails?.sku?.trim() ||
+        prelimOrder.sku?.trim() ||
+        `${prelimOrder.subBrand}-${prelimOrder.preOrderNumber}`;
+
+      const prodBarcode = getUniqueBarcodeValue(prelimOrder.subBrand || 'PRD', existingProducts);
+      const varBarcode = getUniqueBarcodeValue(
+        prelimOrder.subBrand || 'PRD',
+        existingProducts,
+        new Set([prodBarcode])
+      );
+
+      resolvedProductName = productName;
+      resolvedVariantLabel = `${color} / ${model}`;
+
+      const variantDoc: Variant = {
+        id: resolvedVariantId,
+        color,
+        model,
+        stock: goodQty,
+        reservedQty: goodQty,
+        reservedForPreOrders: goodQty > 0 ? [reservationEntry] : [],
+        barcodeValue: varBarcode,
+      };
+
+      const newProductPayload: Omit<Product, 'id'> = {
+        name: productName,
+        sku,
+        description: prelimOrder.productSpecs || `Imported via Pre-Order ${prelimOrder.preOrderNumber}`,
+        category,
+        mainCategory: category,
+        brand,
+        subBrand: prelimOrder.subBrand,
+        costPrice: landed.unitLandedCost,
+        sellingPrice: prelimOrder.sellingUnitPrice,
+        reorderThreshold: Number(input.newProductDetails?.reorderThreshold ?? 5),
+        images: prelimOrder.productImage ? [prelimOrder.productImage] : [],
+        imageUrls: prelimOrder.productImage ? [prelimOrder.productImage] : [],
+        variants: [variantDoc],
+        totalStock: goodQty,
+        reservedQty: goodQty,
+        reservedForPreOrders: goodQty > 0 ? [reservationEntry] : [],
+        archived: false,
+        createdAt: now,
+        barcodeValue: prodBarcode,
+        status: resolvedProductStatus,
+        stockStatus: 'out_of_stock', // All newly received stock is reserved for this pre-order (available = 0)
+        createdById: actor.id,
+        createdBy: actor.name,
+      };
+
+      txn.set(newProdRef, sanitizeData(newProductPayload));
+
+      if (goodQty > 0) {
+        const stockLogRef = doc(collection(db, 'stockLogs'));
+        const stockLog: Omit<StockLog, 'id'> = {
+          productId: resolvedProductId,
+          productName,
+          type: 'in',
+          qty: goodQty,
+          reason: 'Pre-Order Receive',
+          userId: actor.id,
+          userName: actor.name,
+          timestamp: now,
+          beforeQty: 0,
+          afterQty: goodQty,
+          refNo: prelimOrder.preOrderNumber,
+          supplierName: prelimOrder.supplierName || '',
+          preOrderId,
+          variantId: resolvedVariantId,
+          purchasePrice: landed.unitLandedCost,
+        };
+        txn.set(stockLogRef, sanitizeData(stockLog));
+      }
+    }
+
+    // Write damaged goods loss to companyLosses (at landed cost) if damagedQty > 0
+    let damagedLossId = '';
+    if (damagedQty > 0 && landed.damagedCostLoss > 0) {
+      const lossRef = doc(collection(db, 'companyLosses'));
+      damagedLossId = lossRef.id;
+      const lossDoc: Omit<CompanyLoss, 'id'> = {
+        title: `Damaged Pre-Order Stock (${prelimOrder.preOrderNumber}) - ${resolvedProductName}`,
+        reason: 'Product Damage',
+        amount: landed.damagedCostLoss,
+        date: getTodayIsoDate(),
+        subBrand: prelimOrder.subBrand,
+        note: `Damaged qty: ${damagedQty} × ৳${landed.unitLandedCost.toLocaleString()} landed cost${
+          input.note?.trim() ? ` | ${input.note.trim()}` : ''
+        }`,
+        recordedBy: actor.name,
+        createdAt: now,
+      };
+      txn.set(lossRef, sanitizeData(lossDoc));
+    }
+
+    const receiptDoc: PreOrderReceipt = {
+      id: receiptId,
+      preOrderId,
+      preOrderNumber: prelimOrder.preOrderNumber,
+      subBrand: prelimOrder.subBrand,
+      receivedQty: goodQty,
+      damagedQty,
+      productId: resolvedProductId,
+      productName: resolvedProductName,
+      variantId: resolvedVariantId,
+      variantLabel: resolvedVariantLabel,
+      chinaUnitCost: landed.chinaUnitCost,
+      shippingCostPerUnit: landed.shippingCostPerUnit,
+      shippingCostPortion: landed.shippingCostPortion,
+      unitLandedCost: landed.unitLandedCost,
+      totalGoodLandedCost: landed.totalGoodLandedCost,
+      damagedCostLoss: landed.damagedCostLoss,
+      ...(damagedLossId ? { damagedLossId } : {}),
+      damagedLossPending: false,
+      note: input.note?.trim() || '',
+      idempotencyKey: input.idempotencyKey.trim(),
+      receivedBy: actor.id,
+      receivedByName: actor.name,
+      receivedAt: now,
+    };
+    txn.set(receiptRef, sanitizeData(receiptDoc));
+
+    // A4 Accounting Posting
+    const receiptPosting = buildInventoryReceivedPosting({
+      preOrderId,
+      preOrderNumber: prelimOrder.preOrderNumber,
+      subBrand: prelimOrder.subBrand,
+      receiptId,
+      goodLandedCost: landed.totalGoodLandedCost,
+      damagedLossCost: landed.damagedCostLoss,
+      note: `Received ${goodQty} good, ${damagedQty} damaged on ${prelimOrder.preOrderNumber}`,
+      actor: { actorId: actor.id, actorName: actor.name, timestamp: now },
+    });
+    txn.set(doc(db, 'accountingPostings', receiptPosting.id), sanitizeData(receiptPosting));
+
+    const newTotalGood = prevGood + goodQty;
+    const newTotalDamaged = prevDamaged + damagedQty;
+    const isFullyAccountedFor = newTotalGood + newTotalDamaged >= prelimOrder.qty;
+    const shouldMoveToReceivedStatus =
+      isFullyAccountedFor &&
+      !['Received in Stock', 'Ready for Delivery', 'Out for Delivery', 'Delivered'].includes(
+        prelimOrder.status
+      );
+
+    const nextStatus: PreOrderStatus = shouldMoveToReceivedStatus
+      ? 'Received in Stock'
+      : prelimOrder.status;
+
+    const poPatch: Partial<PreOrder> = {
+      linkedProductId: resolvedProductId,
+      linkedVariantId: resolvedVariantId,
+      stockReceivedQty: newTotalGood,
+      damagedQty: newTotalDamaged,
+      stockReceived: isFullyAccountedFor,
+      stockReceivedAt: prelimOrder.stockReceivedAt || now,
+      unitLandedCost: landed.unitLandedCost,
+      landedCostTotal: roundMoney(landed.unitLandedCost * newTotalGood),
+      status: nextStatus,
+      updatedAt: now,
+      updatedBy: actor.id,
+    };
+    txn.update(preOrderRef, sanitizeData(poPatch));
+
+    if (shouldMoveToReceivedStatus) {
+      const historyDoc: PreOrderStatusHistory = {
+        id: historyRef.id,
+        preOrderId,
+        fromStatus: prelimOrder.status,
+        toStatus: 'Received in Stock',
+        note: `Stock received into warehouse (${newTotalGood} good${
+          newTotalDamaged > 0 ? `, ${newTotalDamaged} damaged` : ''
+        } @ ৳${landed.unitLandedCost.toLocaleString()}/unit)`,
+        publicMessage: `Your item has arrived in our Dhaka warehouse and passed inspection.`,
+        notifyCustomer: true,
+        changedBy: actor.id,
+        changedByName: actor.name,
+        timestamp: now,
+      };
+      txn.set(historyRef, sanitizeData(historyDoc));
+    }
+
+    txn.set(
+      auditRef,
+      sanitizeData({
+        id: auditRef.id,
+        preOrderId,
+        preOrderNumber: prelimOrder.preOrderNumber,
+        action: 'STOCK_RECEIVED' as PreOrderAuditAction,
+        summary: `Received ${goodQty} good + ${damagedQty} damaged unit(s) for ${prelimOrder.preOrderNumber} -> ${resolvedProductName} (৳${landed.unitLandedCost.toLocaleString()}/unit)`,
+        metadata: {
+          receiptId,
+          productId: resolvedProductId,
+          variantId: resolvedVariantId,
+          createdNewProduct,
+          productStatus: resolvedProductStatus,
+          goodQty,
+          damagedQty,
+          unitLandedCost: landed.unitLandedCost,
+          totalGoodLandedCost: landed.totalGoodLandedCost,
+          damagedCostLoss: landed.damagedCostLoss,
+        },
+        userId: actor.id,
+        userName: actor.name,
+        userRole: actor.role,
+        timestamp: now,
+      })
+    );
+
+    result = {
+      receipt: receiptDoc,
+      order: { ...prelimOrder, ...poPatch },
+      productId: resolvedProductId,
+      variantId: resolvedVariantId,
+      createdNewProduct,
+      productStatus: resolvedProductStatus,
+    };
+  });
+
+  dbCache.products = null;
+  dbCache.productsArchived = null;
+
+  const syncRes = await syncPublicTracking(preOrderId);
+  if (!syncRes.ok) {
+    result.trackingSyncWarning = syncRes.error;
+  }
+
+  return result;
+}
+
+export interface ConvertPreOrderToSaleInput {
+  courier?: string;
+  courierTrackingNumber?: string;
+  deliveryAddress?: string;
+  notes?: string;
+}
+
+export interface ConvertPreOrderToSaleResult {
+  orderId: string;
+  invoiceId: string;
+  invoiceNumber: string;
+  order: Order;
+  invoice: Invoice;
+  preOrder: PreOrder;
+  alreadyConverted: boolean;
+  trackingSyncWarning?: string;
+}
+
+export async function convertPreOrderToSale(
+  preOrderId: string,
+  input: ConvertPreOrderToSaleInput,
+  actor: PreOrderActor
+): Promise<ConvertPreOrderToSaleResult> {
+  const now = Date.now();
+  const preOrderRef = doc(db, 'preOrders', preOrderId);
+  const convLockRef = doc(db, 'preOrderConversions', preOrderId);
+  const costRef = doc(db, 'preOrders', preOrderId, 'private', 'cost');
+  const companySettingsRef = doc(db, 'settings', 'company');
+  const countersRef = doc(db, 'settings', 'invoiceCounters');
+  const auditRef = doc(db, 'preOrderAudit', generateId('AUD'));
+  const historyRef = doc(db, 'preOrders', preOrderId, 'statusHistory', generateId('HIST'));
+
+  let result!: ConvertPreOrderToSaleResult;
+
+  await runTransaction(db, async (txn) => {
+    const preSnap = await txn.get(preOrderRef);
+    if (!preSnap.exists()) throw new Error('Pre-order not found.');
+    const po = { ...(preSnap.data() as PreOrder), id: preSnap.id };
+
+    const convLockSnap = await txn.get(convLockRef);
+
+    // Idempotent duplicate check
+    if (convLockSnap.exists() || po.convertedSaleId || po.convertedOrderId) {
+      const lockData = convLockSnap.exists() ? (convLockSnap.data() as PreOrderConversionLock) : null;
+      const existingOrderId = lockData?.orderId || po.convertedSaleId || po.convertedOrderId || '';
+      const existingInvoiceId = lockData?.invoiceId || po.convertedInvoiceId || '';
+      const [existingOrdSnap, existingInvSnap] = await Promise.all([
+        existingOrderId ? txn.get(doc(db, 'orders', existingOrderId)) : Promise.resolve(null),
+        existingInvoiceId ? txn.get(doc(db, 'invoices', existingInvoiceId)) : Promise.resolve(null),
+      ]);
+      result = {
+        orderId: existingOrderId,
+        invoiceId: existingInvoiceId,
+        invoiceNumber: lockData?.invoiceNumber || po.convertedInvoiceNumber || '',
+        order: existingOrdSnap?.exists()
+          ? ({ id: existingOrdSnap.id, ...existingOrdSnap.data() } as Order)
+          : ({} as Order),
+        invoice: existingInvSnap?.exists()
+          ? ({ id: existingInvSnap.id, ...existingInvSnap.data() } as Invoice)
+          : ({} as Invoice),
+        preOrder: po,
+        alreadyConverted: true,
+      };
+      return;
+    }
+
+    if (po.isCancelled || po.status === 'Cancelled' || po.status === 'Refunded') {
+      throw new Error(`Cannot convert a ${po.status} pre-order.`);
+    }
+
+    const receivedGoodQty = Math.max(0, Number(po.stockReceivedQty) || 0);
+    if (!po.stockReceived && receivedGoodQty <= 0) {
+      throw new Error('Stock must be received in BD warehouse before converting to Sale & Invoice.');
+    }
+    if (!po.linkedProductId) {
+      throw new Error('Linked product missing. Receive stock first before converting.');
+    }
+
+    const sellQty = receivedGoodQty > 0 ? receivedGoodQty : po.qty;
+    const productRef = doc(db, 'products', po.linkedProductId);
+    const customerRef = po.customerId ? doc(db, 'customers', po.customerId) : null;
+
+    // ALL REMAINING READS FIRST
+    const [costSnap, productSnap, ledger, companySettingsSnap, countersSnap, custSnap] =
+      await Promise.all([
+        txn.get(costRef),
+        txn.get(productRef),
+        loadAndLockOrderLedgerInTxn(txn, preOrderId),
+        txn.get(companySettingsRef),
+        txn.get(countersRef),
+        customerRef ? txn.get(customerRef) : Promise.resolve(null),
+      ]);
+
+    if (!productSnap.exists()) {
+      throw new Error('Linked warehouse product document was not found.');
+    }
+
+    const privCost = costSnap.exists() ? (costSnap.data() as PreOrderPrivateCost) : null;
+    const calc = calculatePreOrderFinancials({
+      qty: po.qty,
+      sellingUnitPrice: po.sellingUnitPrice,
+      deliveryCharge: po.deliveryCharge,
+      discount: po.discount,
+      payments: ledger,
+    });
+
+    const conversionCalc = calculateSaleConversionBreakdown({
+      qty: sellQty,
+      sellingUnitPrice: po.sellingUnitPrice,
+      deliveryCharge: po.deliveryCharge,
+      discount: po.discount,
+      verifiedNetPaid: calc.verifiedNetPaid,
+      unitLandedCost: po.unitLandedCost,
+      fallbackChinaUnitCost: privCost?.chinaUnitCost || 0,
+      fallbackShippingCost:
+        calculateActualShippingCost(privCost?.shippingExpenses) || privCost?.shippingCost || 0,
+    });
+
+    const prodData = productSnap.data() as Product;
+    const variants: Variant[] = Array.isArray(prodData.variants) ? [...prodData.variants] : [];
+    let targetVarIdx = variants.findIndex((v) => v.id === (po.linkedVariantId || ''));
+    if (targetVarIdx === -1 && variants.length > 0) targetVarIdx = 0;
+    if (targetVarIdx === -1) {
+      throw new Error('Linked product has no variants to deduct stock from.');
+    }
+
+    const targetVar = variants[targetVarIdx];
+    const beforeVarStock = Number(targetVar.stock) || 0;
+    if (beforeVarStock < sellQty) {
+      throw new Error(
+        `Insufficient warehouse stock on ${prodData.name} (${beforeVarStock} on hand, need ${sellQty}).`
+      );
+    }
+
+    const afterVarStock = beforeVarStock - sellQty;
+    const beforeVarReserved = Math.max(0, Number(targetVar.reservedQty) || 0);
+    const releaseQty = Math.min(beforeVarReserved, sellQty);
+    const afterVarReserved = Math.max(0, beforeVarReserved - releaseQty);
+    const nextVarReservations = (targetVar.reservedForPreOrders || []).filter(
+      (r) => r.preOrderId !== preOrderId
+    );
+
+    variants[targetVarIdx] = {
+      ...targetVar,
+      stock: afterVarStock,
+      reservedQty: afterVarReserved,
+      reservedForPreOrders: nextVarReservations,
+    };
+
+    const nextTotalStock = variants.reduce((s, v) => s + (Number(v.stock) || 0), 0);
+    const nextReservedTotal = variants.reduce((s, v) => s + Math.max(0, Number(v.reservedQty) || 0), 0);
+    const nextProdReservations = variants.flatMap((v) => v.reservedForPreOrders || []);
+    const nextStockStatus = computeAvailableStockStatus(
+      nextTotalStock,
+      nextReservedTotal,
+      prodData.reorderThreshold
+    );
+
+    // Allocate sequential Invoice Number using existing invoiceCounters pattern
+    const prefixes =
+      companySettingsSnap.exists() && companySettingsSnap.data()?.prefixes
+        ? companySettingsSnap.data().prefixes
+        : { SAT: 'SAT-INV', GZ: 'GZ-INV', RTX: 'RTX-INV' };
+
+    let satCounter = 0;
+    let gzCounter = 0;
+    let rtxCounter = 0;
+    if (countersSnap.exists()) {
+      const cData = countersSnap.data();
+      satCounter = cData.satCounter || 0;
+      gzCounter = cData.gzCounter || 0;
+      rtxCounter = cData.rtxCounter || 0;
+    }
+
+    let prefix = 'SAT-INV';
+    let nextNum = 1;
+    const sub = po.subBrand || 'SAT';
+    if (sub === 'SAT') {
+      prefix = prefixes?.SAT || 'SAT-INV';
+      satCounter++;
+      nextNum = satCounter;
+    } else if (sub === 'GZ') {
+      prefix = prefixes?.GZ || 'GZ-INV';
+      gzCounter++;
+      nextNum = gzCounter;
+    } else if (sub === 'RTX') {
+      prefix = prefixes?.RTX || 'RTX-INV';
+      rtxCounter++;
+      nextNum = rtxCounter;
+    }
+
+    const invoiceNumber = `${prefix}-${String(nextNum).padStart(4, '0')}`;
+    const orderRef = doc(collection(db, 'orders'));
+    const orderId = orderRef.id;
+    const invoiceId = `INV-${now}-${Math.random().toString(36).substring(2, 9)}`;
+    const invoiceRef = doc(db, 'invoices', invoiceId);
+
+    // Determine representative advance method for Order display (cash already posted via accountingPostings!)
+    const verifiedCollections = ledger.filter(
+      (p) => p.status === 'verified' && p.type !== 'refund' && p.type !== 'reversal'
+    );
+    const primaryMethodRaw =
+      verifiedCollections[verifiedCollections.length - 1]?.method || 'Cash';
+    const orderPaymentMethod: Order['paymentMethod'] =
+      primaryMethodRaw === 'bKash' ||
+      primaryMethodRaw === 'Nagad' ||
+      primaryMethodRaw === 'Bank Transfer'
+        ? primaryMethodRaw
+        : 'Cash';
+
+    const orderPaymentStatus: Order['paymentStatus'] =
+      conversionCalc.remainingDue <= 0
+        ? 'Paid'
+        : conversionCalc.advanceApplied > 0
+        ? 'Partial'
+        : 'Due';
+
+    const orderItem: OrderItem = {
+      productId: prodData.id || po.linkedProductId,
+      variantId: targetVar.id,
+      productName: po.productName,
+      variantLabel: `${targetVar.color || po.color || 'Standard'} / ${targetVar.model || po.model || 'Standard'}`,
+      qty: sellQty,
+      unitPrice: po.sellingUnitPrice,
+      costPrice: conversionCalc.unitCostPrice,
+    };
+
+    const initialPaymentHistory: OrderPaymentHistory[] =
+      conversionCalc.advanceApplied > 0
+        ? [
+            {
+              amount: conversionCalc.advanceApplied,
+              method: orderPaymentMethod,
+              date: po.createdAt || now,
+              recordedBy: po.createdByName || actor.name,
+              label: `Advance paid (Pre-Order ${po.preOrderNumber})`,
+              isPreOrderAdvance: true,
+            },
+          ]
+        : [];
+
+    const validSalesChannels = [
+      'Facebook',
+      'TikTok',
+      'Instagram',
+      'Daraz',
+      'CartUp',
+      'Packly',
+      'Direct/WhatsApp',
+    ];
+    const resolvedChannel: Order['salesChannel'] = validSalesChannels.includes(
+      po.salesChannel || ''
+    )
+      ? (po.salesChannel as Order['salesChannel'])
+      : 'Direct/WhatsApp';
+
+    const newOrderDoc: Order = {
+      id: orderId,
+      customerId: po.customerId || '',
+      customerName: po.customerName,
+      customerPhone: po.customerPhone,
+      subBrand: po.subBrand,
+      salesChannel: resolvedChannel,
+      items: [orderItem],
+      discountAmount: conversionCalc.discount,
+      shippingCharge: conversionCalc.deliveryCharge,
+      totalAmount: conversionCalc.totalAmount,
+      courier: input.courier?.trim() || po.courier || 'Hand to Hand',
+      courierTrackingNumber: input.courierTrackingNumber?.trim() || po.trackingNumber || '',
+      paymentMethod: orderPaymentMethod,
+      paymentStatus: orderPaymentStatus,
+      amountPaid: conversionCalc.advanceApplied,
+      amountDue: conversionCalc.remainingDue,
+      status: 'Confirmed',
+      statusHistory: [
+        {
+          status: 'Confirmed',
+          timestamp: now,
+          changedBy: actor.name,
+        },
+      ],
+      deliveryAddress: input.deliveryAddress?.trim() || po.customerAddress,
+      notes: input.notes?.trim() || po.notes || `Converted from Pre-Order ${po.preOrderNumber}`,
+      createdBy: actor.name,
+      createdAt: now,
+      invoiceId,
+      paymentHistory: initialPaymentHistory,
+      source: 'pre_order',
+      preOrderId,
+      preOrderNumber: po.preOrderNumber,
+      stockDeductedOnConvert: true,
+    };
+
+    const custCode =
+      custSnap && custSnap.exists() ? custSnap.data()?.customerId || po.customerCode || '' : po.customerCode || '';
+
+    const newInvoiceDoc: Invoice = {
+      id: invoiceId,
+      orderId,
+      invoiceNumber,
+      subBrand: po.subBrand,
+      subBrandPrefix: prefix,
+      customerId: custCode,
+      customerName: po.customerName,
+      customerPhone: po.customerPhone,
+      items: [orderItem],
+      discountAmount: conversionCalc.discount,
+      shippingCharge: conversionCalc.deliveryCharge,
+      totalAmount: conversionCalc.totalAmount,
+      amountPaid: conversionCalc.advanceApplied,
+      amountDue: conversionCalc.remainingDue,
+      paymentStatus: orderPaymentStatus,
+      courier: newOrderDoc.courier,
+      courierTrackingNumber: newOrderDoc.courierTrackingNumber || '',
+      generatedAt: now,
+      generatedBy: actor.id,
+      voided: false,
+      source: 'pre_order',
+      preOrderId,
+      preOrderNumber: po.preOrderNumber,
+    };
+
+    // ALL WRITES START HERE
+    txn.set(countersRef, { satCounter, gzCounter, rtxCounter }, { merge: true });
+
+    txn.update(
+      productRef,
+      sanitizeData({
+        variants,
+        totalStock: nextTotalStock,
+        reservedQty: nextReservedTotal,
+        reservedForPreOrders: nextProdReservations,
+        stockStatus: nextStockStatus,
+      })
+    );
+
+    const stockLogRef = doc(collection(db, 'stockLogs'));
+    const saleStockLog: Omit<StockLog, 'id'> = {
+      productId: prodData.id || po.linkedProductId,
+      productName: prodData.name || po.productName,
+      type: 'sale',
+      qty: -sellQty,
+      reason: `Pre-Order Sale (${po.preOrderNumber})`,
+      userId: actor.id,
+      userName: actor.name,
+      timestamp: now,
+      beforeQty: beforeVarStock,
+      afterQty: afterVarStock,
+      orderId,
+      preOrderId,
+      variantId: targetVar.id,
+      refNo: invoiceNumber,
+    };
+    txn.set(stockLogRef, sanitizeData(saleStockLog));
+
+    const ordPayload = sanitizeData(newOrderDoc);
+    delete ordPayload.id;
+    txn.set(orderRef, ordPayload);
+    txn.set(invoiceRef, sanitizeData(newInvoiceDoc));
+
+    if (customerRef && custSnap && custSnap.exists()) {
+      const cData = custSnap.data() as Customer;
+      txn.update(
+        customerRef,
+        sanitizeData({
+          totalOrders: (Number(cData.totalOrders) || 0) + 1,
+          lifetimeValue: roundMoney((Number(cData.lifetimeValue) || 0) + conversionCalc.totalAmount),
+        })
+      );
+    }
+
+    const lockDoc: PreOrderConversionLock = {
+      preOrderId,
+      preOrderNumber: po.preOrderNumber,
+      orderId,
+      invoiceId,
+      invoiceNumber,
+      convertedAt: now,
+      convertedBy: actor.id,
+    };
+    txn.set(convLockRef, sanitizeData(lockDoc));
+
+    // A5 Accounting Posting (Sales income, COGS, Profit, settles Customer Advances & Pre-Order Inventory; Cash = 0)
+    const convertPosting = buildConvertToSalePosting({
+      preOrderId,
+      preOrderNumber: po.preOrderNumber,
+      subBrand: po.subBrand,
+      orderId,
+      invoiceNumber,
+      advanceApplied: conversionCalc.advanceApplied,
+      totalSaleAmount: conversionCalc.totalAmount,
+      totalLandedCogs: conversionCalc.totalCogs,
+      note: `Converted ${po.preOrderNumber} -> ${invoiceNumber} (Sales ৳${conversionCalc.totalAmount}, COGS ৳${conversionCalc.totalCogs})`,
+      actor: { actorId: actor.id, actorName: actor.name, timestamp: now },
+    });
+    txn.set(doc(db, 'accountingPostings', convertPosting.id), sanitizeData(convertPosting));
+
+    const nextStatus: PreOrderStatus =
+      po.status === 'Received in Stock' ? 'Ready for Delivery' : po.status;
+    const poPatch: Partial<PreOrder> = {
+      convertedOrderId: orderId,
+      convertedSaleId: orderId,
+      convertedInvoiceId: invoiceId,
+      convertedInvoiceNumber: invoiceNumber,
+      convertedAt: now,
+      status: nextStatus,
+      unitLandedCost: conversionCalc.unitCostPrice,
+      landedCostTotal: conversionCalc.totalCogs,
+      updatedAt: now,
+      updatedBy: actor.id,
+    };
+    txn.update(preOrderRef, sanitizeData(poPatch));
+
+    if (nextStatus !== po.status) {
+      const historyDoc: PreOrderStatusHistory = {
+        id: historyRef.id,
+        preOrderId,
+        fromStatus: po.status,
+        toStatus: nextStatus,
+        note: `Converted to Sales Order & Invoice ${invoiceNumber}`,
+        publicMessage: `Your order has been billed (${invoiceNumber}) and is ready for dispatch.`,
+        notifyCustomer: true,
+        changedBy: actor.id,
+        changedByName: actor.name,
+        timestamp: now,
+      };
+      txn.set(historyRef, sanitizeData(historyDoc));
+    }
+
+    txn.set(
+      auditRef,
+      sanitizeData({
+        id: auditRef.id,
+        preOrderId,
+        preOrderNumber: po.preOrderNumber,
+        action: 'CONVERTED_TO_SALE' as PreOrderAuditAction,
+        summary: `Converted ${po.preOrderNumber} to Sales Order ${orderId} & Invoice ${invoiceNumber} (Advance applied: ৳${conversionCalc.advanceApplied.toLocaleString()}, Due: ৳${conversionCalc.remainingDue.toLocaleString()})`,
+        metadata: {
+          orderId,
+          invoiceId,
+          invoiceNumber,
+          totalAmount: conversionCalc.totalAmount,
+          advanceApplied: conversionCalc.advanceApplied,
+          remainingDue: conversionCalc.remainingDue,
+          totalCogs: conversionCalc.totalCogs,
+          recognizedProfit: conversionCalc.recognizedProfit,
+        },
+        userId: actor.id,
+        userName: actor.name,
+        userRole: actor.role,
+        timestamp: now,
+      })
+    );
+
+    result = {
+      orderId,
+      invoiceId,
+      invoiceNumber,
+      order: newOrderDoc,
+      invoice: newInvoiceDoc,
+      preOrder: { ...po, ...poPatch },
+      alreadyConverted: false,
+    };
+  });
+
+  dbCache.orders = null;
+  dbCache.invoices = null;
+  dbCache.products = null;
+  dbCache.productsArchived = null;
+  dbCache.customers = null;
+
+  const syncRes = await syncPublicTracking(preOrderId);
+  if (!syncRes.ok) {
+    result.trackingSyncWarning = syncRes.error;
+  }
+
+  return result;
+}
+
+export interface CancelAndReconcileInput {
+  reason: string;
+  customerResolution: CancelCustomerResolution;
+  refundAmount?: number;
+  refundMethod?: PreOrderPaymentMethod;
+  refundReferenceNo?: string;
+  retainedChargeReason?: string;
+  supplierResolution: CancelSupplierResolution;
+  supplierSettledAmount?: number;
+  stockResolution: CancelStockResolution;
+  idempotencyKey: string;
+}
+
+export interface CancelAndReconcileResult {
+  order: PreOrder;
+  cancellation: PreOrderCancellationSummary;
+  trackingSyncWarning?: string;
+}
+
+export async function cancelAndReconcilePreOrder(
+  preOrderId: string,
+  input: CancelAndReconcileInput,
+  actor: PreOrderActor
+): Promise<CancelAndReconcileResult> {
+  if (!input.reason?.trim()) {
+    throw new Error('Cancellation reason is required.');
+  }
+  if (!input.idempotencyKey?.trim()) {
+    throw new Error('Idempotency key is required.');
+  }
+
+  const now = Date.now();
+  const safeKey = sanitizeIdFragment(input.idempotencyKey.trim());
+  const isAdmin = isPreOrderAdminRole(actor.role);
+  const isSuperAdminActor = actor.role === 'superadmin' || actor.role === 'super_admin';
+
+  // Load supplier payments outside transaction cleanly
+  const supplierPayments = await getPreOrderSupplierPayments(preOrderId, 100);
+
+  const preOrderRef = doc(db, 'preOrders', preOrderId);
+  const costRef = doc(db, 'preOrders', preOrderId, 'private', 'cost');
+  const historyRef = doc(db, 'preOrders', preOrderId, 'statusHistory', generateId('HIST'));
+  const auditRef = doc(db, 'preOrderAudit', generateId('AUD'));
+
+  let result!: CancelAndReconcileResult;
+
+  await runTransaction(db, async (txn) => {
+    const preSnap = await txn.get(preOrderRef);
+    if (!preSnap.exists()) throw new Error('Pre-order not found.');
+    const po = { ...(preSnap.data() as PreOrder), id: preSnap.id };
+
+    if (po.convertedSaleId || po.convertedOrderId) {
+      throw new Error(
+        `This pre-order has already been converted to Sales Order (${po.convertedInvoiceNumber || po.convertedSaleId}). Cancel it from the Order Desk / Invoices screen instead.`
+      );
+    }
+    if (po.status === 'Delivered') {
+      throw new Error('Delivered pre-orders cannot be cancelled.');
+    }
+    if ((po.status === 'Cancelled' || po.status === 'Refunded') && po.cancellation) {
+      result = { order: po, cancellation: po.cancellation };
+      return;
+    }
+
+    const productRef = po.linkedProductId ? doc(db, 'products', po.linkedProductId) : null;
+    const [costSnap, productSnap, ledger] = await Promise.all([
+      txn.get(costRef),
+      productRef ? txn.get(productRef) : Promise.resolve(null),
+      loadAndLockOrderLedgerInTxn(txn, preOrderId),
+    ]);
+
+    const privCost = costSnap.exists() ? (costSnap.data() as PreOrderPrivateCost) : null;
+    const calc = calculatePreOrderFinancials({
+      qty: po.qty,
+      sellingUnitPrice: po.sellingUnitPrice,
+      deliveryCharge: po.deliveryCharge,
+      discount: po.discount,
+      payments: ledger,
+    });
+
+    const verifiedNetPaid = calc.verifiedNetPaid;
+    const supSummary = calculatePerOrderSupplierSummary({
+      qty: po.qty,
+      chinaUnitCost: privCost?.chinaUnitCost || 0,
+      preOrderId,
+      supplierPayments,
+    });
+    const actualShip =
+      calculateActualShippingCost(privCost?.shippingExpenses) ||
+      Number(privCost?.actualShippingCost || 0);
+    const totalSupplierAndShipPaid = roundMoney(supSummary.paidToSupplier + actualShip);
+    const goodReceivedQty = Math.max(0, Number(po.stockReceivedQty) || 0);
+    const unitLanded = roundMoney(po.unitLandedCost || (privCost?.chinaUnitCost || 0));
+
+    // ---- 1. Customer Money Validation ----
+    let refundAmount = 0;
+    let retainedChargeAmount = 0;
+    let resolvedCustRes: CancelCustomerResolution = input.customerResolution;
+
+    if (toPaisa(verifiedNetPaid) <= 0) {
+      resolvedCustRes = 'none';
+    } else {
+      if (!isAdmin) {
+        throw new Error(
+          'Only Admin or Super Admin can cancel a pre-order that has verified customer advance payments.'
+        );
+      }
+      if (input.customerResolution === 'full_refund') {
+        refundAmount = verifiedNetPaid;
+        retainedChargeAmount = 0;
+      } else if (input.customerResolution === 'partial_refund') {
+        const reqRefund = roundMoney(input.refundAmount || 0);
+        if (reqRefund <= 0 || toPaisa(reqRefund) >= toPaisa(verifiedNetPaid)) {
+          throw new Error(
+            'Partial refund amount must be greater than 0 and less than total verified advance paid.'
+          );
+        }
+        refundAmount = reqRefund;
+        retainedChargeAmount = fromPaisa(toPaisa(verifiedNetPaid) - toPaisa(reqRefund));
+        if (!input.retainedChargeReason?.trim() && !input.reason?.trim()) {
+          throw new Error('A reason is required for retaining a cancellation charge.');
+        }
+      } else if (input.customerResolution === 'no_refund') {
+        if (!isSuperAdminActor) {
+          throw new Error(
+            'Forfeiting customer advance with No Refund is restricted to Super Admin only.'
+          );
+        }
+        if (!input.retainedChargeReason?.trim()) {
+          throw new Error('Explicit Super Admin reason is required when choosing No Refund.');
+        }
+        refundAmount = 0;
+        retainedChargeAmount = verifiedNetPaid;
+      } else {
+        throw new Error('Select how to resolve the customer advance payment.');
+      }
+
+      if (refundAmount > 0 && !input.refundMethod) {
+        throw new Error('Select a refund payment method.');
+      }
+      if (
+        refundAmount > 0 &&
+        input.refundMethod &&
+        input.refundMethod !== 'Cash' &&
+        !input.refundReferenceNo?.trim()
+      ) {
+        throw new Error(`Refund transaction / reference ID is required for ${input.refundMethod}.`);
+      }
+    }
+
+    // ---- 2. Supplier Money Validation ----
+    const unreceivedTransitMoney = Math.max(
+      0,
+      fromPaisa(toPaisa(totalSupplierAndShipPaid) - toPaisa(goodReceivedQty * unitLanded))
+    );
+    const settledSupplierAmt =
+      input.supplierResolution === 'none' || input.supplierResolution === 'keep_stock'
+        ? 0
+        : roundMoney(input.supplierSettledAmount ?? unreceivedTransitMoney);
+
+    // ---- 3. Received Stock Validation ----
+    let resolvedStockRes: CancelStockResolution =
+      goodReceivedQty > 0 ? input.stockResolution : 'none';
+    if (goodReceivedQty > 0 && resolvedStockRes === 'none') {
+      throw new Error('Select how to handle received pre-order warehouse stock.');
+    }
+
+    // ---- WRITES ----
+    let refundPaymentId = '';
+    const updatedLedger = [...ledger];
+
+    if (refundAmount > 0 && input.refundMethod) {
+      refundPaymentId = `PAY_${safeKey}_refund`;
+      const refundPaymentDoc: PreOrderPayment = {
+        id: refundPaymentId,
+        preOrderId,
+        preOrderNumber: po.preOrderNumber,
+        subBrand: po.subBrand,
+        customerName: po.customerName,
+        customerPhone: po.customerPhone,
+        type: 'refund',
+        amount: refundAmount,
+        method: input.refundMethod,
+        referenceNo: input.refundReferenceNo?.trim() || '',
+        receivedAt: now,
+        note: `Cancellation refund: ${input.reason.trim()}`,
+        status: 'verified',
+        idempotencyKey: `${safeKey}_refund`,
+        recordedBy: actor.id,
+        recordedByName: actor.name,
+        verifiedBy: actor.id,
+        verifiedByName: actor.name,
+        verifiedAt: now,
+        createdAt: now,
+      };
+      txn.set(doc(db, 'preOrders', preOrderId, 'payments', refundPaymentId), sanitizeData(refundPaymentDoc));
+      updatedLedger.push(refundPaymentDoc);
+
+      const refundPosting = buildCustomerRefundPosting({
+        preOrderId,
+        preOrderNumber: po.preOrderNumber,
+        subBrand: po.subBrand,
+        paymentId: refundPaymentId,
+        refundAmount,
+        method: input.refundMethod,
+        note: `Cancellation refund (${input.refundMethod}): ${input.reason.trim()}`,
+        actor: { actorId: actor.id, actorName: actor.name, timestamp: now },
+      });
+      txn.set(doc(db, 'accountingPostings', refundPosting.id), sanitizeData(refundPosting));
+    }
+
+    if (retainedChargeAmount > 0) {
+      const chargePosting = buildCancellationChargePosting({
+        preOrderId,
+        preOrderNumber: po.preOrderNumber,
+        subBrand: po.subBrand,
+        retainedAmount: retainedChargeAmount,
+        note:
+          input.retainedChargeReason?.trim() ||
+          `Retained cancellation fee on ${po.preOrderNumber}: ${input.reason.trim()}`,
+        actor: { actorId: actor.id, actorName: actor.name, timestamp: now },
+      });
+      txn.set(doc(db, 'accountingPostings', chargePosting.id), sanitizeData(chargePosting));
+    }
+
+    let supplierReceivableId = '';
+    let supplierLossId = '';
+    if (settledSupplierAmt > 0 && input.supplierResolution === 'receivable') {
+      const recRef = doc(collection(db, 'otherReceivables'));
+      supplierReceivableId = recRef.id;
+      const recDoc: Omit<OtherReceivable, 'id'> = {
+        borrowerName: po.supplierName || `Supplier (${po.preOrderNumber})`,
+        type: 'Supplier Advance',
+        amount: settledSupplierAmt,
+        paidDate: getTodayIsoDate(),
+        status: 'Pending',
+        recoveredAmount: 0,
+        notes: `Cancelled Pre-Order ${po.preOrderNumber} (${po.productName}): ${input.reason.trim()}`,
+        createdAt: now,
+      };
+      txn.set(recRef, sanitizeData(recDoc));
+
+      const supRecPosting = buildSupplierReceivablePosting({
+        preOrderId,
+        preOrderNumber: po.preOrderNumber,
+        subBrand: po.subBrand,
+        receivableId: supplierReceivableId,
+        amount: settledSupplierAmt,
+        note: `Supplier refund receivable (${po.supplierName || 'China Supplier'})`,
+        actor: { actorId: actor.id, actorName: actor.name, timestamp: now },
+      });
+      txn.set(doc(db, 'accountingPostings', supRecPosting.id), sanitizeData(supRecPosting));
+    } else if (settledSupplierAmt > 0 && input.supplierResolution === 'loss') {
+      const lossRef = doc(collection(db, 'companyLosses'));
+      supplierLossId = lossRef.id;
+      const lossDoc: Omit<CompanyLoss, 'id'> = {
+        title: `Cancelled Pre-Order Loss (${po.preOrderNumber}) - ${po.productName}`,
+        reason: 'Pre-Order Cancellation Loss',
+        amount: settledSupplierAmt,
+        date: getTodayIsoDate(),
+        subBrand: po.subBrand,
+        note: input.reason.trim(),
+        recordedBy: actor.name,
+        createdAt: now,
+      };
+      txn.set(lossRef, sanitizeData(lossDoc));
+
+      const supLossPosting = buildSupplierLossPosting({
+        preOrderId,
+        preOrderNumber: po.preOrderNumber,
+        subBrand: po.subBrand,
+        lossId: supplierLossId,
+        amount: settledSupplierAmt,
+        note: `Unrecoverable supplier/shipping loss on cancelled ${po.preOrderNumber}`,
+        actor: { actorId: actor.id, actorName: actor.name, timestamp: now },
+      });
+      txn.set(doc(db, 'accountingPostings', supLossPosting.id), sanitizeData(supLossPosting));
+    }
+
+    let returnedToSupplierQty = Number(po.stockReturnedToSupplierQty || 0);
+    if (goodReceivedQty > 0 && productRef && productSnap && productSnap.exists()) {
+      const prodData = productSnap.data() as Product;
+      const variants: Variant[] = Array.isArray(prodData.variants) ? [...prodData.variants] : [];
+      const goodValue = roundMoney(goodReceivedQty * unitLanded);
+
+      const updatedVariants = variants.map((v) => {
+        const hasPoRes = (v.reservedForPreOrders || []).some((r) => r.preOrderId === preOrderId);
+        if (!hasPoRes && v.id !== po.linkedVariantId) return v;
+
+        const beforeStock = Number(v.stock) || 0;
+        const beforeRes = Math.max(0, Number(v.reservedQty) || 0);
+        const resEntry = (v.reservedForPreOrders || []).find((r) => r.preOrderId === preOrderId);
+        const qtyToClear = resEntry?.qty || Math.min(beforeRes, goodReceivedQty);
+
+        if (resolvedStockRes === 'release_normal') {
+          return {
+            ...v,
+            reservedQty: Math.max(0, beforeRes - qtyToClear),
+            reservedForPreOrders: (v.reservedForPreOrders || []).filter((r) => r.preOrderId !== preOrderId),
+          };
+        } else {
+          // return_supplier
+          const afterStock = Math.max(0, beforeStock - qtyToClear);
+          const logRef = doc(collection(db, 'stockLogs'));
+          const returnLog: Omit<StockLog, 'id'> = {
+            productId: prodData.id || po.linkedProductId!,
+            productName: prodData.name,
+            type: 'out',
+            qty: -qtyToClear,
+            reason: `Pre-Order Return to Supplier (${po.preOrderNumber})`,
+            userId: actor.id,
+            userName: actor.name,
+            timestamp: now,
+            beforeQty: beforeStock,
+            afterQty: afterStock,
+            refNo: po.preOrderNumber,
+            supplierName: po.supplierName || '',
+            preOrderId,
+            variantId: v.id,
+          };
+          txn.set(logRef, sanitizeData(returnLog));
+
+          return {
+            ...v,
+            stock: afterStock,
+            reservedQty: Math.max(0, beforeRes - qtyToClear),
+            reservedForPreOrders: (v.reservedForPreOrders || []).filter((r) => r.preOrderId !== preOrderId),
+          };
+        }
+      });
+
+      const nextTotalStock = updatedVariants.reduce((s, v) => s + (Number(v.stock) || 0), 0);
+      const nextTotalReserved = updatedVariants.reduce((s, v) => s + Math.max(0, Number(v.reservedQty) || 0), 0);
+      const nextProdRes = updatedVariants.flatMap((v) => v.reservedForPreOrders || []);
+      const nextStockStatus = computeAvailableStockStatus(
+        nextTotalStock,
+        nextTotalReserved,
+        prodData.reorderThreshold
+      );
+
+      txn.update(
+        productRef,
+        sanitizeData({
+          variants: updatedVariants,
+          totalStock: nextTotalStock,
+          reservedQty: nextTotalReserved,
+          reservedForPreOrders: nextProdRes,
+          stockStatus: nextStockStatus,
+        })
+      );
+
+      if (resolvedStockRes === 'release_normal') {
+        const releasePosting = buildStockReleasedPosting({
+          preOrderId,
+          preOrderNumber: po.preOrderNumber,
+          subBrand: po.subBrand,
+          releasedValue: goodValue,
+          note: `Released ${goodReceivedQty} unit(s) from ${po.preOrderNumber} to general warehouse stock`,
+          actor: { actorId: actor.id, actorName: actor.name, timestamp: now },
+        });
+        txn.set(doc(db, 'accountingPostings', releasePosting.id), sanitizeData(releasePosting));
+      } else if (resolvedStockRes === 'return_supplier') {
+        returnedToSupplierQty += goodReceivedQty;
+        const retRecRef = doc(collection(db, 'otherReceivables'));
+        const retRecDoc: Omit<OtherReceivable, 'id'> = {
+          borrowerName: po.supplierName || `Supplier Return (${po.preOrderNumber})`,
+          type: 'Supplier Advance',
+          amount: goodValue,
+          paidDate: getTodayIsoDate(),
+          status: 'Pending',
+          recoveredAmount: 0,
+          notes: `Returned ${goodReceivedQty} unit(s) of ${po.productName} from cancelled ${po.preOrderNumber}`,
+          createdAt: now,
+        };
+        txn.set(retRecRef, sanitizeData(retRecDoc));
+
+        const retPosting = buildStockReturnedSupplierPosting({
+          preOrderId,
+          preOrderNumber: po.preOrderNumber,
+          subBrand: po.subBrand,
+          receivableId: retRecRef.id,
+          returnedValue: goodValue,
+          note: `Returned ${goodReceivedQty} unit(s) to supplier for credit/refund`,
+          actor: { actorId: actor.id, actorName: actor.name, timestamp: now },
+        });
+        txn.set(doc(db, 'accountingPostings', retPosting.id), sanitizeData(retPosting));
+      }
+    }
+
+    const cancellationSummary: PreOrderCancellationSummary = {
+      reason: input.reason.trim(),
+      customerResolution: resolvedCustRes,
+      customerRefundAmount: refundAmount,
+      ...(input.refundMethod ? { customerRefundMethod: input.refundMethod } : {}),
+      ...(refundPaymentId ? { customerRefundPaymentId: refundPaymentId } : {}),
+      retainedChargeAmount,
+      ...(input.retainedChargeReason?.trim() ? { retainedChargeReason: input.retainedChargeReason.trim() } : {}),
+      supplierResolution: input.supplierResolution,
+      supplierSettledAmount: settledSupplierAmt,
+      ...(supplierReceivableId ? { supplierReceivableId } : {}),
+      ...(supplierLossId ? { supplierLossId } : {}),
+      stockResolution: resolvedStockRes,
+      releasedOrReturnedQty: goodReceivedQty,
+      cancelledBy: actor.id,
+      cancelledByName: actor.name,
+      cancelledAt: now,
+    };
+
+    const nextStatus: PreOrderStatus =
+      refundAmount > 0 || toPaisa(calc.verifiedRefunded) > 0 ? 'Refunded' : 'Cancelled';
+    const { patch: derivedFin } = buildDerivedOrderFinancialPatch(po, updatedLedger, actor.id, now);
+    const paymentState =
+      nextStatus === 'Refunded'
+        ? 'refunded'
+        : derivePreOrderPaymentState(
+            po.totalAmount,
+            derivedFin.advancePaid,
+            derivedFin.refundedAmount,
+            nextStatus
+          );
+
+    const poPatch: Partial<PreOrder> = {
+      ...derivedFin,
+      paymentState,
+      status: nextStatus,
+      isCancelled: true,
+      cancellationReason: input.reason.trim(),
+      cancelledAt: now,
+      cancelledBy: actor.id,
+      cancellation: cancellationSummary,
+      ...(resolvedStockRes === 'return_supplier'
+        ? { stockReturnedToSupplierQty: returnedToSupplierQty, stockReceivedQty: 0, stockReceived: false }
+        : {}),
+      updatedAt: now,
+      updatedBy: actor.id,
+    };
+    txn.update(preOrderRef, sanitizeData(poPatch));
+
+    const historyDoc: PreOrderStatusHistory = {
+      id: historyRef.id,
+      preOrderId,
+      fromStatus: po.status,
+      toStatus: nextStatus,
+      note: `Cancel & Reconcile: ${input.reason.trim()}`,
+      publicMessage:
+        nextStatus === 'Refunded'
+          ? 'Your pre-order has been cancelled and refunded.'
+          : 'Your pre-order has been cancelled.',
+      notifyCustomer: true,
+      changedBy: actor.id,
+      changedByName: actor.name,
+      timestamp: now,
+    };
+    txn.set(historyRef, sanitizeData(historyDoc));
+
+    txn.set(
+      auditRef,
+      sanitizeData({
+        id: auditRef.id,
+        preOrderId,
+        preOrderNumber: po.preOrderNumber,
+        action: 'CANCEL_RECONCILED' as PreOrderAuditAction,
+        summary: `Cancelled & reconciled ${po.preOrderNumber} (${nextStatus}): Customer refund ৳${refundAmount.toLocaleString()}, Retained charge ৳${retainedChargeAmount.toLocaleString()}, Supplier ${input.supplierResolution} ৳${settledSupplierAmt.toLocaleString()}`,
+        metadata: cancellationSummary,
+        userId: actor.id,
+        userName: actor.name,
+        userRole: actor.role,
+        timestamp: now,
+      })
+    );
+
+    result = {
+      order: { ...po, ...poPatch },
+      cancellation: cancellationSummary,
+    };
+  });
+
+  dbCache.products = null;
+  dbCache.productsArchived = null;
+
+  const syncRes = await syncPublicTracking(preOrderId);
+  if (!syncRes.ok) {
+    result.trackingSyncWarning = syncRes.error;
+  }
+
+  return result;
+}
+
+/**
+ * Read-only Admin integrity audit scanning Pre-Orders, Payment Ledgers, Receipts,
+ * Products Reservations, Sales Orders, Invoices, and AccountingPostings.
+ */
+export async function runPreOrderIntegrityCheck(): Promise<PreOrderIntegrityReport> {
+  const [preOrdersSnap, postings, ordersSnap, invoicesSnap, products, supPays] = await Promise.all([
+    getDocs(query(collection(db, 'preOrders'), orderBy('createdAt', 'desc'), limit(200))),
+    getPreOrderAccountingPostings(undefined, 500),
+    getDocs(query(collection(db, 'orders'), where('source', '==', 'pre_order'), limit(200))).catch(() => null),
+    getDocs(query(collection(db, 'invoices'), where('source', '==', 'pre_order'), limit(200))).catch(() => null),
+    getProducts(true),
+    getPreOrderSupplierPayments(undefined, 300),
+  ]);
+
+  const preOrders: PreOrder[] = preOrdersSnap.docs.map((d) => ({
+    ...(d.data() as PreOrder),
+    id: d.id,
+  }));
+
+  const paymentsByPreOrder: Record<string, PreOrderPayment[]> = {};
+  const privateCostsByPreOrder: Record<string, PreOrderPrivateCost | null> = {};
+  const receiptsByPreOrder: Record<string, PreOrderReceipt[]> = {};
+
+  await Promise.all(
+    preOrders.map(async (po) => {
+      const [pays, priv, rcpts] = await Promise.all([
+        getPreOrderPayments(po.id, 100).catch(() => [] as PreOrderPayment[]),
+        getPreOrderPrivateCost(po.id).catch(() => null),
+        getPreOrderReceipts(po.id, 50).catch(() => [] as PreOrderReceipt[]),
+      ]);
+      paymentsByPreOrder[po.id] = pays;
+      privateCostsByPreOrder[po.id] = priv;
+      receiptsByPreOrder[po.id] = rcpts;
+    })
+  );
+
+  const orders: Order[] = ordersSnap
+    ? ordersSnap.docs.map((d) => ({ ...(d.data() as Order), id: d.id }))
+    : [];
+  const invoices: Invoice[] = invoicesSnap
+    ? invoicesSnap.docs.map((d) => ({ ...(d.data() as Invoice), id: d.id }))
+    : [];
+
+  return analyzePreOrderIntegrity({
+    preOrders,
+    paymentsByPreOrder,
+    privateCostsByPreOrder,
+    receiptsByPreOrder,
+    supplierPayments: supPays,
+    postings,
+    orders,
+    invoices,
+    products,
+  });
+}
+

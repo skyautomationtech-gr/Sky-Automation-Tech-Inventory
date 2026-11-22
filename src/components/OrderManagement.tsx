@@ -54,7 +54,8 @@ import {
   generateInvoiceForOrder,
   recordOrderPayment,
   deleteOrderPayment,
-  updateOrderFullDetails
+  updateOrderFullDetails,
+  getVariantAvailableStock
 } from '../firebase/db';
 
 interface OrderManagementProps {
@@ -170,7 +171,13 @@ export default function OrderManagement({
   const [editAddItemPrice, setEditAddItemPrice] = useState<number>(0);
   const [editAddItemQty, setEditAddItemQty] = useState<number>(1);
 
+  const [deliveryOverrideModal, setDeliveryOverrideModal] = useState<{
+    open: boolean;
+    reason: string;
+  }>({ open: false, reason: '' });
+
   const isSuperAdmin = user?.role === 'superadmin';
+  const isAdminOrSuper = user?.role === 'superadmin' || user?.role === 'admin';
   const hasManageOrders = isSuperAdmin || 
     (user?.permissionOverrides?.manageOrders === true) || 
     (user?.permissionOverrides?.manageOrders !== false && user?.role === 'admin');
@@ -290,6 +297,14 @@ export default function OrderManagement({
     const variant = prod?.variants.find(v => v.id === itemVariantId);
     
     if (!prod || !variant) return;
+
+    const availStock = getVariantAvailableStock(variant);
+    const existingQty = orderItems.find(i => i.productId === itemProductId && i.variantId === itemVariantId)?.qty || 0;
+    if (existingQty + itemQty > availStock) {
+      const reserved = Number(variant.reservedQty) || 0;
+      setError(`Only ${availStock} available for "${prod.name}" (${reserved} reserved for pre-orders).`);
+      return;
+    }
 
     // Check duplicate item
     const duplicateIdx = orderItems.findIndex(i => i.productId === itemProductId && i.variantId === itemVariantId);
@@ -458,6 +473,19 @@ export default function OrderManagement({
     if (!selectedOrder) return;
     if (!hasManageOrders) {
       setError('You do not have permission to modify order status.');
+      return;
+    }
+
+    if (
+      targetStatus === 'Delivered' &&
+      selectedOrder.source === 'pre_order' &&
+      (Number(selectedOrder.amountDue) || 0) > 0
+    ) {
+      if (!isAdminOrSuper) {
+        setError(`Cannot mark converted Pre-Order (${selectedOrder.preOrderNumber || 'PO'}) as Delivered while ৳${Number(selectedOrder.amountDue).toLocaleString()} is due. Collect due via Due Payments first or ask an Admin to override.`);
+        return;
+      }
+      setDeliveryOverrideModal({ open: true, reason: '' });
       return;
     }
 
@@ -729,7 +757,20 @@ export default function OrderManagement({
   };
 
   const handleUpdateEditItemQty = (index: number, newQty: number) => {
+    if (editingOrder?.source === 'pre_order') return;
     if (newQty < 1) return;
+    const item = editItems[index];
+    const prod = products.find(p => p.id === item.productId);
+    const variant = prod?.variants?.find(v => v.id === item.variantId);
+    if (prod && variant) {
+      const origQty = editingOrder?.items?.find(i => i.productId === item.productId && i.variantId === item.variantId)?.qty || 0;
+      const alreadyDeducted = editingOrder && editingOrder.status !== 'Pending' && editingOrder.status !== 'Returned/Cancelled' ? origQty : 0;
+      const maxAllowed = getVariantAvailableStock(variant) + alreadyDeducted;
+      if (newQty > maxAllowed) {
+        setError(`Only ${maxAllowed} unit(s) available for ${item.productName} (${Number(variant.reservedQty) || 0} reserved for pre-orders).`);
+        return;
+      }
+    }
     setEditItems(prev => {
       const updated = [...prev];
       updated[index] = { ...updated[index], qty: newQty };
@@ -738,6 +779,7 @@ export default function OrderManagement({
   };
 
   const handleUpdateEditItemPrice = (index: number, newPrice: number) => {
+    if (editingOrder?.source === 'pre_order') return;
     if (isNaN(newPrice) || newPrice < 0) return;
     setEditItems(prev => {
       const updated = [...prev];
@@ -747,6 +789,7 @@ export default function OrderManagement({
   };
 
   const handleRemoveEditItem = (index: number) => {
+    if (editingOrder?.source === 'pre_order') return;
     if (editItems.length <= 1) {
       setError('An order must have at least 1 line item.');
       return;
@@ -755,6 +798,7 @@ export default function OrderManagement({
   };
 
   const handleAddEditItemToOrder = () => {
+    if (editingOrder?.source === 'pre_order') return;
     if (!editAddItemProductId || !editAddItemVariantId) {
       setError('Please select a product and variant to add.');
       return;
@@ -762,6 +806,15 @@ export default function OrderManagement({
     const prod = products.find(p => p.id === editAddItemProductId);
     const variant = prod?.variants.find(v => v.id === editAddItemVariantId);
     if (!prod || !variant) return;
+
+    const existingQty = editItems.find(i => i.productId === editAddItemProductId && i.variantId === editAddItemVariantId)?.qty || 0;
+    const origQty = editingOrder?.items?.find(i => i.productId === editAddItemProductId && i.variantId === editAddItemVariantId)?.qty || 0;
+    const alreadyDeducted = editingOrder && editingOrder.status !== 'Pending' && editingOrder.status !== 'Returned/Cancelled' ? origQty : 0;
+    const maxAllowed = getVariantAvailableStock(variant) + alreadyDeducted;
+    if (existingQty + (editAddItemQty || 1) > maxAllowed) {
+      setError(`Only ${maxAllowed} available for "${prod.name}" (${Number(variant.reservedQty) || 0} reserved for pre-orders).`);
+      return;
+    }
 
     const existingIdx = editItems.findIndex(i => i.productId === editAddItemProductId && i.variantId === editAddItemVariantId);
     if (existingIdx >= 0) {
@@ -817,11 +870,13 @@ export default function OrderManagement({
     setSuccess('');
 
     try {
-      const subtotal = editItems.reduce((acc, it) => acc + (Number(it.unitPrice || 0) * Number(it.qty || 1)), 0);
-      const ship = parseFloat(editShippingCharge) || 0;
-      const disc = parseFloat(editDiscountAmount) || 0;
-      const paid = parseFloat(editAmountPaid) || 0;
-      const totalAmount = Math.max(0, subtotal + ship - disc);
+      const isConvertedPreOrder = editingOrder.source === 'pre_order';
+      const finalItems = isConvertedPreOrder ? editingOrder.items : editItems;
+      const subtotal = finalItems.reduce((acc, it) => acc + (Number(it.unitPrice || 0) * Number(it.qty || 1)), 0);
+      const ship = isConvertedPreOrder ? Number(editingOrder.shippingCharge ?? 0) : (parseFloat(editShippingCharge) || 0);
+      const disc = isConvertedPreOrder ? Number(editingOrder.discountAmount ?? 0) : (parseFloat(editDiscountAmount) || 0);
+      const paid = isConvertedPreOrder ? Number(editingOrder.amountPaid ?? 0) : (parseFloat(editAmountPaid) || 0);
+      const totalAmount = isConvertedPreOrder ? Number(editingOrder.totalAmount ?? Math.max(0, subtotal + ship - disc)) : Math.max(0, subtotal + ship - disc);
       const amountDue = Math.max(0, totalAmount - paid);
 
       let finalPaymentStatus: PaymentStatus = editPaymentStatus;
@@ -844,14 +899,14 @@ export default function OrderManagement({
           courier: editCourier,
           courierTrackingNumber: editCourierTrackingNumber.trim(),
           notes: editOrderNotes.trim(),
-          items: editItems,
+          items: finalItems,
           discountAmount: disc,
           shippingCharge: ship,
           totalAmount,
           amountPaid: paid,
           amountDue,
           paymentStatus: finalPaymentStatus,
-          paymentMethod: editPaymentMethod
+          paymentMethod: isConvertedPreOrder ? editingOrder.paymentMethod : editPaymentMethod
         },
         user?.id || 'sys',
         user?.name || 'Operator'
@@ -1137,6 +1192,13 @@ export default function OrderManagement({
                             }`}>
                               {order.subBrand}
                             </span>
+                            {order.source === 'pre_order' && (
+                              <div className="mt-1">
+                                <span className="inline-block text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200">
+                                  {order.preOrderNumber || 'PO'}
+                                </span>
+                              </div>
+                            )}
                           </td>
                           <td className="py-3 px-4 text-center font-mono font-bold text-slate-600">
                             {itemCount}
@@ -1204,14 +1266,21 @@ export default function OrderManagement({
                 <div className="flex justify-between items-start">
                   <div>
                     <span className="text-[9px] font-mono tracking-widest text-slate-400 block uppercase">SALES RECORD</span>
-                    <h3 className="font-black font-sans text-base text-amber-400 mt-1">#{selectedOrder.id.substring(0, 12).toUpperCase()}</h3>
+                    <div className="flex items-center gap-2 mt-1 flex-wrap">
+                      <h3 className="font-black font-sans text-base text-amber-400">#{selectedOrder.id.substring(0, 12).toUpperCase()}</h3>
+                      {selectedOrder.source === 'pre_order' && (
+                        <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-amber-400/20 text-amber-300 border border-amber-400/30">
+                          Pre-Order {selectedOrder.preOrderNumber || ''}
+                        </span>
+                      )}
+                    </div>
                   </div>
                   <div className="flex items-center gap-1.5">
                     {(() => {
                       let totalCost = 0;
                       (selectedOrder.items || []).forEach(it => {
                         const p = products.find(prod => prod.id === it.productId);
-                        const c = Number(p?.costPrice) || 0;
+                        const c = (Number(it.costPrice) > 0 ? Number(it.costPrice) : Number(p?.costPrice)) || 0;
                         totalCost += c * (Number(it.qty) || 1);
                       });
                       const profit = (Number(selectedOrder.totalAmount) || 0) - totalCost;
@@ -1442,19 +1511,25 @@ export default function OrderManagement({
                       {selectedOrder.paymentHistory.map((ph, idx) => (
                         <div key={idx} className="flex justify-between items-center text-sm border-b border-slate-100 last:border-0 pb-1.5 last:pb-0">
                           <div>
-                            <p className="font-semibold text-slate-700">৳{ph.amount.toLocaleString()} ({ph.method})</p>
+                            <p className="font-semibold text-slate-700">৳{ph.amount.toLocaleString()} ({ph.label || ph.method})</p>
                             <p className="text-[8px] text-slate-400">By {ph.recordedBy}</p>
                           </div>
                           <div className="flex items-center gap-2">
                             <span className="font-mono text-slate-400">{new Date(ph.date).toLocaleDateString('en-GB')}</span>
-                            <button
-                              type="button"
-                              onClick={() => handleDeletePaymentEntry(idx, ph)}
-                              title="Delete payment entry"
-                              className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-md transition-colors cursor-pointer"
-                            >
-                              <Trash2 size={12} />
-                            </button>
+                            {ph.isPreOrderAdvance ? (
+                              <span className="text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200">
+                                Locked
+                              </span>
+                            ) : (
+                              <button
+                                type="button"
+                                onClick={() => handleDeletePaymentEntry(idx, ph)}
+                                title="Delete payment entry"
+                                className="p-1 text-slate-400 hover:text-rose-600 hover:bg-rose-50 rounded-md transition-colors cursor-pointer"
+                              >
+                                <Trash2 size={12} />
+                              </button>
+                            )}
                           </div>
                         </div>
                       ))}
@@ -2357,6 +2432,12 @@ export default function OrderManagement({
                 </div>
               </div>
 
+              {editingOrder.source === 'pre_order' && (
+                <div className="p-3.5 bg-amber-50 border border-amber-200 text-amber-900 rounded-2xl text-xs font-medium">
+                  <strong>Pre-Order Sale ({editingOrder.preOrderNumber || 'Converted'}):</strong> Item quantities, unit prices, discount, shipping charge, and verified advance totals are locked after conversion. You can update delivery address, courier, tracking code, and notes. Collect remaining balance via <strong>Due Payments</strong>.
+                </div>
+              )}
+
               {/* SECTION 2: Order Items & Pricing Table (Core Feature) */}
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
@@ -2401,9 +2482,10 @@ export default function OrderManagement({
                                   type="number"
                                   min="0"
                                   step="any"
+                                  disabled={editingOrder.source === 'pre_order'}
                                   value={item.unitPrice}
                                   onChange={(e) => handleUpdateEditItemPrice(idx, parseFloat(e.target.value) || 0)}
-                                  className="w-full bg-white border border-slate-200 rounded-lg py-1 pl-6 pr-2 text-right text-xs font-mono font-black text-slate-900 focus:outline-hidden focus:border-amber-400"
+                                  className="w-full bg-white border border-slate-200 rounded-lg py-1 pl-6 pr-2 text-right text-xs font-mono font-black text-slate-900 focus:outline-hidden focus:border-amber-400 disabled:bg-slate-100 disabled:text-slate-500"
                                   title="Edit unit selling price"
                                 />
                               </div>
@@ -2413,7 +2495,7 @@ export default function OrderManagement({
                                 <button
                                   type="button"
                                   onClick={() => handleUpdateEditItemQty(idx, item.qty - 1)}
-                                  disabled={item.qty <= 1}
+                                  disabled={item.qty <= 1 || editingOrder.source === 'pre_order'}
                                   className="px-2 py-1 hover:bg-slate-100 text-slate-600 disabled:opacity-30 cursor-pointer font-bold text-xs"
                                 >
                                   -
@@ -2421,14 +2503,16 @@ export default function OrderManagement({
                                 <input
                                   type="number"
                                   min="1"
+                                  disabled={editingOrder.source === 'pre_order'}
                                   value={item.qty}
                                   onChange={(e) => handleUpdateEditItemQty(idx, parseInt(e.target.value) || 1)}
-                                  className="w-10 text-center py-1 text-xs font-mono font-bold text-slate-900 border-x border-slate-200 focus:outline-hidden"
+                                  className="w-10 text-center py-1 text-xs font-mono font-bold text-slate-900 border-x border-slate-200 focus:outline-hidden disabled:bg-slate-100"
                                 />
                                 <button
                                   type="button"
+                                  disabled={editingOrder.source === 'pre_order'}
                                   onClick={() => handleUpdateEditItemQty(idx, item.qty + 1)}
-                                  className="px-2 py-1 hover:bg-slate-100 text-slate-600 cursor-pointer font-bold text-xs"
+                                  className="px-2 py-1 hover:bg-slate-100 text-slate-600 disabled:opacity-30 cursor-pointer font-bold text-xs"
                                 >
                                   +
                                 </button>
@@ -2440,9 +2524,10 @@ export default function OrderManagement({
                             <td className="py-2.5 px-2 text-center">
                               <button
                                 type="button"
+                                disabled={editingOrder.source === 'pre_order'}
                                 onClick={() => handleRemoveEditItem(idx)}
                                 title="Remove line item"
-                                className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
+                                className="p-1.5 text-slate-400 hover:text-red-600 hover:bg-red-50 rounded-lg transition-colors cursor-pointer disabled:opacity-30"
                               >
                                 <Trash2 size={14} />
                               </button>
@@ -2455,6 +2540,7 @@ export default function OrderManagement({
                 </div>
 
                 {/* Quick Add Extra Products to Order */}
+                {editingOrder.source !== 'pre_order' && (
                 <div className="bg-slate-50 p-3.5 rounded-2xl border border-dashed border-slate-200 space-y-2">
                   <div className="flex items-center justify-between">
                     <span className="text-xs font-bold text-slate-700 uppercase tracking-wide flex items-center gap-1">
@@ -2548,6 +2634,7 @@ export default function OrderManagement({
                     </div>
                   </div>
                 </div>
+                )}
               </div>
 
               {/* SECTION 3: Financial & Payment Recalculations */}
@@ -2582,9 +2669,10 @@ export default function OrderManagement({
                             type="number"
                             min="0"
                             step="any"
+                            disabled={editingOrder.source === 'pre_order'}
                             value={editShippingCharge}
                             onChange={(e) => setEditShippingCharge(e.target.value)}
-                            className="w-28 bg-slate-900 border border-slate-800 rounded-lg py-1 px-2 text-right text-white font-mono font-bold focus:outline-hidden focus:border-amber-400 text-xs"
+                            className="w-28 bg-slate-900 border border-slate-800 rounded-lg py-1 px-2 text-right text-white font-mono font-bold focus:outline-hidden focus:border-amber-400 text-xs disabled:opacity-50"
                           />
                         </div>
 
@@ -2594,9 +2682,10 @@ export default function OrderManagement({
                             type="number"
                             min="0"
                             step="any"
+                            disabled={editingOrder.source === 'pre_order'}
                             value={editDiscountAmount}
                             onChange={(e) => setEditDiscountAmount(e.target.value)}
-                            className="w-28 bg-slate-900 border border-slate-800 rounded-lg py-1 px-2 text-right text-emerald-400 font-mono font-bold focus:outline-hidden focus:border-emerald-400 text-xs"
+                            className="w-28 bg-slate-900 border border-slate-800 rounded-lg py-1 px-2 text-right text-emerald-400 font-mono font-bold focus:outline-hidden focus:border-emerald-400 text-xs disabled:opacity-50"
                           />
                         </div>
 
@@ -2616,9 +2705,10 @@ export default function OrderManagement({
                             type="number"
                             min="0"
                             step="any"
+                            disabled={editingOrder.source === 'pre_order'}
                             value={editAmountPaid}
                             onChange={(e) => setEditAmountPaid(e.target.value)}
-                            className="w-28 bg-slate-900 border border-slate-800 rounded-lg py-1 px-2 text-right text-emerald-400 font-mono font-bold focus:outline-hidden focus:border-emerald-400 text-xs"
+                            className="w-28 bg-slate-900 border border-slate-800 rounded-lg py-1 px-2 text-right text-emerald-400 font-mono font-bold focus:outline-hidden focus:border-emerald-400 text-xs disabled:opacity-50"
                           />
                         </div>
 
@@ -2842,6 +2932,87 @@ export default function OrderManagement({
             >
               <Trash2 size={12} />
               Delete Entry
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
+
+    {/* Admin Delivery Override Modal for Pre-Orders with Remaining Due */}
+    {deliveryOverrideModal.open && selectedOrder && (
+      <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs animate-fade-in">
+        <div className="bg-white rounded-2xl border border-slate-150 p-6 max-w-md w-full space-y-4 shadow-xl">
+          <div className="space-y-1.5">
+            <h3 className="text-sm font-black text-slate-950 uppercase tracking-wide">
+              Admin Override: Deliver with Remaining Due
+            </h3>
+            <p className="text-xs text-slate-600 leading-relaxed">
+              Pre-Order <strong>{selectedOrder.preOrderNumber || selectedOrder.id}</strong> still has <strong className="text-rose-600">৳{Number(selectedOrder.amountDue || 0).toLocaleString()}</strong> unpaid balance. Provide a mandatory audit reason to mark it Delivered anyway.
+            </p>
+          </div>
+          <div>
+            <label className="block text-[11px] font-bold uppercase text-slate-500 mb-1">Override Reason *</label>
+            <textarea
+              rows={2}
+              value={deliveryOverrideModal.reason}
+              onChange={(e) => setDeliveryOverrideModal((prev) => ({ ...prev, reason: e.target.value }))}
+              placeholder="e.g., Corporate credit approved by Director / COD hand-over confirmation pending"
+              className="w-full bg-slate-50 border border-slate-200 rounded-xl px-3 py-2 text-xs text-slate-900 focus:outline-hidden focus:border-amber-400"
+            />
+          </div>
+          <div className="flex gap-2.5 justify-end">
+            <button
+              type="button"
+              onClick={() => setDeliveryOverrideModal({ open: false, reason: '' })}
+              className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl text-xs font-bold cursor-pointer"
+            >
+              Cancel
+            </button>
+            <button
+              type="button"
+              disabled={!deliveryOverrideModal.reason.trim() || submitting}
+              onClick={async () => {
+                const reason = deliveryOverrideModal.reason.trim();
+                if (!reason || !selectedOrder) return;
+                setDeliveryOverrideModal({ open: false, reason: '' });
+                setSubmitting(true);
+                setError('');
+                setSuccess('');
+                try {
+                  const oldStatus = selectedOrder.status;
+                  const updatedStatusHistory: OrderStatusHistory[] = [
+                    ...selectedOrder.statusHistory,
+                    {
+                      status: 'Delivered',
+                      timestamp: Date.now(),
+                      changedBy: `${user?.name || user?.email || 'Admin'} (Override: ${reason})`,
+                    },
+                  ];
+                  const updatedOrder: Order = {
+                    ...selectedOrder,
+                    status: 'Delivered',
+                    statusHistory: updatedStatusHistory,
+                  };
+                  await updateOrderAndHandleStock(
+                    selectedOrder.id,
+                    updatedOrder,
+                    oldStatus,
+                    user?.id || 'sys',
+                    user?.name || 'Admin'
+                  );
+                  await recalculateCustomerStats(selectedOrder.customerId);
+                  setSuccess(`Order delivered with Admin override logged.`);
+                  setSelectedOrder(updatedOrder);
+                  await fetchData();
+                } catch (err: any) {
+                  setError(`Could not deliver order: ${err?.message || err}`);
+                } finally {
+                  setSubmitting(false);
+                }
+              }}
+              className="px-4 py-2 bg-emerald-600 hover:bg-emerald-700 disabled:opacity-40 text-white rounded-xl text-xs font-bold cursor-pointer"
+            >
+              Confirm Delivery Override
             </button>
           </div>
         </div>

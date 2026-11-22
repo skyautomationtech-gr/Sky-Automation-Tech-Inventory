@@ -2,7 +2,9 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   AlertCircle,
   ArrowRightLeft,
+  Ban,
   Banknote,
+  Boxes,
   Building2,
   Calendar,
   Check,
@@ -14,12 +16,14 @@ import {
   ExternalLink,
   Eye,
   EyeOff,
+  FileSpreadsheet,
   History,
   ImagePlus,
   Link2,
   Lock,
   Minus,
   Package,
+  PackageCheck,
   Paperclip,
   Phone,
   Plus,
@@ -41,14 +45,18 @@ import {
   XCircle,
 } from 'lucide-react';
 import {
+  AccountingPosting,
+  Brand,
   Category,
   CompanySettings,
   PreOrder,
   PreOrderAuditEntry,
   PreOrderPayment,
   PreOrderPrivateCost,
+  PreOrderReceipt,
   PreOrderStatusHistory,
   PreOrderSupplierPayment,
+  Product,
   RolePermissionsMap,
   Supplier,
   UserProfile,
@@ -75,9 +83,12 @@ import {
   isSafeTrackingTokenFormat,
   isValidHttpsUrl,
 } from '../../preOrders/tracking';
+import { getBrands, getProducts } from '../../firebase/db';
 import {
   actorFromUser,
+  getPreOrderAccountingPostings,
   getPreOrderFullDetail,
+  getPreOrderReceipts,
   getPreOrderSupplierPayments,
   recalculatePreOrderFromLedger,
   regeneratePublicTrackingToken,
@@ -121,6 +132,9 @@ import {
   ReverseSupplierPaymentModal,
 } from './SupplierPaymentModal';
 import TrackingLinkShareModal from './TrackingLinkShareModal';
+import ReceiveStockModal from './ReceiveStockModal';
+import ConvertToSaleModal from './ConvertToSaleModal';
+import CancelReconcileModal from './CancelReconcileModal';
 
 export interface PreOrderDetailDrawerProps {
   preOrderId: string | null;
@@ -129,10 +143,13 @@ export interface PreOrderDetailDrawerProps {
   user: UserProfile;
   rolePermissions: RolePermissionsMap | null;
   categories: Category[];
+  brands?: Brand[];
+  products?: Product[];
   suppliers: Supplier[];
   companySettings?: CompanySettings | null;
   initialEditMode?: boolean;
   initialTab?: DetailTab;
+  onNavigate?: (tab: string, subAction?: string, initialId?: string | null) => void;
   onUpdated?: () => void;
 }
 
@@ -156,10 +173,13 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
   user,
   rolePermissions,
   categories,
+  brands,
+  products,
   suppliers,
   companySettings,
   initialEditMode = false,
   initialTab = 'overview',
+  onNavigate,
   onUpdated,
 }) => {
   const toast = useToast();
@@ -172,6 +192,8 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
   const canVerifyPayment = hasPermission(user, rolePermissions, 'preOrderVerifyPayment');
   const canRefund = hasPermission(user, rolePermissions, 'preOrderRefund');
   const canUpdateStatus = hasPermission(user, rolePermissions, 'preOrderUpdateStatus');
+  const canReceiveStock = hasPermission(user, rolePermissions, 'preOrderReceiveStock') || isAdminUser;
+  const canConvertSale = hasPermission(user, rolePermissions, 'preOrderConvertSale') || isAdminUser;
   const canManageTracking = hasPermission(user, rolePermissions, 'preOrderManageTracking') || isAdminUser;
   const canViewAudit = isAdminUser;
 
@@ -222,6 +244,15 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
   const [toggleReason, setToggleReason] = useState('');
   const [toggleTargetEnable, setToggleTargetEnable] = useState(false);
   const [lastTrackingSyncWarning, setLastTrackingSyncWarning] = useState('');
+
+  // Part 6 inventory, conversion, cancellation & accounting states
+  const [receipts, setReceipts] = useState<PreOrderReceipt[]>([]);
+  const [poPostings, setPoPostings] = useState<AccountingPosting[]>([]);
+  const [localProducts, setLocalProducts] = useState<Product[]>(products || []);
+  const [localBrands, setLocalBrands] = useState<Brand[]>(brands || []);
+  const [showReceiveModal, setShowReceiveModal] = useState(false);
+  const [showConvertModal, setShowConvertModal] = useState(false);
+  const [showCancelModal, setShowCancelModal] = useState(false);
 
   // Edit mode state
   const [isEditing, setIsEditing] = useState(false);
@@ -285,12 +316,20 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
     []
   );
 
+  useEffect(() => {
+    if (products) setLocalProducts(products);
+  }, [products]);
+
+  useEffect(() => {
+    if (brands) setLocalBrands(brands);
+  }, [brands]);
+
   const loadDetail = useCallback(async () => {
     if (!preOrderId) return;
     setLoading(true);
     setLoadError('');
     try {
-      const [detail, supPays] = await Promise.all([
+      const [detail, supPays, rcptList, postingList, fetchedProds, fetchedBrands] = await Promise.all([
         getPreOrderFullDetail(preOrderId, {
           canViewProfit,
           canViewSupplier,
@@ -299,6 +338,10 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
         canViewSupplier
           ? getPreOrderSupplierPayments(preOrderId, 100).catch(() => [] as PreOrderSupplierPayment[])
           : Promise.resolve([] as PreOrderSupplierPayment[]),
+        getPreOrderReceipts(preOrderId, 50).catch(() => [] as PreOrderReceipt[]),
+        getPreOrderAccountingPostings(preOrderId, 100).catch(() => [] as AccountingPosting[]),
+        !products || products.length === 0 ? getProducts(true).catch(() => [] as Product[]) : Promise.resolve(null),
+        !brands || brands.length === 0 ? getBrands().catch(() => [] as Brand[]) : Promise.resolve(null),
       ]);
       if (!detail) {
         setLoadError('Pre-order record could not be found.');
@@ -311,6 +354,10 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
       setPrivateCost(detail.privateCost);
       setAuditLogs(detail.auditLogs);
       setOrderSupplierPayments(supPays);
+      setReceipts(rcptList);
+      setPoPostings(postingList);
+      if (fetchedProds) setLocalProducts(fetchedProds);
+      if (fetchedBrands) setLocalBrands(fetchedBrands);
       hydrateEditForm(detail.order, detail.privateCost);
       const locked = PRE_ORDER_EDIT_LOCKED_STATUSES.includes(detail.order.status);
       if (initialEditMode && canEdit && !locked) {
@@ -322,7 +369,7 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
     } finally {
       setLoading(false);
     }
-  }, [preOrderId, canViewProfit, canViewSupplier, canViewAudit, hydrateEditForm]);
+  }, [preOrderId, canViewProfit, canViewSupplier, canViewAudit, hydrateEditForm, products, brands, initialEditMode, canEdit]);
 
   useEffect(() => {
     if (isOpen && preOrderId) {
@@ -354,7 +401,31 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
     );
   }, [order, payments]);
 
-  const financialFieldsLocked = hasAnyActivePayment && !isAdminUser;
+  const isConverted = Boolean(order?.convertedSaleId || order?.convertedOrderId);
+  const financialFieldsLocked = isConverted || (hasAnyActivePayment && !isAdminUser);
+  const remainingStockToReceive = order
+    ? Math.max(0, order.qty - ((order.stockReceivedQty || 0) + (order.damagedQty || 0)))
+    : 0;
+  const canShowReceiveStock = Boolean(
+    order &&
+      !isConverted &&
+      !['Delivered', 'Cancelled', 'Refunded'].includes(order.status) &&
+      remainingStockToReceive > 0 &&
+      canReceiveStock
+  );
+  const canShowConvertSale = Boolean(
+    order &&
+      !isConverted &&
+      !['Cancelled', 'Refunded'].includes(order.status) &&
+      ((order.stockReceivedQty || 0) > 0 || order.status === 'Received in Stock') &&
+      canConvertSale
+  );
+  const canShowCancelReconcile = Boolean(
+    order &&
+      !isConverted &&
+      !['Delivered', 'Cancelled', 'Refunded'].includes(order.status) &&
+      (canUpdateStatus || isAdminUser)
+  );
 
   const liveFinancials = useMemo(() => {
     if (!order) return null;
@@ -907,6 +978,36 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
                 ) : null}
               </div>
               <div className="flex flex-wrap items-center gap-2">
+                {canShowReceiveStock && (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    leftIcon={<PackageCheck className="w-3.5 h-3.5 text-[#D4AF37]" />}
+                    onClick={() => setShowReceiveModal(true)}
+                  >
+                    Receive Stock
+                  </Button>
+                )}
+                {canShowConvertSale && (
+                  <Button
+                    type="button"
+                    variant="primary"
+                    leftIcon={<FileSpreadsheet className="w-3.5 h-3.5" />}
+                    onClick={() => setShowConvertModal(true)}
+                  >
+                    Convert to Sale &amp; Invoice
+                  </Button>
+                )}
+                {canShowCancelReconcile && (
+                  <Button
+                    type="button"
+                    variant="danger"
+                    leftIcon={<Ban className="w-3.5 h-3.5" />}
+                    onClick={() => setShowCancelModal(true)}
+                  >
+                    Cancel &amp; Reconcile
+                  </Button>
+                )}
                 {order && canUpdateStatus && order.status !== 'Delivered' && order.status !== 'Refunded' && (
                   <Button
                     type="button"
@@ -992,6 +1093,101 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
                 </div>
               )}
             </div>
+
+            {/* Converted Sale & Invoice Callout OR Stock Receipt Summary */}
+            {(isConverted || (order.stockReceivedQty || 0) > 0 || (order.damagedQty || 0) > 0 || order.cancellation) && (
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {isConverted && (
+                  <div className="p-3.5 rounded-xl border border-emerald-200 dark:border-emerald-800 bg-emerald-50/70 dark:bg-emerald-950/25 space-y-2 text-xs sm:col-span-2">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 font-bold text-emerald-900 dark:text-emerald-200">
+                        <CheckCircle2 className="w-4 h-4 text-emerald-600 shrink-0" />
+                        <span>
+                          Converted to Sales Order &amp; Invoice{' '}
+                          <span className="font-mono">{order.convertedInvoiceNumber || order.convertedSaleId}</span>
+                        </span>
+                      </div>
+                      <div className="flex items-center gap-1.5">
+                        {onNavigate && (
+                          <>
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              size="xs"
+                              onClick={() => {
+                                onClose();
+                                onNavigate('orders', undefined, order.convertedSaleId || order.convertedOrderId || null);
+                              }}
+                            >
+                              Open Order
+                            </Button>
+                            <Button
+                              type="button"
+                              variant="secondary"
+                              size="xs"
+                              onClick={() => {
+                                onClose();
+                                onNavigate('invoices');
+                              }}
+                            >
+                              Open Invoices
+                            </Button>
+                            {order.dueAmount > 0 && (
+                              <Button
+                                type="button"
+                                variant="primary"
+                                size="xs"
+                                onClick={() => {
+                                  onClose();
+                                  onNavigate('receivables');
+                                }}
+                              >
+                                Collect Due ({formatBDT(order.dueAmount)})
+                              </Button>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    </div>
+                  </div>
+                )}
+
+                {((order.stockReceivedQty || 0) > 0 || (order.damagedQty || 0) > 0) && (
+                  <div className="p-3 rounded-xl border border-amber-200/80 dark:border-amber-900/50 bg-amber-50/50 dark:bg-amber-950/20 text-xs flex items-center justify-between gap-2">
+                    <div>
+                      <div className="font-bold text-amber-900 dark:text-amber-200 flex items-center gap-1.5">
+                        <Boxes className="w-3.5 h-3.5 text-[#D4AF37]" />
+                        Warehouse Stock Intake
+                      </div>
+                      <div className="text-[11px] text-amber-800 dark:text-amber-300 mt-0.5 font-mono">
+                        Good: {order.stockReceivedQty || 0}/{order.qty} pcs
+                        {(order.damagedQty || 0) > 0 ? ` • Damaged: ${order.damagedQty}` : ''}
+                        {receipts.length > 0 ? ` (${receipts.length} receipt${receipts.length > 1 ? 's' : ''})` : ''}
+                      </div>
+                    </div>
+                    <Badge variant={isConverted ? 'success' : 'gold'} size="xs">
+                      {isConverted ? 'Delivered to Sale' : 'Reserved'}
+                    </Badge>
+                  </div>
+                )}
+
+                {poPostings.length > 0 && isAdminUser && (
+                  <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/60 dark:bg-slate-950/40 text-xs flex items-center justify-between gap-2">
+                    <div>
+                      <div className="font-bold text-slate-800 dark:text-slate-100">
+                        Accounting Postings
+                      </div>
+                      <div className="text-[11px] text-slate-500 mt-0.5 font-mono">
+                        {poPostings.length} immutable journal entries posted
+                      </div>
+                    </div>
+                    <Badge variant="neutral" size="xs">
+                      Idempotent
+                    </Badge>
+                  </div>
+                )}
+              </div>
+            )}
 
             {/* Customer Public Tracking Portal Strip */}
             <div className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-2.5">
@@ -1738,7 +1934,27 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
                   </div>
 
                   <div className="flex flex-wrap items-center gap-2 pt-2 border-t border-slate-200/70 dark:border-slate-800">
-                    {canCollectPayment &&
+                    {isConverted ? (
+                      <div className="w-full p-2.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 text-xs text-emerald-800 dark:text-emerald-200 flex flex-wrap items-center justify-between gap-2">
+                        <span>
+                          Converted to Sales Invoice <strong>{order.convertedInvoiceNumber || order.convertedSaleId}</strong>. Collect remaining customer due via <strong>Invoices / Due Payments</strong>.
+                        </span>
+                        {onNavigate && order.dueAmount > 0 && (
+                          <Button
+                            type="button"
+                            variant="primary"
+                            size="xs"
+                            onClick={() => {
+                              onClose();
+                              onNavigate('receivables');
+                            }}
+                          >
+                            Go to Due Payments
+                          </Button>
+                        )}
+                      </div>
+                    ) : (
+                      canCollectPayment &&
                       order.dueAmount > 0 &&
                       !['Delivered', 'Cancelled', 'Refunded'].includes(order.status) && (
                         <Button
@@ -1750,8 +1966,9 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
                         >
                           Collect Payment
                         </Button>
-                      )}
-                    {canRefund && (liveFinancials?.verifiedNetPaid || 0) > 0 && (
+                      )
+                    )}
+                    {canRefund && !isConverted && (liveFinancials?.verifiedNetPaid || 0) > 0 && (
                       <Button
                         type="button"
                         variant="danger"
@@ -2412,7 +2629,50 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
         onClose={() => setShowStatusDialog(false)}
         order={order}
         user={user}
+        onOpenCancelReconcile={() => setShowCancelModal(true)}
         onUpdated={() => {
+          loadDetail();
+          onUpdated?.();
+        }}
+      />
+
+      {/* Part 6 Stock Intake, Sale Conversion & Cancellation Reconciliation Modals */}
+      <ReceiveStockModal
+        isOpen={showReceiveModal}
+        onClose={() => setShowReceiveModal(false)}
+        order={order}
+        privateCost={privateCost}
+        user={user}
+        categories={categories}
+        brands={localBrands}
+        products={localProducts}
+        onSuccess={() => {
+          loadDetail();
+          onUpdated?.();
+        }}
+      />
+
+      <ConvertToSaleModal
+        isOpen={showConvertModal}
+        onClose={() => setShowConvertModal(false)}
+        order={order}
+        privateCost={privateCost}
+        user={user}
+        companySettings={companySettings}
+        onSuccess={() => {
+          loadDetail();
+          onUpdated?.();
+        }}
+      />
+
+      <CancelReconcileModal
+        isOpen={showCancelModal}
+        onClose={() => setShowCancelModal(false)}
+        order={order}
+        privateCost={privateCost}
+        supplierPaidBdt={perOrderSupplierSummary?.supplierPaid || 0}
+        user={user}
+        onSuccess={() => {
           loadDetail();
           onUpdated?.();
         }}
