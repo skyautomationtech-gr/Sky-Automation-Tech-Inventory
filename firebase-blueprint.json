@@ -500,8 +500,12 @@
         "time": { "type": "string" },
         "timestamp": { "type": "number" },
         "staffId": { "type": "string" },
+        "staffName": { "type": "string" },
         "text": { "type": "string" },
-        "showToCustomer": { "type": "boolean" }
+        "showToCustomer": { "type": "boolean" },
+        "publicMessage": { "type": "string" },
+        "source": { "type": "string" },
+        "eventType": { "type": "string" }
       }
     },
     "PreOrderSupplierPayment": {
@@ -797,6 +801,14 @@
     "/preOrders/{preOrderId}/shipment/{docId}": {
       "schema": "PreOrderShipment",
       "description": "Pre-order China and BD shipment tracking subdocument"
+    },
+    "/preOrders/{preOrderId}/shipmentDocs/{docId}": {
+      "schema": "PreOrderShipmentDoc",
+      "description": "Shipment documents subcollection"
+    },
+    "/preOrders/{preOrderId}/shipmentEvents/{eventId}": {
+      "schema": "PreOrderShipmentEvent",
+      "description": "Append-only shipment milestone events and customer message audit log"
     },
     "/preOrderSupplierPayments/{paymentId}": {
       "schema": "PreOrderSupplierPayment",

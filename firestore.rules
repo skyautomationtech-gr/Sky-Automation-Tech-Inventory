@@ -322,9 +322,40 @@ service cloud.firestore {
       // Append-Only Shipment Events Log
       match /shipmentEvents/{eventId} {
         allow read: if hasPreOrderPerm('preOrderView');
-        allow create: if (hasPreOrderPerm('preOrderManageTracking') || hasPreOrderPerm('preOrderUpdateStatus') || hasPreOrderPerm('preOrderCollectPayment') || hasPreOrderPerm('preOrderView')) &&
+        allow create: if eventId.size() <= 128 &&
+          eventId.matches('^[a-zA-Z0-9_\\-]+$') &&
+          request.resource.data.id == eventId &&
+          request.resource.data.preOrderId == preOrderId &&
+          request.resource.data.staffId is string &&
+          request.resource.data.staffId.size() > 0 &&
+          request.resource.data.staffId.size() <= 128 &&
+          request.resource.data.staffName is string &&
+          request.resource.data.staffName.size() > 0 &&
+          request.resource.data.staffName.size() <= 150 &&
+          request.resource.data.timestamp is number &&
           request.resource.data.text is string &&
-          request.resource.data.text.size() > 0;
+          request.resource.data.text.size() > 0 &&
+          request.resource.data.text.size() <= 2000 &&
+          request.resource.data.showToCustomer is bool &&
+          request.resource.data.get('eventType', 'shipment_update') in ['shipment_update', 'customer_message_prepared'] &&
+          request.resource.data.get('source', 'manual') in ['auto', 'manual'] &&
+          (
+            request.resource.data.showToCustomer == false ||
+            hasPreOrderPerm('preOrderManageTracking')
+          ) &&
+          (
+            isAdmin() ||
+            hasPreOrderPerm('preOrderManageTracking') ||
+            hasPreOrderPerm('preOrderUpdateStatus') ||
+            (
+              (hasPreOrderPerm('preOrderView') || hasPreOrderPerm('preOrderCollectPayment')) &&
+              request.resource.data.showToCustomer == false &&
+              request.resource.data.get('eventType', '') == 'customer_message_prepared' &&
+              request.resource.data.get('source', '') == 'manual' &&
+              request.resource.data.get('publicMessage', '') == '' &&
+              request.resource.data.text.matches('^Message prepared/sent by .*')
+            )
+          );
         allow update, delete: if false;
       }
 

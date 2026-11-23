@@ -1023,6 +1023,7 @@ export interface PreOrderShipmentEvent {
   showToCustomer: boolean;
   publicMessage?: string;
   source?: 'auto' | 'manual';
+  eventType?: 'shipment_update' | 'customer_message_prepared';
 }
 
 export interface PreOrderSupplierPaymentAllocation {

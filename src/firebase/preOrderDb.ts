@@ -3414,6 +3414,7 @@ export async function upsertPreOrderShipment(
         showToCustomer: Boolean(showToCustomer),
         publicMessage: publicMessage?.trim() || (showToCustomer ? eventText : ''),
         source: 'auto',
+        eventType: 'shipment_update',
       };
       txn.set(eventRef, sanitizeData(eventDoc));
     }
@@ -3769,6 +3770,7 @@ export async function addPreOrderShipmentEvent(
       showToCustomer: Boolean(input.showToCustomer),
       publicMessage: input.publicMessage?.trim() || (input.showToCustomer ? input.text.trim() : ''),
       source: 'manual',
+      eventType: 'shipment_update',
     };
 
     txn.set(eventRef, sanitizeData(createdEvent));
@@ -3942,6 +3944,7 @@ export async function batchUpdatePreOrderShipments(
           text: summaryText,
           showToCustomer: false,
           source: 'auto',
+          eventType: 'shipment_update',
         } as PreOrderShipmentEvent)
       );
 
@@ -6941,6 +6944,7 @@ export async function logCustomerMessagePrepared(
       text: `Message prepared/sent by ${actor.name} via ${channelLabel}`,
       showToCustomer: false,
       source: 'manual',
+      eventType: 'customer_message_prepared',
     };
     txn.set(eventRef, sanitizeData(eventDoc));
 
