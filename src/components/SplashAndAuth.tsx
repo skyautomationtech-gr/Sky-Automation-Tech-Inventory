@@ -13,7 +13,7 @@ import {
   sendPasswordResetEmail,
   signOut
 } from 'firebase/auth';
-import { auth as firebaseAuth } from '../firebase/config';
+import { auth as firebaseAuth, authPersistenceReady, isFirebaseConfigured } from '../firebase/config';
 import { sendOTPEmail } from '../lib/emailjs';
 import { UserProfile, UserRole } from '../types';
 import { 
@@ -43,10 +43,17 @@ import { PWAInstallButton } from './PWAInstallButton';
 
 interface SplashAndAuthProps {
   onAuthSuccess: (user: UserProfile) => void;
+  sessionExpiredMessage?: string;
+  onDismissSessionExpired?: () => void;
 }
 
-export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
+export default function SplashAndAuth({
+  onAuthSuccess,
+  sessionExpiredMessage,
+  onDismissSessionExpired,
+}: SplashAndAuthProps) {
   const [showSplash, setShowSplash] = useState(() => {
+    if (sessionExpiredMessage) return false;
     try {
       return !sessionStorage.getItem('sat_splash_seen');
     } catch {
@@ -113,6 +120,12 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
   useEffect(() => {
     getBranches().then(b => setBranchesList(b || [])).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (sessionExpiredMessage) {
+      setShowSplash(false);
+    }
+  }, [sessionExpiredMessage]);
 
   useEffect(() => {
     const timer = setTimeout(() => {
@@ -268,82 +281,99 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
     try {
       let userId = '';
       let profile: UserProfile | null = null;
+      let isPasswordValid = false;
 
       const { findUserProfileByEmail, getUserProfile, createUserProfile, deleteUserProfile } = await import('../firebase/db');
-      const existingProfile = await findUserProfileByEmail(cleanEmail);
 
-      if (!existingProfile) {
+      // Ensure persistence is initialized before signing in
+      await authPersistenceReady;
+
+      // Clear any previous OTP flag on interactive sign-in until OTP is verified for this sign-in
+      try {
+        sessionStorage.removeItem('sat_otp_verified');
+        localStorage.removeItem('sat_otp_verified');
+        localStorage.removeItem('sat_active_uid');
+      } catch {}
+
+      // Step 1: Real Firebase Auth sign-in is mandatory when Firebase is configured
+      try {
+        const userCredential = await signInWithEmailAndPassword(firebaseAuth, cleanEmail, cleanPassword);
+        userId = userCredential.user.uid;
+        isPasswordValid = true;
+        try {
+          await userCredential.user.getIdToken(true);
+        } catch (tokenErr) {}
+        profile =
+          (await getUserProfile(userId, { strictFirestore: true }).catch(() => null)) ||
+          (await findUserProfileByEmail(cleanEmail));
+      } catch (authErr: any) {
+        console.warn('Firebase Auth sign in failed:', authErr?.code, authErr?.message);
+        if (authErr?.code === 'auth/too-many-requests') {
+          setError('Too many failed login attempts. Please wait a moment before trying again.');
+        } else if (authErr?.code === 'auth/network-request-failed') {
+          setError('Network error reaching Firebase Authentication. Please check your connection and try again.');
+        } else {
+          setError('Invalid email or password. Please verify your credentials or use "Forgot Password?".');
+        }
+        setLoading(false);
+        return;
+      }
+
+      if (!isPasswordValid || !profile) {
+        if (firebaseAuth.currentUser) {
+          try { await signOut(firebaseAuth); } catch {}
+        }
         setError('Invalid email or password. Please verify your credentials or use the "Forgot Password?" link.');
         setLoading(false);
         return;
       }
 
-      if (existingProfile.status === 'pending_approval') {
+      if (profile.status === 'pending_approval') {
+        if (firebaseAuth.currentUser) {
+          try { await signOut(firebaseAuth); } catch {}
+        }
         setError('Your account is still pending Super Admin approval.');
         setLoading(false);
         return;
       }
 
-      if (existingProfile.status === 'rejected') {
+      if (profile.status === 'rejected') {
+        if (firebaseAuth.currentUser) {
+          try { await signOut(firebaseAuth); } catch {}
+        }
         setError('Your registration request was not approved. Please contact your Super Admin.');
         setLoading(false);
         return;
       }
 
-      if (existingProfile.active === false) {
+      if (profile.active === false && profile.role !== 'superadmin') {
+        if (firebaseAuth.currentUser) {
+          try { await signOut(firebaseAuth); } catch {}
+        }
         setError('This account has been suspended or is inactive. Please contact your Super Admin.');
         setLoading(false);
         return;
       }
 
-      let isPasswordValid = false;
-
-      if (existingProfile.customPassword) {
-        if (existingProfile.customPassword === cleanPassword) {
-          isPasswordValid = true;
-          userId = existingProfile.id;
-          profile = existingProfile;
+      // Heal legacy/mismatched profile ID to match Firebase Auth UID
+      const authedUid = firebaseAuth.currentUser?.uid || userId;
+      if (authedUid && profile.id !== authedUid) {
+        const healedProfile: UserProfile = { ...profile, id: authedUid };
+        if (firebaseAuth.currentUser) {
           try {
-            const userCred = await signInWithEmailAndPassword(firebaseAuth, cleanEmail, cleanPassword);
-            userId = userCred.user.uid;
-          } catch (syncErr) {}
+            await createUserProfile(authedUid, healedProfile);
+            if (profile.id && profile.id !== 'operator-superadmin') {
+              try {
+                await deleteUserProfile(profile.id);
+              } catch (delErr) {}
+            }
+            profile = (await getUserProfile(authedUid)) || healedProfile;
+          } catch (healErr) {
+            profile = healedProfile;
+          }
         } else {
-          setError('Invalid email or password. Please verify your credentials or reset your password.');
-          setLoading(false);
-          return;
+          profile = healedProfile;
         }
-      } else {
-        try {
-          const userCredential = await signInWithEmailAndPassword(firebaseAuth, cleanEmail, cleanPassword);
-          userId = userCredential.user.uid;
-          isPasswordValid = true;
-          try {
-            await userCredential.user.getIdToken(true);
-          } catch (tokenErr) {}
-          await new Promise(resolve => setTimeout(resolve, 200));
-          profile = await getUserProfile(userId) || existingProfile;
-        } catch (authErr: any) {
-          console.warn('Firebase Auth sign in failed:', authErr.code, authErr.message);
-          setError('Invalid email or password. Please verify your credentials or use "Forgot Password?".');
-          setLoading(false);
-          return;
-        }
-      }
-
-      if (!isPasswordValid || !profile) {
-        setError('Invalid email or password. Please verify your credentials.');
-        setLoading(false);
-        return;
-      }
-
-      if (userId && profile.id !== userId) {
-        try {
-          await createUserProfile(userId, { ...profile, id: userId });
-          try {
-            await deleteUserProfile(profile.id);
-          } catch (delErr) {}
-          profile = await getUserProfile(userId) || profile;
-        } catch (healErr) {}
       }
 
       const otp = Math.floor(100000 + Math.random() * 900000).toString();
@@ -351,19 +381,21 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
       setTempUserId(profile.id);
       
       if (profile.role === 'staff') {
-        try {
-          const { setDoc, doc } = await import('firebase/firestore');
-          const { db } = await import('../firebase/config');
-          await setDoc(doc(db, 'liveLoginCodes', profile.id), {
-            staffUid: profile.id,
-            staffName: profile.name,
-            email: profile.email,
-            otpCode: otp,
-            generatedAt: Date.now(),
-            expiresAt: Date.now() + 15 * 60 * 1000
-          });
-        } catch (dbErr) {
-          console.warn('Failed to save live login code:', dbErr);
+        if (firebaseAuth.currentUser) {
+          try {
+            const { setDoc, doc } = await import('firebase/firestore');
+            const { db } = await import('../firebase/config');
+            await setDoc(doc(db, 'liveLoginCodes', profile.id), {
+              staffUid: profile.id,
+              staffName: profile.name,
+              email: profile.email,
+              otpCode: otp,
+              generatedAt: Date.now(),
+              expiresAt: Date.now() + 15 * 60 * 1000
+            });
+          } catch (dbErr) {
+            console.warn('Failed to save live login code:', dbErr);
+          }
         }
         setOtpSent(true);
         setInfoMessage('Verification code generated. Please contact your Super Admin for your 6-digit login code.');
@@ -388,7 +420,7 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
     }
   };
 
-  // Verify OTP Code for Login
+  // Verify OTP Code for Login (OTP is strictly an additional check AFTER a real Firebase Auth sign-in)
   const handleVerifyOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
@@ -397,7 +429,15 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
       setLoading(true);
       try {
         const currentUser = firebaseAuth.currentUser;
-        let profile = await getUserProfile(tempUserId);
+        if (isFirebaseConfigured && !currentUser) {
+          setOtpSent(false);
+          setError('Session expired, please log in again');
+          setLoading(false);
+          return;
+        }
+
+        const resolvedLookupId = currentUser?.uid || tempUserId;
+        let profile = await getUserProfile(resolvedLookupId, { strictFirestore: true }).catch(() => null);
         if (!profile && currentUser?.email) {
           profile = await findUserProfileByEmail(currentUser.email);
         }
@@ -405,25 +445,36 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
           profile = await findUserProfileByEmail(email.toLowerCase().trim());
         }
         if (!profile) {
-          await signOut(firebaseAuth);
+          if (currentUser) {
+            await signOut(firebaseAuth);
+          }
           setError('This account is not registered in the system. Please contact your Super Admin.');
           setLoading(false);
           return;
         }
 
+        if (currentUser?.uid && profile.id !== currentUser.uid) {
+          profile = { ...profile, id: currentUser.uid };
+        }
+
         try {
           sessionStorage.setItem('sat_otp_verified', 'true');
           localStorage.setItem('sat_otp_verified', 'true');
+          if (currentUser?.uid) {
+            localStorage.setItem('sat_active_uid', currentUser.uid);
+          }
+          localStorage.setItem('sat_session_started_at', String(Date.now()));
           localStorage.setItem('sat_user_session', JSON.stringify(profile));
         } catch (e) {}
 
-        if (profile.role === 'staff') {
+        if (profile.role === 'staff' && currentUser) {
           try {
             const { deleteDoc, doc } = await import('firebase/firestore');
             const { db } = await import('../firebase/config');
-            await deleteDoc(doc(db, 'liveLoginCodes', tempUserId));
+            await deleteDoc(doc(db, 'liveLoginCodes', tempUserId || profile.id));
           } catch (e) {}
         }
+        onDismissSessionExpired?.();
         onAuthSuccess(profile);
       } catch (err: any) {
         setError(err.message || 'Error initializing profile after OTP.');
@@ -435,8 +486,12 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
     }
   };
 
-  // Direct offline fallback access handler
+  // Direct offline fallback access handler (ONLY when Firebase is not configured)
   const handleDirectOfflineAccess = () => {
+    if (isFirebaseConfigured) {
+      setError('Please sign in with your Firebase account credentials.');
+      return;
+    }
     const fallbackUser: UserProfile = {
       id: 'operator-superadmin',
       email: 'skyautomationtech@gmail.com',
@@ -681,6 +736,17 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
           {/* Glass Form Container */}
           <div className="bg-slate-900/90 backdrop-blur-xl py-8 px-6 sm:px-8 shadow-2xl rounded-3xl border border-slate-800">
             
+            {/* Session Expired Banner */}
+            {sessionExpiredMessage && !error && (
+              <div className="mb-6 bg-amber-950/60 border border-amber-500/40 text-amber-200 p-4 rounded-2xl text-xs sm:text-sm flex items-start gap-3 animate-fade-in">
+                <ShieldAlert size={18} className="text-amber-400 shrink-0 mt-0.5" />
+                <div className="flex-1 min-w-0">
+                  <p className="font-bold text-amber-100">{sessionExpiredMessage}</p>
+                  <p className="mt-0.5 text-xs text-amber-300/80">Please verify your credentials to start an authenticated session.</p>
+                </div>
+              </div>
+            )}
+
             {/* Error Alert Box */}
             {error && (
               <div className="mb-6 bg-red-950/50 border border-red-500/40 text-red-300 p-4 rounded-2xl text-xs sm:text-sm flex items-start gap-3 animate-fade-in">
@@ -1601,17 +1667,19 @@ export default function SplashAndAuth({ onAuthSuccess }: SplashAndAuthProps) {
                       </button>
                     </div>
 
-                    {/* Direct Offline Sandbox Fallback Access */}
-                    <div className="pt-2">
-                      <button
-                        type="button"
-                        onClick={handleDirectOfflineAccess}
-                        className="w-full flex justify-center items-center gap-2 py-3 px-4 border border-slate-800 bg-slate-950 hover:bg-slate-800 rounded-xl text-xs font-bold text-slate-300 hover:text-white transition-all cursor-pointer"
-                      >
-                        <Sparkles size={15} className="text-[#D4AF37]" />
-                        <span>লোকাল স্যান্ডবক্সে সরাসরি প্রবেশ করুন (Direct Offline Access)</span>
-                      </button>
-                    </div>
+                    {/* Direct Offline Sandbox Fallback Access (only shown when Firebase is not configured) */}
+                    {!isFirebaseConfigured && (
+                      <div className="pt-2">
+                        <button
+                          type="button"
+                          onClick={handleDirectOfflineAccess}
+                          className="w-full flex justify-center items-center gap-2 py-3 px-4 border border-slate-800 bg-slate-950 hover:bg-slate-800 rounded-xl text-xs font-bold text-slate-300 hover:text-white transition-all cursor-pointer"
+                        >
+                          <Sparkles size={15} className="text-[#D4AF37]" />
+                          <span>লোকাল স্যান্ডবক্সে সরাসরি প্রবেশ করুন (Direct Offline Access)</span>
+                        </button>
+                      </div>
+                    )}
 
                     <div className="text-center pt-3 border-t border-slate-800/80 mt-4">
                       <button

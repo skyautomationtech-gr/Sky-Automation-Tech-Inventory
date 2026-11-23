@@ -8,6 +8,7 @@ import { getFirestore } from "firebase-admin/firestore";
 
 // Initialize Firebase Admin safely
 let adminApp: any = null;
+let configuredDatabaseId: string | undefined = undefined;
 try {
   let projectId = process.env.FIREBASE_PROJECT_ID || "gen-lang-client-0634961568";
   const configPath = path.join(process.cwd(), 'firebase-applet-config.json');
@@ -16,6 +17,9 @@ try {
       const parsed = JSON.parse(fs.readFileSync(configPath, 'utf8'));
       if (parsed.projectId) {
         projectId = parsed.projectId;
+      }
+      if (parsed.firestoreDatabaseId && parsed.firestoreDatabaseId !== '(default)') {
+        configuredDatabaseId = parsed.firestoreDatabaseId;
       }
     } catch (e) {
       console.warn("Notice reading firebase-applet-config.json:", e);
@@ -35,6 +39,9 @@ try {
 const getDb = () => {
   try {
     if (!adminApp && getApps().length === 0) return null;
+    if (configuredDatabaseId) {
+      return getFirestore(adminApp || getApp(), configuredDatabaseId);
+    }
     return getFirestore();
   } catch (error) {
     console.warn("getFirestore notice:", error);

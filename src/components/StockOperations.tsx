@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { Product, Variant, StockLog, StockLogType, UserProfile } from '../types';
 import { addStockLog, updateProduct, getStockLogs, getVariantAvailableStock } from '../firebase/db';
+import { auth } from '../firebase/config';
 
 interface StockOperationsProps {
   products: Product[];
@@ -68,6 +69,7 @@ export default function StockOperations({
 
   // Refresh active logs list
   const refreshLedger = async () => {
+    if (!auth?.currentUser || !user?.id) return;
     setLedgerLoading(true);
     const logs = await getStockLogs();
     setLedgerLogs(logs);
@@ -75,8 +77,9 @@ export default function StockOperations({
   };
 
   useEffect(() => {
+    if (!auth?.currentUser || !user?.id) return;
     refreshLedger();
-  }, []);
+  }, [user?.id]);
 
   // Pre-fill variant prices on selection
   const selectedProduct = products.find(p => p.id === selectedProductId);

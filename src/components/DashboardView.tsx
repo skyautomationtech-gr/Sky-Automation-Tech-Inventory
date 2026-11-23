@@ -235,13 +235,13 @@ export default function DashboardView({
   };
 
   useEffect(() => {
-    if (user?.id) {
+    if (user?.id && auth?.currentUser) {
       loadAttendance();
     }
   }, [user]);
 
   const loadAttendance = async () => {
-    if (!user) return;
+    if (!user || !auth?.currentUser) return;
     setLoadingAttendance(true);
     try {
       const records = await getTodayAttendance(user.id);

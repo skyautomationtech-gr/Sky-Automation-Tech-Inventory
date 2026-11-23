@@ -26,7 +26,8 @@ import {
   migrateExistingCustomerIds,
   migrateExistingInvoices,
   exportAllData,
-  localStore
+  localStore,
+  dbCache
 } from './firebase/db';
 import {
   exportProductsToCSV,
@@ -128,27 +129,38 @@ const MOCK_PRODUCTS: Product[] = [];
 const MOCK_CATEGORIES: Category[] = [];
 const MOCK_BRANDS: Brand[] = [];
 
-// Helper to restore verified user session across page reloads
-const getSavedUserSession = (): UserProfile | null => {
-  if (typeof window === 'undefined') return null;
+// Helpers to inspect and clear cached auth/session markers
+const hasCachedUserSession = (): boolean => {
+  if (typeof window === 'undefined') return false;
   try {
-    const isOtp = localStorage.getItem('sat_otp_verified') === 'true' || sessionStorage.getItem('sat_otp_verified') === 'true';
-    if (!isOtp) return null;
-    const sessionStr = localStorage.getItem('sat_user_session');
-    if (!sessionStr) return null;
-    const parsed = JSON.parse(sessionStr);
-    if (parsed && (parsed.id || parsed.email)) {
-      return parsed as UserProfile;
-    }
-    return null;
+    return Boolean(
+      localStorage.getItem('sat_user_session') ||
+      localStorage.getItem('sat_otp_verified') === 'true' ||
+      sessionStorage.getItem('sat_otp_verified') === 'true' ||
+      localStorage.getItem('sat_active_uid')
+    );
   } catch {
-    return null;
+    return false;
   }
 };
 
+const clearCachedAuthSession = () => {
+  if (typeof window === 'undefined') return;
+  try {
+    sessionStorage.removeItem('sat_otp_verified');
+    localStorage.removeItem('sat_otp_verified');
+    localStorage.removeItem('sat_user_session');
+    localStorage.removeItem('sat_active_uid');
+    localStorage.removeItem('sat_session_started_at');
+  } catch {}
+};
+
 export default function App() {
-  const [user, setUser] = useState<UserProfile | null>(() => getSavedUserSession());
-  const [authChecking, setAuthChecking] = useState<boolean>(() => !getSavedUserSession());
+  const [user, setUser] = useState<UserProfile | null>(null);
+  const [authChecking, setAuthChecking] = useState<boolean>(true);
+  const [authReady, setAuthReady] = useState<boolean>(false);
+  const [profileLoaded, setProfileLoaded] = useState<boolean>(false);
+  const [sessionExpiredMessage, setSessionExpiredMessage] = useState<string>('');
   const [isQuotaExceeded, setIsQuotaExceeded] = useState(false);
   const [isOfflineDemoMode, setIsOfflineDemoMode] = useState(false);
 
@@ -174,23 +186,19 @@ export default function App() {
     setIsOfflineDemoMode(true);
     setIsQuotaExceeded(false);
     
-    // Check if we already have a saved user session
-    const existing = getSavedUserSession();
-    if (existing) {
-      setUser(existing);
-    } else {
-      setUser({
-        id: 'operator-1',
-        email: 'skyautomationtech@gmail.com',
-        name: 'Sky Automation Operator',
-        role: 'superadmin',
-        active: true,
-        currentSessionStatus: 'checked_in',
-        currentSessionDate: new Date().toISOString().split('T')[0],
-        currentSessionId: 'offline-sess',
-        subBrandAccess: ['SAT', 'GZ', 'RTX']
-      });
-    }
+    setUser({
+      id: 'operator-1',
+      email: 'skyautomationtech@gmail.com',
+      name: 'Sky Automation Operator',
+      role: 'superadmin',
+      active: true,
+      currentSessionStatus: 'checked_in',
+      currentSessionDate: new Date().toISOString().split('T')[0],
+      currentSessionId: 'offline-sess',
+      subBrandAccess: ['SAT', 'GZ', 'RTX']
+    });
+    setProfileLoaded(true);
+    setAuthReady(true);
     
     const cachedSettings = localStore.get<CompanySettings>('company_settings');
     setCompanySettings(cachedSettings || {
@@ -415,7 +423,7 @@ export default function App() {
 
     let isMounted = true;
     
-    // If Firebase project was deleted or unlinked, immediately switch to local sandbox mode without failing
+    // If Firebase project was unlinked, switch to local sandbox mode
     if (!isFirebaseConfigured) {
       console.log('App: Firebase is unlinked or deleted. Seamlessly activating local sandbox mode.');
       enterOfflineDemoMode();
@@ -425,127 +433,165 @@ export default function App() {
 
     console.log('App: Setting up onAuthStateChanged listener...');
 
-    // Pre-load company settings only if Firebase Auth already has a signed-in user
-    const initialSaved = getSavedUserSession();
-    if (initialSaved && auth?.currentUser) {
-      getCompanySettings().then((settings) => {
-        if (!isMounted) return;
-        if (settings && settings.onboarded) {
-          setCompanySettings(settings);
-          setIsOnboarding(false);
-        }
-      }).catch((err) => {
-        console.warn("Could not pre-fetch company settings:", err);
-      });
-    }
-
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       console.log('App: onAuthStateChanged triggered. User:', firebaseUser ? firebaseUser.uid : 'null');
       if (!isMounted) return;
-      setFirebaseAuthed(Boolean(firebaseUser));
 
       try {
         if (firebaseUser) {
-          // Logged In via Firebase Auth
+          setFirebaseAuthed(true);
+          setAuthReady(true);
+
+          // Fetch real Firestore user profile first (never restore session from cache alone)
           console.log('App: Fetching user profile for UID:', firebaseUser.uid);
-          let profile = await getUserProfile(firebaseUser.uid);
-          
-          // Fallback: If not found by UID, search by email to resolve legacy/migrated IDs
+          let profile: UserProfile | null = null;
+          try {
+            profile = await getUserProfile(firebaseUser.uid, { strictFirestore: true });
+          } catch (profileErr: any) {
+            if (checkIfQuotaError(profileErr)) {
+              setIsQuotaExceeded(true);
+              return;
+            }
+            console.warn('App: Strict UID profile lookup failed:', profileErr);
+          }
+
+          // Fallback: Resolve legacy/migrated profile by email when authenticated
           if (!profile && firebaseUser.email) {
             console.log('App: Profile not found by UID, searching by email:', firebaseUser.email);
             profile = await findUserProfileByEmail(firebaseUser.email);
             if (profile && profile.id !== firebaseUser.uid) {
-              // Self-heal: link document to firebaseUser.uid
+              const healedProfile = { ...profile, id: firebaseUser.uid };
               try {
-                await createUserProfile(firebaseUser.uid, { ...profile, id: firebaseUser.uid });
+                await createUserProfile(firebaseUser.uid, healedProfile);
+                profile = (await getUserProfile(firebaseUser.uid, { strictFirestore: true })) || healedProfile;
               } catch (e) {
                 console.warn('Could not self-heal profile UID:', e);
               }
             }
           }
 
-          // Fallback 2: Check local session cache if Firestore read failed or throttled
           if (!profile) {
-            const saved = getSavedUserSession();
-            if (saved && (saved.id === firebaseUser.uid || saved.email === firebaseUser.email)) {
-              profile = saved;
-            }
-          }
-
-          if (profile) {
-            // Safety Check: Suspended Account
-            if (profile.active === false && profile.role !== 'superadmin') {
-              console.warn('App: Attempted access by suspended account:', profile.email);
-              await handleLogout();
-              return;
-            }
-
-            // Check if OTP was verified in this session or device
-            let isOtpVerified = true;
-            try {
-              isOtpVerified = sessionStorage.getItem('sat_otp_verified') === 'true' || localStorage.getItem('sat_otp_verified') === 'true';
-            } catch (e) {}
-            if (!isOtpVerified) {
-              console.log('App: User signed in to Firebase Auth, but OTP is not verified yet. Waiting for OTP challenge in SplashAndAuth...');
-              setUser(null);
-              setAuthChecking(false);
-              return;
-            }
-
-            console.log('App: User session established:', profile.email, `[${profile.role}]`);
-            setUser(profile);
-            try {
-              sessionStorage.setItem('sat_otp_verified', 'true');
-              localStorage.setItem('sat_otp_verified', 'true');
-              localStorage.setItem('sat_user_session', JSON.stringify(profile));
-            } catch (e) {}
-            
-            // Check onboarding
-            try {
-              const settings = await getCompanySettings();
-              if (settings && settings.onboarded) {
-                setCompanySettings(settings);
-                setIsOnboarding(false);
-              } else {
-                setIsOnboarding(true);
-              }
-            } catch (settingsErr: any) {
-              if (checkIfQuotaError(settingsErr)) {
-                setIsQuotaExceeded(true);
-              }
-              throw settingsErr;
-            }
-          } else {
-            // No profile found in Firestore or cache
-            const saved = getSavedUserSession();
-            if (saved) {
-              setUser(saved);
-            } else {
-              setUser(null);
-            }
-          }
-        } else {
-          // Firebase Auth user is null.
-          // Restore verified local session from cache WITHOUT triggering unauthenticated Firestore reads
-          const savedSession = getSavedUserSession();
-          if (savedSession) {
-            console.log('App: Firebase Auth user is null, restoring verified local session from cache for:', savedSession.email);
-            setUser(savedSession);
-            try {
-              const cachedSettingsStr = localStorage.getItem('company_settings');
-              if (cachedSettingsStr) {
-                const parsedSettings = JSON.parse(cachedSettingsStr);
-                if (parsedSettings && parsedSettings.onboarded) {
-                  setCompanySettings(parsedSettings);
-                  setIsOnboarding(false);
-                }
-              }
-            } catch (e) {}
-          } else {
-            // No local session either - truly signed out
+            console.warn('App: Firebase Auth user has no Firestore profile document. Signing out cleanly.');
+            const hadCache = hasCachedUserSession();
+            clearCachedAuthSession();
+            dbCache.clearAll();
+            try { await signOut(auth); } catch {}
+            if (!isMounted) return;
             setUser(null);
+            setFirebaseAuthed(false);
+            setProfileLoaded(false);
             setCompanySettings(null);
             setIsOnboarding(false);
+            if (hadCache) {
+              setSessionExpiredMessage('Session expired, please log in again');
+            }
+            return;
+          }
+
+          // Safety Check: Suspended Account
+          if (profile.active === false && profile.role !== 'superadmin') {
+            console.warn('App: Attempted access by suspended account:', profile.email);
+            await handleLogout();
+            return;
+          }
+
+          // Additional Check: OTP verified marker bound to this device/UID (never replaces Firebase Auth)
+          let isOtpVerified = false;
+          try {
+            const otpFlag =
+              sessionStorage.getItem('sat_otp_verified') === 'true' ||
+              localStorage.getItem('sat_otp_verified') === 'true';
+            const verifiedUid = localStorage.getItem('sat_active_uid');
+            isOtpVerified = otpFlag && (!verifiedUid || verifiedUid === firebaseUser.uid);
+          } catch {}
+
+          if (!isOtpVerified) {
+            console.log('App: User signed in to Firebase Auth, awaiting OTP verification in SplashAndAuth...');
+            setUser(null);
+            setProfileLoaded(false);
+            setAuthChecking(false);
+            return;
+          }
+
+          // Validate session revocation ONLY when this browser recorded a prior session start timestamp
+          try {
+            const startedAtRaw = localStorage.getItem('sat_session_started_at');
+            const startedAt = startedAtRaw ? Number(startedAtRaw) : 0;
+            if (
+              typeof profile.sessionsRevokedAt === 'number' &&
+              Number.isFinite(profile.sessionsRevokedAt) &&
+              startedAt > 0 &&
+              startedAt < profile.sessionsRevokedAt
+            ) {
+              console.warn('App: Session was revoked from another device. Signing out.');
+              clearCachedAuthSession();
+              dbCache.clearAll();
+              try { await signOut(auth); } catch {}
+              if (!isMounted) return;
+              setUser(null);
+              setFirebaseAuthed(false);
+              setProfileLoaded(false);
+              setCompanySettings(null);
+              setIsOnboarding(false);
+              setSessionExpiredMessage('Session expired, please log in again');
+              return;
+            }
+            if (!startedAtRaw) {
+              localStorage.setItem('sat_session_started_at', String(Date.now()));
+            }
+          } catch {}
+
+          console.log('App: User session established:', profile.email, `[${profile.role}]`);
+          try {
+            sessionStorage.setItem('sat_otp_verified', 'true');
+            localStorage.setItem('sat_otp_verified', 'true');
+            localStorage.setItem('sat_active_uid', firebaseUser.uid);
+            localStorage.setItem('sat_user_session', JSON.stringify(profile));
+          } catch {}
+
+          if (!isMounted) return;
+          setSessionExpiredMessage('');
+          setUser(profile);
+          setProfileLoaded(true);
+
+          // Check onboarding only after real Firebase Auth + loaded profile
+          try {
+            const settings = await getCompanySettings();
+            if (!isMounted) return;
+            if (settings && settings.onboarded) {
+              setCompanySettings(settings);
+              setIsOnboarding(false);
+            } else {
+              setIsOnboarding(true);
+            }
+          } catch (settingsErr: any) {
+            if (checkIfQuotaError(settingsErr)) {
+              setIsQuotaExceeded(true);
+            }
+            throw settingsErr;
+          }
+        } else {
+          // Firebase Auth user is null: NEVER restore a cached local session without auth.currentUser.
+          if (!isMounted) return;
+          const hadCachedSession = hasCachedUserSession();
+          if (hadCachedSession) {
+            console.warn('App: Cached session found while Firebase Auth user is null. Clearing stale cache.');
+          }
+          clearCachedAuthSession();
+          dbCache.clearAll();
+          setFirebaseAuthed(false);
+          setProfileLoaded(false);
+          setAuthReady(true);
+          setUser(null);
+          setCompanySettings(null);
+          setIsOnboarding(false);
+          if (hadCachedSession) {
+            setSessionExpiredMessage('Session expired, please log in again');
+          }
+          if (auth?.currentUser) {
+            try {
+              await signOut(auth);
+            } catch {}
           }
         }
       } catch (err: any) {
@@ -554,16 +600,23 @@ export default function App() {
           setIsQuotaExceeded(true);
         } else {
           console.error('Error in onAuthStateChanged:', err);
-        }
-        // Don't wipe session on transient error if saved session exists
-        const saved = getSavedUserSession();
-        if (saved) {
-          setUser(saved);
-        } else {
+          const hadCache = hasCachedUserSession();
+          clearCachedAuthSession();
+          dbCache.clearAll();
+          if (!isMounted) return;
+          setFirebaseAuthed(false);
+          setProfileLoaded(false);
+          setAuthReady(true);
           setUser(null);
+          setCompanySettings(null);
+          setIsOnboarding(false);
+          if (hadCache) {
+            setSessionExpiredMessage('Session expired, please log in again');
+          }
         }
       } finally {
         if (isMounted) {
+          setAuthReady(true);
           setAuthChecking(false);
         }
       }
@@ -626,7 +679,7 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (!publicTrackingRoute.isTrackingRoute && user && firebaseAuthed && !isOnboarding && !isOfflineDemoMode) {
+    if (!publicTrackingRoute.isTrackingRoute && authReady && user && firebaseAuthed && profileLoaded && !isOnboarding && !isOfflineDemoMode) {
       getRolePermissions()
         .then((perms) => setRolePermissions(perms))
         .catch(() => {});
@@ -661,27 +714,50 @@ export default function App() {
         unsubModels();
       };
     }
-  }, [publicTrackingRoute.isTrackingRoute, user, firebaseAuthed, isOnboarding, isOfflineDemoMode]);
+  }, [publicTrackingRoute.isTrackingRoute, authReady, user, firebaseAuthed, profileLoaded, isOnboarding, isOfflineDemoMode]);
 
   // Handle Auth success from Login Screen
   const handleAuthSuccess = async (profile: UserProfile) => {
+    if (isFirebaseConfigured && !auth?.currentUser) {
+      console.warn('App: Blocked handleAuthSuccess because Firebase Auth currentUser is null.');
+      clearCachedAuthSession();
+      setUser(null);
+      setFirebaseAuthed(false);
+      setProfileLoaded(false);
+      setSessionExpiredMessage('Session expired, please log in again');
+      return;
+    }
+
+    const effectiveProfile =
+      auth?.currentUser?.uid && profile.id !== auth.currentUser.uid
+        ? { ...profile, id: auth.currentUser.uid }
+        : profile;
     try {
       sessionStorage.setItem('sat_otp_verified', 'true');
       localStorage.setItem('sat_otp_verified', 'true');
-      localStorage.setItem('sat_user_session', JSON.stringify(profile));
+      if (auth?.currentUser?.uid) {
+        localStorage.setItem('sat_active_uid', auth.currentUser.uid);
+      }
+      localStorage.setItem('sat_session_started_at', String(Date.now()));
+      localStorage.setItem('sat_user_session', JSON.stringify(effectiveProfile));
       
-      // Track login
-      import('./firebase/db').then(({ addLoginHistory }) => {
-        addLoginHistory(profile.id, {
-          timestamp: Date.now(),
-          userAgent: navigator.userAgent,
-          platform: navigator.platform,
-          status: 'success'
-        }).catch(console.error);
-      });
+      // Track login only when Firebase Auth session is active
+      if (auth?.currentUser) {
+        import('./firebase/db').then(({ addLoginHistory }) => {
+          addLoginHistory(effectiveProfile.id, {
+            timestamp: Date.now(),
+            userAgent: navigator.userAgent,
+            platform: navigator.platform,
+            status: 'success'
+          }).catch(() => {});
+        });
+      }
     } catch (e) {}
-    setUser(profile);
-    // ...
+    setSessionExpiredMessage('');
+    setFirebaseAuthed(Boolean(auth?.currentUser));
+    setProfileLoaded(true);
+    setAuthReady(true);
+    setUser(effectiveProfile);
 
     try {
       const settings = await getCompanySettings();
@@ -708,16 +784,16 @@ export default function App() {
 
   // Handle Logout
   const handleLogout = async () => {
-    try {
-      sessionStorage.removeItem('sat_otp_verified');
-      localStorage.removeItem('sat_otp_verified');
-      localStorage.removeItem('sat_user_session');
-      localStorage.removeItem('sat_active_uid');
-    } catch (e) {}
+    clearCachedAuthSession();
+    dbCache.clearAll();
     try {
       await signOut(auth);
     } catch (e) {}
+    setFirebaseAuthed(false);
+    setProfileLoaded(false);
+    setSessionExpiredMessage('');
     setUser(null);
+    setRolePermissions(null);
     setCompanySettings(null);
     setIsOnboarding(false);
     setCurrentTab('dashboard');
@@ -1043,9 +1119,15 @@ export default function App() {
     enterOfflineDemoMode();
   }
 
-  // Auth Guard
-  if (!user) {
-    return <SplashAndAuth onAuthSuccess={handleAuthSuccess} />;
+  // Auth Guard: Wait until both Firebase Auth user and Firestore profile doc are loaded
+  if (!user || !profileLoaded || (isFirebaseConfigured && !isOfflineDemoMode && !firebaseAuthed)) {
+    return (
+      <SplashAndAuth
+        onAuthSuccess={handleAuthSuccess}
+        sessionExpiredMessage={sessionExpiredMessage}
+        onDismissSessionExpired={() => setSessionExpiredMessage('')}
+      />
+    );
   }
 
   // Onboarding Wizard Guard

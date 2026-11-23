@@ -29,7 +29,9 @@ service cloud.firestore {
     }
 
     function isOwnerEmailSuperAdmin() {
-      return isSignedIn() && request.auth.token.email == 'skyautomationtech@gmail.com';
+      return isSignedIn() &&
+        'email' in request.auth.token &&
+        request.auth.token.email.lower() == 'skyautomationtech@gmail.com';
     }
 
     function isSuperAdmin() {
@@ -91,7 +93,7 @@ service cloud.firestore {
 
     match /users/{userId}/loginHistory/{loginId} {
       allow read: if isSignedIn() && (isOwner(userId) || isAdmin());
-      allow create: if isSignedIn() && isOwner(userId);
+      allow create: if isSignedIn() && (isOwner(userId) || isOwnerEmailSuperAdmin());
     }
 
     match /users/{userId}/private/{docId} {
@@ -341,6 +343,7 @@ service cloud.firestore {
           request.resource.data.get('source', 'manual') in ['auto', 'manual'] &&
           (
             request.resource.data.showToCustomer == false ||
+            isAdmin() ||
             hasPreOrderPerm('preOrderManageTracking')
           ) &&
           (

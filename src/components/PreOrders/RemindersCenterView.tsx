@@ -44,6 +44,7 @@ import {
   snoozePreOrderNotification,
   syncDailyTimeBasedReminders,
 } from '../../firebase/preOrderDb';
+import { auth } from '../../firebase/config';
 import {
   Badge,
   Button,
@@ -181,7 +182,7 @@ export const RemindersCenterView: React.FC<RemindersCenterViewProps> = ({
   );
 
   useEffect(() => {
-    if (!canView) return;
+    if (!canView || !auth?.currentUser || !user?.id) return;
     let active = true;
     (async () => {
       const loadedSettings = await getPreOrderSettings().catch(() => DEFAULT_PRE_ORDER_SETTINGS);

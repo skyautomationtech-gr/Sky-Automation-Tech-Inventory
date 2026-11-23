@@ -72,6 +72,7 @@ import {
   rebuildPreOrderStats,
   savePreOrderSettings,
 } from '../../firebase/preOrderDb';
+import { auth } from '../../firebase/config';
 import {
   Button,
   Card,
@@ -214,6 +215,10 @@ export const PreOrderOverviewView: React.FC<PreOrderOverviewViewProps> = ({
   }>({ open: false, diffs: [], scannedCount: 0 });
 
   const fetchDashboard = useCallback(async () => {
+    if (!auth?.currentUser || !user?.id) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
     setError('');
     try {
@@ -233,11 +238,12 @@ export const PreOrderOverviewView: React.FC<PreOrderOverviewViewProps> = ({
     } finally {
       setLoading(false);
     }
-  }, [canViewProfit, canViewSupplier, allowedSubBrands]);
+  }, [canViewProfit, canViewSupplier, allowedSubBrands, user?.id]);
 
   useEffect(() => {
+    if (!auth?.currentUser || !user?.id) return;
     fetchDashboard();
-  }, [fetchDashboard]);
+  }, [fetchDashboard, user?.id]);
 
   const resolvedWindow = useMemo(() => {
     const today = getTodayIsoDate();

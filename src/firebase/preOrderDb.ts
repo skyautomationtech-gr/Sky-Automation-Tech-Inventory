@@ -409,6 +409,11 @@ export async function lookupCustomerByPhone(rawPhone: string): Promise<Customer 
   const normalized = normalizeBdPhone(rawPhone);
   if (!isValidBdPhone(normalized)) return null;
 
+  if (!auth?.currentUser) {
+    const cached = dbCache.customers || localStore.get<Customer[]>('customers') || [];
+    return cached.find((c) => normalizeBdPhone(c.phone) === normalized) || null;
+  }
+
   // 1. Fast O(1) lookup via normalized phone index doc
   try {
     const idxSnap = await getDoc(doc(db, 'customerPhones', normalized));
@@ -1026,6 +1031,9 @@ function matchesClientSideFilters(order: PreOrder, opts: QueryPreOrdersOptions):
 export async function queryPreOrdersPage(
   options: QueryPreOrdersOptions = {}
 ): Promise<QueryPreOrdersResult> {
+  if (!auth?.currentUser) {
+    return { items: [], lastDoc: null, hasMore: false };
+  }
   const pageSize = Math.min(Math.max(Number(options.pageSize) || 25, 1), 100);
   const sortField = options.sortField || 'createdAt';
   const sortDir = options.sortDir || 'desc';
@@ -1151,6 +1159,9 @@ export interface GetPreOrdersResult {
 export async function getPreOrders(
   options: GetPreOrdersOptions = {}
 ): Promise<GetPreOrdersResult> {
+  if (!auth?.currentUser) {
+    return { items: [], lastDoc: null, hasMore: false };
+  }
   const pageSize = Math.min(Math.max(options.limitCount || 50, 1), 100);
   const constraints: any[] = [];
 
@@ -1178,6 +1189,7 @@ export async function getPreOrders(
 }
 
 export async function getPreOrderById(preOrderId: string): Promise<PreOrder | null> {
+  if (!auth?.currentUser) return null;
   const snap = await getDoc(doc(db, 'preOrders', preOrderId));
   if (!snap.exists()) return null;
   return { ...(snap.data() as PreOrder), id: snap.id };
@@ -1186,6 +1198,7 @@ export async function getPreOrderById(preOrderId: string): Promise<PreOrder | nu
 export async function getPreOrderPrivateCost(
   preOrderId: string
 ): Promise<PreOrderPrivateCost | null> {
+  if (!auth?.currentUser) return null;
   try {
     const snap = await getDoc(doc(db, 'preOrders', preOrderId, 'private', 'cost'));
     if (!snap.exists()) return null;
@@ -2608,6 +2621,7 @@ export async function getPreOrderPayments(
   preOrderId: string,
   limitCount: number = 100
 ): Promise<PreOrderPayment[]> {
+  if (!auth?.currentUser) return [];
   const q = query(
     collection(db, 'preOrders', preOrderId, 'payments'),
     orderBy('createdAt', 'desc'),
@@ -2694,6 +2708,9 @@ function matchesPaymentFilters(
 export async function queryPreOrderPaymentsGroup(
   options: QueryPreOrderPaymentsGroupOptions = {}
 ): Promise<QueryPreOrderPaymentsGroupResult> {
+  if (!auth?.currentUser) {
+    return { items: [], lastDoc: null, hasMore: false };
+  }
   const pageSize = Math.min(Math.max(Number(options.pageSize) || 25, 1), 100);
 
   // Fetch reversed payment IDs from reversal entries across ledger (small set)
@@ -2822,6 +2839,9 @@ export interface QueryPreOrderDueListOptions {
 export async function queryPreOrderDueList(
   options: QueryPreOrderDueListOptions = {}
 ): Promise<QueryPreOrdersResult> {
+  if (!auth?.currentUser) {
+    return { items: [], lastDoc: null, hasMore: false };
+  }
   const pageSize = Math.min(Math.max(Number(options.pageSize) || 50, 1), 100);
 
   const filterDueRow = (o: PreOrder) => {
@@ -2905,6 +2925,16 @@ export async function getPreOrderPaymentsSummary(
   allowedSubBrands?: Array<'SAT' | 'GZ' | 'RTX'>,
   subBrandFilter?: 'SAT' | 'GZ' | 'RTX' | 'ALL'
 ): Promise<PreOrderPaymentsSummaryKPIs> {
+  if (!auth?.currentUser) {
+    return {
+      totalVerifiedAdvance: 0,
+      totalPendingVerification: 0,
+      totalCustomerDue: 0,
+      totalRefunded: 0,
+      pendingCountApprox: 0,
+      dueOrdersCount: 0,
+    };
+  }
   const [ordersSnap, pendingSnap] = await Promise.all([
     getDocs(query(collection(db, 'preOrders'), orderBy('createdAt', 'desc'), limit(500))),
     getDocs(
@@ -3220,6 +3250,7 @@ export async function getPreOrderStatusHistory(
   preOrderId: string,
   limitCount: number = 50
 ): Promise<PreOrderStatusHistory[]> {
+  if (!auth?.currentUser) return [];
   const q = query(
     collection(db, 'preOrders', preOrderId, 'statusHistory'),
     orderBy('timestamp', 'asc'),
@@ -3486,6 +3517,7 @@ export async function upsertPreOrderShipment(
 export async function getPreOrderShipment(
   preOrderId: string
 ): Promise<PreOrderShipment | null> {
+  if (!auth?.currentUser) return null;
   const snap = await getDoc(doc(db, 'preOrders', preOrderId, 'shipment', 'details'));
   if (!snap.exists()) return null;
   return snap.data() as PreOrderShipment;
@@ -3599,6 +3631,7 @@ export async function getPreOrderShipmentDocs(
   preOrderId: string,
   includeDeleted: boolean = false
 ): Promise<PreOrderShipmentDoc[]> {
+  if (!auth?.currentUser) return [];
   const q = query(
     collection(db, 'preOrders', preOrderId, 'shipmentDocs'),
     orderBy('uploadedAt', 'desc'),
@@ -3721,6 +3754,7 @@ export async function getPreOrderShipmentEvents(
   preOrderId: string,
   limitCount: number = 100
 ): Promise<PreOrderShipmentEvent[]> {
+  if (!auth?.currentUser) return [];
   const q = query(
     collection(db, 'preOrders', preOrderId, 'shipmentEvents'),
     orderBy('timestamp', 'desc'),
@@ -3806,6 +3840,7 @@ export async function queryShipmentTrackingOrders(options: {
   allowedSubBrands?: Array<'SAT' | 'GZ' | 'RTX'>;
   limitCount?: number;
 } = {}): Promise<PreOrder[]> {
+  if (!auth?.currentUser) return [];
   const pageSize = Math.min(Math.max(options.limitCount || 150, 20), 250);
   const q = query(
     collection(db, 'preOrders'),
@@ -4838,6 +4873,7 @@ export async function getPreOrderSupplierPayments(
   preOrderId?: string,
   limitCount: number = 100
 ): Promise<PreOrderSupplierPayment[]> {
+  if (!auth?.currentUser) return [];
   if (preOrderId) {
     // Support both legacy single preOrderId and new multi-order preOrderIds array-contains
     const [byArraySnap, bySingleSnap] = await Promise.all([
@@ -4869,19 +4905,25 @@ export async function getPreOrderSupplierPayments(
     return Array.from(map.values()).sort((a, b) => b.createdAt - a.createdAt);
   }
 
-  const q = query(
-    collection(db, 'preOrderSupplierPayments'),
-    orderBy('createdAt', 'desc'),
-    limit(limitCount)
-  );
-  const snap = await getDocs(q);
-  return snap.docs.map((d) => ({ ...(d.data() as PreOrderSupplierPayment), id: d.id }));
+  try {
+    const q = query(
+      collection(db, 'preOrderSupplierPayments'),
+      orderBy('createdAt', 'desc'),
+      limit(limitCount)
+    );
+    const snap = await getDocs(q);
+    return snap.docs.map((d) => ({ ...(d.data() as PreOrderSupplierPayment), id: d.id }));
+  } catch (err: any) {
+    if (err?.code === 'permission-denied') return [];
+    throw err;
+  }
 }
 
 export async function getPreOrderSupplierPaymentsBySupplier(
   supplierId: string,
   limitCount: number = 200
 ): Promise<PreOrderSupplierPayment[]> {
+  if (!auth?.currentUser) return [];
   try {
     const q = query(
       collection(db, 'preOrderSupplierPayments'),
@@ -4892,6 +4934,7 @@ export async function getPreOrderSupplierPaymentsBySupplier(
     const snap = await getDocs(q);
     return snap.docs.map((d) => ({ ...(d.data() as PreOrderSupplierPayment), id: d.id }));
   } catch (err: any) {
+    if (err?.code === 'permission-denied') return [];
     if (err?.code === 'failed-precondition') {
       const qFallback = query(
         collection(db, 'preOrderSupplierPayments'),
@@ -4911,6 +4954,7 @@ export async function getPreOrdersBySupplier(
   supplierId: string,
   limitCount: number = 150
 ): Promise<PreOrder[]> {
+  if (!auth?.currentUser) return [];
   try {
     const q = query(
       collection(db, 'preOrders'),
@@ -4921,6 +4965,7 @@ export async function getPreOrdersBySupplier(
     const snap = await getDocs(q);
     return snap.docs.map((d) => ({ ...(d.data() as PreOrder), id: d.id }));
   } catch (err: any) {
+    if (err?.code === 'permission-denied') return [];
     if (err?.code === 'failed-precondition') {
       const qFallback = query(
         collection(db, 'preOrders'),
@@ -4939,6 +4984,7 @@ export async function getPreOrdersBySupplier(
 export async function getPreOrderPrivateCostsMap(
   preOrderIds: string[]
 ): Promise<Record<string, PreOrderPrivateCost>> {
+  if (!auth?.currentUser) return {};
   const uniqueIds = Array.from(new Set(preOrderIds.filter(Boolean))).slice(0, 120);
   const map: Record<string, PreOrderPrivateCost> = {};
   if (uniqueIds.length === 0) return map;
@@ -4963,20 +5009,27 @@ export async function getPreOrderAuditLogs(
   preOrderId?: string,
   limitCount: number = 50
 ): Promise<PreOrderAuditEntry[]> {
+  if (!auth?.currentUser) return [];
   const constraints: any[] = [];
   if (preOrderId) {
     constraints.push(where('preOrderId', '==', preOrderId));
   }
   constraints.push(orderBy('timestamp', 'desc'));
   constraints.push(limit(limitCount));
-  const q = query(collection(db, 'preOrderAudit'), ...constraints);
-  const snap = await getDocs(q);
-  return snap.docs.map((d) => ({ ...(d.data() as PreOrderAuditEntry), id: d.id }));
+  try {
+    const q = query(collection(db, 'preOrderAudit'), ...constraints);
+    const snap = await getDocs(q);
+    return snap.docs.map((d) => ({ ...(d.data() as PreOrderAuditEntry), id: d.id }));
+  } catch (err: any) {
+    if (err?.code === 'permission-denied') return [];
+    throw err;
+  }
 }
 
 export async function getPreOrderNotifications(
   limitCount: number = 30
 ): Promise<PreOrderNotification[]> {
+  if (!auth?.currentUser) return [];
   const q = query(
     collection(db, 'preOrderNotifications'),
     orderBy('createdAt', 'desc'),
@@ -5003,6 +5056,7 @@ export async function getPreOrderReceipts(
   preOrderId: string,
   limitCount: number = 50
 ): Promise<PreOrderReceipt[]> {
+  if (!auth?.currentUser) return [];
   const q = query(
     collection(db, 'preOrders', preOrderId, 'receipts'),
     orderBy('receivedAt', 'desc'),
@@ -5016,6 +5070,7 @@ export async function getPreOrderAccountingPostings(
   preOrderId?: string,
   limitCount: number = 250
 ): Promise<AccountingPosting[]> {
+  if (!auth?.currentUser) return [];
   const constraints: any[] = [];
   if (preOrderId) {
     constraints.push(where('preOrderId', '==', preOrderId));
@@ -5043,6 +5098,7 @@ export function subscribeToAccountingPostings(
   callback: (postings: AccountingPosting[]) => void,
   limitCount: number = 400
 ): () => void {
+  if (!auth?.currentUser) return () => {};
   try {
     const q = query(
       collection(db, 'accountingPostings'),
@@ -6714,6 +6770,7 @@ export async function savePreOrderSettings(
 }
 
 export async function getPreOrderStatsSummary(): Promise<PreOrderStats | null> {
+  if (!auth?.currentUser) return null;
   try {
     const snap = await getDoc(doc(db, 'preOrderStats', 'summary'));
     if (!snap.exists()) return null;
@@ -6808,6 +6865,9 @@ export async function queryPreOrderNotifications(options?: {
   lastDoc: QueryDocumentSnapshot<DocumentData> | null;
   hasMore: boolean;
 }> {
+  if (!auth?.currentUser) {
+    return { items: [], lastDoc: null, hasMore: false };
+  }
   const pageSize = Math.min(Math.max(Number(options?.limitCount) || 30, 1), 100);
   const constraints: any[] = [orderBy('createdAt', 'desc')];
   if (options?.cursor) {
@@ -6990,6 +7050,21 @@ export async function loadPreOrderDashboardData(options: {
   canViewSupplier: boolean;
   allowedSubBrands?: Array<'SAT' | 'GZ' | 'RTX'>;
 }): Promise<PreOrderDashboardData> {
+  if (!auth?.currentUser) {
+    return {
+      stats: createEmptyPreOrderStats(),
+      hasSummaryDoc: false,
+      orders: [],
+      payments: [],
+      privateCostsByOrder: {},
+      supplierPayments: [],
+      postings: [],
+      activity: [],
+      activityLastDoc: null,
+      activityHasMore: false,
+      settings: mergeWithDefaultPreOrderSettings(null),
+    };
+  }
   const [summaryDoc, ordersSnap, paymentsSnap, postings, auditSnap, supPays, settings] =
     await Promise.all([
       getPreOrderStatsSummary(),
@@ -7077,18 +7152,28 @@ export async function loadMorePreOrderAuditFeed(
   lastDoc: QueryDocumentSnapshot<DocumentData> | null;
   hasMore: boolean;
 }> {
+  if (!auth?.currentUser) {
+    return { items: [], lastDoc: null, hasMore: false };
+  }
   const constraints: any[] = [orderBy('timestamp', 'desc')];
   if (cursor) constraints.push(startAfter(cursor));
   constraints.push(limit(pageSize + 1));
 
-  const snap = await getDocs(query(collection(db, 'preOrderAudit'), ...constraints));
-  const hasMore = snap.docs.length > pageSize;
-  const sliced = hasMore ? snap.docs.slice(0, pageSize) : snap.docs;
-  return {
-    items: sliced.map((d) => ({ ...(d.data() as PreOrderAuditEntry), id: d.id })),
-    lastDoc: sliced.length > 0 ? sliced[sliced.length - 1] : null,
-    hasMore,
-  };
+  try {
+    const snap = await getDocs(query(collection(db, 'preOrderAudit'), ...constraints));
+    const hasMore = snap.docs.length > pageSize;
+    const sliced = hasMore ? snap.docs.slice(0, pageSize) : snap.docs;
+    return {
+      items: sliced.map((d) => ({ ...(d.data() as PreOrderAuditEntry), id: d.id })),
+      lastDoc: sliced.length > 0 ? sliced[sliced.length - 1] : null,
+      hasMore,
+    };
+  } catch (err: any) {
+    if (err?.code === 'permission-denied') {
+      return { items: [], lastDoc: null, hasMore: false };
+    }
+    throw err;
+  }
 }
 
 export interface PreOrderReportsDataset {
@@ -7106,6 +7191,17 @@ export async function loadPreOrderReportsDataset(options: {
   canViewSupplier: boolean;
   allowedSubBrands?: Array<'SAT' | 'GZ' | 'RTX'>;
 }): Promise<PreOrderReportsDataset> {
+  if (!auth?.currentUser) {
+    return {
+      preOrders: [],
+      payments: [],
+      privateCostsByOrder: {},
+      suppliers: [],
+      supplierPayments: [],
+      postings: [],
+      auditLogs: [],
+    };
+  }
   const [ordersSnap, paymentsSnap, suppliersSnap, supPays, postings, auditLogs] = await Promise.all([
     getDocs(query(collection(db, 'preOrders'), orderBy('createdAt', 'desc'), limit(1000))),
     getDocs(query(collectionGroup(db, 'payments'), orderBy('createdAt', 'desc'), limit(1200))).catch(
@@ -7167,6 +7263,7 @@ export async function getPreOrdersByCustomer(
   customerId: string,
   rawPhone?: string
 ): Promise<PreOrder[]> {
+  if (!auth?.currentUser) return [];
   const results = new Map<string, PreOrder>();
   const normPhone = rawPhone ? normalizeBdPhone(rawPhone) : '';
 
@@ -7198,6 +7295,7 @@ export async function searchPreOrdersForCommandPalette(
   allowedSubBrands?: Array<'SAT' | 'GZ' | 'RTX'>,
   limitCount: number = 80
 ): Promise<PreOrder[]> {
+  if (!auth?.currentUser) return [];
   try {
     const snap = await getDocs(
       query(collection(db, 'preOrders'), orderBy('updatedAt', 'desc'), limit(limitCount))

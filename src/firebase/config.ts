@@ -3,7 +3,8 @@ import {
   getAuth, 
   setPersistence, 
   browserLocalPersistence, 
-  indexedDBLocalPersistence 
+  indexedDBLocalPersistence,
+  browserSessionPersistence
 } from 'firebase/auth';
 import { 
   initializeFirestore, 
@@ -42,18 +43,29 @@ try {
 const app = appInstance;
 export const auth = app ? getAuth(app) : ({} as any);
 
-// Explicitly ensure robust local session persistence across reloads & iframes
-try {
-  setPersistence(auth, indexedDBLocalPersistence).catch(() => {
-    setPersistence(auth, browserLocalPersistence).catch(err => {
-      console.warn("Auth persistence setup error:", err);
-    });
-  });
-} catch (err) {
-  try {
-    setPersistence(auth, browserLocalPersistence).catch(() => {});
-  } catch (e) {}
-}
+// Explicitly ensure robust session persistence: browserLocalPersistence primary,
+// falling back to indexedDBLocalPersistence then browserSessionPersistence if blocked.
+const configureAuthPersistence = async (): Promise<void> => {
+  if (!isFirebaseConfigured || !app || !auth || typeof window === 'undefined') return;
+  const persistenceChain = [
+    { name: 'browserLocalPersistence', persistence: browserLocalPersistence },
+    { name: 'indexedDBLocalPersistence', persistence: indexedDBLocalPersistence },
+    { name: 'browserSessionPersistence', persistence: browserSessionPersistence },
+  ];
+  for (const entry of persistenceChain) {
+    try {
+      await setPersistence(auth, entry.persistence);
+      return;
+    } catch (err) {
+      console.warn(`Auth ${entry.name} unavailable, trying next fallback:`, err);
+    }
+  }
+  console.warn('All persistent Firebase Auth storage mechanisms were blocked; using in-memory auth state.');
+};
+
+export const authPersistenceReady: Promise<void> = configureAuthPersistence().catch((err) => {
+  console.warn('Auth persistence setup error:', err);
+});
 
 const DB_NAME = (appletConfig as any).firestoreDatabaseId || "ai-studio-6630a5d3-18da-424e-ba5b-db65e1dcfa41";
 

@@ -22,7 +22,7 @@ import { Invoice, UserProfile, Order, CompanySettings, Product } from '../types'
 import { getInvoices, voidInvoiceRecord, getOrders, getCompanySettings, getProducts, subscribeToInvoices, subscribeToOrders, subscribeToProducts } from '../firebase/db';
 import { getBrandLogo, BRAND_NAMES, getSubBrandCompanyInfo } from '../utils/brandLogos';
 import { doc, getDoc } from 'firebase/firestore';
-import { db } from '../firebase/config';
+import { db, auth } from '../firebase/config';
 import html2canvas from 'html2canvas';
 import { jsPDF } from 'jspdf';
 
@@ -103,6 +103,7 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
   };
 
   const fetchRolePermissions = async () => {
+    if (!auth?.currentUser) return;
     try {
       const docRef = doc(db, 'settings', 'rolePermissions');
       const docSnap = await getDoc(docRef);
@@ -110,7 +111,7 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
         setRolePermissions(docSnap.data());
       }
     } catch (err) {
-      console.error('Error fetching role permissions:', err);
+      console.warn('Error fetching role permissions:', err);
     }
   };
 

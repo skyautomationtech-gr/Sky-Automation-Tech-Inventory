@@ -234,9 +234,35 @@ export async function updatePrivateEmploymentInfo(userId: string, data: PrivateE
   }
 }
 
-export async function getUserProfile(userId: string): Promise<UserProfile | null> {
+export async function getUserProfile(
+  userId: string,
+  options?: { strictFirestore?: boolean }
+): Promise<UserProfile | null> {
   const trimmedUid = userId.trim();
   const cachedUser = localStore.get<UserProfile>('user_' + trimmedUid);
+  const strict = Boolean(options?.strictFirestore);
+
+  if (!auth?.currentUser) {
+    if (strict) return null;
+    if (trimmedUid === 'operator-superadmin' || trimmedUid === 'operator-1') {
+      const saProfile: UserProfile = {
+        id: trimmedUid,
+        email: 'skyautomationtech@gmail.com',
+        name: 'Sky Automation Super Admin',
+        role: 'superadmin',
+        active: true,
+        status: 'approved',
+        customPassword: '12345678',
+        subBrandAccess: ['SAT', 'GZ', 'RTX'],
+        currentSessionStatus: 'checked_in',
+        currentSessionDate: new Date().toISOString().split('T')[0],
+        createdAt: Date.now()
+      };
+      localStore.set('user_' + trimmedUid, saProfile);
+      return saProfile;
+    }
+    return cachedUser || null;
+  }
 
   let attempts = 0;
   const maxAttempts = 2;
@@ -251,6 +277,10 @@ export async function getUserProfile(userId: string): Promise<UserProfile | null
         const profile = { id: docSnap.id, ...(data as any) } as UserProfile;
         localStore.set('user_' + trimmedUid, profile);
         return profile;
+      }
+
+      if (strict) {
+        return null;
       }
       
       if (trimmedUid === 'operator-superadmin' || trimmedUid === 'operator-1') {
@@ -276,13 +306,18 @@ export async function getUserProfile(userId: string): Promise<UserProfile | null
     } catch (error: any) {
       attempts++;
       console.warn(`getUserProfile attempt ${attempts} failed:`, error);
-      if (isQuotaErrorMessage(error?.message || String(error)) || attempts >= maxAttempts) {
-        if (cachedUser) {
-          console.log('getUserProfile: Using cached profile due to quota/network limit.');
+      const isQuota = isQuotaErrorMessage(error?.message || String(error));
+      if (isQuota || attempts >= maxAttempts) {
+        if (isQuota && cachedUser) {
+          console.log('getUserProfile: Using cached profile due to quota limit.');
           return cachedUser;
         }
-        
-        // Synthesize fallback superadmin if currentUser matches
+        if (strict) {
+          throw error;
+        }
+        if (cachedUser) {
+          return cachedUser;
+        }
         if (auth.currentUser && auth.currentUser.uid === trimmedUid) {
           const fallbackProfile: UserProfile = {
             id: trimmedUid,
@@ -299,12 +334,12 @@ export async function getUserProfile(userId: string): Promise<UserProfile | null
           localStore.set('user_' + trimmedUid, fallbackProfile);
           return fallbackProfile;
         }
-        return cachedUser || null;
+        return null;
       }
       await new Promise(resolve => setTimeout(resolve, 100 * attempts));
     }
   }
-  return cachedUser || null;
+  return strict ? null : (cachedUser || null);
 }
 
 export async function getAllUsers(): Promise<UserProfile[]> {
@@ -333,6 +368,7 @@ export async function getAllUsers(): Promise<UserProfile[]> {
 }
 
 export function subscribeToUsers(callback: (users: UserProfile[]) => void): () => void {
+  if (!auth?.currentUser) return () => {};
   try {
     const colRef = collection(db, 'users');
     const unsubscribe = onSnapshot(colRef, (querySnapshot) => {
@@ -358,33 +394,44 @@ export function subscribeToUsers(callback: (users: UserProfile[]) => void): () =
 
 export async function findUserProfileByEmail(email: string): Promise<UserProfile | null> {
   const normEmail = email.toLowerCase().trim();
+
+  // Never query /users unauthenticated (Firestore rules require auth != null)
+  if (!auth?.currentUser) {
+    return null;
+  }
   
   // Special handling for requested Super Admin account: skyautomationtech@gmail.com
   if (normEmail === 'skyautomationtech@gmail.com') {
+    const authedMatchesSuperAdmin =
+      auth.currentUser.email?.toLowerCase().trim() === 'skyautomationtech@gmail.com';
+    if (!authedMatchesSuperAdmin) {
+      return null;
+    }
+    const resolvedId = auth.currentUser.uid;
+    try {
+      const existingSnap = await getDoc(doc(db, 'users', resolvedId));
+      if (existingSnap.exists()) {
+        const existingProfile = { id: existingSnap.id, ...(existingSnap.data() as any) } as UserProfile;
+        localStore.set('user_' + resolvedId, existingProfile);
+        return existingProfile;
+      }
+    } catch (e) {}
+
     const superAdminProfile: UserProfile = {
-      id: 'operator-superadmin',
+      id: resolvedId,
       email: 'skyautomationtech@gmail.com',
       name: 'Sky Automation Super Admin',
       role: 'superadmin',
       active: true,
       status: 'approved',
-      customPassword: '12345678',
       subBrandAccess: ['SAT', 'GZ', 'RTX'],
       currentSessionStatus: 'checked_in',
       currentSessionDate: new Date().toISOString().split('T')[0],
       createdAt: Date.now()
     };
-    localStore.set('user_operator-superadmin', superAdminProfile);
-    try {
-      setDoc(doc(db, 'users', 'operator-superadmin'), sanitizeData(superAdminProfile), { merge: true }).catch(() => {});
-    } catch (e) {}
+    localStore.set('user_' + resolvedId, superAdminProfile);
+    await setDoc(doc(db, 'users', resolvedId), sanitizeData(superAdminProfile), { merge: true });
     return superAdminProfile;
-  }
-
-  const cachedAll = localStore.get<UserProfile[]>('all_users') || dbCache.users;
-  if (cachedAll) {
-    const found = cachedAll.find(u => u.email?.toLowerCase().trim() === normEmail);
-    if (found) return found;
   }
 
   let attempts = 0;
@@ -406,6 +453,7 @@ export async function findUserProfileByEmail(email: string): Promise<UserProfile
       attempts++;
       console.warn(`findUserProfileByEmail attempt ${attempts} failed:`, error);
       if (isQuotaErrorMessage(error?.message || String(error)) || attempts >= maxAttempts) {
+        const cachedAll = localStore.get<UserProfile[]>('all_users') || dbCache.users;
         if (cachedAll) {
           const found = cachedAll.find(u => u.email?.toLowerCase().trim() === normEmail);
           if (found) return found;
@@ -609,6 +657,7 @@ export async function saveCompanySettings(settings: CompanySettings): Promise<vo
 export async function getCategories(): Promise<Category[]> {
   if (dbCache.categories) return dbCache.categories;
   const cached = localStore.get<Category[]>('categories');
+  if (!auth?.currentUser) return cached || [];
   
   try {
     const colRef = collection(db, 'categories');
@@ -622,11 +671,12 @@ export async function getCategories(): Promise<Category[]> {
     return categories;
   } catch (error: any) {
     console.warn('Error fetching categories, falling back to local storage:', error);
-    return [];
+    return cached || [];
   }
 }
 
 export function subscribeToCategories(callback: (categories: Category[]) => void): () => void {
+  if (!auth?.currentUser) return () => {};
   try {
     const colRef = collection(db, 'categories');
     const unsubscribe = onSnapshot(colRef, (querySnapshot) => {
@@ -706,6 +756,7 @@ export async function deleteCategory(id: string): Promise<void> {
 export async function getBrands(): Promise<Brand[]> {
   if (dbCache.brands) return dbCache.brands;
   const cached = localStore.get<Brand[]>('brands');
+  if (!auth?.currentUser) return cached || [];
   try {
     const colRef = collection(db, 'brands');
     const querySnapshot = await getDocs(colRef);
@@ -718,11 +769,12 @@ export async function getBrands(): Promise<Brand[]> {
     return brands;
   } catch (error) {
     console.warn('Error fetching brands, returning empty:', error);
-    return [];
+    return cached || [];
   }
 }
 
 export function subscribeToBrands(callback: (brands: Brand[]) => void): () => void {
+  if (!auth?.currentUser) return () => {};
   try {
     const colRef = collection(db, 'brands');
     const unsubscribe = onSnapshot(colRef, (querySnapshot) => {
@@ -803,6 +855,7 @@ export async function deleteBrand(id: string): Promise<void> {
 export async function getProductColors(): Promise<ProductColor[]> {
   if (dbCache.colors) return dbCache.colors;
   const cached = localStore.get<ProductColor[]>('product_colors');
+  if (!auth?.currentUser) return cached || [];
   try {
     const colRef = collection(db, 'productColors');
     const querySnapshot = await getDocs(colRef);
@@ -815,11 +868,12 @@ export async function getProductColors(): Promise<ProductColor[]> {
     return colors;
   } catch (error) {
     console.warn('Error fetching colors, returning empty:', error);
-    return [];
+    return cached || [];
   }
 }
 
 export function subscribeToProductColors(callback: (colors: ProductColor[]) => void): () => void {
+  if (!auth?.currentUser) return () => {};
   try {
     const colRef = collection(db, 'productColors');
     const unsubscribe = onSnapshot(colRef, (querySnapshot) => {
@@ -884,6 +938,7 @@ export async function deleteProductColor(id: string): Promise<void> {
 export async function getProductModels(): Promise<ProductModel[]> {
   if (dbCache.models) return dbCache.models;
   const cached = localStore.get<ProductModel[]>('product_models');
+  if (!auth?.currentUser) return cached || [];
   try {
     const colRef = collection(db, 'productModels');
     const querySnapshot = await getDocs(colRef);
@@ -896,11 +951,12 @@ export async function getProductModels(): Promise<ProductModel[]> {
     return models;
   } catch (error) {
     console.warn('Error fetching models, returning empty:', error);
-    return [];
+    return cached || [];
   }
 }
 
 export function subscribeToProductModels(callback: (models: ProductModel[]) => void): () => void {
+  if (!auth?.currentUser) return () => {};
   try {
     const colRef = collection(db, 'productModels');
     const unsubscribe = onSnapshot(colRef, (querySnapshot) => {
@@ -1103,6 +1159,7 @@ export async function getProducts(includeArchived: boolean = false): Promise<Pro
   
   const cacheKey = includeArchived ? 'products_archived' : 'products_active';
   const cached = localStore.get<Product[]>(cacheKey);
+  if (!auth?.currentUser) return cached || [];
 
   try {
     const colRef = collection(db, 'products');
@@ -1139,6 +1196,7 @@ export function subscribeToProducts(
   callback: (products: Product[]) => void,
   includeArchived: boolean = false
 ): () => void {
+  if (!auth?.currentUser) return () => {};
   try {
     const colRef = collection(db, 'products');
     const q = includeArchived ? colRef : query(colRef, where('archived', '==', false));
@@ -2132,6 +2190,7 @@ export async function cleanupDuplicateSessions(): Promise<number> {
 }
 
 export async function getAllAttendanceRecords(dateFilter?: string, userIdFilter?: string): Promise<any[]> {
+  if (!auth?.currentUser) return [];
   const colRef = collection(db, 'attendance');
   let q = query(colRef, orderBy('checkInTime', 'desc'));
   
@@ -2207,6 +2266,7 @@ export interface ProductAttributes {
 }
 
 export async function getProductAttributes(): Promise<ProductAttributes | null> {
+  if (!auth?.currentUser) return null;
   try {
     const docRef = doc(db, 'settings', 'productAttributes');
     const docSnap = await getDoc(docRef);
@@ -2360,6 +2420,7 @@ export async function migrateExistingCustomerIds(): Promise<{ totalMigrated: num
 }
 
 export function subscribeToCustomers(callback: (customers: Customer[]) => void): () => void {
+  if (!auth?.currentUser) return () => {};
   try {
     const colRef = collection(db, 'customers');
     const q = query(colRef, orderBy('createdAt', 'desc'));
@@ -2477,6 +2538,7 @@ export async function getOrders(): Promise<Order[]> {
 }
 
 export function subscribeToOrders(callback: (orders: Order[]) => void): () => void {
+  if (!auth?.currentUser) return () => {};
   try {
     const colRef = collection(db, 'orders');
     const q = query(colRef, orderBy('createdAt', 'desc'));
@@ -3014,11 +3076,13 @@ export async function getInvoices(): Promise<Invoice[]> {
       dbCache.invoices = cached;
       return cached;
     }
-    handleFirestoreError(error, OperationType.LIST, 'invoices');
+    console.warn('Error fetching invoices, returning empty:', error);
+    return [];
   }
 }
 
 export function subscribeToInvoices(callback: (invoices: Invoice[]) => void): () => void {
+  if (!auth?.currentUser) return () => {};
   try {
     const colRef = collection(db, 'invoices');
     const unsubscribe = onSnapshot(colRef, (snapshot) => {
@@ -3477,6 +3541,7 @@ export async function deleteOrderPayment(
 export async function getExpenses(): Promise<Expense[]> {
   if (dbCache.expenses) return dbCache.expenses;
   const cached = localStore.get<Expense[]>('expenses');
+  if (!auth?.currentUser) return cached || [];
   try {
     const colRef = collection(db, 'expenses');
     const q = query(colRef, orderBy('date', 'desc'), orderBy('createdAt', 'desc'));
@@ -3499,6 +3564,7 @@ export async function getExpenses(): Promise<Expense[]> {
 }
 
 export function subscribeToExpenses(callback: (expenses: Expense[]) => void): () => void {
+  if (!auth?.currentUser) return () => {};
   try {
     const colRef = collection(db, 'expenses');
     const q = query(colRef, orderBy('date', 'desc'), orderBy('createdAt', 'desc'));
@@ -3601,6 +3667,7 @@ export async function deleteExpense(id: string, expenseId?: string): Promise<voi
 export async function getIncomes(): Promise<Income[]> {
   if (dbCache.incomes) return dbCache.incomes;
   const cached = localStore.get<Income[]>('incomes');
+  if (!auth?.currentUser) return cached || [];
   try {
     const colRef = collection(db, 'incomes');
     const q = query(colRef, orderBy('date', 'desc'), orderBy('createdAt', 'desc'));
@@ -3623,6 +3690,7 @@ export async function getIncomes(): Promise<Income[]> {
 }
 
 export function subscribeToIncomes(callback: (incomes: Income[]) => void): () => void {
+  if (!auth?.currentUser) return () => {};
   try {
     const colRef = collection(db, 'incomes');
     const q = query(colRef, orderBy('date', 'desc'), orderBy('createdAt', 'desc'));
@@ -3981,6 +4049,7 @@ export async function deleteSupplier(id: string): Promise<void> {
 
 // Supplier Payments
 export async function getSupplierPayments(supplierId?: string): Promise<SupplierPayment[]> {
+  if (!auth?.currentUser) return [];
   try {
     const colRef = collection(db, 'supplierPayments');
     let q = query(colRef, orderBy('createdAt', 'desc'));
@@ -4283,6 +4352,7 @@ export async function logAuditAction(
 }
 
 export async function getAuditLogs(): Promise<AuditLog[]> {
+  if (!auth?.currentUser) return [];
   try {
     const colRef = collection(db, 'auditLogs');
     const q = query(colRef, orderBy('timestamp', 'desc'), limit(100));
@@ -4304,6 +4374,7 @@ export async function getAuditLogs(): Promise<AuditLog[]> {
 
 // --- 1. Total Investment Tracker ---
 export async function getInvestments(): Promise<InvestmentEntry[]> {
+  if (!auth?.currentUser) return [];
   try {
     const colRef = collection(db, 'investments');
     const q = query(colRef, orderBy('createdAt', 'desc'));
@@ -4314,11 +4385,13 @@ export async function getInvestments(): Promise<InvestmentEntry[]> {
     });
     return entries;
   } catch (error) {
-    handleFirestoreError(error, OperationType.LIST, 'investments');
+    console.warn('Error fetching investments:', error);
+    return [];
   }
 }
 
 export function subscribeToInvestments(callback: (entries: InvestmentEntry[]) => void): Unsubscribe {
+  if (!auth?.currentUser) return () => {};
   const colRef = collection(db, 'investments');
   const q = query(colRef, orderBy('createdAt', 'desc'));
   return onSnapshot(q, (snapshot) => {
@@ -4378,6 +4451,7 @@ export async function deleteInvestment(id: string): Promise<void> {
 
 // --- 2. Company Purchases / Assets Tracker ---
 export async function getCompanyPurchases(): Promise<CompanyPurchase[]> {
+  if (!auth?.currentUser) return [];
   try {
     const colRef = collection(db, 'companyPurchases');
     const q = query(colRef, orderBy('createdAt', 'desc'));
@@ -4388,11 +4462,13 @@ export async function getCompanyPurchases(): Promise<CompanyPurchase[]> {
     });
     return purchases;
   } catch (error) {
-    handleFirestoreError(error, OperationType.LIST, 'companyPurchases');
+    console.warn('Error fetching companyPurchases:', error);
+    return [];
   }
 }
 
 export function subscribeToCompanyPurchases(callback: (purchases: CompanyPurchase[]) => void): Unsubscribe {
+  if (!auth?.currentUser) return () => {};
   const colRef = collection(db, 'companyPurchases');
   const q = query(colRef, orderBy('createdAt', 'desc'));
   return onSnapshot(q, (snapshot) => {
@@ -4439,6 +4515,7 @@ export async function deleteCompanyPurchase(id: string): Promise<void> {
 
 // --- 3. Company Losses Tracker ---
 export async function getCompanyLosses(): Promise<CompanyLoss[]> {
+  if (!auth?.currentUser) return [];
   try {
     const colRef = collection(db, 'companyLosses');
     const q = query(colRef, orderBy('createdAt', 'desc'));
@@ -4449,11 +4526,13 @@ export async function getCompanyLosses(): Promise<CompanyLoss[]> {
     });
     return losses;
   } catch (error) {
-    handleFirestoreError(error, OperationType.LIST, 'companyLosses');
+    console.warn('Error fetching companyLosses:', error);
+    return [];
   }
 }
 
 export function subscribeToCompanyLosses(callback: (losses: CompanyLoss[]) => void): Unsubscribe {
+  if (!auth?.currentUser) return () => {};
   const colRef = collection(db, 'companyLosses');
   const q = query(colRef, orderBy('createdAt', 'desc'));
   return onSnapshot(q, (snapshot) => {
@@ -4500,6 +4579,7 @@ export async function deleteCompanyLoss(id: string): Promise<void> {
 
 // --- 4. Cash Balance Settings & Reconciliations ---
 export async function getCashBalanceSettings(): Promise<CashBalanceSettings | null> {
+  if (!auth?.currentUser) return { openingBalance: 0, updatedAt: Date.now() };
   try {
     const docRef = doc(db, 'settings', 'cashBalance');
     const docSnap = await getDoc(docRef);
@@ -4540,6 +4620,13 @@ export const DEFAULT_ACCOUNTING_BASELINE: AccountingBaselineSettings = {
 };
 
 export async function getAccountingBaselineSettings(): Promise<AccountingBaselineSettings> {
+  if (!auth?.currentUser) {
+    try {
+      const local = localStorage.getItem('sat_accounting_baseline');
+      if (local) return { ...DEFAULT_ACCOUNTING_BASELINE, ...JSON.parse(local) };
+    } catch (e) {}
+    return DEFAULT_ACCOUNTING_BASELINE;
+  }
   try {
     const docRef = doc(db, 'settings', 'accountingBaseline');
     const docSnap = await getDoc(docRef);
@@ -4564,6 +4651,7 @@ export async function getAccountingBaselineSettings(): Promise<AccountingBaselin
 }
 
 export function subscribeToAccountingBaselineSettings(callback: (settings: AccountingBaselineSettings) => void): Unsubscribe {
+  if (!auth?.currentUser) return () => {};
   const docRef = doc(db, 'settings', 'accountingBaseline');
   return onSnapshot(docRef, (docSnap) => {
     if (docSnap.exists()) {
@@ -4599,6 +4687,7 @@ export async function saveAccountingBaselineSettings(settings: Partial<Accountin
 
 // --- 4.2 Direct Cash In & Cash Out Transactions ---
 export async function getCashTransactions(): Promise<CashTransaction[]> {
+  if (!auth?.currentUser) return [];
   try {
     const colRef = collection(db, 'cashTransactions');
     const q = query(colRef, orderBy('timestamp', 'desc'), limit(200));
@@ -4609,11 +4698,13 @@ export async function getCashTransactions(): Promise<CashTransaction[]> {
     });
     return list;
   } catch (error) {
-    handleFirestoreError(error, OperationType.LIST, 'cashTransactions');
+    console.warn('Error fetching cashTransactions:', error);
+    return [];
   }
 }
 
 export function subscribeToCashTransactions(callback: (list: CashTransaction[]) => void): Unsubscribe {
+  if (!auth?.currentUser) return () => {};
   const colRef = collection(db, 'cashTransactions');
   const q = query(colRef, orderBy('timestamp', 'desc'), limit(200));
   return onSnapshot(q, (snapshot) => {
@@ -4652,6 +4743,7 @@ export async function deleteCashTransaction(id: string): Promise<void> {
 
 
 export async function getCashReconciliations(): Promise<CashReconciliation[]> {
+  if (!auth?.currentUser) return [];
   try {
     const colRef = collection(db, 'cashReconciliations');
     const q = query(colRef, orderBy('createdAt', 'desc'), limit(50));
@@ -4662,11 +4754,13 @@ export async function getCashReconciliations(): Promise<CashReconciliation[]> {
     });
     return list;
   } catch (error) {
-    handleFirestoreError(error, OperationType.LIST, 'cashReconciliations');
+    console.warn('Error fetching cashReconciliations:', error);
+    return [];
   }
 }
 
 export function subscribeToCashReconciliations(callback: (recs: CashReconciliation[]) => void): Unsubscribe {
+  if (!auth?.currentUser) return () => {};
   const colRef = collection(db, 'cashReconciliations');
   const q = query(colRef, orderBy('createdAt', 'desc'), limit(50));
   return onSnapshot(q, (snapshot) => {
@@ -4695,6 +4789,7 @@ export async function addCashReconciliation(data: Omit<CashReconciliation, 'id'>
 
 // --- 5. Other Receivables Tracker ---
 export async function getOtherReceivables(): Promise<OtherReceivable[]> {
+  if (!auth?.currentUser) return [];
   try {
     const colRef = collection(db, 'otherReceivables');
     const q = query(colRef, orderBy('createdAt', 'desc'));
@@ -4705,11 +4800,13 @@ export async function getOtherReceivables(): Promise<OtherReceivable[]> {
     });
     return list;
   } catch (error) {
-    handleFirestoreError(error, OperationType.LIST, 'otherReceivables');
+    console.warn('Error fetching otherReceivables:', error);
+    return [];
   }
 }
 
 export function subscribeToOtherReceivables(callback: (list: OtherReceivable[]) => void): Unsubscribe {
+  if (!auth?.currentUser) return () => {};
   const colRef = collection(db, 'otherReceivables');
   const q = query(colRef, orderBy('createdAt', 'desc'));
   return onSnapshot(q, (snapshot) => {
@@ -4756,6 +4853,7 @@ export async function deleteOtherReceivable(id: string): Promise<void> {
 
 // --- 6. Payment Platform Balance Tracker ---
 export async function getPaymentPlatformLedger(): Promise<PaymentPlatformLedger[]> {
+  if (!auth?.currentUser) return [];
   try {
     const colRef = collection(db, 'paymentPlatformLedger');
     const q = query(colRef, orderBy('createdAt', 'desc'));
@@ -4766,11 +4864,13 @@ export async function getPaymentPlatformLedger(): Promise<PaymentPlatformLedger[
     });
     return list;
   } catch (error) {
-    handleFirestoreError(error, OperationType.LIST, 'paymentPlatformLedger');
+    console.warn('Error fetching paymentPlatformLedger:', error);
+    return [];
   }
 }
 
 export function subscribeToPaymentPlatformLedger(callback: (list: PaymentPlatformLedger[]) => void): Unsubscribe {
+  if (!auth?.currentUser) return () => {};
   const colRef = collection(db, 'paymentPlatformLedger');
   const q = query(colRef, orderBy('createdAt', 'desc'));
   return onSnapshot(q, (snapshot) => {
@@ -4817,6 +4917,7 @@ export async function deletePaymentPlatformEntry(id: string): Promise<void> {
 
 // --- 7. Import / Shipping Costs Tracker ---
 export async function getImportShippingCosts(): Promise<ImportShippingCost[]> {
+  if (!auth?.currentUser) return [];
   try {
     const colRef = collection(db, 'importShippingCosts');
     const q = query(colRef, orderBy('createdAt', 'desc'));
@@ -4832,7 +4933,8 @@ export async function getImportShippingCosts(): Promise<ImportShippingCost[]> {
     });
     return list;
   } catch (error) {
-    handleFirestoreError(error, OperationType.LIST, 'importShippingCosts');
+    console.warn('Error fetching importShippingCosts:', error);
+    return [];
   }
 }
 
@@ -4841,6 +4943,7 @@ export const getImportShippingRecords = getImportShippingCosts;
 export const getPaymentPlatformEntries = getPaymentPlatformLedger;
 
 export async function getStockPurchases(): Promise<any[]> {
+  if (!auth?.currentUser) return [];
   try {
     const colRef = collection(db, 'stockPurchases');
     const snapshot = await getDocs(colRef);
@@ -4856,6 +4959,7 @@ export async function getStockPurchases(): Promise<any[]> {
 }
 
 export function subscribeToImportShippingCosts(callback: (list: ImportShippingCost[]) => void): Unsubscribe {
+  if (!auth?.currentUser) return () => {};
   const colRef = collection(db, 'importShippingCosts');
   const q = query(colRef, orderBy('createdAt', 'desc'));
   return onSnapshot(q, (snapshot) => {
@@ -4980,6 +5084,7 @@ export const DEFAULT_CHART_OF_ACCOUNTS: Omit<ChartOfAccount, 'id'>[] = [
 ];
 
 export async function getChartOfAccounts(): Promise<ChartOfAccount[]> {
+  if (!auth?.currentUser) return [];
   try {
     const colRef = collection(db, 'chartOfAccounts');
     const q = query(colRef, orderBy('code', 'asc'));
@@ -4996,6 +5101,7 @@ export async function getChartOfAccounts(): Promise<ChartOfAccount[]> {
 }
 
 export function subscribeToChartOfAccounts(callback: (accounts: ChartOfAccount[]) => void): Unsubscribe {
+  if (!auth?.currentUser) return () => {};
   const colRef = collection(db, 'chartOfAccounts');
   const q = query(colRef, orderBy('code', 'asc'));
   return onSnapshot(q, (snapshot) => {
@@ -5039,6 +5145,7 @@ export async function deleteChartOfAccount(id: string): Promise<void> {
 
 // --- 9. Accounting Vouchers / Journal Entries ---
 export async function getAccountingVouchers(): Promise<AccountingVoucher[]> {
+  if (!auth?.currentUser) return [];
   try {
     const colRef = collection(db, 'accountingVouchers');
     const q = query(colRef, orderBy('createdAt', 'desc'), limit(200));
@@ -5055,6 +5162,7 @@ export async function getAccountingVouchers(): Promise<AccountingVoucher[]> {
 }
 
 export function subscribeToAccountingVouchers(callback: (vouchers: AccountingVoucher[]) => void): Unsubscribe {
+  if (!auth?.currentUser) return () => {};
   const colRef = collection(db, 'accountingVouchers');
   const q = query(colRef, orderBy('createdAt', 'desc'), limit(200));
   return onSnapshot(q, (snapshot) => {
@@ -5094,8 +5202,14 @@ export async function deleteAccountingVoucher(id: string): Promise<void> {
 
 
 export async function addLoginHistory(userId: string, record: { timestamp: number, userAgent: string, platform: string, status: string }): Promise<void> {
+  if (!auth?.currentUser) return;
+  const targetUid =
+    userId === auth.currentUser.uid ||
+    auth.currentUser.email?.toLowerCase().trim() === 'skyautomationtech@gmail.com'
+      ? userId
+      : auth.currentUser.uid;
   try {
-    const colRef = collection(db, 'users', userId, 'loginHistory');
+    const colRef = collection(db, 'users', targetUid, 'loginHistory');
     await addDoc(colRef, record);
     
     // Limit to 20 records
@@ -5107,25 +5221,30 @@ export async function addLoginHistory(userId: string, record: { timestamp: numbe
         await batch.commit();
     }
   } catch (e) {
-    console.error('addLoginHistory error:', e);
+    console.warn('addLoginHistory notice:', e);
   }
 }
 
 export async function getLoginHistory(userId: string, limitCount: number = 20): Promise<any[]> {
+  if (!auth?.currentUser) return [];
   try {
     const colRef = collection(db, 'users', userId, 'loginHistory');
     const q = query(colRef, orderBy('timestamp', 'desc'), limit(limitCount));
     const snapshot = await getDocs(q);
     return snapshot.docs.map(doc => ({ id: doc.id, ...doc.data() }));
   } catch (e) {
-    console.error('getLoginHistory error:', e);
+    console.warn('getLoginHistory notice:', e);
     return [];
   }
 }
 
 export async function revokeAllSessions(userId: string): Promise<void> {
   try {
-    await updateUserProfile(userId, { sessionsRevokedAt: Date.now() });
+    const revokedAt = Date.now();
+    await updateUserProfile(userId, { sessionsRevokedAt: revokedAt });
+    try {
+      localStorage.setItem('sat_session_started_at', String(revokedAt));
+    } catch {}
   } catch (e) {
     console.error('revokeAllSessions error:', e);
     throw e;

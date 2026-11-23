@@ -23,6 +23,7 @@ import NotificationCenter from './NotificationCenter';
 import { ThemeToggle } from '../design-system/ThemeToggle';
 import { TAB_DIRECTORY } from './Breadcrumbs';
 import { GlobalSearchPalette } from './GlobalSearchPalette';
+import { auth } from '../firebase/config';
 
 interface TopBarProps {
   currentTab: string;
@@ -228,14 +229,16 @@ export const TopBar: React.FC<TopBarProps> = ({
           </div>
 
           {/* Notification Center (40x40 wrapper) */}
-          <div className="shrink-0">
-            <NotificationCenter
-              user={user}
-              rolePermissions={rolePermissions}
-              products={products}
-              onNavigate={onNavigate}
-            />
-          </div>
+          {user && auth?.currentUser && (
+            <div className="shrink-0">
+              <NotificationCenter
+                user={user}
+                rolePermissions={rolePermissions}
+                products={products}
+                onNavigate={onNavigate}
+              />
+            </div>
+          )}
 
           <div className="flex-shrink-0">
             <ThemeToggle />
