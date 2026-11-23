@@ -21,6 +21,7 @@ import {
   ImagePlus,
   Link2,
   Lock,
+  MessageCircle,
   Minus,
   Package,
   PackageCheck,
@@ -135,6 +136,7 @@ import TrackingLinkShareModal from './TrackingLinkShareModal';
 import ReceiveStockModal from './ReceiveStockModal';
 import ConvertToSaleModal from './ConvertToSaleModal';
 import CancelReconcileModal from './CancelReconcileModal';
+import CustomerMessageModal from './CustomerMessageModal';
 
 export interface PreOrderDetailDrawerProps {
   preOrderId: string | null;
@@ -253,6 +255,7 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
   const [showReceiveModal, setShowReceiveModal] = useState(false);
   const [showConvertModal, setShowConvertModal] = useState(false);
   const [showCancelModal, setShowCancelModal] = useState(false);
+  const [showCustomerMsgModal, setShowCustomerMsgModal] = useState(false);
 
   // Edit mode state
   const [isEditing, setIsEditing] = useState(false);
@@ -1016,6 +1019,16 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
                     onClick={() => setShowStatusDialog(true)}
                   >
                     Update Status
+                  </Button>
+                )}
+                {order && (
+                  <Button
+                    type="button"
+                    variant="secondary"
+                    leftIcon={<MessageCircle className="w-3.5 h-3.5 text-emerald-600" />}
+                    onClick={() => setShowCustomerMsgModal(true)}
+                  >
+                    Send Update
                   </Button>
                 )}
                 {order && canEdit && !isStatusLocked && activeTab === 'overview' && (
@@ -2797,6 +2810,15 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
           </div>
         </form>
       </Modal>
+
+      <CustomerMessageModal
+        isOpen={showCustomerMsgModal}
+        onClose={() => setShowCustomerMsgModal(false)}
+        order={order}
+        user={user}
+        companySettings={companySettings}
+        onLogged={loadDetail}
+      />
     </>
   );
 };

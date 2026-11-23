@@ -563,7 +563,9 @@ export type PreOrderTabId =
   | 'preorder_tracking'
   | 'preorder_links'
   | 'preorder_suppliers'
-  | 'preorder_reports';
+  | 'preorder_reminders'
+  | 'preorder_reports'
+  | 'preorder_help';
 
 export interface PreOrderNavItemMeta {
   id: PreOrderTabId;
@@ -616,10 +618,22 @@ export const PRE_ORDER_NAV_ITEMS: readonly PreOrderNavItemMeta[] = [
     requiredPermission: 'preOrderSupplier',
   },
   {
+    id: 'preorder_reminders',
+    label: 'Notifications & Reminders',
+    description: 'Review event alerts, time-based arrival/due reminders, snoozes, and customer message templates.',
+    requiredPermission: 'preOrderView',
+  },
+  {
     id: 'preorder_reports',
     label: 'Reports & History',
     description: 'Analyze pre-order volume, dues, profit margins, and immutable audit trails.',
     requiredPermission: 'preOrderReports',
+  },
+  {
+    id: 'preorder_help',
+    label: 'Help & Guide',
+    description: 'Workflow steps, status definitions, advance/refund policies, and tracking link security.',
+    requiredPermission: 'preOrderView',
   },
 ] as const;
 

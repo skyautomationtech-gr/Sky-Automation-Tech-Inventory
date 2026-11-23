@@ -229,7 +229,12 @@ export const TopBar: React.FC<TopBarProps> = ({
 
           {/* Notification Center (40x40 wrapper) */}
           <div className="shrink-0">
-            <NotificationCenter user={user} products={products} onNavigate={onNavigate} />
+            <NotificationCenter
+              user={user}
+              rolePermissions={rolePermissions}
+              products={products}
+              onNavigate={onNavigate}
+            />
           </div>
 
           <div className="flex-shrink-0">

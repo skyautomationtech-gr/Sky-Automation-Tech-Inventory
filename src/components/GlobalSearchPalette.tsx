@@ -24,9 +24,10 @@ import {
   Moon,
   Sun,
   Layers,
-  Tag
+  Tag,
+  Plane
 } from 'lucide-react';
-import { UserProfile, Product, Order, Invoice, Customer, Supplier, RolePermissionsMap } from '../types';
+import { UserProfile, Product, Order, Invoice, Customer, Supplier, RolePermissionsMap, PreOrder } from '../types';
 import { 
   getOrders, 
   getCustomers, 
@@ -36,8 +37,9 @@ import {
   getCategories, 
   getBrands 
 } from '../firebase/db';
+import { searchPreOrdersForCommandPalette } from '../firebase/preOrderDb';
 import { TAB_DIRECTORY } from './Breadcrumbs';
-import { PRE_ORDER_NAV_ITEMS, hasPermission, isPreOrderTab } from '../preOrders/constants';
+import { PRE_ORDER_NAV_ITEMS, formatBDT, hasPermission, isPreOrderAdminRole, isPreOrderTab } from '../preOrders/constants';
 
 interface GlobalSearchPaletteProps {
   isOpen: boolean;
@@ -50,7 +52,7 @@ interface GlobalSearchPaletteProps {
   onLogout?: () => void;
 }
 
-type FilterCategory = 'all' | 'pages' | 'products' | 'orders' | 'invoices' | 'people' | 'actions';
+type FilterCategory = 'all' | 'pages' | 'preorders' | 'products' | 'orders' | 'invoices' | 'people' | 'actions';
 
 export const GlobalSearchPalette: React.FC<GlobalSearchPaletteProps> = ({
   isOpen,
@@ -69,6 +71,7 @@ export const GlobalSearchPalette: React.FC<GlobalSearchPaletteProps> = ({
 
   // Lazy loaded supplementary data caches
   const [orders, setOrders] = useState<Order[]>([]);
+  const [preOrders, setPreOrders] = useState<PreOrder[]>([]);
   const [invoices, setInvoices] = useState<Invoice[]>([]);
   const [customers, setCustomers] = useState<Customer[]>([]);
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
@@ -90,6 +93,18 @@ export const GlobalSearchPalette: React.FC<GlobalSearchPaletteProps> = ({
   const isSuperAdmin = user?.role === 'superadmin';
   const isAdminOrManager = isSuperAdmin || user?.role === 'admin' || user?.role === 'manager';
   const isPrivileged = isSuperAdmin || user?.role === 'admin';
+  const canViewPreOrders = hasPermission(user, rolePermissions, 'preOrderView');
+  const canViewSupplier = hasPermission(user, rolePermissions, 'preOrderSupplier') || isPreOrderAdminRole(user?.role);
+  const allowedSubBrands = useMemo<Array<'SAT' | 'GZ' | 'RTX'>>(() => {
+    if (!user) return ['SAT', 'GZ', 'RTX'];
+    if (isSuperAdmin || !user.subBrandAccess || user.subBrandAccess.length === 0) {
+      return ['SAT', 'GZ', 'RTX'];
+    }
+    const valid = user.subBrandAccess.filter(
+      (b): b is 'SAT' | 'GZ' | 'RTX' => b === 'SAT' || b === 'GZ' || b === 'RTX'
+    );
+    return valid.length > 0 ? valid : ['SAT'];
+  }, [user, isSuperAdmin]);
 
   // Load supplementary data once when palette opens
   useEffect(() => {
@@ -98,8 +113,11 @@ export const GlobalSearchPalette: React.FC<GlobalSearchPaletteProps> = ({
       const loadData = async () => {
         setLoading(true);
         try {
-          const [ord, inv, cust, sup, usr, cats, brds] = await Promise.all([
+          const [ord, poList, inv, cust, sup, usr, cats, brds] = await Promise.all([
             getOrders().catch(() => []),
+            canViewPreOrders
+              ? searchPreOrdersForCommandPalette(allowedSubBrands, 80).catch(() => [])
+              : Promise.resolve([]),
             getInvoices().catch(() => []),
             getCustomers().catch(() => []),
             getSuppliers().catch(() => []),
@@ -108,6 +126,7 @@ export const GlobalSearchPalette: React.FC<GlobalSearchPaletteProps> = ({
             getBrands().catch(() => [])
           ]);
           setOrders(ord || []);
+          setPreOrders(poList || []);
           setInvoices(inv || []);
           setCustomers(cust || []);
           setSuppliers(sup || []);
@@ -125,7 +144,7 @@ export const GlobalSearchPalette: React.FC<GlobalSearchPaletteProps> = ({
       setQuery('');
       setSelectedIndex(0);
     }
-  }, [isOpen, isPrivileged, user]);
+  }, [isOpen, isPrivileged, canViewPreOrders, allowedSubBrands, user]);
 
   const saveRecentSearch = (searchTerm: string) => {
     if (!searchTerm.trim()) return;
@@ -240,6 +259,44 @@ export const GlobalSearchPalette: React.FC<GlobalSearchPaletteProps> = ({
         }
       }));
   }, [query, activeFilter, orders, onNavigate, onClose]);
+
+  // 3b. Pre-Orders
+  const preOrderResults = useMemo(() => {
+    if (!canViewPreOrders) return [];
+    if (activeFilter !== 'all' && activeFilter !== 'preorders') return [];
+    if (!query.trim() && activeFilter !== 'preorders') return [];
+    const q = query.toLowerCase().trim();
+    const list = !q
+      ? preOrders.slice(0, 8)
+      : preOrders
+          .filter((po) => {
+            if (!po) return false;
+            return (
+              po.preOrderNumber?.toLowerCase().includes(q) ||
+              po.customerName?.toLowerCase().includes(q) ||
+              po.customerPhone?.includes(q) ||
+              po.productName?.toLowerCase().includes(q) ||
+              po.sku?.toLowerCase().includes(q) ||
+              po.trackingNumber?.toLowerCase().includes(q) ||
+              (canViewSupplier && po.supplierOrderRef?.toLowerCase().includes(q)) ||
+              (canViewSupplier && po.supplierName?.toLowerCase().includes(q))
+            );
+          })
+          .slice(0, 8);
+
+    return list.map((po) => ({
+      type: 'preorder' as const,
+      id: po.id,
+      title: `${po.preOrderNumber} · ${po.productName} (${po.subBrand})`,
+      subtitle: `${po.customerName} (${po.customerPhone}) · ${po.status} · Total ${formatBDT(po.totalAmount)}${po.trackingNumber ? ` · Trk: ${po.trackingNumber}` : ''}`,
+      icon: Plane,
+      action: () => {
+        saveRecentSearch(po.preOrderNumber);
+        onNavigate('preorder_list', 'detail', po.id);
+        onClose();
+      },
+    }));
+  }, [canViewPreOrders, canViewSupplier, query, activeFilter, preOrders, onNavigate, onClose]);
 
   // 4. Invoices
   const invoiceResults = useMemo(() => {
@@ -457,6 +514,7 @@ export const GlobalSearchPalette: React.FC<GlobalSearchPaletteProps> = ({
   const allFlattenedResults = useMemo(() => {
     return [
       ...pageResults,
+      ...preOrderResults,
       ...productResults,
       ...orderResults,
       ...invoiceResults,
@@ -464,7 +522,7 @@ export const GlobalSearchPalette: React.FC<GlobalSearchPaletteProps> = ({
       ...catBrandResults,
       ...actionResults
     ];
-  }, [pageResults, productResults, orderResults, invoiceResults, peopleResults, catBrandResults, actionResults]);
+  }, [pageResults, preOrderResults, productResults, orderResults, invoiceResults, peopleResults, catBrandResults, actionResults]);
 
   // Keyboard navigation handler inside modal
   useEffect(() => {
@@ -533,6 +591,7 @@ export const GlobalSearchPalette: React.FC<GlobalSearchPaletteProps> = ({
           {[
             { id: 'all', label: 'All Results' },
             { id: 'pages', label: 'Pages' },
+            ...(canViewPreOrders ? [{ id: 'preorders', label: 'Pre-Orders' }] : []),
             { id: 'products', label: 'Products' },
             { id: 'orders', label: 'Orders' },
             { id: 'invoices', label: 'Invoices' },
@@ -617,6 +676,41 @@ export const GlobalSearchPalette: React.FC<GlobalSearchPaletteProps> = ({
                   >
                     <div className="flex items-center gap-3 min-w-0">
                       <div className="p-2 rounded-xl bg-slate-100 dark:bg-slate-800 group-hover:bg-[#D4AF37]/20 text-[#D4AF37] transition-colors shrink-0">
+                        <Icon size={16} />
+                      </div>
+                      <div className="min-w-0 text-left">
+                        <p className="font-bold truncate">{item.title}</p>
+                        <p className="text-[10px] text-slate-400 font-mono truncate">{item.subtitle}</p>
+                      </div>
+                    </div>
+                    <ArrowRight size={14} className="text-slate-400 opacity-0 group-hover:opacity-100 transition-opacity shrink-0 ml-2" />
+                  </button>
+                );
+              })}
+            </div>
+          )}
+
+          {!loading && preOrderResults.length > 0 && (
+            <div className="space-y-1 pt-2 border-t border-slate-100 dark:border-slate-800">
+              <p className="px-3 py-1 text-[11px] font-mono font-bold text-slate-400 uppercase tracking-widest">
+                Pre-Orders ({preOrderResults.length})
+              </p>
+              {preOrderResults.map((item) => {
+                const globalIdx = allFlattenedResults.indexOf(item);
+                const isSelected = globalIdx === selectedIndex;
+                const Icon = item.icon;
+                return (
+                  <button
+                    key={item.id}
+                    type="button"
+                    onClick={item.action}
+                    onMouseEnter={() => setSelectedIndex(globalIdx)}
+                    className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs transition-colors cursor-pointer group ${
+                      isSelected ? 'bg-[#D4AF37]/15 dark:bg-[#D4AF37]/20 text-slate-900 dark:text-white border border-[#D4AF37]/40 font-bold' : 'hover:bg-slate-100 dark:hover:bg-slate-800/80 text-slate-700 dark:text-slate-300'
+                    }`}
+                  >
+                    <div className="flex items-center gap-3 min-w-0">
+                      <div className="p-2 rounded-xl bg-amber-50 dark:bg-amber-950/40 text-[#D4AF37] shrink-0">
                         <Icon size={16} />
                       </div>
                       <div className="min-w-0 text-left">

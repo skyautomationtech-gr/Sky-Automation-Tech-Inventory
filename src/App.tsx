@@ -87,13 +87,16 @@ import ReportsAnalytics from './components/ReportsAnalytics';
 import { AuditLogView } from './components/AuditLogView';
 import CompanySettingsView from './components/CompanySettingsView';
 import ProfileSettingsView from './components/ProfileSettingsView';
-import PreOrderPlaceholderView from './components/PreOrders/PreOrderPlaceholderView';
+import PreOrderOverviewView from './components/PreOrders/PreOrderOverviewView';
 import CreatePreOrderView from './components/PreOrders/CreatePreOrderView';
 import AllPreOrdersView from './components/PreOrders/AllPreOrdersView';
 import PaymentManagementView from './components/PreOrders/PaymentManagementView';
 import PreOrderSupplierManagementView from './components/PreOrders/PreOrderSupplierManagementView';
 import ShipmentTrackingView from './components/PreOrders/ShipmentTrackingView';
 import CustomerTrackingLinksView from './components/PreOrders/CustomerTrackingLinksView';
+import RemindersCenterView from './components/PreOrders/RemindersCenterView';
+import PreOrderReportsView from './components/PreOrders/PreOrderReportsView';
+import PreOrderHelpView from './components/PreOrders/PreOrderHelpView';
 import PublicTrackingPortal from './components/PreOrders/PublicTrackingPortal';
 import NotificationCenter from './components/NotificationCenter';
 import { PublicInvoiceVerification } from './components/PublicInvoiceVerification';
@@ -267,6 +270,9 @@ export default function App() {
   const [initialOrderId, setInitialOrderId] = useState<string | null>(null);
   const [initialCustomerId, setInitialCustomerId] = useState<string | null>(null);
   const [selectedPreOrderId, setSelectedPreOrderId] = useState<string | null>(null);
+  const [preOrderListPreset, setPreOrderListPreset] = useState<
+    import('./types').PreOrderListFilterPreset | null
+  >(null);
   const [preOrderCreateDirty, setPreOrderCreateDirty] = useState(false);
   const [pendingNavigation, setPendingNavigation] = useState<{
     tab: string;
@@ -758,6 +764,7 @@ export default function App() {
       if (initialId) setSelectedPreOrderId(initialId);
     } else {
       setSelectedPreOrderId(null);
+      setPreOrderListPreset(null);
     }
   };
 
@@ -1186,6 +1193,20 @@ export default function App() {
         )}
 
         {/* Tab 2b: Pre-Order Management Routes */}
+        {currentTab === 'preorder_overview' && (
+          <ErrorBoundary fallbackTitle="Pre-Order Overview encountered an issue">
+            <PreOrderOverviewView
+              user={user}
+              rolePermissions={rolePermissions}
+              onNavigate={navigateToTab}
+              onOpenPreOrderList={(preset) => {
+                setPreOrderListPreset(preset);
+                performNavigate('preorder_list');
+              }}
+            />
+          </ErrorBoundary>
+        )}
+
         {currentTab === 'preorder_create' && (
           <ErrorBoundary fallbackTitle="Create Pre-Order encountered an issue">
             <CreatePreOrderView
@@ -1220,6 +1241,8 @@ export default function App() {
               onNavigate={navigateToTab}
               initialSelectedPreOrderId={selectedPreOrderId}
               onClearInitialSelected={() => setSelectedPreOrderId(null)}
+              initialFilter={preOrderListPreset}
+              onClearInitialFilter={() => setPreOrderListPreset(null)}
             />
           </ErrorBoundary>
         )}
@@ -1272,22 +1295,36 @@ export default function App() {
           </ErrorBoundary>
         )}
 
-        {isPreOrderTab(currentTab) &&
-          currentTab !== 'preorder_create' &&
-          currentTab !== 'preorder_list' &&
-          currentTab !== 'preorder_payments' &&
-          currentTab !== 'preorder_suppliers' &&
-          currentTab !== 'preorder_tracking' &&
-          currentTab !== 'preorder_links' && (
-            <ErrorBoundary fallbackTitle="Pre-Order Management encountered an issue">
-              <PreOrderPlaceholderView
-                tab={currentTab}
-                user={user}
-                rolePermissions={rolePermissions}
-                onNavigate={navigateToTab}
-              />
-            </ErrorBoundary>
-          )}
+        {currentTab === 'preorder_reminders' && (
+          <ErrorBoundary fallbackTitle="Notifications & Reminders Center encountered an issue">
+            <RemindersCenterView
+              user={user}
+              rolePermissions={rolePermissions}
+              companySettings={companySettings}
+              onNavigate={navigateToTab}
+            />
+          </ErrorBoundary>
+        )}
+
+        {currentTab === 'preorder_reports' && (
+          <ErrorBoundary fallbackTitle="Pre-Order Reports encountered an issue">
+            <PreOrderReportsView
+              user={user}
+              rolePermissions={rolePermissions}
+              onNavigate={navigateToTab}
+            />
+          </ErrorBoundary>
+        )}
+
+        {currentTab === 'preorder_help' && (
+          <ErrorBoundary fallbackTitle="Pre-Order Quick Guide encountered an issue">
+            <PreOrderHelpView
+              user={user}
+              rolePermissions={rolePermissions}
+              onNavigate={navigateToTab}
+            />
+          </ErrorBoundary>
+        )}
 
         {/* Tab 4: User Management View */}
         {currentTab === 'users' && (
@@ -1308,6 +1345,7 @@ export default function App() {
               requireCheckIn={requireCheckIn} 
               initialCustomerId={initialCustomerId}
               clearInitialCustomerId={() => setInitialCustomerId(null)}
+              onOpenPreOrder={(preOrderId) => navigateToTab('preorder_list', 'detail', preOrderId)}
             />
           </ErrorBoundary>
         )}

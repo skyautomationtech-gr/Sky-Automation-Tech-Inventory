@@ -16,9 +16,12 @@ import {
   AlertCircle,
   CheckCircle2,
   Trash2,
-  Copy
+  Copy,
+  Plane,
+  MessageCircle,
+  ExternalLink
 } from 'lucide-react';
-import { Customer, Order, UserProfile } from '../types';
+import { Customer, Order, PreOrder, UserProfile } from '../types';
 import { 
   getCustomers, 
   addCustomer, 
@@ -29,19 +32,23 @@ import {
   subscribeToOrders,
   localStore
 } from '../firebase/db';
+import { getPreOrdersByCustomer } from '../firebase/preOrderDb';
+import { formatBDT, normalizeBdPhone } from '../preOrders/constants';
 
 interface CustomerManagementProps {
   user: UserProfile | null;
   requireCheckIn?: () => boolean;
   initialCustomerId?: string | null;
   clearInitialCustomerId?: () => void;
+  onOpenPreOrder?: (preOrderId: string) => void;
 }
 
 export default function CustomerManagement({ 
   user, 
   requireCheckIn,
   initialCustomerId,
-  clearInitialCustomerId
+  clearInitialCustomerId,
+  onOpenPreOrder
 }: CustomerManagementProps) {
   // Initialize immediately from cache to prevent layout jumps
   const [customers, setCustomers] = useState<Customer[]>(() => localStore.get<Customer[]>('customers') || []);
@@ -63,6 +70,8 @@ export default function CustomerManagement({
   // Modal / Form states
   const [showAddModal, setShowAddModal] = useState(false);
   const [selectedCustomer, setSelectedCustomer] = useState<Customer | null>(null);
+  const [customerPreOrders, setCustomerPreOrders] = useState<PreOrder[]>([]);
+  const [loadingPreOrders, setLoadingPreOrders] = useState(false);
   const [showEditForm, setShowEditForm] = useState(false);
   const [customerToDelete, setCustomerToDelete] = useState<Customer | null>(null);
 
@@ -119,6 +128,28 @@ export default function CustomerManagement({
       }
     }
   }, [initialCustomerId, customers, clearInitialCustomerId]);
+
+  useEffect(() => {
+    if (!selectedCustomer) {
+      setCustomerPreOrders([]);
+      return;
+    }
+    let active = true;
+    setLoadingPreOrders(true);
+    getPreOrdersByCustomer(selectedCustomer.id, selectedCustomer.phone)
+      .then((list) => {
+        if (active) setCustomerPreOrders(list);
+      })
+      .catch(() => {
+        if (active) setCustomerPreOrders([]);
+      })
+      .finally(() => {
+        if (active) setLoadingPreOrders(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, [selectedCustomer]);
 
   // Bangladesh format validation
   const validateBdPhone = (phone: string) => {
@@ -998,6 +1029,112 @@ export default function CustomerManagement({
                           </div>
                         ))}
                       </div>
+                    )}
+                  </div>
+
+                  {/* Pre-Orders Summary & History */}
+                  <div className="space-y-2 pt-2 border-t border-slate-100">
+                    <div className="flex justify-between items-center">
+                      <h4 className="font-bold text-slate-700 uppercase tracking-wider text-[10px] flex items-center gap-1.5">
+                        <Plane size={12} className="text-[#D4AF37]" />
+                        <span>Pre-Orders ({customerPreOrders.length})</span>
+                      </h4>
+                      {selectedCustomer.phone && (
+                        <div className="flex items-center gap-1.5">
+                          <a
+                            href={`tel:${normalizeBdPhone(selectedCustomer.phone)}`}
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-slate-100 hover:bg-slate-200 text-slate-700 text-[10px] font-bold"
+                          >
+                            <Phone size={10} />
+                            Call
+                          </a>
+                          <a
+                            href={`https://wa.me/${(() => {
+                              const p = normalizeBdPhone(selectedCustomer.phone);
+                              return p.startsWith('01') ? `88${p}` : p;
+                            })()}`}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-emerald-50 hover:bg-emerald-100 text-emerald-700 border border-emerald-200 text-[10px] font-bold"
+                          >
+                            <MessageCircle size={10} />
+                            WhatsApp
+                          </a>
+                        </div>
+                      )}
+                    </div>
+
+                    {loadingPreOrders ? (
+                      <div className="p-3 text-center text-slate-400 text-[11px]">
+                        Loading Pre-Orders...
+                      </div>
+                    ) : customerPreOrders.length === 0 ? (
+                      <div className="p-3 text-center text-slate-400 bg-slate-50 rounded-lg border border-dashed border-slate-200">
+                        <p className="text-[11px] italic">No Pre-Orders linked to this customer.</p>
+                      </div>
+                    ) : (
+                      <>
+                        <div className="grid grid-cols-3 gap-1.5 text-center">
+                          <div className="p-1.5 rounded-lg bg-slate-50 border border-slate-100">
+                            <span className="block text-[9px] font-bold uppercase text-slate-400">Active</span>
+                            <span className="font-mono font-bold text-xs text-slate-800">
+                              {customerPreOrders.filter((p) => p.status !== 'Delivered' && p.status !== 'Cancelled' && p.status !== 'Refunded').length}
+                            </span>
+                          </div>
+                          <div className="p-1.5 rounded-lg bg-slate-50 border border-slate-100">
+                            <span className="block text-[9px] font-bold uppercase text-slate-400">Paid Adv.</span>
+                            <span className="font-mono font-bold text-xs text-emerald-700">
+                              {formatBDT(customerPreOrders.reduce((s, p) => s + (p.advancePaid || 0), 0))}
+                            </span>
+                          </div>
+                          <div className="p-1.5 rounded-lg bg-slate-50 border border-slate-100">
+                            <span className="block text-[9px] font-bold uppercase text-slate-400">Active Due</span>
+                            <span className="font-mono font-bold text-xs text-rose-600">
+                              {formatBDT(
+                                customerPreOrders
+                                  .filter((p) => p.status !== 'Cancelled' && p.status !== 'Refunded')
+                                  .reduce((s, p) => s + Math.max(0, p.dueAmount || 0), 0)
+                              )}
+                            </span>
+                          </div>
+                        </div>
+
+                        <div className="space-y-1.5 max-h-44 overflow-y-auto">
+                          {customerPreOrders.map((po) => (
+                            <div
+                              key={po.id}
+                              onClick={() => {
+                                if (onOpenPreOrder) {
+                                  setSelectedCustomer(null);
+                                  onOpenPreOrder(po.id);
+                                }
+                              }}
+                              className={`p-2 bg-slate-50 rounded-lg border border-slate-100 flex items-center justify-between ${
+                                onOpenPreOrder ? 'cursor-pointer hover:border-[#D4AF37]/60' : ''
+                              }`}
+                            >
+                              <div className="min-w-0 pr-2">
+                                <div className="font-mono font-bold text-slate-900 text-xs flex items-center gap-1.5">
+                                  <span>{po.preOrderNumber}</span>
+                                  <span className="text-[10px] px-1 rounded bg-slate-900 text-[#D4AF37]">{po.subBrand}</span>
+                                  {onOpenPreOrder && <ExternalLink size={10} className="text-[#B89628]" />}
+                                </div>
+                                <div className="text-[10px] text-slate-500 truncate">
+                                  {po.productName} &bull; Qty {po.qty}
+                                </div>
+                              </div>
+                              <div className="text-right shrink-0">
+                                <div className="font-mono font-bold text-slate-800 text-xs">
+                                  {formatBDT(po.totalAmount)}
+                                </div>
+                                <span className="text-[9px] font-bold uppercase px-1.5 py-0.5 rounded bg-amber-50 text-amber-800 border border-amber-200">
+                                  {po.status}
+                                </span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </>
                     )}
                   </div>
                 </>

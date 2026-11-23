@@ -19,12 +19,14 @@ import {
   RefreshCw,
   RotateCcw,
   ShieldCheck,
+  X,
 } from 'lucide-react';
 import {
   Brand,
   Category,
   CompanySettings,
   PreOrder,
+  PreOrderListFilterPreset,
   PreOrderPaymentState,
   PreOrderStatus,
   Product,
@@ -69,6 +71,8 @@ export interface AllPreOrdersViewProps {
   onNavigate?: (tab: string, subAction?: string, initialId?: string | null) => void;
   initialSelectedPreOrderId?: string | null;
   onClearInitialSelected?: () => void;
+  initialFilter?: PreOrderListFilterPreset | null;
+  onClearInitialFilter?: () => void;
 }
 
 export const AllPreOrdersView: React.FC<AllPreOrdersViewProps> = ({
@@ -82,6 +86,8 @@ export const AllPreOrdersView: React.FC<AllPreOrdersViewProps> = ({
   onNavigate,
   initialSelectedPreOrderId,
   onClearInitialSelected,
+  initialFilter,
+  onClearInitialFilter,
 }) => {
   const isAdmin = isPreOrderAdminRole(user.role);
   const canView = hasPermission(user, rolePermissions, 'preOrderView');
@@ -146,6 +152,25 @@ export const AllPreOrdersView: React.FC<AllPreOrdersViewProps> = ({
       setActiveDrawerId(initialSelectedPreOrderId);
     }
   }, [initialSelectedPreOrderId]);
+
+  // Apply filter preset coming from Overview Dashboard or Reminders
+  useEffect(() => {
+    if (!initialFilter) return;
+    setSelectedStatuses(initialFilter.statuses ? [...initialFilter.statuses] : []);
+    setSubBrandFilter(initialFilter.subBrand || 'ALL');
+    setPaymentStateFilter(initialFilter.paymentState || 'ALL');
+    setOverdueOnly(Boolean(initialFilter.overdueOnly));
+    if (initialFilter.searchTerm !== undefined) {
+      setSearchInput(initialFilter.searchTerm);
+      setDebouncedSearch(initialFilter.searchTerm.trim());
+    } else {
+      setSearchInput('');
+      setDebouncedSearch('');
+    }
+    setSupplierFilter('ALL');
+    setDateFrom('');
+    setDateTo('');
+  }, [initialFilter]);
 
   // Close multi-select status dropdown & row actions menu on outside click
   useEffect(() => {
@@ -293,6 +318,7 @@ export const AllPreOrdersView: React.FC<AllPreOrdersViewProps> = ({
     setDateFrom('');
     setDateTo('');
     setOverdueOnly(false);
+    onClearInitialFilter?.();
   };
 
   const handleNextPage = () => {
@@ -371,6 +397,22 @@ export const AllPreOrdersView: React.FC<AllPreOrdersViewProps> = ({
           )}
         </div>
       </div>
+
+      {initialFilter?.label && (
+        <div className="flex items-center justify-between gap-2 px-3.5 py-2 rounded-xl bg-amber-50/80 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/70 text-xs text-amber-900 dark:text-amber-200">
+          <span>
+            Dashboard Filter Preset: <strong>{initialFilter.label}</strong>
+          </span>
+          <button
+            type="button"
+            onClick={resetFilters}
+            className="inline-flex items-center gap-1 font-semibold text-[#B89628] hover:underline cursor-pointer"
+          >
+            <X className="w-3.5 h-3.5" />
+            Clear Preset
+          </button>
+        </div>
+      )}
 
       {/* Filters Toolbar */}
       <Card padding="sm" className="space-y-3">

@@ -141,9 +141,15 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    match /settings/preOrderSettings {
+      allow read: if isSignedIn();
+      allow create, update: if isAdmin() || (isActiveUser() && userRole() == 'manager');
+      allow delete: if false;
+    }
+
     match /settings/{settingId} {
-      allow read: if isSignedIn() && !(settingId in ['rolePermissions', 'preOrderCounter', 'customerCounter', 'supplierCounter', 'invoiceCounters']);
-      allow write: if isAdmin() && !(settingId in ['rolePermissions', 'preOrderCounter', 'customerCounter', 'supplierCounter', 'invoiceCounters']);
+      allow read: if isSignedIn() && !(settingId in ['rolePermissions', 'preOrderCounter', 'customerCounter', 'supplierCounter', 'invoiceCounters', 'preOrderSettings']);
+      allow write: if isAdmin() && !(settingId in ['rolePermissions', 'preOrderCounter', 'customerCounter', 'supplierCounter', 'invoiceCounters', 'preOrderSettings']);
     }
 
     // ==========================================
@@ -316,7 +322,7 @@ service cloud.firestore {
       // Append-Only Shipment Events Log
       match /shipmentEvents/{eventId} {
         allow read: if hasPreOrderPerm('preOrderView');
-        allow create: if (hasPreOrderPerm('preOrderManageTracking') || hasPreOrderPerm('preOrderUpdateStatus')) &&
+        allow create: if (hasPreOrderPerm('preOrderManageTracking') || hasPreOrderPerm('preOrderUpdateStatus') || hasPreOrderPerm('preOrderCollectPayment') || hasPreOrderPerm('preOrderView')) &&
           request.resource.data.text is string &&
           request.resource.data.text.size() > 0;
         allow update, delete: if false;
@@ -371,13 +377,38 @@ service cloud.firestore {
       allow update, delete: if false;
     }
 
-    // Pre-Order Notifications
+    // Pre-Order Notifications & Daily Reminders
     match /preOrderNotifications/{notificationId} {
       allow read: if hasPreOrderPerm('preOrderView');
-      allow create: if hasPreOrderPerm('preOrderView') || hasPreOrderPerm('preOrderCreate');
+      allow create: if (hasPreOrderPerm('preOrderView') || hasPreOrderPerm('preOrderCreate')) &&
+        request.resource.data.id == notificationId &&
+        request.resource.data.type is string &&
+        request.resource.data.title is string &&
+        request.resource.data.createdAt is number;
       allow update: if hasPreOrderPerm('preOrderView') &&
-        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['readBy']);
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['readBy', 'snoozedUntilBy']);
       allow delete: if isSuperAdmin();
+    }
+
+    // Pre-Order KPI Summary Rollup (Quota-friendly Overview Dashboard)
+    match /preOrderStats/{docId} {
+      allow read: if hasPreOrderPerm('preOrderView');
+      allow create, update: if docId == 'summary' &&
+        request.resource.data.id == 'summary' &&
+        request.resource.data.totalOrders is number &&
+        (
+          isAdmin() ||
+          hasPreOrderPerm('preOrderCreate') ||
+          hasPreOrderPerm('preOrderEdit') ||
+          hasPreOrderPerm('preOrderUpdateStatus') ||
+          hasPreOrderPerm('preOrderCollectPayment') ||
+          hasPreOrderPerm('preOrderVerifyPayment') ||
+          hasPreOrderPerm('preOrderRefund') ||
+          hasPreOrderPerm('preOrderReceiveStock') ||
+          hasPreOrderPerm('preOrderConvertSale') ||
+          hasPreOrderPerm('preOrderSupplier')
+        );
+      allow delete: if false;
     }
 
     // Immutable Append-Only Pre-Order Accounting Postings Ledger

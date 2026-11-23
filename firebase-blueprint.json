@@ -580,10 +580,58 @@
       "properties": {
         "preOrderId": { "type": "string" },
         "type": { "type": "string" },
+        "category": { "type": "string" },
+        "severity": { "type": "string" },
+        "dayKey": { "type": "string" },
         "title": { "type": "string" },
         "message": { "type": "string" },
         "readBy": { "type": "array" },
+        "snoozedUntilBy": { "type": "object" },
         "createdAt": { "type": "number" }
+      }
+    },
+    "PreOrderStats": {
+      "title": "PreOrderStats",
+      "description": "Pre-Order KPI rollup document maintained inside transactions and rebuildable by Admins",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "totalOrders": { "type": "number" },
+        "activeOrders": { "type": "number" },
+        "deliveredOrders": { "type": "number" },
+        "cancelledOrders": { "type": "number" },
+        "refundedOrders": { "type": "number" },
+        "overdueOrders": { "type": "number" },
+        "totalOrderValue": { "type": "number" },
+        "totalAdvanceCollected": { "type": "number" },
+        "totalCustomerDue": { "type": "number" },
+        "pendingPaymentCount": { "type": "number" },
+        "pendingPaymentAmount": { "type": "number" },
+        "customerAdvancesLiability": { "type": "number" },
+        "supplierPayableEstimate": { "type": "number" },
+        "statusCounts": { "type": "object" },
+        "subBrandStats": { "type": "object" },
+        "lastUpdatedAt": { "type": "number" }
+      }
+    },
+    "PreOrderSettings": {
+      "title": "PreOrderSettings",
+      "description": "Pre-Order daily reminder thresholds and bilingual EN/BN customer message templates",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "enableArrivalSoonReminder": { "type": "boolean" },
+        "enableArrivalTodayReminder": { "type": "boolean" },
+        "enableDelayReminder": { "type": "boolean" },
+        "enableDueReminder": { "type": "boolean" },
+        "enableReadyDeliveryReminder": { "type": "boolean" },
+        "arrivalReminderDays": { "type": "number" },
+        "dueReminderDays": { "type": "number" },
+        "delayGraceDays": { "type": "number" },
+        "readyWaitingDays": { "type": "number" },
+        "receivedNotConvertedDays": { "type": "number" },
+        "messageTemplates": { "type": "object" },
+        "updatedAt": { "type": "number" }
       }
     },
     "AccountingPosting": {
@@ -773,6 +821,14 @@
     "/accountingPostings/{postingId}": {
       "schema": "AccountingPosting",
       "description": "Immutable idempotent accounting ledger postings for pre-order lifecycle"
+    },
+    "/settings/preOrderSettings": {
+      "schema": "PreOrderSettings",
+      "description": "Pre-Order reminder thresholds and EN/BN message templates settings document"
+    },
+    "/preOrderStats/{docId}": {
+      "schema": "PreOrderStats",
+      "description": "Transactional Pre-Order dashboard summary document"
     },
     "/preOrderConversions/{preOrderId}": {
       "schema": "PreOrderConversionLock",

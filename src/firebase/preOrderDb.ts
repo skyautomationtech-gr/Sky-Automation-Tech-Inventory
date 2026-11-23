@@ -58,11 +58,14 @@ import {
   PreOrderPaymentType,
   PreOrderPrivateCost,
   PreOrderReceipt,
+  PreOrderSettings,
   PreOrderShipment,
   PreOrderShipmentDoc,
   PreOrderShipmentEvent,
   PreOrderShippingExpensesBreakdown,
   PreOrderShippingMethod,
+  PreOrderStats,
+  PreOrderStatsRebuildDiff,
   PreOrderStatus,
   PreOrderStatusHistory,
   PreOrderSupplierPayment,
@@ -73,6 +76,7 @@ import {
   PublicTrackingRecord,
   RolePermissionsMap,
   StockLog,
+  Supplier,
   UserProfile,
   Variant,
 } from '../types';
@@ -126,6 +130,17 @@ import {
   generateSecureTrackingToken,
   isSafeTrackingTokenFormat,
 } from '../preOrders/tracking';
+import {
+  computePreOrderStatsFromData,
+  createEmptyPreOrderStats,
+  diffPreOrderStats,
+  evaluateTimeBasedReminderCandidates,
+  isActivePreOrderStatus,
+} from '../preOrders/stats';
+import {
+  DEFAULT_PRE_ORDER_SETTINGS,
+  mergeWithDefaultPreOrderSettings,
+} from '../preOrders/templates';
 
 export interface PreOrderActor {
   id: string;
@@ -166,6 +181,161 @@ export function maskPhoneNumber(phone?: string): string {
   const cleaned = phone.trim();
   if (cleaned.length <= 5) return '***';
   return `${cleaned.slice(0, 3)}****${cleaned.slice(-3)}`;
+}
+
+// ==========================================
+// TRANSACTIONAL PRE-ORDER STATS & EVENT NOTIFICATIONS
+// ==========================================
+
+function applyOrderSnapshotContribution(stats: PreOrderStats, po: PreOrder, dir: 1 | -1): void {
+  const isVoid = po.status === 'Cancelled' || po.status === 'Refunded';
+  const totalP = isVoid ? 0 : toPaisa(po.totalAmount);
+  const advP = toPaisa(po.advancePaid);
+  const dueP = isVoid ? 0 : Math.max(0, toPaisa(po.dueAmount));
+  const refP = toPaisa(po.refundedAmount);
+
+  stats.totalOrders = Math.max(0, stats.totalOrders + dir);
+  if (po.status) {
+    stats.statusCounts[po.status] = Math.max(0, (stats.statusCounts[po.status] || 0) + dir);
+  }
+  if (isActivePreOrderStatus(po.status)) stats.activeOrders = Math.max(0, stats.activeOrders + dir);
+  if (po.status === 'Ordered from China' || po.status === 'China Warehouse') {
+    stats.chinaOrders = Math.max(0, stats.chinaOrders + dir);
+  }
+  if (po.status === 'International Shipment') {
+    stats.internationalShipments = Math.max(0, stats.internationalShipments + dir);
+  }
+  if (po.status === 'Customs Clearance') {
+    stats.customsClearance = Math.max(0, stats.customsClearance + dir);
+  }
+  if (po.status === 'Arrived in Bangladesh') {
+    stats.arrivedProducts = Math.max(0, stats.arrivedProducts + dir);
+  }
+  if (po.status === 'Received in Stock') {
+    stats.receivedInStock = Math.max(0, stats.receivedInStock + dir);
+  }
+  if (po.status === 'Ready for Delivery') {
+    stats.readyForDelivery = Math.max(0, stats.readyForDelivery + dir);
+  }
+  if (po.status === 'Delivered') stats.deliveredOrders = Math.max(0, stats.deliveredOrders + dir);
+  if (po.status === 'Cancelled') stats.cancelledOrders = Math.max(0, stats.cancelledOrders + dir);
+  if (po.status === 'Refunded') stats.refundedOrders = Math.max(0, stats.refundedOrders + dir);
+  if (po.convertedSaleId || po.convertedOrderId) {
+    stats.convertedOrders = Math.max(0, stats.convertedOrders + dir);
+  }
+  if (isPreOrderOverdue(po.estimatedDeliveryDate, po.status, po.stockReceived)) {
+    stats.overdueOrders = Math.max(0, stats.overdueOrders + dir);
+  }
+
+  stats.totalOrderValue = fromPaisa(Math.max(0, toPaisa(stats.totalOrderValue) + dir * totalP));
+  stats.totalAdvanceCollected = fromPaisa(Math.max(0, toPaisa(stats.totalAdvanceCollected) + dir * advP));
+  stats.totalCustomerDue = fromPaisa(Math.max(0, toPaisa(stats.totalCustomerDue) + dir * dueP));
+  stats.totalRefunded = fromPaisa(Math.max(0, toPaisa(stats.totalRefunded) + dir * refP));
+
+  const sb: 'SAT' | 'GZ' | 'RTX' = po.subBrand === 'GZ' || po.subBrand === 'RTX' ? po.subBrand : 'SAT';
+  if (!stats.subBrandStats[sb]) {
+    stats.subBrandStats[sb] = { count: 0, totalAmount: 0, advancePaid: 0, dueAmount: 0 };
+  }
+  stats.subBrandStats[sb].count = Math.max(0, stats.subBrandStats[sb].count + dir);
+  stats.subBrandStats[sb].totalAmount = fromPaisa(
+    Math.max(0, toPaisa(stats.subBrandStats[sb].totalAmount) + dir * totalP)
+  );
+  stats.subBrandStats[sb].advancePaid = fromPaisa(
+    Math.max(0, toPaisa(stats.subBrandStats[sb].advancePaid) + dir * advP)
+  );
+  stats.subBrandStats[sb].dueAmount = fromPaisa(
+    Math.max(0, toPaisa(stats.subBrandStats[sb].dueAmount) + dir * dueP)
+  );
+}
+
+function writeStatsDeltaInTxn(
+  txn: Transaction,
+  statsSnap: any,
+  params: {
+    beforeOrder?: PreOrder | null;
+    afterOrder?: PreOrder | null;
+    pendingCountDelta?: number;
+    pendingAmountDelta?: number;
+    customerAdvanceLiabilityDelta?: number;
+    supplierPayableDelta?: number;
+    now: number;
+  }
+): void {
+  const base = createEmptyPreOrderStats();
+  const raw = statsSnap && statsSnap.exists() ? (statsSnap.data() as Partial<PreOrderStats>) : {};
+  const next: PreOrderStats = {
+    ...base,
+    ...raw,
+    id: 'summary',
+    statusCounts: { ...base.statusCounts, ...(raw.statusCounts || {}) },
+    subBrandStats: {
+      SAT: { ...base.subBrandStats.SAT, ...(raw.subBrandStats?.SAT || {}) },
+      GZ: { ...base.subBrandStats.GZ, ...(raw.subBrandStats?.GZ || {}) },
+      RTX: { ...base.subBrandStats.RTX, ...(raw.subBrandStats?.RTX || {}) },
+    },
+    lastUpdatedAt: params.now,
+  };
+
+  if (params.beforeOrder) {
+    applyOrderSnapshotContribution(next, params.beforeOrder, -1);
+  }
+  if (params.afterOrder) {
+    applyOrderSnapshotContribution(next, params.afterOrder, 1);
+  }
+  if (params.pendingCountDelta) {
+    next.pendingPaymentCount = Math.max(0, next.pendingPaymentCount + params.pendingCountDelta);
+  }
+  if (params.pendingAmountDelta) {
+    next.pendingPaymentAmount = fromPaisa(
+      Math.max(0, toPaisa(next.pendingPaymentAmount) + toPaisa(params.pendingAmountDelta))
+    );
+  }
+  if (params.customerAdvanceLiabilityDelta) {
+    next.customerAdvancesLiability = fromPaisa(
+      Math.max(0, toPaisa(next.customerAdvancesLiability) + toPaisa(params.customerAdvanceLiabilityDelta))
+    );
+  }
+  if (params.supplierPayableDelta) {
+    next.supplierPayableEstimate = fromPaisa(
+      Math.max(0, toPaisa(next.supplierPayableEstimate) + toPaisa(params.supplierPayableDelta))
+    );
+  }
+
+  txn.set(doc(db, 'preOrderStats', 'summary'), sanitizeData(next));
+}
+
+function mapStatusToNotificationType(status: PreOrderStatus): {
+  type: PreOrderNotification['type'];
+  severity: 'info' | 'warning' | 'urgent';
+  targetTab: string;
+} {
+  switch (status) {
+    case 'Advance Received':
+      return { type: 'advance_received', severity: 'info', targetTab: 'preorder_payments' };
+    case 'Order Confirmed':
+      return { type: 'order_confirmed', severity: 'info', targetTab: 'preorder_list' };
+    case 'Ordered from China':
+    case 'China Warehouse':
+    case 'International Shipment':
+    case 'Customs Clearance':
+      return { type: 'shipment_updated', severity: 'info', targetTab: 'preorder_tracking' };
+    case 'Arrived in Bangladesh':
+      return { type: 'product_arrived', severity: 'warning', targetTab: 'preorder_list' };
+    case 'Received in Stock':
+      return { type: 'stock_received', severity: 'info', targetTab: 'preorder_list' };
+    case 'Ready for Delivery':
+      return { type: 'ready_for_delivery', severity: 'warning', targetTab: 'preorder_list' };
+    case 'Out for Delivery':
+      return { type: 'out_for_delivery', severity: 'info', targetTab: 'preorder_list' };
+    case 'Delivered':
+      return { type: 'delivered', severity: 'info', targetTab: 'preorder_list' };
+    case 'Cancelled':
+      return { type: 'cancelled', severity: 'warning', targetTab: 'preorder_list' };
+    case 'Refunded':
+      return { type: 'refund_recorded', severity: 'warning', targetTab: 'preorder_payments' };
+    default:
+      return { type: 'status_update', severity: 'info', targetTab: 'preorder_list' };
+  }
 }
 
 // ==========================================
@@ -453,13 +623,16 @@ export async function createPreOrder(
   let resolvedCustomerCode = '';
   let createdNewCustomerRecord: Customer | null = null;
 
+  const statsSummaryRef = doc(db, 'preOrderStats', 'summary');
+
   await runTransaction(db, async (txn) => {
     // 1. ALL TRANSACTION READS FIRST
-    const [existingPoSnap, phoneIdxSnap, poCounterSnap, custCounterSnap] = await Promise.all([
+    const [existingPoSnap, phoneIdxSnap, poCounterSnap, custCounterSnap, statsSnap] = await Promise.all([
       txn.get(preOrderRef),
       txn.get(phoneIndexRef),
       txn.get(preOrderCounterRef),
       txn.get(customerCounterRef),
+      txn.get(statsSummaryRef),
     ]);
 
     if (existingPoSnap.exists()) {
@@ -698,6 +871,41 @@ export async function createPreOrder(
         txn.set(doc(db, 'accountingPostings', advancePosting.id), sanitizeData(advancePosting));
       }
     }
+
+    writeStatsDeltaInTxn(txn, statsSnap, {
+      afterOrder: preOrderDoc,
+      pendingCountDelta: initialAdvanceAmount > 0 && initialPaymentStatus === 'pending' ? 1 : 0,
+      pendingAmountDelta: initialAdvanceAmount > 0 && initialPaymentStatus === 'pending' ? initialAdvanceAmount : 0,
+      customerAdvanceLiabilityDelta: shouldAutoVerify ? initialAdvanceAmount : 0,
+      now,
+    });
+
+    const notifMeta = mapStatusToNotificationType(startStatus);
+    const evNotifRef = doc(db, 'preOrderNotifications', generateId('NTF'));
+    txn.set(
+      evNotifRef,
+      sanitizeData({
+        id: evNotifRef.id,
+        preOrderId,
+        preOrderNumber: createdNumber,
+        subBrand: preOrderDoc.subBrand,
+        type: notifMeta.type,
+        category: 'event',
+        severity: notifMeta.severity,
+        title: `New Pre-Order · ${createdNumber}`,
+        message: `${preOrderDoc.customerName} ordered ${preOrderDoc.productName} x${preOrderDoc.qty} (${startStatus}).`,
+        targetTab: notifMeta.targetTab,
+        forRoles: ['superadmin', 'admin', 'manager', 'staff'],
+        readBy: [],
+        customerPhone: preOrderDoc.customerPhone,
+        customerName: preOrderDoc.customerName,
+        dueAmount: preOrderDoc.dueAmount,
+        estimatedArrivalDate: preOrderDoc.estimatedDeliveryDate,
+        preOrderStatus: startStatus,
+        createdAt: now,
+        createdBy: actor.id,
+      } as PreOrderNotification)
+    );
   });
 
   if (createdNewCustomerRecord) {
@@ -1074,10 +1282,13 @@ export async function updatePreOrder(
   const activePayments = ledgerPayments.filter((p) => p.status !== 'rejected');
 
   await runTransaction(db, async (txn) => {
-    const snap = await txn.get(preOrderRef);
+    const [snap, statsSnap] = await Promise.all([
+      txn.get(preOrderRef),
+      txn.get(doc(db, 'preOrderStats', 'summary')),
+    ]);
     if (!snap.exists()) throw new Error('Pre-order not found.');
 
-    const current = snap.data() as PreOrder;
+    const current = { ...(snap.data() as PreOrder), id: snap.id };
     if (PRE_ORDER_EDIT_LOCKED_STATUSES.includes(current.status)) {
       throw new Error(`Pre-orders with status "${current.status}" are locked from editing.`);
     }
@@ -1264,6 +1475,13 @@ export async function updatePreOrder(
       timestamp: now,
     };
     txn.set(auditRef, sanitizeData(auditDoc));
+
+    const updatedAfter = { ...current, ...nextDoc } as PreOrder;
+    writeStatsDeltaInTxn(txn, statsSnap, {
+      beforeOrder: current,
+      afterOrder: updatedAfter,
+      now,
+    });
   });
 
   const syncRes = await syncPublicTracking(preOrderId);
@@ -1489,10 +1707,11 @@ export async function collectPreOrderPayment(
   let resultOrder!: PreOrder;
 
   await runTransaction(db, async (txn) => {
-    const [orderSnap, existingPaymentSnap, existingLedger] = await Promise.all([
+    const [orderSnap, existingPaymentSnap, existingLedger, statsSnap] = await Promise.all([
       txn.get(preOrderRef),
       txn.get(paymentRef),
       loadAndLockOrderLedgerInTxn(txn, preOrderId),
+      txn.get(doc(db, 'preOrderStats', 'summary')),
     ]);
 
     if (!orderSnap.exists()) throw new Error('Pre-order not found.');
@@ -1648,11 +1867,43 @@ export async function collectPreOrderPayment(
           id: notifRef.id,
           preOrderId,
           preOrderNumber: order.preOrderNumber,
+          subBrand: order.subBrand,
           type: 'payment_pending',
-          title: 'Payment Pending Verification',
+          category: 'event',
+          severity: 'warning',
+          title: `Payment Pending Verification · ${order.preOrderNumber}`,
           message: `${order.preOrderNumber}: ৳${safeAmount.toLocaleString()} via ${input.method} recorded by ${actor.name} awaiting verification.`,
           targetTab: 'preorder_payments',
+          forRoles: ['superadmin', 'admin', 'manager'],
           readBy: [],
+          customerPhone: order.customerPhone,
+          customerName: order.customerName,
+          dueAmount: patch.dueAmount,
+          preOrderStatus: order.status,
+          createdAt: now,
+          createdBy: actor.id,
+        } as PreOrderNotification)
+      );
+    } else {
+      txn.set(
+        notifRef,
+        sanitizeData({
+          id: notifRef.id,
+          preOrderId,
+          preOrderNumber: order.preOrderNumber,
+          subBrand: order.subBrand,
+          type: 'advance_received',
+          category: 'event',
+          severity: 'info',
+          title: `Advance Received · ${order.preOrderNumber}`,
+          message: `৳${safeAmount.toLocaleString()} (${input.method}) verified for ${order.customerName}. Remaining due: ৳${patch.dueAmount.toLocaleString()}.`,
+          targetTab: 'preorder_payments',
+          forRoles: ['superadmin', 'admin', 'manager', 'staff'],
+          readBy: [],
+          customerPhone: order.customerPhone,
+          customerName: order.customerName,
+          dueAmount: patch.dueAmount,
+          preOrderStatus: order.status,
           createdAt: now,
           createdBy: actor.id,
         } as PreOrderNotification)
@@ -1661,6 +1912,15 @@ export async function collectPreOrderPayment(
 
     resultPayment = paymentDoc;
     resultOrder = { ...order, ...patch };
+
+    writeStatsDeltaInTxn(txn, statsSnap, {
+      beforeOrder: order,
+      afterOrder: resultOrder,
+      pendingCountDelta: nextStatus === 'pending' ? 1 : 0,
+      pendingAmountDelta: nextStatus === 'pending' ? safeAmount : 0,
+      customerAdvanceLiabilityDelta: nextStatus === 'verified' ? safeAmount : 0,
+      now,
+    });
   });
 
   const syncRes = await syncPublicTracking(preOrderId);
@@ -1690,10 +1950,11 @@ export async function verifyPreOrderPayment(
   let updatedOrder!: PreOrder & { trackingSyncWarning?: string };
 
   await runTransaction(db, async (txn) => {
-    const [orderSnap, paySnap, existingLedger] = await Promise.all([
+    const [orderSnap, paySnap, existingLedger, statsSnap] = await Promise.all([
       txn.get(preOrderRef),
       txn.get(paymentRef),
       loadAndLockOrderLedgerInTxn(txn, preOrderId),
+      txn.get(doc(db, 'preOrderStats', 'summary')),
     ]);
 
     if (!orderSnap.exists()) throw new Error('Pre-order not found.');
@@ -1799,6 +2060,50 @@ export async function verifyPreOrderPayment(
     );
 
     updatedOrder = { ...order, ...patch };
+
+    writeStatsDeltaInTxn(txn, statsSnap, {
+      beforeOrder: order,
+      afterOrder: updatedOrder,
+      pendingCountDelta: -1,
+      pendingAmountDelta: payment.type !== 'refund' && payment.type !== 'reversal' ? -payment.amount : 0,
+      customerAdvanceLiabilityDelta:
+        decision === 'verified'
+          ? payment.type === 'refund'
+            ? -payment.amount
+            : payment.type !== 'reversal'
+            ? payment.amount
+            : 0
+          : 0,
+      now,
+    });
+
+    const vNotifRef = doc(db, 'preOrderNotifications', generateId('NTF'));
+    txn.set(
+      vNotifRef,
+      sanitizeData({
+        id: vNotifRef.id,
+        preOrderId,
+        preOrderNumber: order.preOrderNumber,
+        subBrand: order.subBrand,
+        type: decision === 'verified' ? 'payment_verified' : 'payment_rejected',
+        category: 'event',
+        severity: decision === 'verified' ? 'info' : 'warning',
+        title: `${decision === 'verified' ? 'Payment Verified' : 'Payment Rejected'} · ${order.preOrderNumber}`,
+        message:
+          decision === 'verified'
+            ? `৳${payment.amount.toLocaleString()} (${payment.method}) verified by ${actor.name}.`
+            : `৳${payment.amount.toLocaleString()} rejected by ${actor.name}: ${paymentPatch.rejectionReason}`,
+        targetTab: 'preorder_payments',
+        forRoles: ['superadmin', 'admin', 'manager', 'staff'],
+        readBy: [],
+        customerPhone: order.customerPhone,
+        customerName: order.customerName,
+        dueAmount: patch.dueAmount,
+        preOrderStatus: order.status,
+        createdAt: now,
+        createdBy: actor.id,
+      } as PreOrderNotification)
+    );
   });
 
   const syncRes = await syncPublicTracking(preOrderId);
@@ -1842,7 +2147,7 @@ export async function reversePreOrderPayment(
       'accountingPostings',
       getCustomerRefundPostingId(preOrderId, originalPaymentId)
     );
-    const [orderSnap, origSnap, revSnap, existingLedger, origCollectionPostingSnap, origRefundPostingSnap] =
+    const [orderSnap, origSnap, revSnap, existingLedger, origCollectionPostingSnap, origRefundPostingSnap, statsSnap] =
       await Promise.all([
         txn.get(preOrderRef),
         txn.get(origPaymentRef),
@@ -1850,6 +2155,7 @@ export async function reversePreOrderPayment(
         loadAndLockOrderLedgerInTxn(txn, preOrderId),
         txn.get(origCollectionPostingRef),
         txn.get(origRefundPostingRef),
+        txn.get(doc(db, 'preOrderStats', 'summary')),
       ]);
 
     if (!orderSnap.exists()) throw new Error('Pre-order not found.');
@@ -1982,6 +2288,13 @@ export async function reversePreOrderPayment(
 
     resultPayment = reversalDoc;
     resultOrder = { ...order, ...patch };
+
+    writeStatsDeltaInTxn(txn, statsSnap, {
+      beforeOrder: order,
+      afterOrder: resultOrder,
+      customerAdvanceLiabilityDelta: orig.type === 'refund' ? orig.amount : -orig.amount,
+      now,
+    });
   });
 
   const syncRes = await syncPublicTracking(preOrderId);
@@ -2034,10 +2347,11 @@ export async function refundPreOrderPayment(
   let resultOrder!: PreOrder;
 
   await runTransaction(db, async (txn) => {
-    const [orderSnap, existingPaySnap, existingLedger] = await Promise.all([
+    const [orderSnap, existingPaySnap, existingLedger, statsSnap] = await Promise.all([
       txn.get(preOrderRef),
       txn.get(paymentRef),
       loadAndLockOrderLedgerInTxn(txn, preOrderId),
+      txn.get(doc(db, 'preOrderStats', 'summary')),
     ]);
 
     if (!orderSnap.exists()) throw new Error('Pre-order not found.');
@@ -2145,11 +2459,19 @@ export async function refundPreOrderPayment(
         id: notifRef.id,
         preOrderId,
         preOrderNumber: order.preOrderNumber,
-        type: 'refund_alert',
-        title: 'Customer Refund Recorded',
+        subBrand: order.subBrand,
+        type: 'refund_recorded',
+        category: 'event',
+        severity: 'warning',
+        title: `Customer Refund Recorded · ${order.preOrderNumber}`,
         message: `${order.preOrderNumber}: ৳${safeAmount.toLocaleString()} refunded via ${input.method} by ${actor.name}.`,
         targetTab: 'preorder_payments',
+        forRoles: ['superadmin', 'admin', 'manager', 'staff'],
         readBy: [],
+        customerPhone: order.customerPhone,
+        customerName: order.customerName,
+        dueAmount: patch.dueAmount,
+        preOrderStatus: order.status,
         createdAt: now,
         createdBy: actor.id,
       } as PreOrderNotification)
@@ -2157,6 +2479,13 @@ export async function refundPreOrderPayment(
 
     resultPayment = refundDoc;
     resultOrder = { ...order, ...patch };
+
+    writeStatsDeltaInTxn(txn, statsSnap, {
+      beforeOrder: order,
+      afterOrder: resultOrder,
+      customerAdvanceLiabilityDelta: -safeAmount,
+      now,
+    });
   });
 
   const syncRes = await syncPublicTracking(preOrderId);
@@ -2190,9 +2519,10 @@ export async function recalculatePreOrderFromLedger(
   let result!: RecalculateLedgerResult;
 
   await runTransaction(db, async (txn) => {
-    const [orderSnap, ledger] = await Promise.all([
+    const [orderSnap, ledger, statsSnap] = await Promise.all([
       txn.get(preOrderRef),
       loadAndLockOrderLedgerInTxn(txn, preOrderId),
+      txn.get(doc(db, 'preOrderStats', 'summary')),
     ]);
     if (!orderSnap.exists()) throw new Error('Pre-order not found.');
 
@@ -2247,6 +2577,13 @@ export async function recalculatePreOrderFromLedger(
           timestamp: now,
         })
       );
+
+      writeStatsDeltaInTxn(txn, statsSnap, {
+        beforeOrder: order,
+        afterOrder: { ...order, ...patch },
+        pendingAmountDelta: fromPaisa(toPaisa(after.pendingAmount) - toPaisa(before.pendingAmount)),
+        now,
+      });
     }
 
     result = {
@@ -2668,9 +3005,10 @@ export async function transitionPreOrderStatus(
         ? doc(db, 'orders', (prelimOrder.convertedSaleId || prelimOrder.convertedOrderId)!)
         : null;
 
-    const [ledger, convertedOrderSnap] = await Promise.all([
+    const [ledger, convertedOrderSnap, statsSnap] = await Promise.all([
       loadAndLockOrderLedgerInTxn(txn, preOrderId),
       convertedOrderRef ? txn.get(convertedOrderRef) : Promise.resolve(null),
+      txn.get(doc(db, 'preOrderStats', 'summary')),
     ]);
 
     const order = prelimOrder;
@@ -2834,6 +3172,41 @@ export async function transitionPreOrderStatus(
     );
 
     updatedOrder = { ...order, ...orderUpdate } as PreOrder;
+
+    writeStatsDeltaInTxn(txn, statsSnap, {
+      beforeOrder: order,
+      afterOrder: updatedOrder,
+      now,
+    });
+
+    const stMeta = mapStatusToNotificationType(toStatus);
+    const stNotifRef = doc(db, 'preOrderNotifications', generateId('NTF'));
+    txn.set(
+      stNotifRef,
+      sanitizeData({
+        id: stNotifRef.id,
+        preOrderId,
+        preOrderNumber: order.preOrderNumber,
+        subBrand: order.subBrand,
+        type: stMeta.type,
+        category: 'event',
+        severity: stMeta.severity,
+        title: `${toStatus} · ${order.preOrderNumber}`,
+        message: `${order.productName} for ${order.customerName} moved from ${order.status} to ${toStatus}.${
+          noteTrimmed ? ` Note: ${noteTrimmed}` : ''
+        }`,
+        targetTab: stMeta.targetTab,
+        forRoles: ['superadmin', 'admin', 'manager', 'staff'],
+        readBy: [],
+        customerPhone: order.customerPhone,
+        customerName: order.customerName,
+        dueAmount: updatedOrder.dueAmount,
+        estimatedArrivalDate: updatedOrder.estimatedDeliveryDate,
+        preOrderStatus: toStatus,
+        createdAt: now,
+        createdBy: actor.id,
+      } as PreOrderNotification)
+    );
   });
 
   const syncRes = await syncPublicTracking(preOrderId);
@@ -4758,10 +5131,11 @@ export async function receivePreOrderStock(
     const targetProductId = (input.productId || prelimOrder.linkedProductId || '').trim();
     const productRef = targetProductId ? doc(db, 'products', targetProductId) : null;
 
-    const [receiptSnap, costSnap, productSnap] = await Promise.all([
+    const [receiptSnap, costSnap, productSnap, statsSnap] = await Promise.all([
       txn.get(receiptRef),
       txn.get(costRef),
       productRef ? txn.get(productRef) : Promise.resolve(null),
+      txn.get(doc(db, 'preOrderStats', 'summary')),
     ]);
 
     if (receiptSnap.exists()) {
@@ -5159,9 +5533,41 @@ export async function receivePreOrderStock(
       })
     );
 
+    const updatedReceiveOrder = { ...prelimOrder, ...poPatch };
+    writeStatsDeltaInTxn(txn, statsSnap, {
+      beforeOrder: prelimOrder,
+      afterOrder: updatedReceiveOrder,
+      now,
+    });
+
+    const recNotifRef = doc(db, 'preOrderNotifications', generateId('NTF'));
+    txn.set(
+      recNotifRef,
+      sanitizeData({
+        id: recNotifRef.id,
+        preOrderId,
+        preOrderNumber: prelimOrder.preOrderNumber,
+        subBrand: prelimOrder.subBrand,
+        type: 'stock_received',
+        category: 'event',
+        severity: 'info',
+        title: `Stock Received · ${prelimOrder.preOrderNumber}`,
+        message: `Received ${goodQty} good${damagedQty > 0 ? `, ${damagedQty} damaged` : ''} unit(s) of ${resolvedProductName}. Status: ${nextStatus}.`,
+        targetTab: 'preorder_list',
+        forRoles: ['superadmin', 'admin', 'manager', 'staff'],
+        readBy: [],
+        customerPhone: prelimOrder.customerPhone,
+        customerName: prelimOrder.customerName,
+        dueAmount: prelimOrder.dueAmount,
+        preOrderStatus: nextStatus,
+        createdAt: now,
+        createdBy: actor.id,
+      } as PreOrderNotification)
+    );
+
     result = {
       receipt: receiptDoc,
-      order: { ...prelimOrder, ...poPatch },
+      order: updatedReceiveOrder,
       productId: resolvedProductId,
       variantId: resolvedVariantId,
       createdNewProduct,
@@ -5263,7 +5669,7 @@ export async function convertPreOrderToSale(
     const customerRef = po.customerId ? doc(db, 'customers', po.customerId) : null;
 
     // ALL REMAINING READS FIRST
-    const [costSnap, productSnap, ledger, companySettingsSnap, countersSnap, custSnap] =
+    const [costSnap, productSnap, ledger, companySettingsSnap, countersSnap, custSnap, statsSnap] =
       await Promise.all([
         txn.get(costRef),
         txn.get(productRef),
@@ -5271,6 +5677,7 @@ export async function convertPreOrderToSale(
         txn.get(companySettingsRef),
         txn.get(countersRef),
         customerRef ? txn.get(customerRef) : Promise.resolve(null),
+        txn.get(doc(db, 'preOrderStats', 'summary')),
       ]);
 
     if (!productSnap.exists()) {
@@ -5634,13 +6041,46 @@ export async function convertPreOrderToSale(
       })
     );
 
+    const updatedConvertedOrder = { ...po, ...poPatch };
+    writeStatsDeltaInTxn(txn, statsSnap, {
+      beforeOrder: po,
+      afterOrder: updatedConvertedOrder,
+      customerAdvanceLiabilityDelta: -conversionCalc.advanceApplied,
+      now,
+    });
+
+    const convNotifRef = doc(db, 'preOrderNotifications', generateId('NTF'));
+    txn.set(
+      convNotifRef,
+      sanitizeData({
+        id: convNotifRef.id,
+        preOrderId,
+        preOrderNumber: po.preOrderNumber,
+        subBrand: po.subBrand,
+        type: 'ready_for_delivery',
+        category: 'event',
+        severity: 'info',
+        title: `Converted to Invoice ${invoiceNumber}`,
+        message: `${po.preOrderNumber} for ${po.customerName} converted to Sales Order & Invoice ${invoiceNumber} (Due: ৳${conversionCalc.remainingDue.toLocaleString()}).`,
+        targetTab: 'preorder_list',
+        forRoles: ['superadmin', 'admin', 'manager', 'staff'],
+        readBy: [],
+        customerPhone: po.customerPhone,
+        customerName: po.customerName,
+        dueAmount: conversionCalc.remainingDue,
+        preOrderStatus: nextStatus,
+        createdAt: now,
+        createdBy: actor.id,
+      } as PreOrderNotification)
+    );
+
     result = {
       orderId,
       invoiceId,
       invoiceNumber,
       order: newOrderDoc,
       invoice: newInvoiceDoc,
-      preOrder: { ...po, ...poPatch },
+      preOrder: updatedConvertedOrder,
       alreadyConverted: false,
     };
   });
@@ -5724,10 +6164,11 @@ export async function cancelAndReconcilePreOrder(
     }
 
     const productRef = po.linkedProductId ? doc(db, 'products', po.linkedProductId) : null;
-    const [costSnap, productSnap, ledger] = await Promise.all([
+    const [costSnap, productSnap, ledger, statsSnap] = await Promise.all([
       txn.get(costRef),
       productRef ? txn.get(productRef) : Promise.resolve(null),
       loadAndLockOrderLedgerInTxn(txn, preOrderId),
+      txn.get(doc(db, 'preOrderStats', 'summary')),
     ]);
 
     const privCost = costSnap.exists() ? (costSnap.data() as PreOrderPrivateCost) : null;
@@ -6130,8 +6571,41 @@ export async function cancelAndReconcilePreOrder(
       })
     );
 
+    const updatedCancelledOrder = { ...po, ...poPatch };
+    writeStatsDeltaInTxn(txn, statsSnap, {
+      beforeOrder: po,
+      afterOrder: updatedCancelledOrder,
+      customerAdvanceLiabilityDelta: -(refundAmount + retainedChargeAmount),
+      now,
+    });
+
+    const cancelNotifRef = doc(db, 'preOrderNotifications', generateId('NTF'));
+    txn.set(
+      cancelNotifRef,
+      sanitizeData({
+        id: cancelNotifRef.id,
+        preOrderId,
+        preOrderNumber: po.preOrderNumber,
+        subBrand: po.subBrand,
+        type: nextStatus === 'Refunded' ? 'refund_recorded' : 'cancelled',
+        category: 'event',
+        severity: 'warning',
+        title: `${nextStatus} · ${po.preOrderNumber}`,
+        message: `${po.preOrderNumber} (${po.customerName}) cancelled & reconciled. Refund: ৳${refundAmount.toLocaleString()}, Retained: ৳${retainedChargeAmount.toLocaleString()}.`,
+        targetTab: 'preorder_list',
+        forRoles: ['superadmin', 'admin', 'manager'],
+        readBy: [],
+        customerPhone: po.customerPhone,
+        customerName: po.customerName,
+        dueAmount: 0,
+        preOrderStatus: nextStatus,
+        createdAt: now,
+        createdBy: actor.id,
+      } as PreOrderNotification)
+    );
+
     result = {
-      order: { ...po, ...poPatch },
+      order: updatedCancelledOrder,
       cancellation: cancellationSummary,
     };
   });
@@ -6201,5 +6675,536 @@ export async function runPreOrderIntegrityCheck(): Promise<PreOrderIntegrityRepo
     invoices,
     products,
   });
+}
+
+// ==========================================
+// PART 7: SETTINGS, OVERVIEW STATS, REMINDERS, CUSTOMER MESSAGES, REPORTS & SEARCH
+// ==========================================
+
+let lastReminderSyncSessionKey = '';
+
+export async function getPreOrderSettings(): Promise<PreOrderSettings> {
+  if (!auth?.currentUser) return mergeWithDefaultPreOrderSettings(null);
+  try {
+    const snap = await getDoc(doc(db, 'settings', 'preOrderSettings'));
+    if (snap.exists()) {
+      return mergeWithDefaultPreOrderSettings(snap.data() as PreOrderSettings);
+    }
+    return mergeWithDefaultPreOrderSettings(null);
+  } catch (err) {
+    console.warn('getPreOrderSettings fallback to defaults:', err);
+    return mergeWithDefaultPreOrderSettings(null);
+  }
+}
+
+export async function savePreOrderSettings(
+  settings: Partial<PreOrderSettings>,
+  actor: PreOrderActor
+): Promise<PreOrderSettings> {
+  const merged = mergeWithDefaultPreOrderSettings({
+    ...settings,
+    updatedAt: Date.now(),
+    updatedBy: actor.id,
+  });
+  await setDoc(doc(db, 'settings', 'preOrderSettings'), sanitizeData(merged), { merge: true });
+  return merged;
+}
+
+export async function getPreOrderStatsSummary(): Promise<PreOrderStats | null> {
+  try {
+    const snap = await getDoc(doc(db, 'preOrderStats', 'summary'));
+    if (!snap.exists()) return null;
+    const base = createEmptyPreOrderStats();
+    const raw = snap.data() as Partial<PreOrderStats>;
+    return {
+      ...base,
+      ...raw,
+      statusCounts: { ...base.statusCounts, ...(raw.statusCounts || {}) },
+      subBrandStats: {
+        SAT: { ...base.subBrandStats.SAT, ...(raw.subBrandStats?.SAT || {}) },
+        GZ: { ...base.subBrandStats.GZ, ...(raw.subBrandStats?.GZ || {}) },
+        RTX: { ...base.subBrandStats.RTX, ...(raw.subBrandStats?.RTX || {}) },
+      },
+    };
+  } catch (err) {
+    console.warn('getPreOrderStatsSummary fallback:', err);
+    return null;
+  }
+}
+
+export interface RebuildPreOrderStatsResult {
+  before: PreOrderStats | null;
+  stats: PreOrderStats;
+  diffs: PreOrderStatsRebuildDiff[];
+}
+
+export async function rebuildPreOrderStats(
+  actor: PreOrderActor
+): Promise<RebuildPreOrderStatsResult> {
+  if (!isPreOrderAdminRole(actor.role)) {
+    throw new Error('Only Admin or Super Admin can rebuild pre-order summary statistics.');
+  }
+
+  const [beforeStats, ordersSnap, pendingSnap, supPays, postings] = await Promise.all([
+    getPreOrderStatsSummary(),
+    getDocs(query(collection(db, 'preOrders'), orderBy('createdAt', 'desc'), limit(1000))),
+    getDocs(query(collectionGroup(db, 'payments'), where('status', '==', 'pending'), limit(500))).catch(() => null),
+    getPreOrderSupplierPayments(undefined, 500).catch(() => [] as PreOrderSupplierPayment[]),
+    getPreOrderAccountingPostings(undefined, 1000).catch(() => [] as AccountingPosting[]),
+  ]);
+
+  const preOrders: PreOrder[] = ordersSnap.docs.map((d) => ({ ...(d.data() as PreOrder), id: d.id }));
+  const pendingPayments: PreOrderPayment[] = pendingSnap
+    ? pendingSnap.docs.map((d) => ({ ...(d.data() as PreOrderPayment), id: d.id }))
+    : [];
+
+  // Load private costs for active orders in small bounded batches so supplierPayableEstimate is accurate
+  const activeOrders = preOrders.filter((o) => isActivePreOrderStatus(o.status)).slice(0, 180);
+  const privateCostsByOrder = await getPreOrderPrivateCostsMap(activeOrders.map((o) => o.id));
+
+  const nextStats = computePreOrderStatsFromData({
+    preOrders,
+    pendingPayments,
+    supplierPayments: supPays,
+    privateCostsByOrder,
+    postings,
+    rebuiltBy: actor.name,
+  });
+
+  const diffs = diffPreOrderStats(beforeStats, nextStats);
+  await setDoc(doc(db, 'preOrderStats', 'summary'), sanitizeData(nextStats));
+
+  const rebuildAuditId = generateId('AUD');
+  await setDoc(
+    doc(db, 'preOrderAudit', rebuildAuditId),
+    sanitizeData({
+      id: rebuildAuditId,
+      preOrderId: 'STATS',
+      preOrderNumber: 'SUMMARY',
+      action: 'STATS_REBUILT' as PreOrderAuditAction,
+      summary: `Rebuilt preOrderStats/summary from ${preOrders.length} orders (${diffs.length} changed metric${diffs.length === 1 ? '' : 's'})`,
+      metadata: {
+        scannedOrders: preOrders.length,
+        diffs,
+      },
+      userId: actor.id,
+      userName: actor.name,
+      userRole: actor.role,
+      timestamp: Date.now(),
+    })
+  ).catch(() => {});
+
+  return { before: beforeStats, stats: nextStats, diffs };
+}
+
+export async function queryPreOrderNotifications(options?: {
+  limitCount?: number;
+  cursor?: QueryDocumentSnapshot<DocumentData> | null;
+}): Promise<{
+  items: PreOrderNotification[];
+  lastDoc: QueryDocumentSnapshot<DocumentData> | null;
+  hasMore: boolean;
+}> {
+  const pageSize = Math.min(Math.max(Number(options?.limitCount) || 30, 1), 100);
+  const constraints: any[] = [orderBy('createdAt', 'desc')];
+  if (options?.cursor) {
+    constraints.push(startAfter(options.cursor));
+  }
+  constraints.push(limit(pageSize + 1));
+
+  const snap = await getDocs(query(collection(db, 'preOrderNotifications'), ...constraints));
+  const hasMore = snap.docs.length > pageSize;
+  const sliced = hasMore ? snap.docs.slice(0, pageSize) : snap.docs;
+  const items = sliced.map((d) => ({ ...(d.data() as PreOrderNotification), id: d.id }));
+  const lastDoc = sliced.length > 0 ? sliced[sliced.length - 1] : null;
+  return { items, lastDoc, hasMore };
+}
+
+export async function markAllPreOrderNotificationsRead(
+  notificationIds: string[],
+  userId: string
+): Promise<void> {
+  if (!notificationIds.length || !userId) return;
+  const unique = Array.from(new Set(notificationIds));
+  for (let i = 0; i < unique.length; i += 400) {
+    const chunk = unique.slice(i, i + 400);
+    const batch = writeBatch(db);
+    chunk.forEach((id) => {
+      batch.update(doc(db, 'preOrderNotifications', id), {
+        readBy: arrayUnion(userId),
+      });
+    });
+    await batch.commit();
+  }
+}
+
+export async function snoozePreOrderNotification(
+  notificationId: string,
+  userId: string,
+  durationDays: 1 | 3
+): Promise<number> {
+  const snoozedUntil = Date.now() + durationDays * 86400000;
+  await updateDoc(doc(db, 'preOrderNotifications', notificationId), {
+    [`snoozedUntilBy.${userId}`]: snoozedUntil,
+  });
+  return snoozedUntil;
+}
+
+export async function syncDailyTimeBasedReminders(options: {
+  settings?: PreOrderSettings;
+  actor: PreOrderActor;
+  allowedSubBrands?: Array<'SAT' | 'GZ' | 'RTX'>;
+  force?: boolean;
+}): Promise<{ created: number; evaluated: number; skippedSessionGuard?: boolean }> {
+  if (!auth?.currentUser) return { created: 0, evaluated: 0 };
+  const todayIso = getTodayIsoDate();
+  const sessionKey = `${auth.currentUser.uid}_${todayIso}`;
+  if (!options.force && lastReminderSyncSessionKey === sessionKey) {
+    return { created: 0, evaluated: 0, skippedSessionGuard: true };
+  }
+
+  const settings = options.settings || (await getPreOrderSettings());
+  const activeSnap = await getDocs(
+    query(collection(db, 'preOrders'), orderBy('updatedAt', 'desc'), limit(250))
+  );
+  let orders = activeSnap.docs.map((d) => ({ ...(d.data() as PreOrder), id: d.id }));
+  if (options.allowedSubBrands && options.allowedSubBrands.length > 0 && options.allowedSubBrands.length < 3) {
+    orders = orders.filter((o) => options.allowedSubBrands!.includes(o.subBrand));
+  }
+
+  const candidates = evaluateTimeBasedReminderCandidates(orders, settings, todayIso, Date.now());
+  if (candidates.length === 0) {
+    lastReminderSyncSessionKey = sessionKey;
+    return { created: 0, evaluated: orders.length };
+  }
+
+  // Check already-existing reminders for today in one query so we never overwrite user readBy/snoozedUntilBy
+  const dayKey = todayIso.replace(/-/g, '');
+  const existingTodaySnap = await getDocs(
+    query(collection(db, 'preOrderNotifications'), where('dayKey', '==', dayKey), limit(500))
+  ).catch(() => null);
+  const existingIds = new Set<string>();
+  existingTodaySnap?.forEach((d) => existingIds.add(d.id));
+
+  const missing = candidates.filter((c) => !existingIds.has(c.id));
+  let created = 0;
+
+  if (missing.length > 0) {
+    for (let i = 0; i < missing.length; i += 250) {
+      const chunk = missing.slice(i, i + 250);
+      const batch = writeBatch(db);
+      for (const rem of chunk) {
+        batch.set(doc(db, 'preOrderNotifications', rem.id), sanitizeData(rem));
+        created += 1;
+      }
+      await batch.commit().catch(() => {});
+    }
+  }
+
+  lastReminderSyncSessionKey = sessionKey;
+  return { created, evaluated: orders.length };
+}
+
+export async function logCustomerMessagePrepared(
+  preOrderId: string,
+  input: {
+    channel: 'whatsapp' | 'sms' | 'copy';
+    templateKey?: string;
+    language?: 'en' | 'bn';
+    messageText: string;
+  },
+  actor: PreOrderActor
+): Promise<void> {
+  const now = Date.now();
+  const nowDate = new Date(now);
+  const preOrderRef = doc(db, 'preOrders', preOrderId);
+  const eventId = generateId('SHPEVT');
+  const eventRef = doc(db, 'preOrders', preOrderId, 'shipmentEvents', eventId);
+  const auditRef = doc(db, 'preOrderAudit', generateId('AUD'));
+
+  const channelLabel =
+    input.channel === 'whatsapp' ? 'WhatsApp' : input.channel === 'sms' ? 'SMS' : 'Copied Text';
+
+  await runTransaction(db, async (txn) => {
+    const snap = await txn.get(preOrderRef);
+    if (!snap.exists()) throw new Error('Pre-order not found.');
+    const order = snap.data() as PreOrder;
+
+    const eventDoc: PreOrderShipmentEvent = {
+      id: eventId,
+      preOrderId,
+      date: nowDate.toISOString().split('T')[0],
+      time: nowDate.toTimeString().slice(0, 5),
+      timestamp: now,
+      staffId: actor.id,
+      staffName: actor.name,
+      text: `Message prepared/sent by ${actor.name} via ${channelLabel}`,
+      showToCustomer: false,
+      source: 'manual',
+    };
+    txn.set(eventRef, sanitizeData(eventDoc));
+
+    txn.set(
+      auditRef,
+      sanitizeData({
+        id: auditRef.id,
+        preOrderId,
+        preOrderNumber: order.preOrderNumber,
+        action: 'CUSTOMER_MESSAGE_PREPARED' as PreOrderAuditAction,
+        summary: `Customer update prepared (${channelLabel}${input.language ? ` · ${input.language.toUpperCase()}` : ''}) on ${order.preOrderNumber}`,
+        metadata: {
+          channel: input.channel,
+          templateKey: input.templateKey || 'custom',
+          language: input.language || 'en',
+          messagePreview: input.messageText.slice(0, 240),
+        },
+        userId: actor.id,
+        userName: actor.name,
+        userRole: actor.role,
+        timestamp: now,
+      })
+    );
+  });
+}
+
+export interface PreOrderDashboardData {
+  stats: PreOrderStats;
+  hasSummaryDoc: boolean;
+  orders: PreOrder[];
+  payments: PreOrderPayment[];
+  privateCostsByOrder: Record<string, PreOrderPrivateCost | null>;
+  supplierPayments: PreOrderSupplierPayment[];
+  postings: AccountingPosting[];
+  activity: PreOrderAuditEntry[];
+  activityLastDoc: QueryDocumentSnapshot<DocumentData> | null;
+  activityHasMore: boolean;
+  settings: PreOrderSettings;
+}
+
+export async function loadPreOrderDashboardData(options: {
+  canViewProfit: boolean;
+  canViewSupplier: boolean;
+  allowedSubBrands?: Array<'SAT' | 'GZ' | 'RTX'>;
+}): Promise<PreOrderDashboardData> {
+  const [summaryDoc, ordersSnap, paymentsSnap, postings, auditSnap, supPays, settings] =
+    await Promise.all([
+      getPreOrderStatsSummary(),
+      getDocs(query(collection(db, 'preOrders'), orderBy('createdAt', 'desc'), limit(300))),
+      getDocs(query(collectionGroup(db, 'payments'), orderBy('createdAt', 'desc'), limit(350))).catch(
+        () => null
+      ),
+      options.canViewProfit
+        ? getPreOrderAccountingPostings(undefined, 400).catch(() => [] as AccountingPosting[])
+        : Promise.resolve([] as AccountingPosting[]),
+      getDocs(query(collection(db, 'preOrderAudit'), orderBy('timestamp', 'desc'), limit(21))).catch(
+        () => null
+      ),
+      options.canViewSupplier
+        ? getPreOrderSupplierPayments(undefined, 300).catch(() => [] as PreOrderSupplierPayment[])
+        : Promise.resolve([] as PreOrderSupplierPayment[]),
+      getPreOrderSettings(),
+    ]);
+
+  let orders: PreOrder[] = ordersSnap.docs.map((d) => ({ ...(d.data() as PreOrder), id: d.id }));
+  if (
+    options.allowedSubBrands &&
+    options.allowedSubBrands.length > 0 &&
+    options.allowedSubBrands.length < 3
+  ) {
+    orders = orders.filter((o) => options.allowedSubBrands!.includes(o.subBrand));
+  }
+
+  let payments: PreOrderPayment[] = paymentsSnap
+    ? paymentsSnap.docs.map((d) => ({ ...(d.data() as PreOrderPayment), id: d.id }))
+    : [];
+  if (
+    options.allowedSubBrands &&
+    options.allowedSubBrands.length > 0 &&
+    options.allowedSubBrands.length < 3
+  ) {
+    payments = payments.filter((p) => !p.subBrand || options.allowedSubBrands!.includes(p.subBrand));
+  }
+
+  const privateCostsByOrder =
+    options.canViewProfit || options.canViewSupplier
+      ? await getPreOrderPrivateCostsMap(orders.slice(0, 120).map((o) => o.id))
+      : {};
+
+  const activityDocs = auditSnap ? auditSnap.docs : [];
+  const activityHasMore = activityDocs.length > 20;
+  const slicedAuditDocs = activityHasMore ? activityDocs.slice(0, 20) : activityDocs;
+  const activity = slicedAuditDocs.map((d) => ({
+    ...(d.data() as PreOrderAuditEntry),
+    id: d.id,
+  }));
+  const activityLastDoc =
+    slicedAuditDocs.length > 0 ? slicedAuditDocs[slicedAuditDocs.length - 1] : null;
+
+  const stats =
+    summaryDoc ||
+    computePreOrderStatsFromData({
+      preOrders: orders,
+      pendingPayments: payments.filter((p) => p.status === 'pending'),
+      supplierPayments: supPays,
+      privateCostsByOrder,
+      postings,
+    });
+
+  return {
+    stats,
+    hasSummaryDoc: Boolean(summaryDoc),
+    orders,
+    payments,
+    privateCostsByOrder,
+    supplierPayments: supPays,
+    postings,
+    activity,
+    activityLastDoc,
+    activityHasMore,
+    settings,
+  };
+}
+
+export async function loadMorePreOrderAuditFeed(
+  cursor: QueryDocumentSnapshot<DocumentData> | null,
+  pageSize: number = 20
+): Promise<{
+  items: PreOrderAuditEntry[];
+  lastDoc: QueryDocumentSnapshot<DocumentData> | null;
+  hasMore: boolean;
+}> {
+  const constraints: any[] = [orderBy('timestamp', 'desc')];
+  if (cursor) constraints.push(startAfter(cursor));
+  constraints.push(limit(pageSize + 1));
+
+  const snap = await getDocs(query(collection(db, 'preOrderAudit'), ...constraints));
+  const hasMore = snap.docs.length > pageSize;
+  const sliced = hasMore ? snap.docs.slice(0, pageSize) : snap.docs;
+  return {
+    items: sliced.map((d) => ({ ...(d.data() as PreOrderAuditEntry), id: d.id })),
+    lastDoc: sliced.length > 0 ? sliced[sliced.length - 1] : null,
+    hasMore,
+  };
+}
+
+export interface PreOrderReportsDataset {
+  preOrders: PreOrder[];
+  payments: PreOrderPayment[];
+  privateCostsByOrder: Record<string, PreOrderPrivateCost | null>;
+  suppliers: Supplier[];
+  supplierPayments: PreOrderSupplierPayment[];
+  postings: AccountingPosting[];
+  auditLogs: PreOrderAuditEntry[];
+}
+
+export async function loadPreOrderReportsDataset(options: {
+  canViewProfit: boolean;
+  canViewSupplier: boolean;
+  allowedSubBrands?: Array<'SAT' | 'GZ' | 'RTX'>;
+}): Promise<PreOrderReportsDataset> {
+  const [ordersSnap, paymentsSnap, suppliersSnap, supPays, postings, auditLogs] = await Promise.all([
+    getDocs(query(collection(db, 'preOrders'), orderBy('createdAt', 'desc'), limit(1000))),
+    getDocs(query(collectionGroup(db, 'payments'), orderBy('createdAt', 'desc'), limit(1200))).catch(
+      () => null
+    ),
+    options.canViewSupplier
+      ? getDocs(collection(db, 'suppliers')).catch(() => null)
+      : Promise.resolve(null),
+    options.canViewSupplier
+      ? getPreOrderSupplierPayments(undefined, 600).catch(() => [] as PreOrderSupplierPayment[])
+      : Promise.resolve([] as PreOrderSupplierPayment[]),
+    options.canViewProfit
+      ? getPreOrderAccountingPostings(undefined, 800).catch(() => [] as AccountingPosting[])
+      : Promise.resolve([] as AccountingPosting[]),
+    getPreOrderAuditLogs(undefined, 400).catch(() => [] as PreOrderAuditEntry[]),
+  ]);
+
+  let preOrders = ordersSnap.docs.map((d) => ({ ...(d.data() as PreOrder), id: d.id }));
+  if (
+    options.allowedSubBrands &&
+    options.allowedSubBrands.length > 0 &&
+    options.allowedSubBrands.length < 3
+  ) {
+    preOrders = preOrders.filter((o) => options.allowedSubBrands!.includes(o.subBrand));
+  }
+
+  let payments = paymentsSnap
+    ? paymentsSnap.docs.map((d) => ({ ...(d.data() as PreOrderPayment), id: d.id }))
+    : [];
+  if (
+    options.allowedSubBrands &&
+    options.allowedSubBrands.length > 0 &&
+    options.allowedSubBrands.length < 3
+  ) {
+    payments = payments.filter((p) => !p.subBrand || options.allowedSubBrands!.includes(p.subBrand));
+  }
+
+  const suppliers: Supplier[] = suppliersSnap
+    ? suppliersSnap.docs.map((d) => ({ ...(d.data() as Omit<Supplier, 'id'>), id: d.id }))
+    : [];
+
+  const privateCostsByOrder =
+    options.canViewProfit || options.canViewSupplier
+      ? await getPreOrderPrivateCostsMap(preOrders.slice(0, 160).map((o) => o.id))
+      : {};
+
+  return {
+    preOrders,
+    payments,
+    privateCostsByOrder,
+    suppliers,
+    supplierPayments: supPays,
+    postings,
+    auditLogs,
+  };
+}
+
+export async function getPreOrdersByCustomer(
+  customerId: string,
+  rawPhone?: string
+): Promise<PreOrder[]> {
+  const results = new Map<string, PreOrder>();
+  const normPhone = rawPhone ? normalizeBdPhone(rawPhone) : '';
+
+  const tasks: Promise<void>[] = [];
+  if (customerId) {
+    tasks.push(
+      getDocs(query(collection(db, 'preOrders'), where('customerId', '==', customerId), limit(50)))
+        .then((snap) => {
+          snap.forEach((d) => results.set(d.id, { ...(d.data() as PreOrder), id: d.id }));
+        })
+        .catch(() => {})
+    );
+  }
+  if (isValidBdPhone(normPhone)) {
+    tasks.push(
+      getDocs(query(collection(db, 'preOrders'), where('customerPhone', '==', normPhone), limit(50)))
+        .then((snap) => {
+          snap.forEach((d) => results.set(d.id, { ...(d.data() as PreOrder), id: d.id }));
+        })
+        .catch(() => {})
+    );
+  }
+
+  await Promise.all(tasks);
+  return Array.from(results.values()).sort((a, b) => b.createdAt - a.createdAt);
+}
+
+export async function searchPreOrdersForCommandPalette(
+  allowedSubBrands?: Array<'SAT' | 'GZ' | 'RTX'>,
+  limitCount: number = 80
+): Promise<PreOrder[]> {
+  try {
+    const snap = await getDocs(
+      query(collection(db, 'preOrders'), orderBy('updatedAt', 'desc'), limit(limitCount))
+    );
+    const items = snap.docs.map((d) => ({ ...(d.data() as PreOrder), id: d.id }));
+    if (allowedSubBrands && allowedSubBrands.length > 0 && allowedSubBrands.length < 3) {
+      return items.filter((o) => allowedSubBrands.includes(o.subBrand));
+    }
+    return items;
+  } catch {
+    return [];
+  }
 }
 

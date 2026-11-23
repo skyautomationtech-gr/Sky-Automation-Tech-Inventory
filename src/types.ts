@@ -1153,7 +1153,9 @@ export type PreOrderAuditAction =
   | 'TRACKING_LINK_EXPIRED'
   | 'STOCK_RECEIVED'
   | 'CONVERTED_TO_SALE'
-  | 'CANCEL_RECONCILED';
+  | 'CANCEL_RECONCILED'
+  | 'CUSTOMER_MESSAGE_PREPARED'
+  | 'STATS_REBUILT';
 
 export interface PreOrderAuditEntry {
   id: string;
@@ -1168,15 +1170,52 @@ export interface PreOrderAuditEntry {
   timestamp: number;
 }
 
+export type PreOrderNotificationType =
+  | 'payment_pending'
+  | 'advance_received'
+  | 'payment_verified'
+  | 'payment_rejected'
+  | 'order_confirmed'
+  | 'status_update'
+  | 'shipment_updated'
+  | 'shipment_delayed'
+  | 'arrival_alert'
+  | 'arrival_soon'
+  | 'arrival_today'
+  | 'product_arrived'
+  | 'stock_received'
+  | 'due_payment_reminder'
+  | 'ready_for_delivery'
+  | 'out_for_delivery'
+  | 'delivered'
+  | 'cancelled'
+  | 'refund_alert'
+  | 'refund_recorded'
+  | 'link_sync_failed'
+  | 'general';
+
 export interface PreOrderNotification {
   id: string;
   preOrderId: string;
   preOrderNumber: string;
-  type: 'payment_pending' | 'status_update' | 'arrival_alert' | 'refund_alert' | 'general';
+  subBrand?: 'SAT' | 'GZ' | 'RTX';
+  type: PreOrderNotificationType;
+  category?: 'event' | 'reminder';
+  severity?: 'info' | 'warning' | 'urgent';
   title: string;
   message: string;
   targetTab: string;
+  forRoles?: string[];
+  forUserIds?: string[];
   readBy: string[];
+  snoozedUntilBy?: Record<string, number>;
+  dayKey?: string;
+  reminderType?: string;
+  customerPhone?: string;
+  customerName?: string;
+  dueAmount?: number;
+  estimatedArrivalDate?: string;
+  preOrderStatus?: PreOrderStatus;
   createdAt: number;
   createdBy: string;
 }
@@ -1301,4 +1340,92 @@ export interface PreOrderIntegrityReport {
   checkedAt: number;
 }
 
+export interface PreOrderStatsSubBrandBucket {
+  count: number;
+  totalAmount: number;
+  advancePaid: number;
+  dueAmount: number;
+}
+
+export interface PreOrderStats {
+  id: string; // 'summary'
+  totalOrders: number;
+  activeOrders: number;
+  chinaOrders: number;
+  internationalShipments: number;
+  customsClearance: number;
+  arrivedProducts: number;
+  receivedInStock: number;
+  readyForDelivery: number;
+  deliveredOrders: number;
+  cancelledOrders: number;
+  refundedOrders: number;
+  convertedOrders: number;
+  overdueOrders: number;
+  totalOrderValue: number;
+  totalAdvanceCollected: number;
+  totalCustomerDue: number;
+  totalRefunded: number;
+  pendingPaymentAmount: number;
+  pendingPaymentCount: number;
+  customerAdvancesLiability: number;
+  supplierPayableEstimate: number;
+  statusCounts: Record<PreOrderStatus, number>;
+  subBrandStats: Record<'SAT' | 'GZ' | 'RTX', PreOrderStatsSubBrandBucket>;
+  lastUpdatedAt: number;
+  lastRebuiltAt?: number;
+  rebuiltBy?: string;
+}
+
+export interface PreOrderStatsRebuildDiff {
+  field: string;
+  label: string;
+  before: number;
+  after: number;
+  diff: number;
+}
+
+export type PreOrderMessageTemplateKey =
+  | 'advance_received'
+  | 'order_confirmed'
+  | 'shipment_update'
+  | 'product_arrived'
+  | 'due_payment_reminder'
+  | 'ready_for_delivery'
+  | 'delivery_confirmation'
+  | 'delay_notice';
+
+export interface BilingualMessageTemplate {
+  label: string;
+  en: string;
+  bn: string;
+}
+
+export type PreOrderMessageTemplatesMap = Record<PreOrderMessageTemplateKey, BilingualMessageTemplate>;
+
+export interface PreOrderSettings {
+  id: string; // 'preOrderSettings'
+  enableArrivalSoonReminder: boolean;
+  enableArrivalTodayReminder: boolean;
+  enableDelayReminder: boolean;
+  enableDueReminder: boolean;
+  enableReadyDeliveryReminder: boolean;
+  arrivalReminderDays: number; // default 3
+  dueReminderDays: number; // default 7
+  delayGraceDays: number; // default 0
+  readyWaitingDays: number; // default 2
+  receivedNotConvertedDays: number; // default 3 (Needs Attention N days)
+  messageTemplates: PreOrderMessageTemplatesMap;
+  updatedAt: number;
+  updatedBy?: string;
+}
+
+export interface PreOrderListFilterPreset {
+  statuses?: PreOrderStatus[];
+  subBrand?: 'ALL' | 'SAT' | 'GZ' | 'RTX';
+  paymentState?: 'ALL' | PreOrderPaymentState;
+  overdueOnly?: boolean;
+  searchTerm?: string;
+  label?: string;
+}
 

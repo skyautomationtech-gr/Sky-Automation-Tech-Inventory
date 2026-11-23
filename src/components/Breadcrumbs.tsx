@@ -25,6 +25,8 @@ import {
   ShieldCheck,
   Settings,
   User,
+  Bell,
+  HelpCircle,
 } from 'lucide-react';
 
 interface BreadcrumbsProps {
@@ -49,7 +51,9 @@ export const TAB_DIRECTORY: Record<string, TabMeta> = {
   preorder_tracking: { group: 'Pre-Order Management', label: 'Shipment Tracking', icon: Plane },
   preorder_links: { group: 'Pre-Order Management', label: 'Customer Tracking Links', icon: Link2 },
   preorder_suppliers: { group: 'Pre-Order Management', label: 'Supplier Management', icon: Building2 },
+  preorder_reminders: { group: 'Pre-Order Management', label: 'Notifications & Reminders', icon: Bell },
   preorder_reports: { group: 'Pre-Order Management', label: 'Reports & History', icon: BarChart3 },
+  preorder_help: { group: 'Pre-Order Management', label: 'Help & Guide', icon: HelpCircle },
   stock: { group: 'Operations', label: 'Stock Operations', icon: ArrowUpDown },
   orders: { group: 'Sales Desk', label: 'Order Desk', icon: ShoppingBag },
   invoices: { group: 'Sales Desk', label: 'Invoice Desk', icon: Receipt },
