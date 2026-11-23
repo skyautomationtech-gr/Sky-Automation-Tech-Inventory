@@ -55,7 +55,6 @@ export interface UserProfile {
 
   // Account Setup
   requirePasswordChange?: boolean;
-  customPassword?: string;
   permissionOverrides?: PermissionOverrides;
 
   // Attendance

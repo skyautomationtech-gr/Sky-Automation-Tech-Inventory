@@ -1034,6 +1034,57 @@ export default function DashboardView({
             </div>
           )}
 
+          {/* Super Admin Only: Live Staff Login OTP Codes */}
+          {user?.role === 'superadmin' && (
+            <div className="bg-white dark:bg-slate-900 border border-amber-200/80 dark:border-amber-900/50 rounded-2xl p-6 shadow-sm">
+              <div className="flex items-center justify-between mb-4">
+                <div>
+                  <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                    <ShieldCheck size={18} className="text-amber-500" />
+                    Live Staff Login Codes
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                    Super Admin only • Active 5-min verification codes
+                  </p>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                {liveLoginCodes.filter(c => c.otpCode && (!c.expiresAt || c.expiresAt > Date.now())).length > 0 ? (
+                  liveLoginCodes
+                    .filter(c => c.otpCode && (!c.expiresAt || c.expiresAt > Date.now()))
+                    .map((item) => {
+                      const minsLeft = item.expiresAt
+                        ? Math.max(1, Math.ceil((item.expiresAt - Date.now()) / 60000))
+                        : 5;
+                      return (
+                        <div
+                          key={item.id}
+                          className="flex items-center justify-between p-3 rounded-xl bg-amber-50/70 dark:bg-amber-950/20 border border-amber-200/70 dark:border-amber-900/40"
+                        >
+                          <div className="min-w-0">
+                            <div className="text-xs font-bold text-slate-900 dark:text-white truncate">
+                              {item.staffName || 'Staff'}
+                            </div>
+                            <div className="text-[11px] text-slate-500 dark:text-slate-400 truncate">
+                              {item.email} • expires ~{minsLeft}m
+                            </div>
+                          </div>
+                          <span className="px-3 py-1 text-sm font-mono font-black tracking-widest rounded-lg bg-slate-900 text-[#D4AF37] dark:bg-slate-950 border border-[#D4AF37]/40 shrink-0">
+                            {item.otpCode}
+                          </span>
+                        </div>
+                      );
+                    })
+                ) : (
+                  <div className="text-xs text-slate-400 italic text-center py-4">
+                    No active staff login codes
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
           {/* Active Staff Sessions */}
           <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 shadow-sm">
             <div className="flex items-center justify-between mb-4">

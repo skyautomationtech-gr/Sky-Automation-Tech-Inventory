@@ -108,7 +108,22 @@ service cloud.firestore {
     }
 
     match /liveLoginCodes/{codeId} {
-      allow read, write: if isSignedIn();
+      allow read: if isSuperAdmin();
+      allow create, update: if isSuperAdmin() || (
+        isSignedIn() &&
+        isOwner(codeId) &&
+        request.resource.data.keys().hasOnly([
+          'staffUid', 'staffName', 'email', 'otpCode', 'generatedAt', 'expiresAt'
+        ]) &&
+        request.resource.data.staffUid == request.auth.uid &&
+        request.resource.data.otpCode is string &&
+        request.resource.data.otpCode.matches('^[0-9]{6}$') &&
+        request.resource.data.generatedAt is number &&
+        request.resource.data.expiresAt is number &&
+        request.resource.data.expiresAt > request.resource.data.generatedAt &&
+        request.resource.data.expiresAt <= request.resource.data.generatedAt + 300000
+      );
+      allow delete: if isSuperAdmin() || (isSignedIn() && isOwner(codeId));
     }
 
     // ==========================================

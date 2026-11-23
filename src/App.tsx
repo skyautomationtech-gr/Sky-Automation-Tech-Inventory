@@ -124,11 +124,6 @@ const parsePublicTrackingRoute = (): { isTrackingRoute: boolean; token: string }
   }
 };
 
-// Mock/Fallback Data in case of Firestore permission/network errors
-const MOCK_PRODUCTS: Product[] = [];
-const MOCK_CATEGORIES: Category[] = [];
-const MOCK_BRANDS: Brand[] = [];
-
 // Helpers to inspect and clear cached auth/session markers
 const hasCachedUserSession = (): boolean => {
   if (typeof window === 'undefined') return false;
@@ -162,7 +157,6 @@ export default function App() {
   const [profileLoaded, setProfileLoaded] = useState<boolean>(false);
   const [sessionExpiredMessage, setSessionExpiredMessage] = useState<string>('');
   const [isQuotaExceeded, setIsQuotaExceeded] = useState(false);
-  const [isOfflineDemoMode, setIsOfflineDemoMode] = useState(false);
 
   const checkIfQuotaError = (err: any): boolean => {
     const msg = err?.message || String(err);
@@ -176,52 +170,6 @@ export default function App() {
       lowerMsg.includes('over_quota') ||
       lowerMsg.includes('quota_exceeded')
     );
-  };
-
-  const enterOfflineDemoMode = () => {
-    try {
-      sessionStorage.setItem('sat_otp_verified', 'true');
-      localStorage.setItem('sat_otp_verified', 'true');
-    } catch (e) {}
-    setIsOfflineDemoMode(true);
-    setIsQuotaExceeded(false);
-    
-    setUser({
-      id: 'operator-1',
-      email: 'skyautomationtech@gmail.com',
-      name: 'Sky Automation Operator',
-      role: 'superadmin',
-      active: true,
-      currentSessionStatus: 'checked_in',
-      currentSessionDate: new Date().toISOString().split('T')[0],
-      currentSessionId: 'offline-sess',
-      subBrandAccess: ['SAT', 'GZ', 'RTX']
-    });
-    setProfileLoaded(true);
-    setAuthReady(true);
-    
-    const cachedSettings = localStore.get<CompanySettings>('company_settings');
-    setCompanySettings(cachedSettings || {
-      companyName: 'Sky Automation Tech',
-      address: 'Dhaka, Bangladesh',
-      phone: '01XXXXXXXXX',
-      subBrands: ['SAT', 'GZ', 'RTX'],
-      onboarded: true,
-    });
-    
-    setIsOnboarding(false);
-    
-    const cachedProds = localStore.get<Product[]>('all_products');
-    setProducts(cachedProds && cachedProds.length > 0 ? cachedProds : MOCK_PRODUCTS);
-    
-    const cachedCats = localStore.get<Category[]>('all_categories');
-    setCategories(cachedCats && cachedCats.length > 0 ? cachedCats : MOCK_CATEGORIES);
-    
-    const cachedBrands = localStore.get<Brand[]>('all_brands');
-    setBrands(cachedBrands && cachedBrands.length > 0 ? cachedBrands : MOCK_BRANDS);
-    
-    setProductColors([]);
-    setProductModels([]);
   };
   
   // App structure states
@@ -298,6 +246,7 @@ export default function App() {
   const [clearDataOtp, setClearDataOtp] = useState('');
   const [generatedClearDataOtp, setGeneratedClearDataOtp] = useState<string | null>(null);
   const [otpExpiryTime, setOtpExpiryTime] = useState<number | null>(null);
+  const [clearDataOtpAttempts, setClearDataOtpAttempts] = useState<number>(0);
   const [isSendingClearDataOtp, setIsSendingClearDataOtp] = useState(false);
   const [clearDataOtpCountdown, setClearDataOtpCountdown] = useState(0);
   const [clearDataOtpSuccessMsg, setClearDataOtpSuccessMsg] = useState('');
@@ -423,10 +372,8 @@ export default function App() {
 
     let isMounted = true;
     
-    // If Firebase project was unlinked, switch to local sandbox mode
     if (!isFirebaseConfigured) {
-      console.log('App: Firebase is unlinked or deleted. Seamlessly activating local sandbox mode.');
-      enterOfflineDemoMode();
+      clearCachedAuthSession();
       setAuthChecking(false);
       return;
     }
@@ -679,7 +626,7 @@ export default function App() {
   };
 
   useEffect(() => {
-    if (!publicTrackingRoute.isTrackingRoute && authReady && user && firebaseAuthed && profileLoaded && !isOnboarding && !isOfflineDemoMode) {
+    if (!publicTrackingRoute.isTrackingRoute && authReady && user && firebaseAuthed && profileLoaded && !isOnboarding) {
       getRolePermissions()
         .then((perms) => setRolePermissions(perms))
         .catch(() => {});
@@ -714,7 +661,7 @@ export default function App() {
         unsubModels();
       };
     }
-  }, [publicTrackingRoute.isTrackingRoute, authReady, user, firebaseAuthed, profileLoaded, isOnboarding, isOfflineDemoMode]);
+  }, [publicTrackingRoute.isTrackingRoute, authReady, user, firebaseAuthed, profileLoaded, isOnboarding]);
 
   // Handle Auth success from Login Screen
   const handleAuthSuccess = async (profile: UserProfile) => {
@@ -946,26 +893,35 @@ export default function App() {
   };
 
   const generateAndSendClearDataOtp = async () => {
-    const targetEmail = user?.email || auth.currentUser?.email || 'skyautomationtech@gmail.com';
-    const code = Math.floor(100000 + Math.random() * 900000).toString();
-    setGeneratedClearDataOtp(code);
-    setOtpExpiryTime(Date.now() + 10 * 60 * 1000); // 10 mins
+    const targetEmail = user?.email || auth.currentUser?.email || '';
+    if (!targetEmail) {
+      setClearingDataError('Could not send the code, try again');
+      return;
+    }
+    const arr = new Uint32Array(1);
+    crypto.getRandomValues(arr);
+    const code = String(100000 + (arr[0] % 900000));
     setIsSendingClearDataOtp(true);
     setClearingDataError('');
     setClearDataOtpSuccessMsg('');
-    
+
     try {
       const res = await sendOTPEmail(targetEmail, code, user?.name || 'Super Admin');
       if (res.success) {
-        setClearDataOtpSuccessMsg(`Security OTP successfully sent to ${targetEmail}`);
+        setGeneratedClearDataOtp(code);
+        setOtpExpiryTime(Date.now() + 5 * 60 * 1000); // 5 mins
+        setClearDataOtpAttempts(0);
+        setClearDataOtpSuccessMsg(`Security OTP sent to ${targetEmail}`);
+        setClearDataOtpCountdown(60);
       } else {
-        setClearDataOtpSuccessMsg(`Security verification code generated for ${targetEmail}`);
+        setGeneratedClearDataOtp(null);
+        setOtpExpiryTime(null);
+        setClearingDataError('Could not send the code, try again');
       }
-      setClearDataOtpCountdown(60);
-    } catch (err: any) {
-      console.warn('OTP send notice:', err);
-      setClearDataOtpSuccessMsg(`Security verification code generated for ${targetEmail}`);
-      setClearDataOtpCountdown(60);
+    } catch {
+      setGeneratedClearDataOtp(null);
+      setOtpExpiryTime(null);
+      setClearingDataError('Could not send the code, try again');
     } finally {
       setIsSendingClearDataOtp(false);
     }
@@ -976,6 +932,7 @@ export default function App() {
     setShowClearDataModal(true);
     setClearDataPassword('');
     setClearDataOtp('');
+    setClearDataOtpAttempts(0);
     setClearingDataError('');
     setClearDataOtpSuccessMsg('');
     setShowClearPassword(false);
@@ -991,7 +948,7 @@ export default function App() {
       return;
     }
     
-    // Step 2: Validate OTP
+    // Step 2: Validate OTP (5-min expiry, max 5 attempts, single-use)
     const cleanOtp = clearDataOtp.trim().replace(/\s+/g, '');
     if (!cleanOtp) {
       setClearingDataError('Please enter the 6-digit email OTP verification code.');
@@ -1009,14 +966,36 @@ export default function App() {
     }
 
     if (otpExpiryTime && Date.now() > otpExpiryTime) {
+      setGeneratedClearDataOtp(null);
+      setOtpExpiryTime(null);
       setClearingDataError('OTP has expired. Please click Resend OTP.');
       return;
     }
 
-    if (cleanOtp !== generatedClearDataOtp && cleanOtp !== '999888') {
-      setClearingDataError('Invalid OTP code. Please check the code sent to your email.');
+    if (clearDataOtpAttempts >= 5) {
+      setGeneratedClearDataOtp(null);
+      setOtpExpiryTime(null);
+      setClearingDataError('Too many invalid OTP attempts. Please click Resend OTP.');
       return;
     }
+
+    if (cleanOtp !== generatedClearDataOtp) {
+      const nextAttempts = clearDataOtpAttempts + 1;
+      setClearDataOtpAttempts(nextAttempts);
+      if (nextAttempts >= 5) {
+        setGeneratedClearDataOtp(null);
+        setOtpExpiryTime(null);
+        setClearingDataError('Too many invalid OTP attempts. Please click Resend OTP.');
+      } else {
+        setClearingDataError('Invalid OTP code. Please check the code sent to your email.');
+      }
+      return;
+    }
+
+    // Consume OTP immediately (single-use)
+    setGeneratedClearDataOtp(null);
+    setOtpExpiryTime(null);
+    setClearDataOtpAttempts(0);
 
     // Step 3: Verify Password via Firebase Auth Re-authentication
     setIsClearingData(true);
@@ -1114,13 +1093,21 @@ export default function App() {
     );
   }
 
-  // Graceful Fallback: Never lock the user out with a full-screen block
-  if (isQuotaExceeded && !isOfflineDemoMode) {
-    enterOfflineDemoMode();
+  if (!isFirebaseConfigured) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex flex-col justify-center items-center p-6 text-center">
+        <div className="max-w-md bg-slate-900 border border-slate-800 rounded-2xl p-6 space-y-3">
+          <h2 className="text-lg font-bold text-white">Firebase Configuration Required</h2>
+          <p className="text-xs text-slate-400">
+            Authentication and database services are not configured for this environment.
+          </p>
+        </div>
+      </div>
+    );
   }
 
   // Auth Guard: Wait until both Firebase Auth user and Firestore profile doc are loaded
-  if (!user || !profileLoaded || (isFirebaseConfigured && !isOfflineDemoMode && !firebaseAuthed)) {
+  if (!user || !profileLoaded || !firebaseAuthed) {
     return (
       <SplashAndAuth
         onAuthSuccess={handleAuthSuccess}
@@ -1188,33 +1175,18 @@ export default function App() {
             {/* Scrollable Main Workspace */}
             <main className="flex-1 overflow-y-auto overflow-x-hidden p-4 md:p-6 lg:p-8 bg-slate-50 dark:bg-slate-950 w-full max-w-full min-w-0">
           
-          {/* Offline / Local Mode Banner */}
-          {isOfflineDemoMode && (
-            <div className="mb-6 bg-amber-500/10 border border-amber-500/20 rounded-xl p-4 flex flex-col sm:flex-row sm:items-center justify-between gap-3 shadow-3xs">
-              <div className="flex items-start gap-3">
-                <div className="p-2 bg-amber-500/15 border border-amber-500/30 rounded-lg text-amber-500 shrink-0">
-                  <Sparkles size={18} />
-                </div>
-                <div>
-                  <h4 className="text-sm font-semibold text-amber-800 dark:text-amber-300">
-                    {!isFirebaseConfigured ? 'Firebase প্রজেক্ট রিমুভড — লোকাল মোডে চলছে (Local Sandbox Active)' : 'লোকাল স্যান্ডবক্স মোড সক্রিয় (Offline Sandbox)'}
-                  </h4>
-                  <p className="text-sm text-amber-700/80 dark:text-amber-400/80 mt-0.5">
-                    {!isFirebaseConfigured 
-                      ? 'ডিলিট হওয়া Firebase প্রজেক্টের কানেকশন ও ব্লকিং রিমুভ করা হয়েছে। সমস্ত ডাটা আপনার লোকাল স্টোরেজে নিরবচ্ছিন্নভাবে সংরক্ষিত হচ্ছে।' 
-                      : 'লোকাল ডেটাবেজ মোডে সমস্ত ফিচার (ইনভেন্টরি, অর্ডার, ইনভয়েস, একাউন্টিং) স্বাভাবিকভাবে কাজ করছে।'}
-                  </p>
-                </div>
-              </div>
-              <div className="flex items-center gap-2 shrink-0">
-                <button
-                  type="button"
-                  onClick={() => setIsOfflineDemoMode(false)}
-                  className="px-3 py-1.5 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-lg transition-colors cursor-pointer"
-                >
-                  Dismiss Banner
-                </button>
-              </div>
+          {isQuotaExceeded && (
+            <div className="mb-6 bg-amber-500/10 border border-amber-500/20 rounded-xl p-4 flex items-center justify-between gap-3">
+              <p className="text-xs text-amber-700 dark:text-amber-300 font-medium">
+                Firestore read quota notice detected. Cached session data is active where available.
+              </p>
+              <button
+                type="button"
+                onClick={() => setIsQuotaExceeded(false)}
+                className="px-3 py-1 bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold rounded-lg cursor-pointer"
+              >
+                Dismiss
+              </button>
             </div>
           )}
 

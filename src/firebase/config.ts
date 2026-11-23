@@ -24,12 +24,12 @@ export const isFirebaseConfigured = Boolean(
 // Configuration keys for Firebase
 // Sourced dynamically from environment variables and firebase-applet-config.json
 export const firebaseConfig = {
-  apiKey: appletConfig.apiKey || "AIzaSyDummyKeyForLocalSandbox123456",
-  authDomain: appletConfig.authDomain || "local-sandbox.firebaseapp.com",
-  projectId: appletConfig.projectId || "local-sandbox",
-  storageBucket: appletConfig.storageBucket || "local-sandbox.appspot.com",
-  messagingSenderId: appletConfig.messagingSenderId || "1234567890",
-  appId: appletConfig.appId || "1:1234567890:web:local-sandbox"
+  apiKey: appletConfig.apiKey || "",
+  authDomain: appletConfig.authDomain || "",
+  projectId: appletConfig.projectId || "",
+  storageBucket: appletConfig.storageBucket || "",
+  messagingSenderId: appletConfig.messagingSenderId || "",
+  appId: appletConfig.appId || ""
 };
 
 // Initialize Firebase safely

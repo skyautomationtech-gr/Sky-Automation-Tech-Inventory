@@ -991,7 +991,7 @@ export default function ProductManagement({
         );
       } else {
         // Create new product
-        await addProduct(productPayload, user?.id || 'demo', user?.name || 'Operator');
+        await addProduct(productPayload, user?.id || '', user?.name || 'Operator');
         setFormSuccess(finalStatus === 'pending_review'
           ? 'New product successfully submitted for review and approval!'
           : 'New product successfully published to catalog!'

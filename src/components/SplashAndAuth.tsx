@@ -2,11 +2,9 @@ import React, { useState, useEffect } from 'react';
 import { 
   initializeUser, 
   getUserProfile,
-  getAllUsers,
   findUserProfileByEmail,
   deleteUserProfile,
-  getBranches,
-  updateUserPasswordByEmail
+  getBranches
 } from '../firebase/db';
 import { 
   signInWithEmailAndPassword, 
@@ -46,6 +44,19 @@ interface SplashAndAuthProps {
   sessionExpiredMessage?: string;
   onDismissSessionExpired?: () => void;
 }
+
+const OTP_TTL_MS = 5 * 60 * 1000;
+const MAX_OTP_ATTEMPTS = 5;
+const LOGIN_MAX_FAILED_ATTEMPTS = 5;
+const LOGIN_LOCKOUT_MS = 60 * 1000;
+const LOGIN_ATTEMPTS_KEY = 'sat_login_failed_attempts';
+const LOGIN_LOCKOUT_UNTIL_KEY = 'sat_login_lockout_until';
+
+const generateSecureOtp = (): string => {
+  const arr = new Uint32Array(1);
+  crypto.getRandomValues(arr);
+  return String(100000 + (arr[0] % 900000));
+};
 
 export default function SplashAndAuth({
   onAuthSuccess,
@@ -95,22 +106,53 @@ export default function SplashAndAuth({
   const [emailOtpVerified, setEmailOtpVerified] = useState(false);
   const [signupOtpSent, setSignupOtpSent] = useState(false);
   const [signupGeneratedOtp, setSignupGeneratedOtp] = useState('');
+  const [signupOtpExpiresAt, setSignupOtpExpiresAt] = useState<number | null>(null);
+  const [signupOtpAttempts, setSignupOtpAttempts] = useState(0);
   const [signupUserEnteredOtp, setSignupUserEnteredOtp] = useState('');
   const [signupCooldown, setSignupCooldown] = useState(0);
 
   // OTP-Based Password Reset Wizard State
-  const [forgotStep, setForgotStep] = useState(1); // 1: Email, 2: OTP, 3: New Password, 4: Success
+  const [forgotStep, setForgotStep] = useState(1); // 1: Email, 2: OTP, 3: Reset Link Sent
   const [forgotGeneratedOtp, setForgotGeneratedOtp] = useState('');
+  const [forgotOtpExpiresAt, setForgotOtpExpiresAt] = useState<number | null>(null);
+  const [forgotOtpAttempts, setForgotOtpAttempts] = useState(0);
   const [forgotUserEnteredOtp, setForgotUserEnteredOtp] = useState('');
   const [forgotCooldown, setForgotCooldown] = useState(0);
-  const [newPassword, setNewPassword] = useState('');
-  const [confirmNewPassword, setConfirmNewPassword] = useState('');
   
   // OTP State for Login
   const [otpSent, setOtpSent] = useState(false);
   const [generatedOtp, setGeneratedOtp] = useState('');
+  const [loginOtpExpiresAt, setLoginOtpExpiresAt] = useState<number | null>(null);
+  const [loginOtpAttempts, setLoginOtpAttempts] = useState(0);
   const [userEnteredOtp, setUserEnteredOtp] = useState('');
   const [tempUserId, setTempUserId] = useState('');
+
+  // Brute-force Login Protection (5 failed attempts -> 60s cooldown)
+  const [loginFailedAttempts, setLoginFailedAttempts] = useState<number>(() => {
+    try {
+      const stored = parseInt(localStorage.getItem(LOGIN_ATTEMPTS_KEY) || '0', 10);
+      return Number.isFinite(stored) && stored > 0 ? stored : 0;
+    } catch {
+      return 0;
+    }
+  });
+  const [loginLockoutUntil, setLoginLockoutUntil] = useState<number>(() => {
+    try {
+      const stored = parseInt(localStorage.getItem(LOGIN_LOCKOUT_UNTIL_KEY) || '0', 10);
+      return Number.isFinite(stored) && stored > Date.now() ? stored : 0;
+    } catch {
+      return 0;
+    }
+  });
+  const [loginCooldown, setLoginCooldown] = useState<number>(() => {
+    try {
+      const stored = parseInt(localStorage.getItem(LOGIN_LOCKOUT_UNTIL_KEY) || '0', 10);
+      if (Number.isFinite(stored) && stored > Date.now()) {
+        return Math.ceil((stored - Date.now()) / 1000);
+      }
+    } catch {}
+    return 0;
+  });
   
   // Status state
   const [loading, setLoading] = useState(false);
@@ -141,7 +183,7 @@ export default function SplashAndAuth({
   useEffect(() => {
     let interval: any;
     if (signupCooldown > 0) {
-      interval = setInterval(() => setSignupCooldown(c => c - 1), 1000);
+      interval = setInterval(() => setSignupCooldown(c => (c > 0 ? c - 1 : 0)), 1000);
     }
     return () => clearInterval(interval);
   }, [signupCooldown]);
@@ -149,10 +191,65 @@ export default function SplashAndAuth({
   useEffect(() => {
     let interval: any;
     if (forgotCooldown > 0) {
-      interval = setInterval(() => setForgotCooldown(c => c - 1), 1000);
+      interval = setInterval(() => setForgotCooldown(c => (c > 0 ? c - 1 : 0)), 1000);
     }
     return () => clearInterval(interval);
   }, [forgotCooldown]);
+
+  useEffect(() => {
+    if (!loginLockoutUntil || loginLockoutUntil <= Date.now()) {
+      setLoginCooldown(0);
+      return;
+    }
+    const updateRemaining = () => {
+      const remaining = Math.ceil((loginLockoutUntil - Date.now()) / 1000);
+      if (remaining <= 0) {
+        setLoginCooldown(0);
+        setLoginLockoutUntil(0);
+        setLoginFailedAttempts(0);
+        try {
+          localStorage.removeItem(LOGIN_LOCKOUT_UNTIL_KEY);
+          localStorage.removeItem(LOGIN_ATTEMPTS_KEY);
+        } catch {}
+      } else {
+        setLoginCooldown(remaining);
+      }
+    };
+    updateRemaining();
+    const interval = setInterval(updateRemaining, 1000);
+    return () => clearInterval(interval);
+  }, [loginLockoutUntil]);
+
+  const recordLoginFailure = (): boolean => {
+    const next = loginFailedAttempts + 1;
+    if (next >= LOGIN_MAX_FAILED_ATTEMPTS) {
+      const until = Date.now() + LOGIN_LOCKOUT_MS;
+      setLoginFailedAttempts(0);
+      setLoginLockoutUntil(until);
+      setLoginCooldown(Math.ceil(LOGIN_LOCKOUT_MS / 1000));
+      try {
+        localStorage.removeItem(LOGIN_ATTEMPTS_KEY);
+        localStorage.setItem(LOGIN_LOCKOUT_UNTIL_KEY, String(until));
+      } catch {}
+      return true;
+    } else {
+      setLoginFailedAttempts(next);
+      try {
+        localStorage.setItem(LOGIN_ATTEMPTS_KEY, String(next));
+      } catch {}
+      return false;
+    }
+  };
+
+  const resetLoginFailures = () => {
+    setLoginFailedAttempts(0);
+    setLoginLockoutUntil(0);
+    setLoginCooldown(0);
+    try {
+      localStorage.removeItem(LOGIN_ATTEMPTS_KEY);
+      localStorage.removeItem(LOGIN_LOCKOUT_UNTIL_KEY);
+    } catch {}
+  };
 
   const resetForm = () => {
     setEmail('');
@@ -167,14 +264,22 @@ export default function SplashAndAuth({
     setPhotoUrl('');
     setOtpSent(false);
     setGeneratedOtp('');
+    setLoginOtpExpiresAt(null);
+    setLoginOtpAttempts(0);
     setUserEnteredOtp('');
     setTempUserId('');
     setSignupStep(1);
     setEmailOtpVerified(false);
     setSignupOtpSent(false);
+    setSignupGeneratedOtp('');
+    setSignupOtpExpiresAt(null);
+    setSignupOtpAttempts(0);
+    setSignupUserEnteredOtp('');
     setForgotStep(1);
-    setNewPassword('');
-    setConfirmNewPassword('');
+    setForgotGeneratedOtp('');
+    setForgotOtpExpiresAt(null);
+    setForgotOtpAttempts(0);
+    setForgotUserEnteredOtp('');
     setError('');
     setInfoMessage('');
   };
@@ -205,11 +310,9 @@ export default function SplashAndAuth({
     setLoading(true);
     try {
       const { createUserWithEmailAndPassword } = await import('firebase/auth');
-      console.log("REGISTRATION - Creating Auth user for:", email);
       const userCredential = await createUserWithEmailAndPassword(firebaseAuth, email, password);
       const userId = userCredential.user.uid;
       
-      console.log("REGISTRATION - Initializing user profile document...");
       const isFirst = await initializeUser(userId, {
         name: fullName.trim(),
         email: email.toLowerCase().trim(),
@@ -234,7 +337,6 @@ export default function SplashAndAuth({
         subBrandAccess: []
       });
       
-      console.log("REGISTRATION - Signing out newly registered user...");
       await signOut(firebaseAuth);
       
       if (isFirst) {
@@ -268,6 +370,13 @@ export default function SplashAndAuth({
     setError('');
     setInfoMessage('');
 
+    if (loginLockoutUntil > Date.now()) {
+      const waitSec = Math.ceil((loginLockoutUntil - Date.now()) / 1000);
+      setLoginCooldown(waitSec);
+      setError(`Too many failed login attempts. Please wait ${waitSec}s before trying again.`);
+      return;
+    }
+
     const cleanEmail = email.toLowerCase().trim();
     const cleanPassword = password;
 
@@ -295,11 +404,12 @@ export default function SplashAndAuth({
         localStorage.removeItem('sat_active_uid');
       } catch {}
 
-      // Step 1: Real Firebase Auth sign-in is mandatory when Firebase is configured
+      // Step 1: Real Firebase Auth sign-in is mandatory
       try {
         const userCredential = await signInWithEmailAndPassword(firebaseAuth, cleanEmail, cleanPassword);
         userId = userCredential.user.uid;
         isPasswordValid = true;
+        resetLoginFailures();
         try {
           await userCredential.user.getIdToken(true);
         } catch (tokenErr) {}
@@ -307,13 +417,23 @@ export default function SplashAndAuth({
           (await getUserProfile(userId, { strictFirestore: true }).catch(() => null)) ||
           (await findUserProfileByEmail(cleanEmail));
       } catch (authErr: any) {
-        console.warn('Firebase Auth sign in failed:', authErr?.code, authErr?.message);
         if (authErr?.code === 'auth/too-many-requests') {
-          setError('Too many failed login attempts. Please wait a moment before trying again.');
+          const until = Date.now() + LOGIN_LOCKOUT_MS;
+          setLoginLockoutUntil(until);
+          setLoginCooldown(Math.ceil(LOGIN_LOCKOUT_MS / 1000));
+          try {
+            localStorage.setItem(LOGIN_LOCKOUT_UNTIL_KEY, String(until));
+          } catch {}
+          setError('Too many failed login attempts. Please wait 60 seconds before trying again.');
         } else if (authErr?.code === 'auth/network-request-failed') {
-          setError('Network error reaching Firebase Authentication. Please check your connection and try again.');
+          setError('Network error reaching authentication service. Please check your connection and try again.');
         } else {
-          setError('Invalid email or password. Please verify your credentials or use "Forgot Password?".');
+          const lockedOut = recordLoginFailure();
+          if (lockedOut) {
+            setError('Too many failed login attempts. Please wait 60 seconds before trying again.');
+          } else {
+            setError('Invalid email or password. Please verify your credentials or use "Forgot Password?".');
+          }
         }
         setLoading(false);
         return;
@@ -362,7 +482,7 @@ export default function SplashAndAuth({
         if (firebaseAuth.currentUser) {
           try {
             await createUserProfile(authedUid, healedProfile);
-            if (profile.id && profile.id !== 'operator-superadmin') {
+            if (profile.id) {
               try {
                 await deleteUserProfile(profile.id);
               } catch (delErr) {}
@@ -376,44 +496,62 @@ export default function SplashAndAuth({
         }
       }
 
-      const otp = Math.floor(100000 + Math.random() * 900000).toString();
+      const otp = generateSecureOtp();
+      const now = Date.now();
       setGeneratedOtp(otp);
+      setLoginOtpExpiresAt(now + OTP_TTL_MS);
+      setLoginOtpAttempts(0);
+      setUserEnteredOtp('');
       setTempUserId(profile.id);
       
       if (profile.role === 'staff') {
-        if (firebaseAuth.currentUser) {
-          try {
-            const { setDoc, doc } = await import('firebase/firestore');
-            const { db } = await import('../firebase/config');
-            await setDoc(doc(db, 'liveLoginCodes', profile.id), {
-              staffUid: profile.id,
-              staffName: profile.name,
-              email: profile.email,
-              otpCode: otp,
-              generatedAt: Date.now(),
-              expiresAt: Date.now() + 15 * 60 * 1000
-            });
-          } catch (dbErr) {
-            console.warn('Failed to save live login code:', dbErr);
-          }
+        if (!firebaseAuth.currentUser) {
+          setGeneratedOtp('');
+          setLoginOtpExpiresAt(null);
+          setError('Session expired, please log in again');
+          setLoading(false);
+          return;
         }
-        setOtpSent(true);
-        setInfoMessage('Verification code generated. Please contact your Super Admin for your 6-digit login code.');
+        try {
+          const { setDoc, doc } = await import('firebase/firestore');
+          const { db } = await import('../firebase/config');
+          await setDoc(doc(db, 'liveLoginCodes', profile.id), {
+            staffUid: profile.id,
+            staffName: profile.name,
+            email: profile.email,
+            otpCode: otp,
+            generatedAt: now,
+            expiresAt: now + OTP_TTL_MS
+          });
+          setOtpSent(true);
+          setInfoMessage('Verification code generated. Please contact your Super Admin for your 6-digit login code.');
+        } catch (dbErr) {
+          setGeneratedOtp('');
+          setLoginOtpExpiresAt(null);
+          try { await signOut(firebaseAuth); } catch {}
+          setError('Could not send the code, try again');
+        }
       } else {
         const emailRes = await sendOTPEmail(cleanEmail, otp, profile.name);
-        setOtpSent(true);
-        if (cleanEmail === 'skyautomationtech@gmail.com' || !emailRes.success) {
-          setInfoMessage(`Security verification code sent to ${cleanEmail}. (OTP Code: ${otp})`);
+        if (!emailRes.success) {
+          setGeneratedOtp('');
+          setLoginOtpExpiresAt(null);
+          setTempUserId('');
+          if (firebaseAuth.currentUser) {
+            try { await signOut(firebaseAuth); } catch {}
+          }
+          setError('Could not send the code, try again');
         } else {
-          setInfoMessage(`A security verification code was sent to ${cleanEmail}`);
+          setOtpSent(true);
+          setInfoMessage(`A verification code was sent to ${cleanEmail}.`);
         }
       }
     } catch (err: any) {
-      console.warn('Login attempt failed:', err.code, err.message);
-      if (err.code === 'auth/user-not-found' || err.code === 'auth/invalid-credential' || err.code === 'auth/wrong-password') {
+      if (err?.code === 'auth/user-not-found' || err?.code === 'auth/invalid-credential' || err?.code === 'auth/wrong-password') {
+        recordLoginFailure();
         setError('Invalid email or password. Please verify your credentials or use "Forgot Password?".');
       } else {
-        setError(`Authentication failed: ${err.message || 'Please check your credentials.'}`);
+        setError('Authentication failed. Please check your credentials and try again.');
       }
     } finally {
       setLoading(false);
@@ -424,18 +562,65 @@ export default function SplashAndAuth({
   const handleVerifyOtp = async (e: React.FormEvent) => {
     e.preventDefault();
     setError('');
-    
+
+    const currentUser = firebaseAuth.currentUser;
+    if (isFirebaseConfigured && !currentUser) {
+      setOtpSent(false);
+      setGeneratedOtp('');
+      setLoginOtpExpiresAt(null);
+      setError('Session expired, please log in again');
+      return;
+    }
+
+    if (!generatedOtp) {
+      setOtpSent(false);
+      setError('No active verification code. Please sign in again.');
+      return;
+    }
+
+    if (loginOtpExpiresAt && Date.now() > loginOtpExpiresAt) {
+      setGeneratedOtp('');
+      setLoginOtpExpiresAt(null);
+      setLoginOtpAttempts(0);
+      setUserEnteredOtp('');
+      setOtpSent(false);
+      if (currentUser) {
+        try {
+          const { deleteDoc, doc } = await import('firebase/firestore');
+          const { db } = await import('../firebase/config');
+          await deleteDoc(doc(db, 'liveLoginCodes', tempUserId || currentUser.uid));
+        } catch {}
+        try { await signOut(firebaseAuth); } catch {}
+      }
+      setError('Verification code expired. Please sign in again.');
+      return;
+    }
+
+    if (loginOtpAttempts >= MAX_OTP_ATTEMPTS) {
+      setGeneratedOtp('');
+      setLoginOtpExpiresAt(null);
+      setLoginOtpAttempts(0);
+      setUserEnteredOtp('');
+      setOtpSent(false);
+      if (currentUser) {
+        try {
+          const { deleteDoc, doc } = await import('firebase/firestore');
+          const { db } = await import('../firebase/config');
+          await deleteDoc(doc(db, 'liveLoginCodes', tempUserId || currentUser.uid));
+        } catch {}
+        try { await signOut(firebaseAuth); } catch {}
+      }
+      setError('Too many incorrect verification attempts. Please sign in again.');
+      return;
+    }
+
     if (userEnteredOtp.trim() === generatedOtp.trim() && generatedOtp.trim() !== '') {
+      // Consume OTP immediately (single-use)
+      setGeneratedOtp('');
+      setLoginOtpExpiresAt(null);
+      setLoginOtpAttempts(0);
       setLoading(true);
       try {
-        const currentUser = firebaseAuth.currentUser;
-        if (isFirebaseConfigured && !currentUser) {
-          setOtpSent(false);
-          setError('Session expired, please log in again');
-          setLoading(false);
-          return;
-        }
-
         const resolvedLookupId = currentUser?.uid || tempUserId;
         let profile = await getUserProfile(resolvedLookupId, { strictFirestore: true }).catch(() => null);
         if (!profile && currentUser?.email) {
@@ -482,33 +667,27 @@ export default function SplashAndAuth({
         setLoading(false);
       }
     } else {
-      setError('Incorrect verification code. Please try again.');
+      const nextAttempts = loginOtpAttempts + 1;
+      setLoginOtpAttempts(nextAttempts);
+      if (nextAttempts >= MAX_OTP_ATTEMPTS) {
+        setGeneratedOtp('');
+        setLoginOtpExpiresAt(null);
+        setLoginOtpAttempts(0);
+        setUserEnteredOtp('');
+        setOtpSent(false);
+        if (currentUser) {
+          try {
+            const { deleteDoc, doc } = await import('firebase/firestore');
+            const { db } = await import('../firebase/config');
+            await deleteDoc(doc(db, 'liveLoginCodes', tempUserId || currentUser.uid));
+          } catch {}
+          try { await signOut(firebaseAuth); } catch {}
+        }
+        setError('Too many incorrect verification attempts. Please sign in again.');
+      } else {
+        setError('Incorrect verification code. Please try again.');
+      }
     }
-  };
-
-  // Direct offline fallback access handler (ONLY when Firebase is not configured)
-  const handleDirectOfflineAccess = () => {
-    if (isFirebaseConfigured) {
-      setError('Please sign in with your Firebase account credentials.');
-      return;
-    }
-    const fallbackUser: UserProfile = {
-      id: 'operator-superadmin',
-      email: 'skyautomationtech@gmail.com',
-      name: 'Sky Automation Operator',
-      role: 'superadmin',
-      active: true,
-      currentSessionStatus: 'checked_in',
-      currentSessionDate: new Date().toISOString().split('T')[0],
-      currentSessionId: 'offline-sess',
-      subBrandAccess: ['SAT', 'GZ', 'RTX']
-    };
-    try {
-      sessionStorage.setItem('sat_otp_verified', 'true');
-      localStorage.setItem('sat_otp_verified', 'true');
-      localStorage.setItem('sat_user_session', JSON.stringify(fallbackUser));
-    } catch (e) {}
-    onAuthSuccess(fallbackUser);
   };
 
   // Splash Component Render
@@ -802,9 +981,9 @@ export default function SplashAndAuth({
                     <input
                       type="text"
                       maxLength={6}
-                      placeholder="e.g. 123456"
+                      placeholder="6-digit code"
                       value={userEnteredOtp}
-                      onChange={(e) => setUserEnteredOtp(e.target.value)}
+                      onChange={(e) => setUserEnteredOtp(e.target.value.replace(/\D/g, ''))}
                       className="pl-11 w-full bg-slate-950 border border-slate-800 rounded-xl py-3 text-white placeholder-slate-600 focus:outline-none focus:ring-2 focus:ring-[#D4AF37] focus:border-transparent text-center text-xl tracking-widest font-mono font-bold"
                       required
                     />
@@ -822,7 +1001,23 @@ export default function SplashAndAuth({
                 <div className="text-center">
                   <button
                     type="button"
-                    onClick={() => setOtpSent(false)}
+                    onClick={async () => {
+                      setOtpSent(false);
+                      setGeneratedOtp('');
+                      setLoginOtpExpiresAt(null);
+                      setLoginOtpAttempts(0);
+                      setUserEnteredOtp('');
+                      setError('');
+                      setInfoMessage('');
+                      if (firebaseAuth.currentUser) {
+                        try {
+                          const { deleteDoc, doc } = await import('firebase/firestore');
+                          const { db } = await import('../firebase/config');
+                          await deleteDoc(doc(db, 'liveLoginCodes', tempUserId || firebaseAuth.currentUser.uid));
+                        } catch {}
+                        try { await signOut(firebaseAuth); } catch {}
+                      }
+                    }}
                     className="text-xs text-slate-400 hover:text-white underline cursor-pointer"
                   >
                     ← Back to Login Credentials
@@ -838,10 +1033,10 @@ export default function SplashAndAuth({
                   <div className="space-y-5">
                     <div className="flex items-center justify-between pb-3 border-b border-slate-800">
                       <span className="text-xs font-mono font-bold uppercase tracking-wider text-[#D4AF37]">
-                        Step {forgotStep} of 4 — Password Recovery
+                        Step {forgotStep} of 3 — Password Recovery
                       </span>
                       <div className="flex gap-1.5">
-                        {[1, 2, 3, 4].map(s => (
+                        {[1, 2, 3].map(s => (
                           <div key={s} className={`w-6 h-1.5 rounded-full transition-all ${forgotStep >= s ? 'bg-[#D4AF37]' : 'bg-slate-800'}`} />
                         ))}
                       </div>
@@ -850,7 +1045,7 @@ export default function SplashAndAuth({
                     {forgotStep === 1 && (
                       <div className="space-y-4">
                         <div className="p-3 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-300">
-                          Enter your registered account email address. We will generate a 6-digit security verification code to confirm your identity.
+                          Enter your registered account email address. We will email you a 6-digit verification code or a password reset link.
                         </div>
                         <div>
                           <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
@@ -860,7 +1055,7 @@ export default function SplashAndAuth({
                             <Mail className="absolute top-3.5 left-3 text-slate-500" size={18} />
                             <input
                               type="email"
-                              placeholder="email@skyautomation.com"
+                              placeholder="you@example.com"
                               value={email}
                               onChange={(e) => setEmail(e.target.value)}
                               className="pl-10 w-full bg-slate-950 border border-slate-800 rounded-xl py-3 text-white text-sm focus:ring-2 focus:ring-[#D4AF37]"
@@ -870,67 +1065,76 @@ export default function SplashAndAuth({
                         </div>
                         <button
                           type="button"
-                          disabled={loading}
+                          disabled={loading || forgotCooldown > 0}
                           onClick={async () => {
-                            if (!email.trim() || !email.includes('@')) {
+                            const cleanEmail = email.trim();
+                            if (!cleanEmail || !cleanEmail.includes('@')) {
                               setError('Please enter a valid account email.');
                               return;
                             }
                             setError('');
+                            setInfoMessage('');
                             setLoading(true);
                             try {
-                              const code = Math.floor(100000 + Math.random() * 900000).toString();
+                              const code = generateSecureOtp();
+                              const emailRes = await sendOTPEmail(cleanEmail, code, 'User');
+                              if (!emailRes.success) {
+                                setForgotGeneratedOtp('');
+                                setForgotOtpExpiresAt(null);
+                                setError('Could not send the code, try again');
+                                return;
+                              }
                               setForgotGeneratedOtp(code);
-                              try {
-                                const pendingResets = JSON.parse(localStorage.getItem('sky_pending_resets') || '{}');
-                                pendingResets[email.toLowerCase().trim()] = code;
-                                localStorage.setItem('sky_pending_resets', JSON.stringify(pendingResets));
-                              } catch (e) {}
-                              
+                              setForgotOtpExpiresAt(Date.now() + OTP_TTL_MS);
+                              setForgotOtpAttempts(0);
+                              setForgotUserEnteredOtp('');
+                              setForgotCooldown(60);
                               setForgotStep(2);
-                              setInfoMessage(`Security verification code generated for ${email}. (Demo OTP Code: ${code})`);
-                            } catch (err: any) {
-                              setError(err.message || 'Failed to generate OTP code.');
+                              setInfoMessage(`A verification code was sent to ${cleanEmail}.`);
+                            } catch {
+                              setForgotGeneratedOtp('');
+                              setForgotOtpExpiresAt(null);
+                              setError('Could not send the code, try again');
                             } finally {
                               setLoading(false);
                             }
                           }}
-                          className="w-full py-3.5 px-4 rounded-xl text-xs sm:text-sm font-extrabold text-slate-950 bg-[#D4AF37] hover:bg-[#b89628] transition-all cursor-pointer"
+                          className="w-full py-3.5 px-4 rounded-xl text-xs sm:text-sm font-extrabold text-slate-950 bg-[#D4AF37] hover:bg-[#b89628] transition-all cursor-pointer disabled:opacity-50"
                         >
-                          {loading ? 'Generating Code...' : 'Send Verification Code →'}
+                          {loading ? 'Sending Code...' : forgotCooldown > 0 ? `Please wait ${forgotCooldown}s` : 'Send Verification Code →'}
                         </button>
                         <button
                           type="button"
                           disabled={loading}
                           onClick={async () => {
-                            if (!email.trim() || !email.includes('@')) {
+                            const cleanEmail = email.trim();
+                            if (!cleanEmail || !cleanEmail.includes('@')) {
                               setError('Please enter a valid account email.');
                               return;
                             }
                             setError('');
                             setLoading(true);
                             try {
-                              await sendPasswordResetEmail(firebaseAuth, email);
-                              setInfoMessage(`Official Firebase password reset email sent to ${email}. Check your inbox!`);
-                            } catch (err: any) {
-                              setError(err.message || 'Failed to send reset email.');
+                              await sendPasswordResetEmail(firebaseAuth, cleanEmail);
+                              setForgotStep(3);
+                              setInfoMessage(`Password reset email sent to ${cleanEmail}. Please check your inbox.`);
+                            } catch {
+                              setError('Could not send password reset email. Please verify the address and try again.');
                             } finally {
                               setLoading(false);
                             }
                           }}
                           className="w-full py-2.5 px-4 rounded-xl text-xs font-semibold text-[#D4AF37] bg-slate-950 border border-slate-800 hover:bg-slate-800 transition-all cursor-pointer"
                         >
-                          Or Send Official Firebase Reset Email Link
+                          Send Password Reset Email Link
                         </button>
                       </div>
                     )}
 
                     {forgotStep === 2 && (
                       <div className="space-y-4">
-                        <div className="p-3 bg-[#D4AF37]/10 border border-[#D4AF37]/30 rounded-xl text-xs text-amber-300 space-y-1">
-                          <p className="font-bold">🔑 Security Verification Code</p>
-                          <p>Verification code for this reset session:</p>
-                          <p className="text-xl font-mono font-black tracking-widest text-center py-2 text-white bg-slate-950 rounded-lg">{forgotGeneratedOtp || '------'}</p>
+                        <div className="p-3 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-300">
+                          Enter the 6-digit verification code sent to your email. The code expires in 5 minutes.
                         </div>
                         <div>
                           <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400 mb-1">
@@ -939,85 +1143,55 @@ export default function SplashAndAuth({
                           <input
                             type="text"
                             maxLength={6}
-                            placeholder="000000"
+                            placeholder="6-digit code"
                             value={forgotUserEnteredOtp}
-                            onChange={(e) => setForgotUserEnteredOtp(e.target.value)}
+                            onChange={(e) => setForgotUserEnteredOtp(e.target.value.replace(/\D/g, ''))}
                             className="w-full bg-slate-950 border border-slate-800 rounded-xl py-3 text-white text-center font-mono tracking-widest text-xl focus:ring-2 focus:ring-[#D4AF37]"
                           />
                         </div>
                         <div className="flex items-center justify-between text-xs">
                           <button
                             type="button"
-                            onClick={() => {
-                              const code = Math.floor(100000 + Math.random() * 900000).toString();
-                              setForgotGeneratedOtp(code);
-                              setInfoMessage(`New verification code generated: ${code}`);
-                            }}
-                            className="text-[#D4AF37] hover:underline cursor-pointer"
-                          >
-                            Generate New Code
-                          </button>
-                        </div>
-                        <div className="flex gap-2 pt-2">
-                          <button
-                            type="button"
-                            onClick={() => setForgotStep(1)}
-                            className="px-4 py-3 bg-slate-950 hover:bg-slate-800 text-slate-300 rounded-xl text-xs font-bold cursor-pointer"
-                          >
-                            ← Back
-                          </button>
-                          <button
-                            type="button"
-                            onClick={() => {
-                              if (forgotUserEnteredOtp.trim() === forgotGeneratedOtp.trim()) {
-                                setForgotStep(3);
-                                setError('');
-                                setInfoMessage('OTP verified successfully! Set your new password below.');
-                              } else {
-                                setError('Invalid OTP code. Please check and try again.');
+                            disabled={forgotCooldown > 0 || loading}
+                            onClick={async () => {
+                              if (forgotCooldown > 0 || loading) return;
+                              const cleanEmail = email.trim();
+                              setError('');
+                              setLoading(true);
+                              try {
+                                const code = generateSecureOtp();
+                                const emailRes = await sendOTPEmail(cleanEmail, code, 'User');
+                                if (!emailRes.success) {
+                                  setError('Could not send the code, try again');
+                                  return;
+                                }
+                                setForgotGeneratedOtp(code);
+                                setForgotOtpExpiresAt(Date.now() + OTP_TTL_MS);
+                                setForgotOtpAttempts(0);
+                                setForgotUserEnteredOtp('');
+                                setForgotCooldown(60);
+                                setInfoMessage(`A new verification code was sent to ${cleanEmail}.`);
+                              } catch {
+                                setError('Could not send the code, try again');
+                              } finally {
+                                setLoading(false);
                               }
                             }}
-                            className="flex-1 py-3 bg-[#D4AF37] hover:bg-[#b89628] text-slate-950 font-extrabold rounded-xl text-xs sm:text-sm cursor-pointer"
+                            className="text-[#D4AF37] hover:underline disabled:opacity-50 cursor-pointer"
                           >
-                            Verify & Set Password →
+                            {forgotCooldown > 0 ? `Resend Code in ${forgotCooldown}s` : 'Resend Verification Code'}
                           </button>
-                        </div>
-                      </div>
-                    )}
-
-                    {forgotStep === 3 && (
-                      <div className="space-y-4">
-                        <div className="p-3 bg-slate-950 border border-slate-800 rounded-xl text-xs text-slate-300">
-                          Choose a secure new password for your account (minimum 6 characters).
-                        </div>
-                        <div>
-                          <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
-                            New Password <span className="text-red-400">*</span>
-                          </label>
-                          <input
-                            type="password"
-                            placeholder="••••••••"
-                            value={newPassword}
-                            onChange={(e) => setNewPassword(e.target.value)}
-                            className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-xl py-3 px-3 text-white text-sm focus:ring-2 focus:ring-[#D4AF37]"
-                          />
-                        </div>
-                        <div>
-                          <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
-                            Confirm New Password <span className="text-red-400">*</span>
-                          </label>
-                          <input
-                            type="password"
-                            placeholder="••••••••"
-                            value={confirmNewPassword}
-                            onChange={(e) => setConfirmNewPassword(e.target.value)}
-                            className="mt-1 w-full bg-slate-950 border border-slate-800 rounded-xl py-3 px-3 text-white text-sm focus:ring-2 focus:ring-[#D4AF37]"
-                          />
                         </div>
                         <div className="flex gap-2 pt-2">
                           <button
                             type="button"
-                            onClick={() => setForgotStep(2)}
+                            onClick={() => {
+                              setForgotStep(1);
+                              setForgotGeneratedOtp('');
+                              setForgotOtpExpiresAt(null);
+                              setForgotOtpAttempts(0);
+                              setError('');
+                            }}
                             className="px-4 py-3 bg-slate-950 hover:bg-slate-800 text-slate-300 rounded-xl text-xs font-bold cursor-pointer"
                           >
                             ← Back
@@ -1026,54 +1200,81 @@ export default function SplashAndAuth({
                             type="button"
                             disabled={loading}
                             onClick={async () => {
-                              if (!newPassword || newPassword.length < 6) {
-                                setError('Password must be at least 6 characters long.');
+                              if (!forgotGeneratedOtp) {
+                                setError('No active verification code. Please request a new code.');
                                 return;
                               }
-                              if (newPassword !== confirmNewPassword) {
-                                setError('Passwords do not match.');
+                              if (forgotOtpExpiresAt && Date.now() > forgotOtpExpiresAt) {
+                                setForgotGeneratedOtp('');
+                                setForgotOtpExpiresAt(null);
+                                setForgotOtpAttempts(0);
+                                setError('Verification code expired. Please request a new code.');
                                 return;
                               }
-                              setError('');
-                              setLoading(true);
-                              try {
-                                await updateUserPasswordByEmail(email, newPassword);
-                                setForgotStep(4);
-                                setInfoMessage('Password successfully updated!');
-                              } catch (err: any) {
-                                console.warn('Direct reset error:', err);
-                                setError(err.message || 'Failed to update password.');
-                              } finally {
-                                setLoading(false);
+                              if (forgotOtpAttempts >= MAX_OTP_ATTEMPTS) {
+                                setForgotGeneratedOtp('');
+                                setForgotOtpExpiresAt(null);
+                                setForgotOtpAttempts(0);
+                                setError('Too many invalid attempts. Please request a new code.');
+                                return;
+                              }
+                              if (forgotUserEnteredOtp.trim() === forgotGeneratedOtp.trim()) {
+                                setForgotGeneratedOtp('');
+                                setForgotOtpExpiresAt(null);
+                                setForgotOtpAttempts(0);
+                                setForgotUserEnteredOtp('');
+                                setError('');
+                                setLoading(true);
+                                try {
+                                  await sendPasswordResetEmail(firebaseAuth, email.trim());
+                                  setForgotStep(3);
+                                  setInfoMessage(`OTP verified! A password reset link has been sent to ${email.trim()}.`);
+                                } catch {
+                                  setError('Could not send password reset email. Please try again.');
+                                } finally {
+                                  setLoading(false);
+                                }
+                              } else {
+                                const nextAttempts = forgotOtpAttempts + 1;
+                                setForgotOtpAttempts(nextAttempts);
+                                if (nextAttempts >= MAX_OTP_ATTEMPTS) {
+                                  setForgotGeneratedOtp('');
+                                  setForgotOtpExpiresAt(null);
+                                  setForgotOtpAttempts(0);
+                                  setError('Too many invalid attempts. Please request a new code.');
+                                } else {
+                                  setError('Invalid OTP code. Please check and try again.');
+                                }
                               }
                             }}
-                            className="flex-1 py-3 bg-[#D4AF37] hover:bg-[#b89628] text-slate-950 font-extrabold rounded-xl text-xs sm:text-sm cursor-pointer"
+                            className="flex-1 py-3 bg-[#D4AF37] hover:bg-[#b89628] text-slate-950 font-extrabold rounded-xl text-xs sm:text-sm cursor-pointer disabled:opacity-50"
                           >
-                            {loading ? 'Updating Password...' : 'Reset Password'}
+                            {loading ? 'Sending Reset Link...' : 'Verify & Send Reset Link →'}
                           </button>
                         </div>
                       </div>
                     )}
 
-                    {forgotStep === 4 && (
+                    {forgotStep === 3 && (
                       <div className="space-y-4 text-center py-4">
                         <div className="w-16 h-16 bg-emerald-500/20 text-emerald-400 rounded-full flex items-center justify-center mx-auto border border-emerald-500/40">
                           <CheckCircle2 size={32} />
                         </div>
-                        <h4 className="text-lg font-bold text-white">Password Reset Successful!</h4>
+                        <h4 className="text-lg font-bold text-white">Password Reset Email Sent</h4>
                         <div className="text-xs text-slate-300 leading-relaxed text-left bg-slate-950 p-3.5 rounded-xl border border-slate-800 space-y-2">
                           <p>
-                            Your account password has been updated for <strong className="text-[#D4AF37]">{email}</strong>.
+                            Check the inbox for <strong className="text-[#D4AF37]">{email}</strong> and follow the link to choose a new password.
                           </p>
-                          <p>You can now sign in using your new credentials.</p>
+                          <p>Once your password is updated, return here to sign in.</p>
                         </div>
                         <button
                           type="button"
                           onClick={() => {
                             setIsForgotPassword(false);
                             setForgotStep(1);
-                            setNewPassword('');
-                            setConfirmNewPassword('');
+                            setForgotGeneratedOtp('');
+                            setForgotOtpExpiresAt(null);
+                            setForgotOtpAttempts(0);
                             setForgotUserEnteredOtp('');
                             setError('');
                             setInfoMessage('');
@@ -1085,14 +1286,19 @@ export default function SplashAndAuth({
                       </div>
                     )}
 
-                    {forgotStep < 4 && (
+                    {forgotStep < 3 && (
                       <div className="text-center pt-2">
                         <button
                           type="button"
                           onClick={() => {
                             setIsForgotPassword(false);
                             setForgotStep(1);
+                            setForgotGeneratedOtp('');
+                            setForgotOtpExpiresAt(null);
+                            setForgotOtpAttempts(0);
+                            setForgotUserEnteredOtp('');
                             setError('');
+                            setInfoMessage('');
                           }}
                           className="text-xs text-slate-400 hover:text-white underline cursor-pointer"
                         >
@@ -1250,25 +1456,32 @@ export default function SplashAndAuth({
                             {!emailOtpVerified && (
                               <button
                                 type="button"
+                                disabled={signupCooldown > 0}
                                 onClick={async () => {
                                   if (!email.trim() || !email.includes('@')) {
                                     setError('Please enter a valid email address first.');
                                     return;
                                   }
-                                  const code = Math.floor(100000 + Math.random() * 900000).toString();
-                                  setSignupGeneratedOtp(code);
-                                  const emailRes = await sendOTPEmail(email, code, fullName || 'Applicant');
+                                  setError('');
+                                  const code = generateSecureOtp();
+                                  const emailRes = await sendOTPEmail(email.trim(), code, fullName || 'Applicant');
                                   if (!emailRes.success) {
-                                    setError(`EmailJS Delivery Failed: ${emailRes.error || 'Unknown error'}`);
+                                    setSignupGeneratedOtp('');
+                                    setSignupOtpExpiresAt(null);
+                                    setError('Could not send the code, try again');
                                     return;
                                   }
+                                  setSignupGeneratedOtp(code);
+                                  setSignupOtpExpiresAt(Date.now() + OTP_TTL_MS);
+                                  setSignupOtpAttempts(0);
+                                  setSignupUserEnteredOtp('');
                                   setSignupOtpSent(true);
                                   setSignupCooldown(45);
-                                  setInfoMessage(`Verification OTP sent to ${email}`);
+                                  setInfoMessage(`Verification OTP sent to ${email.trim()}`);
                                 }}
-                                className="px-4 py-2 bg-[#D4AF37] hover:bg-[#b89628] text-slate-950 font-bold rounded-xl text-xs whitespace-nowrap cursor-pointer"
+                                className="px-4 py-2 bg-[#D4AF37] hover:bg-[#b89628] text-slate-950 font-bold rounded-xl text-xs whitespace-nowrap cursor-pointer disabled:opacity-50"
                               >
-                                Send OTP
+                                {signupCooldown > 0 ? `${signupCooldown}s` : 'Send OTP'}
                               </button>
                             )}
                             {emailOtpVerified && (
@@ -1285,20 +1498,50 @@ export default function SplashAndAuth({
                               <input
                                 type="text"
                                 maxLength={6}
-                                placeholder="6-digit OTP"
+                                placeholder="6-digit code"
                                 value={signupUserEnteredOtp}
-                                onChange={(e) => setSignupUserEnteredOtp(e.target.value)}
+                                onChange={(e) => setSignupUserEnteredOtp(e.target.value.replace(/\D/g, ''))}
                                 className="flex-1 bg-slate-900 border border-slate-800 rounded-xl py-2 px-3 text-white font-mono text-center tracking-widest text-sm"
                               />
                               <button
                                 type="button"
                                 onClick={() => {
+                                  if (!signupGeneratedOtp) {
+                                    setError('No active verification code. Please click Resend Verification Code.');
+                                    return;
+                                  }
+                                  if (signupOtpExpiresAt && Date.now() > signupOtpExpiresAt) {
+                                    setSignupGeneratedOtp('');
+                                    setSignupOtpExpiresAt(null);
+                                    setSignupOtpAttempts(0);
+                                    setError('Verification code expired. Please resend a new code.');
+                                    return;
+                                  }
+                                  if (signupOtpAttempts >= MAX_OTP_ATTEMPTS) {
+                                    setSignupGeneratedOtp('');
+                                    setSignupOtpExpiresAt(null);
+                                    setSignupOtpAttempts(0);
+                                    setError('Too many invalid OTP attempts. Please resend a new code.');
+                                    return;
+                                  }
                                   if (signupUserEnteredOtp.trim() === signupGeneratedOtp.trim()) {
+                                    setSignupGeneratedOtp('');
+                                    setSignupOtpExpiresAt(null);
+                                    setSignupOtpAttempts(0);
                                     setEmailOtpVerified(true);
                                     setInfoMessage('Email successfully verified!');
                                     setError('');
                                   } else {
-                                    setError('Invalid OTP code. Please try again.');
+                                    const nextAttempts = signupOtpAttempts + 1;
+                                    setSignupOtpAttempts(nextAttempts);
+                                    if (nextAttempts >= MAX_OTP_ATTEMPTS) {
+                                      setSignupGeneratedOtp('');
+                                      setSignupOtpExpiresAt(null);
+                                      setSignupOtpAttempts(0);
+                                      setError('Too many invalid OTP attempts. Please resend a new code.');
+                                    } else {
+                                      setError('Invalid OTP code. Please try again.');
+                                    }
                                   }
                                 }}
                                 className="px-4 py-2 bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-bold rounded-xl text-xs cursor-pointer"
@@ -1312,13 +1555,17 @@ export default function SplashAndAuth({
                                 disabled={signupCooldown > 0}
                                 onClick={async () => {
                                   if (signupCooldown > 0) return;
-                                  const code = Math.floor(100000 + Math.random() * 900000).toString();
-                                  setSignupGeneratedOtp(code);
-                                  const emailRes = await sendOTPEmail(email, code, fullName || 'Applicant');
+                                  setError('');
+                                  const code = generateSecureOtp();
+                                  const emailRes = await sendOTPEmail(email.trim(), code, fullName || 'Applicant');
                                   if (!emailRes.success) {
-                                    setError(`EmailJS Delivery Failed: ${emailRes.error || 'Unknown error'}`);
+                                    setError('Could not send the code, try again');
                                     return;
                                   }
+                                  setSignupGeneratedOtp(code);
+                                  setSignupOtpExpiresAt(Date.now() + OTP_TTL_MS);
+                                  setSignupOtpAttempts(0);
+                                  setSignupUserEnteredOtp('');
                                   setSignupCooldown(45);
                                   setInfoMessage('New OTP code sent!');
                                 }}
@@ -1590,7 +1837,7 @@ export default function SplashAndAuth({
                         <Mail className="absolute top-3.5 left-3.5 text-slate-500" size={18} />
                         <input
                           type="email"
-                          placeholder="email@skyautomation.com"
+                          placeholder="you@example.com"
                           value={email}
                           onChange={(e) => setEmail(e.target.value)}
                           className="pl-11 w-full bg-slate-950 border border-slate-800 rounded-xl py-3 text-white text-sm focus:outline-none focus:ring-2 focus:ring-[#D4AF37] focus:border-transparent font-medium"
@@ -1610,6 +1857,7 @@ export default function SplashAndAuth({
                             setIsForgotPassword(true);
                             setForgotStep(1);
                             setError('');
+                            setInfoMessage('');
                           }}
                           className="text-xs text-[#D4AF37] hover:underline cursor-pointer font-semibold"
                         >
@@ -1637,49 +1885,22 @@ export default function SplashAndAuth({
                       </div>
                     </div>
 
-                    {/* Quick Super Admin Credentials Fill Badge */}
-                    <div className="flex items-center justify-between bg-slate-950 p-2.5 rounded-xl border border-[#D4AF37]/30 text-xs">
-                      <div className="flex items-center gap-2 text-slate-300 font-mono text-[11px]">
-                        <ShieldCheck size={14} className="text-[#D4AF37] shrink-0" />
-                        <span>Super Admin: <strong className="text-[#D4AF37]">skyautomationtech@gmail.com</strong></span>
-                      </div>
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setEmail('skyautomationtech@gmail.com');
-                          setPassword('12345678');
-                          setError('');
-                        }}
-                        className="px-2.5 py-1 bg-[#D4AF37]/15 hover:bg-[#D4AF37]/30 text-[#D4AF37] font-bold text-[11px] rounded-lg border border-[#D4AF37]/40 transition-all cursor-pointer whitespace-nowrap"
-                      >
-                        Auto Fill (12345678)
-                      </button>
-                    </div>
-
                     <div className="pt-2">
                       <button
                         type="submit"
-                        disabled={loading}
-                        className="w-full flex justify-center items-center gap-2 py-3.5 px-4 border border-transparent rounded-xl shadow-lg text-xs sm:text-sm font-extrabold text-slate-950 bg-[#D4AF37] hover:bg-[#b89628] transition-all cursor-pointer active:scale-98"
+                        disabled={loading || loginCooldown > 0}
+                        className="w-full flex justify-center items-center gap-2 py-3.5 px-4 border border-transparent rounded-xl shadow-lg text-xs sm:text-sm font-extrabold text-slate-950 bg-[#D4AF37] hover:bg-[#b89628] transition-all cursor-pointer active:scale-98 disabled:opacity-50"
                       >
-                        <span>{loading ? 'Authenticating Operator...' : 'Sign In to Console'}</span>
-                        {!loading && <ArrowRight size={16} />}
+                        <span>
+                          {loginCooldown > 0
+                            ? `Locked — Try again in ${loginCooldown}s`
+                            : loading
+                              ? 'Authenticating Operator...'
+                              : 'Sign In to Console'}
+                        </span>
+                        {!loading && loginCooldown === 0 && <ArrowRight size={16} />}
                       </button>
                     </div>
-
-                    {/* Direct Offline Sandbox Fallback Access (only shown when Firebase is not configured) */}
-                    {!isFirebaseConfigured && (
-                      <div className="pt-2">
-                        <button
-                          type="button"
-                          onClick={handleDirectOfflineAccess}
-                          className="w-full flex justify-center items-center gap-2 py-3 px-4 border border-slate-800 bg-slate-950 hover:bg-slate-800 rounded-xl text-xs font-bold text-slate-300 hover:text-white transition-all cursor-pointer"
-                        >
-                          <Sparkles size={15} className="text-[#D4AF37]" />
-                          <span>লোকাল স্যান্ডবক্সে সরাসরি প্রবেশ করুন (Direct Offline Access)</span>
-                        </button>
-                      </div>
-                    )}
 
                     <div className="text-center pt-3 border-t border-slate-800/80 mt-4">
                       <button

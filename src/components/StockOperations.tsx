@@ -197,7 +197,7 @@ export default function StockOperations({
         type: activeAction === 'adjust' ? 'adjustment' : activeAction === 'in' ? 'in' : 'out',
         qty: qtyChange,
         reason: reasonLabel,
-        userId: user?.id || 'demo-ops',
+        userId: user?.id || '',
         userName: user?.name || 'Operator',
         beforeQty: currentStock,
         afterQty: newStock,

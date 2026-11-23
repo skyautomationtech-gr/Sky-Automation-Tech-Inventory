@@ -244,23 +244,6 @@ export async function getUserProfile(
 
   if (!auth?.currentUser) {
     if (strict) return null;
-    if (trimmedUid === 'operator-superadmin' || trimmedUid === 'operator-1') {
-      const saProfile: UserProfile = {
-        id: trimmedUid,
-        email: 'skyautomationtech@gmail.com',
-        name: 'Sky Automation Super Admin',
-        role: 'superadmin',
-        active: true,
-        status: 'approved',
-        customPassword: '12345678',
-        subBrandAccess: ['SAT', 'GZ', 'RTX'],
-        currentSessionStatus: 'checked_in',
-        currentSessionDate: new Date().toISOString().split('T')[0],
-        createdAt: Date.now()
-      };
-      localStore.set('user_' + trimmedUid, saProfile);
-      return saProfile;
-    }
     return cachedUser || null;
   }
 
@@ -281,24 +264,6 @@ export async function getUserProfile(
 
       if (strict) {
         return null;
-      }
-      
-      if (trimmedUid === 'operator-superadmin' || trimmedUid === 'operator-1') {
-        const saProfile: UserProfile = {
-          id: trimmedUid,
-          email: 'skyautomationtech@gmail.com',
-          name: 'Sky Automation Super Admin',
-          role: 'superadmin',
-          active: true,
-          status: 'approved',
-          customPassword: '12345678',
-          subBrandAccess: ['SAT', 'GZ', 'RTX'],
-          currentSessionStatus: 'checked_in',
-          currentSessionDate: new Date().toISOString().split('T')[0],
-          createdAt: Date.now()
-        };
-        localStore.set('user_' + trimmedUid, saProfile);
-        return saProfile;
       }
 
       if (cachedUser) return cachedUser;
@@ -400,38 +365,15 @@ export async function findUserProfileByEmail(email: string): Promise<UserProfile
     return null;
   }
   
-  // Special handling for requested Super Admin account: skyautomationtech@gmail.com
-  if (normEmail === 'skyautomationtech@gmail.com') {
-    const authedMatchesSuperAdmin =
-      auth.currentUser.email?.toLowerCase().trim() === 'skyautomationtech@gmail.com';
-    if (!authedMatchesSuperAdmin) {
-      return null;
-    }
-    const resolvedId = auth.currentUser.uid;
+  if (auth.currentUser.email?.toLowerCase().trim() === normEmail) {
     try {
-      const existingSnap = await getDoc(doc(db, 'users', resolvedId));
-      if (existingSnap.exists()) {
-        const existingProfile = { id: existingSnap.id, ...(existingSnap.data() as any) } as UserProfile;
-        localStore.set('user_' + resolvedId, existingProfile);
+      const ownSnap = await getDoc(doc(db, 'users', auth.currentUser.uid));
+      if (ownSnap.exists()) {
+        const existingProfile = { id: ownSnap.id, ...(ownSnap.data() as any) } as UserProfile;
+        localStore.set('user_' + ownSnap.id, existingProfile);
         return existingProfile;
       }
-    } catch (e) {}
-
-    const superAdminProfile: UserProfile = {
-      id: resolvedId,
-      email: 'skyautomationtech@gmail.com',
-      name: 'Sky Automation Super Admin',
-      role: 'superadmin',
-      active: true,
-      status: 'approved',
-      subBrandAccess: ['SAT', 'GZ', 'RTX'],
-      currentSessionStatus: 'checked_in',
-      currentSessionDate: new Date().toISOString().split('T')[0],
-      createdAt: Date.now()
-    };
-    localStore.set('user_' + resolvedId, superAdminProfile);
-    await setDoc(doc(db, 'users', resolvedId), sanitizeData(superAdminProfile), { merge: true });
-    return superAdminProfile;
+    } catch {}
   }
 
   let attempts = 0;
@@ -568,17 +510,6 @@ export async function updateUserProfile(userId: string, data: Partial<UserProfil
   }
 }
 
-export async function updateUserPasswordByEmail(email: string, newPassword: string): Promise<void> {
-  const profile = await findUserProfileByEmail(email);
-  if (!profile) {
-    throw new Error('No user profile found with this email address.');
-  }
-  await updateUserProfile(profile.id, {
-    customPassword: newPassword,
-    requirePasswordChange: false,
-    updatedAt: Date.now()
-  });
-}
 
 export async function promoteUserToSuperAdmin(email: string): Promise<void> {
   const user = await findUserProfileByEmail(email);
@@ -5203,11 +5134,7 @@ export async function deleteAccountingVoucher(id: string): Promise<void> {
 
 export async function addLoginHistory(userId: string, record: { timestamp: number, userAgent: string, platform: string, status: string }): Promise<void> {
   if (!auth?.currentUser) return;
-  const targetUid =
-    userId === auth.currentUser.uid ||
-    auth.currentUser.email?.toLowerCase().trim() === 'skyautomationtech@gmail.com'
-      ? userId
-      : auth.currentUser.uid;
+  const targetUid = userId === auth.currentUser.uid ? userId : auth.currentUser.uid;
   try {
     const colRef = collection(db, 'users', targetUid, 'loginHistory');
     await addDoc(colRef, record);
