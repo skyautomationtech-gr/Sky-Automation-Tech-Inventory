@@ -799,47 +799,6 @@ export default function UserManagement({
         </div>
       )}
 
-      {/* Tab Navigation Strip */}
-      {isSuperAdmin && (
-        <div className="flex items-center gap-1 bg-white p-1 rounded-xl border border-slate-200/80 shadow-2xs w-fit flex-wrap">
-          <button
-            onClick={() => { setActiveTab('registry'); onTabChange?.('registry'); }}
-            className={`px-3 py-1.5 text-xs font-bold rounded-lg transition cursor-pointer ${
-              activeTab === 'registry' 
-                ? 'bg-slate-900 text-amber-400 shadow-2xs' 
-                : 'text-slate-500 hover:text-slate-900'
-            }`}
-          >
-            Active Registry ({filteredUsers.length})
-          </button>
-          <button
-            onClick={() => { setActiveTab('pending'); onTabChange?.('pending'); }}
-            className={`px-3 py-1.5 text-xs font-bold rounded-lg transition flex items-center gap-1.5 cursor-pointer ${
-              activeTab === 'pending' 
-                ? 'bg-slate-900 text-amber-400 shadow-2xs' 
-                : 'text-slate-500 hover:text-slate-900'
-            }`}
-          >
-            <span>Pending Approvals</span>
-            {pendingUsers.length > 0 && (
-              <span className="bg-amber-400 text-slate-950 text-[10px] font-mono font-bold px-1.5 py-0.2 rounded-full">
-                {pendingUsers.length}
-              </span>
-            )}
-          </button>
-          <button
-            onClick={() => { setActiveTab('permissions'); onTabChange?.('permissions'); }}
-            className={`px-3 py-1.5 text-xs font-bold rounded-lg transition flex items-center gap-1.5 cursor-pointer ${
-              activeTab === 'permissions'
-                ? 'bg-slate-900 text-amber-400 shadow-2xs'
-                : 'text-slate-500 hover:text-slate-900'
-            }`}
-          >
-            <SlidersHorizontal size={12} />
-            <span>Role &amp; Pre-Order Permissions</span>
-          </button>
-        </div>
-      )}
 
       {/* ADD STAFF MODAL FORM (Standard Clean Modal) */}
       {showAddForm && (

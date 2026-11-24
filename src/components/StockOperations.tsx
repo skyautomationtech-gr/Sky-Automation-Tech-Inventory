@@ -239,52 +239,7 @@ export default function StockOperations({
 
   return (
     <div className="space-y-6">
-      
-      {/* Tab Selectors */}
-      <div className="border-b border-slate-200 overflow-x-auto no-scrollbar">
-        <div className="flex gap-4 min-w-max pb-2 px-1">
-          <button
-            onClick={() => { setActiveAction('in'); resetForm(); onActionChange?.('in'); }}
-            className={`pb-2.5 px-1 font-semibold text-sm transition-all border-b-2 cursor-pointer ${
-              activeAction === 'in'
-                ? 'border-amber-400 text-slate-900 font-extrabold'
-                : 'border-transparent text-slate-500 hover:text-slate-950'
-            }`}
-          >
-            Stock IN
-          </button>
-          <button
-            onClick={() => { setActiveAction('out'); resetForm(); onActionChange?.('out'); }}
-            className={`pb-2.5 px-1 font-semibold text-sm transition-all border-b-2 cursor-pointer ${
-              activeAction === 'out'
-                ? 'border-amber-400 text-slate-900 font-extrabold'
-                : 'border-transparent text-slate-500 hover:text-slate-950'
-            }`}
-          >
-            Stock OUT
-          </button>
-          <button
-            onClick={() => { setActiveAction('adjust'); resetForm(); onActionChange?.('adjust'); }}
-            className={`pb-2.5 px-1 font-semibold text-sm transition-all border-b-2 cursor-pointer ${
-              activeAction === 'adjust'
-                ? 'border-amber-400 text-slate-900 font-extrabold'
-                : 'border-transparent text-slate-500 hover:text-slate-950'
-            }`}
-          >
-            Adjustment
-          </button>
-          <button
-            onClick={() => { setActiveAction('ledger'); resetForm(); onActionChange?.('ledger'); }}
-            className={`pb-2.5 px-1 font-semibold text-sm transition-all border-b-2 cursor-pointer ${
-              activeAction === 'ledger'
-                ? 'border-amber-400 text-slate-900 font-extrabold'
-                : 'border-transparent text-slate-500 hover:text-slate-950'
-            }`}
-          >
-            Master Ledger
-          </button>
-        </div>
-      </div>
+
 
       {/* SUCCESS / ERROR NOTIFICATIONS */}
       {success && (

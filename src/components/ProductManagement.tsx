@@ -1581,118 +1581,7 @@ export default function ProductManagement({
 
   return (
     <div className="space-y-6">
-      
-      {/* Tab Selectors */}
-      <div className="border-b border-slate-200 overflow-x-auto no-scrollbar">
-        <div className="flex gap-4 min-w-max pb-1">
-          <button
-            onClick={() => handleSelectSubTab('catalog')}
-            className={`pb-2.5 px-1 font-semibold text-sm transition-all border-b-2 cursor-pointer whitespace-nowrap ${
-              activeSubTab === 'catalog'
-                ? 'border-amber-400 text-slate-900 font-extrabold'
-                : 'border-transparent text-slate-500 hover:text-slate-950'
-            }`}
-          >
-            Product Catalog
-          </button>
-          <button
-            onClick={() => handleSelectSubTab('categories')}
-            className={`pb-2.5 px-1 font-semibold text-sm transition-all border-b-2 cursor-pointer whitespace-nowrap ${
-              activeSubTab === 'categories'
-                ? 'border-amber-400 text-slate-900 font-extrabold'
-                : 'border-transparent text-slate-500 hover:text-slate-950'
-            }`}
-          >
-            Categories CRUD
-          </button>
-          <button
-            onClick={() => handleSelectSubTab('brands')}
-            className={`pb-2.5 px-1 font-semibold text-sm transition-all border-b-2 cursor-pointer whitespace-nowrap ${
-              activeSubTab === 'brands'
-                ? 'border-amber-400 text-slate-900 font-extrabold'
-                : 'border-transparent text-slate-500 hover:text-slate-950'
-            }`}
-          >
-            Brands CRUD
-          </button>
-          {!isStaff && (
-            <button
-              onClick={() => handleSelectSubTab('attributes')}
-              className={`pb-2.5 px-1 font-semibold text-sm transition-all border-b-2 cursor-pointer whitespace-nowrap ${
-                activeSubTab === 'attributes'
-                  ? 'border-amber-400 text-slate-900 font-extrabold'
-                  : 'border-transparent text-slate-500 hover:text-slate-950'
-              }`}
-            >
-              Attributes CRUD
-            </button>
-          )}
-          {!isStaff && (
-            <button
-              onClick={() => handleSelectSubTab('pending')}
-              className={`pb-2.5 px-1 font-semibold text-sm transition-all border-b-2 cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
-                activeSubTab === 'pending'
-                  ? 'border-amber-400 text-slate-900 font-extrabold'
-                  : 'border-transparent text-slate-500 hover:text-slate-950'
-              }`}
-            >
-              Pending Products
-              {products.filter(p => p.status === 'pending_review' && !p.archived).length > 0 && (
-                <span className="px-1.5 py-0.5 bg-red-500 text-white text-[9px] font-black rounded-full leading-none">
-                  {products.filter(p => p.status === 'pending_review' && !p.archived).length}
-                </span>
-              )}
-            </button>
-          )}
-          <button
-            onClick={() => handleSelectSubTab('out_of_stock')}
-            className={`pb-2.5 px-1 font-semibold text-sm transition-all border-b-2 cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
-              activeSubTab === 'out_of_stock'
-                ? 'border-amber-400 text-slate-900 font-extrabold'
-                : 'border-transparent text-slate-500 hover:text-slate-950'
-            }`}
-          >
-            Out of Stock
-            {products.filter(p => (p.stockStatus === 'out_of_stock' || getProductAvailableStock(p) <= 0) && !p.archived).length > 0 && (
-              <span className="px-1.5 py-0.5 bg-red-500 text-white text-[9px] font-black rounded-full leading-none">
-                {products.filter(p => (p.stockStatus === 'out_of_stock' || getProductAvailableStock(p) <= 0) && !p.archived).length}
-              </span>
-            )}
-          </button>
-          <button
-            onClick={() => handleSelectSubTab('archive')}
-            className={`pb-2.5 px-1 font-semibold text-sm transition-all border-b-2 cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
-              activeSubTab === 'archive'
-                ? 'border-amber-400 text-slate-900 font-extrabold'
-                : 'border-transparent text-slate-500 hover:text-slate-950'
-            }`}
-          >
-            Archive
-            {products.filter(p => p.archived).length > 0 && (
-              <span className="px-1.5 py-0.5 bg-slate-500 text-white text-[9px] font-black rounded-full leading-none">
-                {products.filter(p => p.archived).length}
-              </span>
-            )}
-          </button>
-          {user?.role === 'superadmin' && (
-            <button
-              onClick={() => handleSelectSubTab('deletion_requests')}
-              className={`pb-2.5 px-1 font-semibold text-sm transition-all border-b-2 cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
-                activeSubTab === 'deletion_requests'
-                  ? 'border-amber-400 text-slate-900 font-extrabold'
-                  : 'border-transparent text-slate-500 hover:text-slate-950'
-              }`}
-            >
-              Deletion Requests
-              {products.filter(p => p.deletionStatus === 'pending_approval').length > 0 && (
-                <span className="px-1.5 py-0.5 bg-rose-500 text-white text-[9px] font-black rounded-full leading-none animate-pulse">
-                  {products.filter(p => p.deletionStatus === 'pending_approval').length}
-                </span>
-              )}
-            </button>
-          )}
-        </div>
-      </div>
+
 
       {activeSubTab === 'catalog' && (
         <div className="flex flex-wrap gap-2 md:justify-end items-center">
@@ -3795,7 +3684,7 @@ export default function ProductManagement({
                                 onNavigateToStock(product.id);
                               } else {
                                 setSelectedProduct(product);
-                                setActiveSubTab('catalog');
+                                handleSelectSubTab('catalog');
                               }
                             }}
                             className="bg-amber-400 hover:bg-amber-500 text-slate-900 px-3 py-1.5 font-bold text-sm rounded-lg cursor-pointer flex items-center justify-center gap-1.5 shadow-xs transition-colors mx-auto"

@@ -61,6 +61,9 @@ export const AccountingDesk: React.FC<AccountingDeskProps> = ({ user, initialTab
     { id: 'expenses', label: 'দৈনন্দিন খরচ (Expenses)', icon: TrendingDown },
   ];
 
+  const currentTabMeta = tabs.find(t => t.id === activeTab) || tabs[0];
+  const CurrentTabIcon = currentTabMeta.icon;
+
   return (
     <div className="space-y-6 w-full max-w-[1920px] mx-auto pb-10">
       
@@ -72,7 +75,7 @@ export const AccountingDesk: React.FC<AccountingDeskProps> = ({ user, initialTab
               <Calculator size={22} />
             </div>
             <div>
-              <div className="flex items-center gap-2">
+              <div className="flex items-center gap-2 flex-wrap">
                 <h1 className="text-xl font-bold text-slate-900 dark:text-white tracking-tight">Accounting Desk</h1>
                 <span className="text-xs font-mono font-bold bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 px-2.5 py-0.5 rounded-full border border-emerald-500/20">
                   হাতে ক্যাশ ৳{(baseline.baselineCash || 0).toLocaleString()} | বিনিয়োগ ৳{(baseline.baselineInvestment || 0).toLocaleString()}
@@ -83,28 +86,11 @@ export const AccountingDesk: React.FC<AccountingDeskProps> = ({ user, initialTab
               </p>
             </div>
           </div>
-        </div>
 
-        {/* Navigation Tabs Bar */}
-        <div className="flex items-center gap-1.5 overflow-x-auto mt-5 pt-3 border-t border-slate-100 dark:border-slate-800 scrollbar-thin">
-          {tabs.map(tab => {
-            const Icon = tab.icon;
-            const isActive = activeTab === tab.id;
-            return (
-              <button
-                key={tab.id}
-                onClick={() => handleSelectTab(tab.id)}
-                className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
-                  isActive 
-                    ? 'bg-gold-500 text-slate-950 shadow-xs' 
-                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-100 dark:hover:bg-slate-800 bg-slate-50 dark:bg-slate-800/40 border border-slate-200/60 dark:border-slate-800'
-                }`}
-              >
-                <Icon size={15} />
-                {tab.label}
-              </button>
-            );
-          })}
+          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/70 dark:border-slate-700/70 text-xs font-bold text-slate-700 dark:text-slate-200 shrink-0 self-start sm:self-center">
+            <CurrentTabIcon size={14} className="text-gold-600 dark:text-gold-400 shrink-0" />
+            <span>{currentTabMeta.label}</span>
+          </div>
         </div>
       </div>
 
