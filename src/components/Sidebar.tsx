@@ -110,6 +110,7 @@ export default function Sidebar({
         { id: 'dashboard', name: 'Dashboard', icon: LayoutDashboard },
         { id: 'products', name: 'Products & Brands', icon: Package },
         { id: 'stock', name: 'Stock Operations', icon: ArrowUpDown },
+        { id: 'suppliers', name: 'Supplier Directory', icon: Truck },
       ],
     },
     {
@@ -122,13 +123,12 @@ export default function Sidebar({
     },
     {
       title: 'Financials',
-      items: [
-        { id: 'accounting', name: 'Accounting Desk', icon: Calculator },
-        ...(isSuperAdmin || user?.role === 'admin' || user?.role === 'manager'
-          ? [{ id: 'financials', name: 'Income & Expense', icon: DollarSign }]
-          : []),
-        { id: 'suppliers', name: 'Supplier Directory', icon: Truck },
-      ],
+      items: isSuperAdmin
+        ? [
+            { id: 'accounting', name: 'Accounting Desk', icon: Calculator },
+            { id: 'financials', name: 'Income & Expense', icon: DollarSign },
+          ]
+        : [],
     },
     {
       title: 'People & CRM',
@@ -140,15 +140,17 @@ export default function Sidebar({
     },
     {
       title: 'Intelligence & Audit',
-      items: [
-        { id: 'reports', name: 'Reports & Analytics', icon: BarChart3 },
-        ...(isPrivileged ? [{ id: 'audit_logs', name: 'Audit Logs', icon: Activity }] : []),
-      ],
+      items: isSuperAdmin
+        ? [
+            { id: 'reports', name: 'Reports & Analytics', icon: BarChart3 },
+            { id: 'audit_logs', name: 'Audit Logs', icon: Activity },
+          ]
+        : [],
     },
     {
       title: 'Administration',
       items: [
-        { id: 'settings', name: 'Company Settings', icon: Settings },
+        ...(isSuperAdmin ? [{ id: 'settings', name: 'Company Settings', icon: Settings }] : []),
         { id: 'profile', name: 'Profile Settings', icon: User },
       ],
     },

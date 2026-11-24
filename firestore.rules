@@ -196,9 +196,22 @@ service cloud.firestore {
       allow delete: if false;
     }
 
+    match /settings/accountingBaseline {
+      allow read, write: if isSuperAdmin();
+    }
+
+    match /settings/cashBalance {
+      allow read, write: if isSuperAdmin();
+    }
+
+    match /settings/company {
+      allow read: if isSignedIn();
+      allow write: if isSuperAdmin();
+    }
+
     match /settings/{settingId} {
-      allow read: if isSignedIn() && !(settingId in ['rolePermissions', 'preOrderCounter', 'customerCounter', 'supplierCounter', 'invoiceCounters', 'preOrderSettings']);
-      allow write: if isAdmin() && !(settingId in ['rolePermissions', 'preOrderCounter', 'customerCounter', 'supplierCounter', 'invoiceCounters', 'preOrderSettings']);
+      allow read: if isSignedIn() && !(settingId in ['rolePermissions', 'preOrderCounter', 'customerCounter', 'supplierCounter', 'invoiceCounters', 'preOrderSettings', 'accountingBaseline', 'cashBalance', 'company']);
+      allow write: if isAdmin() && !(settingId in ['rolePermissions', 'preOrderCounter', 'customerCounter', 'supplierCounter', 'invoiceCounters', 'preOrderSettings', 'accountingBaseline', 'cashBalance', 'company']);
     }
 
     // ==========================================
@@ -565,28 +578,32 @@ service cloud.firestore {
       allow update, delete: if isAdmin();
     }
     match /stockPurchases/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
-    match /expenses/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
-    match /incomes/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /expenses/{docId} { allow read, write: if isSuperAdmin(); }
+    match /incomes/{docId} { allow read, write: if isSuperAdmin(); }
     match /notifications/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
     match /branches/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
-    match /auditLogs/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
-    match /investments/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
-    match /companyPurchases/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /auditLogs/{docId} {
+      allow read: if isSuperAdmin();
+      allow create: if isSignedIn();
+      allow update, delete: if isSuperAdmin();
+    }
+    match /investments/{docId} { allow read, write: if isSuperAdmin(); }
+    match /companyPurchases/{docId} { allow read, write: if isSuperAdmin(); }
     match /companyLosses/{docId} {
       allow read: if isSignedIn();
       allow create: if isAdmin() || hasPreOrderPerm('preOrderReceiveStock') || hasPreOrderPerm('preOrderUpdateStatus') || hasPreOrderPerm('preOrderRefund');
       allow update, delete: if isAdmin();
     }
-    match /cashReconciliations/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /cashReconciliations/{docId} { allow read, write: if isSuperAdmin(); }
     match /otherReceivables/{docId} {
       allow read: if isSignedIn();
       allow create: if isAdmin() || hasPreOrderPerm('preOrderUpdateStatus') || hasPreOrderPerm('preOrderRefund') || hasPreOrderPerm('preOrderSupplier');
       allow update, delete: if isAdmin();
     }
-    match /paymentPlatformLedger/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
-    match /importShippingCosts/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
-    match /chartOfAccounts/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
-    match /accountingVouchers/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
-    match /cashTransactions/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /paymentPlatformLedger/{docId} { allow read, write: if isSuperAdmin(); }
+    match /importShippingCosts/{docId} { allow read, write: if isSuperAdmin(); }
+    match /chartOfAccounts/{docId} { allow read, write: if isSuperAdmin(); }
+    match /accountingVouchers/{docId} { allow read, write: if isSuperAdmin(); }
+    match /cashTransactions/{docId} { allow read, write: if isSuperAdmin(); }
   }
 }

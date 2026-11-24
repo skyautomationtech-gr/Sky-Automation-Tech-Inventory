@@ -575,13 +575,15 @@ export default function DashboardView({
             <Package size={15} />
             Add Product
           </button>
-          <button
-            onClick={() => onNavigateToTab('accounting')}
-            className="flex items-center gap-2 px-4 py-2 text-xs font-semibold text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-xl transition-colors cursor-pointer"
-          >
-            <Calculator size={15} />
-            Accounting
-          </button>
+          {user?.role === 'superadmin' && (
+            <button
+              onClick={() => onNavigateToTab('accounting')}
+              className="flex items-center gap-2 px-4 py-2 text-xs font-semibold text-slate-700 dark:text-slate-200 bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 rounded-xl transition-colors cursor-pointer"
+            >
+              <Calculator size={15} />
+              Accounting
+            </button>
+          )}
         </div>
       </div>
 

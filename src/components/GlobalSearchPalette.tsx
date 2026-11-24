@@ -91,7 +91,6 @@ export const GlobalSearchPalette: React.FC<GlobalSearchPaletteProps> = ({
   const resultsContainerRef = useRef<HTMLDivElement>(null);
 
   const isSuperAdmin = user?.role === 'superadmin';
-  const isAdminOrManager = isSuperAdmin || user?.role === 'admin' || user?.role === 'manager';
   const isPrivileged = isSuperAdmin || user?.role === 'admin';
   const canViewPreOrders = hasPermission(user, rolePermissions, 'preOrderView');
   const canViewSupplier = hasPermission(user, rolePermissions, 'preOrderSupplier') || isPreOrderAdminRole(user?.role);
@@ -161,10 +160,13 @@ export const GlobalSearchPalette: React.FC<GlobalSearchPaletteProps> = ({
     const canViewPreOrders = hasPermission(user, rolePermissions, 'preOrderView');
     return Object.entries(TAB_DIRECTORY)
       .filter(([id, meta]) => {
-        if (id === 'financials' && !isAdminOrManager) return false;
+        if (id === 'accounting' && !isSuperAdmin) return false;
+        if (id === 'financials' && !isSuperAdmin) return false;
+        if (id === 'reports' && !isSuperAdmin) return false;
+        if (id === 'audit_logs' && !isSuperAdmin) return false;
+        if (id === 'settings' && !isSuperAdmin) return false;
         if (id === 'attendance' && !isSuperAdmin) return false;
         if (id === 'users' && !isPrivileged) return false;
-        if (id === 'audit_logs' && !isPrivileged) return false;
 
         if (isPreOrderTab(id)) {
           if (!canViewPreOrders) return false;
@@ -190,7 +192,7 @@ export const GlobalSearchPalette: React.FC<GlobalSearchPaletteProps> = ({
           onClose();
         }
       }));
-  }, [query, activeFilter, isAdminOrManager, isSuperAdmin, isPrivileged, user, rolePermissions, onNavigate, onClose]);
+  }, [query, activeFilter, isSuperAdmin, isPrivileged, user, rolePermissions, onNavigate, onClose]);
 
   // 2. Products
   const productResults = useMemo(() => {
@@ -467,7 +469,7 @@ export const GlobalSearchPalette: React.FC<GlobalSearchPaletteProps> = ({
           onClose();
         }
       },
-      ...(isAdminOrManager ? [{
+      ...(isSuperAdmin ? [{
         title: 'Record New Expense',
         subtitle: 'Quick Action · Income & Expense',
         icon: DollarSign,
@@ -508,7 +510,7 @@ export const GlobalSearchPalette: React.FC<GlobalSearchPaletteProps> = ({
     if (!query.trim()) return actions.slice(0, 4);
     const q = query.toLowerCase().trim();
     return actions.filter(a => a.title.toLowerCase().includes(q) || a.subtitle.toLowerCase().includes(q));
-  }, [query, activeFilter, isAdminOrManager, onNavigate, onClose, onToggleTheme, onLogout]);
+  }, [query, activeFilter, isSuperAdmin, onNavigate, onClose, onToggleTheme, onLogout]);
 
   // Combine all items into a flat list for keyboard navigation
   const allFlattenedResults = useMemo(() => {

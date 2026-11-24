@@ -761,8 +761,21 @@ export default function App() {
     setCurrentTab('dashboard');
   };
 
+  const SUPERADMIN_ONLY_TABS = new Set(['accounting', 'financials', 'reports', 'audit_logs', 'settings']);
+  const isUserSuperAdmin = user?.role === 'superadmin';
+
+  useEffect(() => {
+    if (user && !isUserSuperAdmin && SUPERADMIN_ONLY_TABS.has(currentTab)) {
+      setCurrentTab('dashboard');
+    }
+  }, [user, isUserSuperAdmin, currentTab]);
+
   // Execute navigation immediately (after any dirty confirmation)
   const performNavigate = (tab: string, subAction?: string, initialId?: string | null) => {
+    if (SUPERADMIN_ONLY_TABS.has(tab) && !isUserSuperAdmin) {
+      setCurrentTab('dashboard');
+      return;
+    }
     setCurrentTab(tab);
     if (tab === 'products') {
       if (subAction === 'add') {
@@ -1359,7 +1372,7 @@ export default function App() {
               rolePermissions={rolePermissions}
               categories={categories}
               companySettings={companySettings}
-              onNavigateSettings={() => navigateToTab('settings')}
+              onNavigateSettings={isUserSuperAdmin ? () => navigateToTab('settings') : undefined}
             />
           </ErrorBoundary>
         )}
@@ -1445,9 +1458,9 @@ export default function App() {
           </ErrorBoundary>
         )}
 
-        {/* Tab Financials: Income & Expense Financial Overview View */}
+        {/* Tab Financials: Income & Expense Financial Overview View (Super Admin Only) */}
         {currentTab === 'financials' && (
-          (user.role === 'superadmin' || user.role === 'admin' || user.role === 'manager') ? (
+          isUserSuperAdmin ? (
             <FinancialOverview 
               user={user} 
               products={products} 
@@ -1462,17 +1475,26 @@ export default function App() {
               </div>
               <h2 className="text-base font-extrabold text-red-800 uppercase tracking-tight">Access Restricted</h2>
               <p className="text-sm text-red-600 leading-relaxed">
-                The Income & Expense financial control panel is reserved for authorized administrative roles. Your current role is not authorized to access this ledger.
+                This module is restricted to Super Admin only. Your current role is not authorized to access this area.
               </p>
             </div>
           )
         )}
 
-        {/* Tab Accounting: Zero-Setup Plain Minimal Accounting Desk */}
+        {/* Tab Accounting: Zero-Setup Plain Minimal Accounting Desk (Super Admin Only) */}
         {currentTab === 'accounting' && (
-          <ErrorBoundary fallbackTitle="Accounting Desk encountered an issue">
-            <AccountingDesk user={user} />
-          </ErrorBoundary>
+          isUserSuperAdmin ? (
+            <ErrorBoundary fallbackTitle="Accounting Desk encountered an issue">
+              <AccountingDesk user={user} />
+            </ErrorBoundary>
+          ) : (
+            <div className="bg-red-50 border border-red-200 rounded-3xl p-8 max-w-lg mx-auto text-center space-y-4 my-12 shadow-sm">
+              <h2 className="text-base font-extrabold text-red-800 uppercase tracking-tight">Access Restricted</h2>
+              <p className="text-sm text-red-600 leading-relaxed">
+                Accounting Desk is restricted to Super Admin only.
+              </p>
+            </div>
+          )
         )}
 
         {/* Tab Profile: Profile Settings */}
@@ -1492,18 +1514,37 @@ export default function App() {
           <SupplierManagement user={user} rolePermissions={rolePermissions || {}} />
         )}
 
-        {/* Tab Reports: Reports & Analytics View */}
+        {/* Tab Reports: Reports & Analytics View (Super Admin Only) */}
         {currentTab === 'reports' && (
-          <ReportsAnalytics user={user} />
+          isUserSuperAdmin ? (
+            <ReportsAnalytics user={user} />
+          ) : (
+            <div className="bg-red-50 border border-red-200 rounded-3xl p-8 max-w-lg mx-auto text-center space-y-4 my-12 shadow-sm">
+              <h2 className="text-base font-extrabold text-red-800 uppercase tracking-tight">Access Restricted</h2>
+              <p className="text-sm text-red-600 leading-relaxed">
+                Reports &amp; Analytics is restricted to Super Admin only.
+              </p>
+            </div>
+          )
         )}
 
-        {/* Tab Audit Logs: Audit Log View */}
+        {/* Tab Audit Logs: Audit Log View (Super Admin Only) */}
         {currentTab === 'audit_logs' && (
-          <AuditLogView user={user} />
+          isUserSuperAdmin ? (
+            <AuditLogView user={user} />
+          ) : (
+            <div className="bg-red-50 border border-red-200 rounded-3xl p-8 max-w-lg mx-auto text-center space-y-4 my-12 shadow-sm">
+              <h2 className="text-base font-extrabold text-red-800 uppercase tracking-tight">Access Restricted</h2>
+              <p className="text-sm text-red-600 leading-relaxed">
+                Audit Logs is restricted to Super Admin only.
+              </p>
+            </div>
+          )
         )}
 
-        {/* Tab 5: Settings View */}
+        {/* Tab 5: Settings View (Super Admin Only) */}
         {currentTab === 'settings' && (
+          isUserSuperAdmin ? (
           <div className="space-y-6">
             <ErrorBoundary fallbackTitle="Company Settings encountered an issue">
               <CompanySettingsView
@@ -1741,6 +1782,14 @@ export default function App() {
               </div>
             )}
           </div>
+          ) : (
+            <div className="bg-red-50 border border-red-200 rounded-3xl p-8 max-w-lg mx-auto text-center space-y-4 my-12 shadow-sm">
+              <h2 className="text-base font-extrabold text-red-800 uppercase tracking-tight">Access Restricted</h2>
+              <p className="text-sm text-red-600 leading-relaxed">
+                Company Settings is restricted to Super Admin only.
+              </p>
+            </div>
+          )
         )}
 
 
