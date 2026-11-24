@@ -708,11 +708,14 @@ export default function ProductManagement({
 
   useEffect(() => {
     if (!initialSubTab) return;
-    if ((initialSubTab === 'attributes' || initialSubTab === 'pending') && isStaff) {
+    if (initialSubTab === 'attributes' && isStaff) {
       setActiveSubTab('catalog');
       return;
     }
-    if (initialSubTab === 'deletion_requests' && !isSuperAdmin) {
+    if (
+      (initialSubTab === 'pending' || initialSubTab === 'archive' || initialSubTab === 'deletion_requests') &&
+      !isSuperAdmin
+    ) {
       setActiveSubTab('catalog');
       return;
     }
@@ -3400,7 +3403,7 @@ export default function ProductManagement({
           </div>
         </div>
       )}
-      {activeSubTab === 'pending' && (
+      {activeSubTab === 'pending' && isSuperAdmin && (
         <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-4">
           <div className="border-b border-slate-100 pb-3 flex justify-between items-center flex-wrap gap-2">
             <div>
@@ -3703,7 +3706,7 @@ export default function ProductManagement({
       )}
 
       {/* SUB TAB: ARCHIVE */}
-      {activeSubTab === 'archive' && (
+      {activeSubTab === 'archive' && isSuperAdmin && (
         <div className="bg-white rounded-2xl shadow-sm border border-slate-100 overflow-hidden p-6 space-y-4">
           <div className="flex justify-between items-center">
             <div>

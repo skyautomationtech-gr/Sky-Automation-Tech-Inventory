@@ -871,10 +871,13 @@ export default function App() {
       } else {
         setInitialProductAddMode(false);
         const targetSub = (normalizedSub || 'catalog') as ProductSubTab;
-        if ((targetSub === 'attributes' || targetSub === 'pending') && isUserStaff) {
+        if (targetSub === 'attributes' && isUserStaff) {
           setProductSubTab('catalog');
           setCurrentSubAction('catalog');
-        } else if (targetSub === 'deletion_requests' && !isUserSuperAdmin) {
+        } else if (
+          (targetSub === 'pending' || targetSub === 'archive' || targetSub === 'deletion_requests') &&
+          !isUserSuperAdmin
+        ) {
           setProductSubTab('catalog');
           setCurrentSubAction('catalog');
         } else {

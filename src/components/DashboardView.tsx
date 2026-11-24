@@ -1006,8 +1006,8 @@ export default function DashboardView({
             </div>
           </div>
 
-          {/* Pending Approvals & Restock Alerts */}
-          {(pendingProductsCount > 0 || pendingUsersCount > 0) && (
+          {/* Pending Approvals & Restock Alerts (Super Admin Only) */}
+          {user?.role === 'superadmin' && (pendingProductsCount > 0 || pendingUsersCount > 0) && (
             <div className="bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900/50 rounded-2xl p-5 shadow-sm">
               <div className="flex items-center gap-2 text-amber-800 dark:text-amber-400 font-bold text-sm">
                 <AlertCircle size={18} />

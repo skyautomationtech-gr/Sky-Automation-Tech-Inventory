@@ -190,7 +190,11 @@ export default function NotificationCenter({
 
       // 1. Stored ERP notifications
       dbNotifs
-        .filter((n) => !n.dismissedBy?.includes(user.id || ''))
+        .filter(
+          (n) =>
+            !n.dismissedBy?.includes(user.id || '') &&
+            (isSuperAdmin || n.type !== 'pending_approval')
+        )
         .forEach((n) => {
           const isRead = Boolean(n.read || n.readBy?.includes(user.id || ''));
           mergedMap.set(n.id, {
@@ -233,8 +237,8 @@ export default function NotificationCenter({
           }
         });
 
-      // 3. Pending Staff / Sign-up Approvals Check (Admin / Super Admin only)
-      if (isSuperAdmin || user.role === 'admin') {
+      // 3. Pending Staff / Sign-up Approvals Check (Super Admin only)
+      if (isSuperAdmin) {
         const usersList = await getAllUsers().catch(() => []);
         const pendingUsers = usersList.filter(
           (u) =>

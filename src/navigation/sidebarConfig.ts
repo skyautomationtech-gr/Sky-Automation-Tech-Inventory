@@ -212,17 +212,17 @@ export function buildSidebarGroups({
           badgeTone: 'danger',
           keywords: 'out of stock empty zero reorder',
         },
-        {
-          id: 'inventory_archive',
-          label: 'Archive',
-          tab: 'products',
-          subAction: 'archive',
-          badgeCount: badges.archiveCount,
-          badgeTone: 'neutral',
-          keywords: 'archived products hidden',
-        },
-        ...(!isStaff
+        ...(isSuperAdmin
           ? [
+              {
+                id: 'inventory_archive',
+                label: 'Archive',
+                tab: 'products',
+                subAction: 'archive',
+                badgeCount: badges.archiveCount,
+                badgeTone: 'neutral' as const,
+                keywords: 'archived products hidden',
+              },
               {
                 id: 'inventory_pending',
                 label: 'Pending Approvals',
@@ -232,10 +232,6 @@ export function buildSidebarGroups({
                 badgeTone: 'danger' as const,
                 keywords: 'pending products review approval',
               },
-            ]
-          : []),
-        ...(isSuperAdmin
-          ? [
               {
                 id: 'inventory_deletion_requests',
                 label: 'Deletion Requests',
