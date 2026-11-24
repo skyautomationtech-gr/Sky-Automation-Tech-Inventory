@@ -32,6 +32,7 @@ interface TopBarProps {
   onNavigate: (tab: string, subAction?: string, initialId?: string | null) => void;
   user: UserProfile | null;
   rolePermissions?: RolePermissionsMap | null;
+  rolePermissionsReady?: boolean;
   products?: Product[];
   companySettings: CompanySettings | null;
   onLogout: () => void;
@@ -48,6 +49,7 @@ export const TopBar: React.FC<TopBarProps> = ({
   onNavigate,
   user,
   rolePermissions = null,
+  rolePermissionsReady = false,
   products = [],
   companySettings,
   onLogout,
@@ -150,10 +152,10 @@ export const TopBar: React.FC<TopBarProps> = ({
 
   return (
     <>
-      <header className="sticky top-0 z-30 h-16 w-full max-w-full box-border overflow-hidden bg-white/90 dark:bg-slate-900/90 backdrop-blur-md border-b border-slate-200/90 dark:border-slate-800/90 px-6 flex items-center justify-between gap-3 transition-colors shadow-2xs shrink-0">
+      <header className="sticky top-0 z-30 h-16 w-full max-w-full box-border bg-white/90 dark:bg-slate-900/90 backdrop-blur-md border-b border-slate-200/90 dark:border-slate-800/90 px-4 lg:px-6 flex items-center justify-between gap-2.5 lg:gap-3 transition-colors shadow-2xs shrink-0">
         
-        {/* Left Zone: Mobile Menu + Page Title Only (Clean, no toggle overlap) */}
-        <div className="flex items-center gap-3.5 shrink-0 min-w-[220px]">
+        {/* Left Zone: Mobile Menu + Page Title Only */}
+        <div className="flex items-center gap-3 min-w-0 flex-1">
           {/* Mobile Menu Button */}
           <button
             type="button"
@@ -164,9 +166,9 @@ export const TopBar: React.FC<TopBarProps> = ({
             <Menu size={20} />
           </button>
 
-          {/* Page Title (Vertically centered, single line, min-w-[180px]) */}
+          {/* Page Title */}
           <div className="min-w-0 flex items-center gap-2">
-            <h2 className="text-xl font-semibold text-slate-900 dark:text-white tracking-tight truncate leading-tight whitespace-nowrap">
+            <h2 className="text-lg lg:text-xl font-semibold text-slate-900 dark:text-white tracking-tight truncate leading-tight whitespace-nowrap">
               {activePageTitle}
             </h2>
             {dataLoading && (
@@ -178,42 +180,43 @@ export const TopBar: React.FC<TopBarProps> = ({
           </div>
         </div>
 
-        {/* Center Zone: Search Bar (Fixed 320px on ≥1440px / xl+, collapses to 40x40 icon below 1440px) */}
-        <div className="flex-[1_1_320px] min-w-[200px] max-w-[360px] flex items-center justify-center shrink">
+        {/* Center Zone: Search Bar */}
+        <div className="flex-[0_1_320px] min-w-0 max-w-[360px] flex items-center justify-center shrink">
           {/* Desktop Search Bar */}
           <button
             type="button"
             onClick={() => setIsSearchOpen(true)}
-            className="hidden xl:flex w-full h-10 px-3.5 rounded-xl bg-slate-100 dark:bg-slate-800/80 hover:bg-slate-200/70 dark:hover:bg-slate-800 border border-slate-200/90 dark:border-slate-700/80 text-slate-500 dark:text-slate-400 text-xs items-center justify-between transition-all cursor-pointer shadow-inner focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/40 group"
+            className="hidden xl:flex w-full min-w-[200px] h-10 px-3.5 rounded-xl bg-slate-100 dark:bg-slate-800/80 hover:bg-slate-200/70 dark:hover:bg-slate-800 border border-slate-200/90 dark:border-slate-700/80 text-slate-500 dark:text-slate-400 text-xs items-center justify-between transition-all cursor-pointer shadow-inner focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/40 group"
           >
-            <div className="flex items-center gap-2.5 truncate">
+            <div className="flex items-center gap-2.5 min-w-0 truncate">
               <Search size={15} className="text-slate-400 group-hover:text-[#D4AF37] transition-colors shrink-0" />
               <span className="truncate">Search anything… (Ctrl+K)</span>
             </div>
-            <kbd className="inline-flex items-center gap-0.5 px-2 py-0.5 text-[10px] font-mono font-bold rounded-md bg-white dark:bg-slate-700 text-slate-500 dark:text-slate-300 border border-slate-200 dark:border-slate-600 shadow-2xs shrink-0">
+            <kbd className="inline-flex items-center gap-0.5 px-2 py-0.5 text-[10px] font-mono font-bold rounded-md bg-white dark:bg-slate-700 text-slate-500 dark:text-slate-300 border border-slate-200 dark:border-slate-600 shadow-2xs shrink-0 ml-2">
               <span className="text-xs">⌘</span>K
             </kbd>
           </button>
 
-          {/* Tablet / Smaller Laptop 40x40 Search Icon Button (Below 1440px / xl) */}
+          {/* Compact Search Icon Button (Below 1280px / xl) */}
           <button
             type="button"
             onClick={() => setIsSearchOpen(true)}
             className="xl:hidden flex items-center justify-center w-10 h-10 rounded-xl bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-700 transition-colors cursor-pointer shrink-0 shadow-2xs"
             title="Search anything… (Ctrl+K)"
+            aria-label="Open global search"
           >
             <Search size={18} />
           </button>
         </div>
 
-        {/* Right Zone: Check-in chip, Date/Time widget, Notifications, Theme toggle, User chip */}
-        <div className="flex items-center gap-3 whitespace-nowrap shrink-0">
+        {/* Right Zone: Check-in chip, Date/Time widget, Notifications, Theme toggle */}
+        <div className="flex items-center gap-2 lg:gap-3 whitespace-nowrap shrink-0">
           
-          {/* Check-In / Check-Out Chip (Height 40px, padding 0 14px, nowrap) */}
+          {/* Check-In / Check-Out Chip */}
           <button
             type="button"
             onClick={() => onNavigate('dashboard')}
-            className={`h-10 px-3.5 rounded-xl text-xs font-bold border transition-all cursor-pointer shadow-2xs flex items-center gap-2 shrink-0 whitespace-nowrap ${
+            className={`h-10 px-3 rounded-xl text-xs font-bold border transition-all cursor-pointer shadow-2xs flex items-center gap-2 shrink-0 whitespace-nowrap ${
               isCheckedIn
                 ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300 border-emerald-200 dark:border-emerald-800 hover:bg-emerald-100 dark:hover:bg-emerald-950/70'
                 : 'bg-amber-50 dark:bg-amber-950/40 text-amber-700 dark:text-amber-300 border-amber-200 dark:border-amber-800 hover:bg-amber-100 dark:hover:bg-amber-950/70'
@@ -229,13 +232,13 @@ export const TopBar: React.FC<TopBarProps> = ({
             <span>{isCheckedIn ? 'Checked In' : 'Checked Out'}</span>
           </button>
 
-          {/* Date/Time Widget (Hide full date below 1440px) */}
-          <div className="h-10 px-2 rounded-xl bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 text-xs flex items-center gap-2 flex-shrink-0 whitespace-nowrap text-slate-800 dark:text-slate-200 shadow-2xs">
-            <Clock size={15} className="text-[#D4AF37] flex-shrink-0" />
+          {/* Date/Time Widget */}
+          <div className="hidden sm:flex h-10 px-2.5 rounded-xl bg-slate-100 dark:bg-slate-800/80 border border-slate-200 dark:border-slate-700 text-xs items-center gap-2 shrink-0 whitespace-nowrap text-slate-800 dark:text-slate-200 shadow-2xs">
+            <Clock size={15} className="text-[#D4AF37] shrink-0" />
             <span className="font-mono font-bold tracking-tight tabular-nums">
               {formattedTime}
             </span>
-            <span className="hidden 1440:inline text-slate-400 dark:text-slate-500 text-[11px] font-medium border-l border-slate-200 dark:border-slate-700 pl-2">
+            <span className="hidden 2xl:inline text-slate-400 dark:text-slate-500 text-[11px] font-medium border-l border-slate-200 dark:border-slate-700 pl-2">
               {formattedDate}
             </span>
           </div>
@@ -246,13 +249,16 @@ export const TopBar: React.FC<TopBarProps> = ({
               <NotificationCenter
                 user={user}
                 rolePermissions={rolePermissions}
+                rolePermissionsReady={rolePermissionsReady}
                 products={products}
+                currentTab={currentTab}
+                currentSubAction={currentSubAction}
                 onNavigate={onNavigate}
               />
             </div>
           )}
 
-          <div className="flex-shrink-0">
+          <div className="shrink-0">
             <ThemeToggle />
           </div>
 

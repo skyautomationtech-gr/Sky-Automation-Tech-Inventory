@@ -337,6 +337,7 @@ export interface AppNotification {
   targetId?: string;
   createdAt: number;
   read: boolean;
+  readBy?: string[];
   dismissedBy?: string[];
 }
 

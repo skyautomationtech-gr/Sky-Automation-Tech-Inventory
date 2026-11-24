@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useMemo } from 'react';
+import { createPortal } from 'react-dom';
 import { 
   Search, 
   X, 
@@ -568,11 +569,11 @@ export const GlobalSearchPalette: React.FC<GlobalSearchPaletteProps> = ({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [isOpen, allFlattenedResults, selectedIndex, onClose]);
 
-  if (!isOpen) return null;
+  if (!isOpen || typeof document === 'undefined') return null;
 
-  return (
+  return createPortal(
     <div
-      className="fixed inset-0 z-50 flex items-start justify-center pt-20 px-4 bg-slate-950/60 backdrop-blur-md animate-fade-in"
+      className="fixed inset-0 z-[1050] flex items-start justify-center pt-20 px-4 bg-slate-950/60 backdrop-blur-md animate-fade-in"
       onClick={onClose}
     >
       <div
@@ -966,6 +967,7 @@ export const GlobalSearchPalette: React.FC<GlobalSearchPaletteProps> = ({
           <span className="text-[#D4AF37] font-bold">SAT Global Search Engine</span>
         </div>
       </div>
-    </div>
+    </div>,
+    document.body
   );
 };

@@ -204,6 +204,7 @@ export default function App() {
   const [productColors, setProductColors] = useState<ProductColor[]>([]);
   const [productModels, setProductModels] = useState<ProductModel[]>([]);
   const [rolePermissions, setRolePermissions] = useState<RolePermissionsMap | null>(null);
+  const [rolePermissionsLoaded, setRolePermissionsLoaded] = useState<boolean>(false);
   const [firebaseAuthed, setFirebaseAuthed] = useState<boolean>(() => Boolean(auth?.currentUser));
   const [dataLoading, setDataLoading] = useState(false);
   const [showCheckInModal, setShowCheckInModal] = useState(false);
@@ -675,13 +676,16 @@ export default function App() {
       getRolePermissions()
         .then((perms) => {
           setRolePermissions(perms);
+          setRolePermissionsLoaded(true);
           if (hasPermission(user, perms, 'preOrderView')) {
             getPreOrderStatsSummary()
               .then((stats) => setPendingPreOrderVerificationsCount(stats?.pendingPaymentCount || 0))
               .catch(() => {});
           }
         })
-        .catch(() => {});
+        .catch(() => {
+          setRolePermissionsLoaded(true);
+        });
 
       if (user.role === 'superadmin') {
         getAllUsers()
@@ -806,6 +810,7 @@ export default function App() {
     setSessionExpiredMessage('');
     setUser(null);
     setRolePermissions(null);
+    setRolePermissionsLoaded(false);
     setCompanySettings(null);
     setIsOnboarding(false);
     setCurrentTab('dashboard');
@@ -1272,7 +1277,7 @@ export default function App() {
   return (
     <ThemeProvider userId={user.id} initialUserPreference={user.themePreference}>
       <ToastProvider>
-        <div className="h-screen w-full max-w-full bg-slate-100 dark:bg-slate-950 text-slate-800 dark:text-slate-100 flex flex-col lg:flex-row overflow-hidden transition-colors">
+        <div className="h-screen w-full max-w-full bg-slate-100 dark:bg-slate-950 text-slate-800 dark:text-slate-100 flex flex-col lg:flex-row transition-colors">
           
           {/* Sidebar Navigation */}
           <Sidebar 
@@ -1296,7 +1301,7 @@ export default function App() {
           />
 
           {/* Main Content Workspace */}
-          <div className="flex-1 flex flex-col h-full min-h-0 min-w-0 max-w-full overflow-hidden bg-slate-50 dark:bg-slate-950">
+          <div className="flex-1 flex flex-col h-full min-h-0 min-w-0 max-w-full bg-slate-50 dark:bg-slate-950">
             
             {/* Sticky Top Header Bar (Laptop & Mobile Glass Header) */}
             <TopBar 
@@ -1305,6 +1310,7 @@ export default function App() {
               onNavigate={navigateToTab}
               user={user}
               rolePermissions={rolePermissions}
+              rolePermissionsReady={rolePermissionsLoaded || isUserSuperAdmin}
               products={products}
               companySettings={companySettings}
               onLogout={handleLogout}

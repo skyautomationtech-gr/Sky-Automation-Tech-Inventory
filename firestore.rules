@@ -54,10 +54,12 @@ service cloud.firestore {
       return isSuperAdmin() || (
         isActiveUser() && (
           (userData().keys().hasAny(['permissionOverrides']) &&
+           userData().permissionOverrides is map &&
            userData().permissionOverrides.keys().hasAny([permKey]))
             ? userData().permissionOverrides[permKey] == true
             : (hasRolePermsDoc() &&
                rolePermsData().keys().hasAny([userRole()]) &&
+               rolePermsData()[userRole()] is map &&
                rolePermsData()[userRole()].keys().hasAny([permKey])
                 ? rolePermsData()[userRole()][permKey] == true
                 : (userRole() == 'admin' ||
@@ -580,7 +582,14 @@ service cloud.firestore {
     match /stockPurchases/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
     match /expenses/{docId} { allow read, write: if isSuperAdmin(); }
     match /incomes/{docId} { allow read, write: if isSuperAdmin(); }
-    match /notifications/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /notifications/{docId} {
+      allow read: if isSignedIn();
+      allow create, delete: if isAdmin();
+      allow update: if isAdmin() || (
+        isActiveUser() &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read', 'readBy', 'dismissedBy'])
+      );
+    }
     match /branches/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
     match /auditLogs/{docId} {
       allow read: if isSuperAdmin();

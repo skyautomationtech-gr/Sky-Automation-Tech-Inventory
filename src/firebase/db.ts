@@ -15,7 +15,8 @@ import {
   writeBatch,
   limit,
   onSnapshot,
-  Unsubscribe
+  Unsubscribe,
+  arrayUnion
 } from 'firebase/firestore';
 import { pushProductToReseller } from '../services/resellerSync';
 import { db, auth } from './config';
@@ -4201,7 +4202,7 @@ export async function recordSupplierPurchase(supplierId: string, purchaseAmount:
 // NOTIFICATIONS OPERATIONS
 // ==========================================
 
-export async function getNotifications(): Promise<AppNotification[]> {
+export async function getNotifications(throwOnError = false): Promise<AppNotification[]> {
   if (!auth?.currentUser) return [];
   try {
     const colRef = collection(db, 'notifications');
@@ -4213,7 +4214,8 @@ export async function getNotifications(): Promise<AppNotification[]> {
     });
     return list;
   } catch (error) {
-    console.warn('Unable to fetch remote notifications, returning empty array:', error);
+    console.warn('Unable to fetch remote notifications:', error);
+    if (throwOnError) throw error;
     return [];
   }
 }
@@ -4226,7 +4228,8 @@ export async function addNotification(
     const payload: Omit<AppNotification, 'id'> = {
       ...notifData,
       createdAt: Date.now(),
-      read: false
+      read: false,
+      readBy: []
     };
     const sanitized = sanitizeData(payload);
     const docRef = await addDoc(colRef, sanitized);
@@ -4237,16 +4240,21 @@ export async function addNotification(
   }
 }
 
-export async function markNotificationRead(id: string): Promise<void> {
+export async function markNotificationRead(id: string, userId?: string): Promise<void> {
+  if (!auth?.currentUser) return;
   try {
     const docRef = doc(db, 'notifications', id);
-    await updateDoc(docRef, { read: true });
+    await updateDoc(docRef, {
+      read: true,
+      ...(userId ? { readBy: arrayUnion(userId) } : {})
+    });
   } catch (error) {
     console.error('Failed to mark notification read:', error);
   }
 }
 
 export async function dismissNotification(id: string, userId: string): Promise<void> {
+  if (!auth?.currentUser) return;
   try {
     const docRef = doc(db, 'notifications', id);
     const docSnap = await getDoc(docRef);
@@ -4261,11 +4269,15 @@ export async function dismissNotification(id: string, userId: string): Promise<v
   }
 }
 
-export async function markAllNotificationsRead(notifIds: string[]): Promise<void> {
+export async function markAllNotificationsRead(notifIds: string[], userId?: string): Promise<void> {
+  if (!auth?.currentUser || notifIds.length === 0) return;
   try {
     const batch = writeBatch(db);
     for (const id of notifIds) {
-      batch.update(doc(db, 'notifications', id), { read: true });
+      batch.update(doc(db, 'notifications', id), {
+        read: true,
+        ...(userId ? { readBy: arrayUnion(userId) } : {})
+      });
     }
     await batch.commit();
   } catch (error) {
