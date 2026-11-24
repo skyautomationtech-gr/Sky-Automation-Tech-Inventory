@@ -1,12 +1,12 @@
 {
-  "projectId": "sky-inventory-pro",
-  "appId": "1:461281167942:web:817fbd9d3785596b801847",
-  "apiKey": "AIzaSyAADG_aB1F593sQReKaGyk2InRl5Twc5GA",
-  "authDomain": "sky-inventory-pro.firebaseapp.com",
+  "projectId": "sky-automation-tech-inventory",
+  "appId": "1:930774778285:web:06eb70acdf21b2ede76124",
+  "apiKey": "AIzaSyAboJydXvLUC7HwIzEk2gLEYW1m7cPSAZg",
+  "authDomain": "sky-automation-tech-inventory.firebaseapp.com",
   "firestoreDatabaseId": "ai-studio-6630a5d3-18da-424e-ba5b-db65e1dcfa41",
-  "storageBucket": "sky-inventory-pro.firebasestorage.app",
-  "messagingSenderId": "461281167942",
+  "storageBucket": "sky-automation-tech-inventory.firebasestorage.app",
+  "messagingSenderId": "930774778285",
   "measurementId": "",
-  "oAuthClientId": "461281167942-qib9r9irk6kesnk7lb37gai7osh52cq2.apps.googleusercontent.com",
+  "oAuthClientId": "930774778285-e8l65n8u9ai091b7hrqt9fchruqqiq2n.apps.googleusercontent.com",
   "recaptchaSiteKey": ""
 }
