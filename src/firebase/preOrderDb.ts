@@ -5432,6 +5432,24 @@ export async function receivePreOrderStock(
         stockStatus: 'out_of_stock', // All newly received stock is reserved for this pre-order (available = 0)
         createdById: actor.id,
         createdBy: actor.name,
+        submittedBy: {
+          uid: actor.id,
+          name: actor.name,
+          role: actor.role,
+        },
+        submittedAt: now,
+        editHistory: [
+          {
+            id: `eh-${now}`,
+            editedByUid: actor.id,
+            editedByName: actor.name,
+            editedByRole: actor.role,
+            editedAt: now,
+            action: 'created',
+            note: `Created via Pre-Order ${prelimOrder.preOrderNumber}`,
+            changes: [],
+          },
+        ],
       };
 
       txn.set(newProdRef, sanitizeData(newProductPayload));

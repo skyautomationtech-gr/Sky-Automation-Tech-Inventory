@@ -173,9 +173,53 @@
         "message": { "type": "string" },
         "targetScreen": { "type": "string" },
         "targetId": { "type": "string" },
+        "subAction": { "type": "string" },
+        "targetUserId": { "type": "string" },
+        "forRoles": { "type": "array" },
+        "rejectionReason": { "type": "string" },
         "createdAt": { "type": "number" },
         "read": { "type": "boolean" },
+        "readBy": { "type": "array" },
         "dismissedBy": { "type": "array" }
+      }
+    },
+    "Product": {
+      "title": "Product",
+      "description": "Inventory catalog & pending approval product document",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "sku": { "type": "string" },
+        "description": { "type": "string" },
+        "notes": { "type": "string" },
+        "category": { "type": "string" },
+        "mainCategory": { "type": "string" },
+        "subCategory": { "type": "string" },
+        "childCategory": { "type": "string" },
+        "brand": { "type": "string" },
+        "subBrand": { "type": "string" },
+        "costPrice": { "type": "number" },
+        "sellingPrice": { "type": "number" },
+        "reorderThreshold": { "type": "number" },
+        "images": { "type": "array" },
+        "imageUrls": { "type": "array" },
+        "variants": { "type": "array" },
+        "totalStock": { "type": "number" },
+        "archived": { "type": "boolean" },
+        "status": { "type": "string" },
+        "stockStatus": { "type": "string" },
+        "barcodeValue": { "type": "string" },
+        "rejectionReason": { "type": "string" },
+        "createdById": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "submittedBy": { "type": "object" },
+        "submittedAt": { "type": "number" },
+        "approvedBy": { "type": "object" },
+        "approvedAt": { "type": "number" },
+        "rejectedBy": { "type": "object" },
+        "rejectedAt": { "type": "number" },
+        "editHistory": { "type": "array" },
+        "createdAt": { "type": "number" }
       }
     },
     "Invoice": {
@@ -749,6 +793,10 @@
     "/supplierPayments/{paymentId}": {
       "schema": "SupplierPayment",
       "description": "Supplier payments log collection"
+    },
+    "/products/{productId}": {
+      "schema": "Product",
+      "description": "Inventory catalog & pending products collection"
     },
     "/notifications/{notificationId}": {
       "schema": "AppNotification",

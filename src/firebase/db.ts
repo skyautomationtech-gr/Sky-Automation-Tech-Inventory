@@ -19,6 +19,7 @@ import {
   arrayUnion
 } from 'firebase/firestore';
 import { pushProductToReseller } from '../services/resellerSync';
+import { normalizeProductImages } from '../utils/productImageUpload';
 import { db, auth } from './config';
 import { 
   UserProfile, 
@@ -1131,12 +1132,8 @@ export function normalizeProduct(id: string, data: any): Product {
   const childCategory = data.childCategory || '';
   const category = data.category || mainCategory;
 
-  const images = Array.isArray(data.images) && data.images.length > 0
-    ? data.images 
-    : (Array.isArray(data.imageUrls) ? data.imageUrls : []);
-  const imageUrls = Array.isArray(data.imageUrls) && data.imageUrls.length > 0 
-    ? data.imageUrls 
-    : images;
+  const images = normalizeProductImages(data);
+  const imageUrls = images;
 
   const variants: Variant[] = Array.isArray(data.variants) && data.variants.length > 0
     ? data.variants.map((v: any, idx: number) => ({
@@ -1185,11 +1182,25 @@ export function normalizeProduct(id: string, data: any): Product {
     stockStatus = 'out_of_stock';
   }
 
+  const submittedByRaw = data.submittedBy && typeof data.submittedBy === 'object' ? data.submittedBy : null;
+  const submittedBy = submittedByRaw
+    ? {
+        uid: String(submittedByRaw.uid || data.createdById || ''),
+        name: String(submittedByRaw.name || data.createdBy || 'Unknown'),
+        ...(submittedByRaw.role ? { role: String(submittedByRaw.role) } : {}),
+        ...(submittedByRaw.photoUrl ? { photoUrl: String(submittedByRaw.photoUrl) } : {}),
+      }
+    : {
+        uid: String(data.createdById || ''),
+        name: String(data.createdBy || 'Unknown'),
+      };
+
   return {
     id,
     name: data.name || 'Unnamed Product',
     sku: data.sku || `SKU-${id.substring(0, 6)}`,
     description: data.description || '',
+    notes: data.notes || '',
     category,
     mainCategory,
     subCategory,
@@ -1215,8 +1226,15 @@ export function normalizeProduct(id: string, data: any): Product {
     deletionStatus: data.deletionStatus || null,
     deletionRequestedBy: data.deletionRequestedBy || '',
     deletionRequestedAt: data.deletionRequestedAt || undefined,
-    createdById: data.createdById || '',
-    createdBy: data.createdBy || ''
+    createdById: data.createdById || submittedBy.uid || '',
+    createdBy: data.createdBy || submittedBy.name || '',
+    submittedBy,
+    submittedAt: Number(data.submittedAt || data.createdAt || 0) || undefined,
+    approvedBy: data.approvedBy || undefined,
+    approvedAt: data.approvedAt ? Number(data.approvedAt) : undefined,
+    rejectedBy: data.rejectedBy || undefined,
+    rejectedAt: data.rejectedAt ? Number(data.rejectedAt) : undefined,
+    editHistory: Array.isArray(data.editHistory) ? data.editHistory : [],
   };
 }
 
@@ -1326,12 +1344,24 @@ export async function addProduct(product: Omit<Product, 'id'>, userId: string, u
       product.variants.reduce((acc, v) => acc + (v.reservedQty || 0), 0)
     );
     const stockStatus = Math.max(0, totalQty - reservedQty) <= 0 ? 'out_of_stock' : 'in_stock';
+    const normalizedImages = normalizeProductImages(product);
+    const nowTs = Date.now();
+    const submittedBy = product.submittedBy || {
+      uid: product.createdById || userId || '',
+      name: product.createdBy || userName || 'Unknown',
+    };
     const sanitizedProduct = sanitizeData({
       ...product,
+      images: normalizedImages,
+      imageUrls: normalizedImages,
+      createdById: product.createdById || userId || submittedBy.uid || '',
+      createdBy: product.createdBy || userName || submittedBy.name || 'Unknown',
+      submittedBy,
+      submittedAt: product.submittedAt || nowTs,
       totalStock: totalQty,
       reservedQty,
       stockStatus,
-      createdAt: Date.now()
+      createdAt: product.createdAt || nowTs
     });
     const docRef = await addDoc(colRef, sanitizedProduct);
 
@@ -1365,6 +1395,11 @@ export async function updateProduct(id: string, updatedFields: Partial<Product>)
   dbCache.products = null; dbCache.productsArchived = null;
   try {
     const payload = { ...updatedFields };
+    if (payload.images !== undefined || payload.imageUrls !== undefined) {
+      const normalizedImages = normalizeProductImages(payload);
+      payload.images = normalizedImages;
+      payload.imageUrls = normalizedImages;
+    }
     if (payload.variants && !payload.stockStatus) {
       const totalQty = payload.variants.reduce((acc, v) => acc + (v.stock || 0), 0);
       const reservedQty = Math.max(

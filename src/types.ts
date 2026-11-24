@@ -118,11 +118,37 @@ export interface Variant {
   barcodeValue?: string;
 }
 
+export interface ProductSubmitterInfo {
+  uid: string;
+  name: string;
+  role?: UserRole | string;
+  photoUrl?: string;
+}
+
+export interface ProductEditChange {
+  field: string;
+  label: string;
+  before: string;
+  after: string;
+}
+
+export interface ProductEditHistoryEntry {
+  id: string;
+  editedByUid: string;
+  editedByName: string;
+  editedByRole: string;
+  editedAt: number;
+  action: 'created' | 'edited' | 'approved' | 'rejected' | 'resubmitted';
+  note?: string;
+  changes: ProductEditChange[];
+}
+
 export interface Product {
   id: string;
   name: string;
   sku: string;
   description?: string;
+  notes?: string;
   category: string; // for backward compatibility/displays
   mainCategory?: string; // name/id of 3-level main category
   subCategory?: string; // name/id of 3-level sub category
@@ -133,7 +159,7 @@ export interface Product {
   sellingPrice: number;
   discountPrice?: number;
   reorderThreshold: number;
-  images: string[]; // Base64 or Object URL or Storage paths
+  images: string[]; // Storage download URLs or compact Data URLs
   imageUrls?: string[];
   variants: Variant[];
   totalStock?: number;
@@ -150,6 +176,13 @@ export interface Product {
   deletionRequestedAt?: number;
   createdById?: string;
   createdBy?: string;
+  submittedBy?: ProductSubmitterInfo;
+  submittedAt?: number;
+  approvedBy?: ProductSubmitterInfo;
+  approvedAt?: number;
+  rejectedBy?: ProductSubmitterInfo;
+  rejectedAt?: number;
+  editHistory?: ProductEditHistoryEntry[];
 }
 
 export type StockLogType = 'in' | 'out' | 'adjustment' | 'sale' | 'cancellation_restock' | 'return_restock';
@@ -326,7 +359,7 @@ export interface SupplierPayment {
   createdAt: number;
 }
 
-export type NotificationType = 'low_stock' | 'order_status' | 'due_payment' | 'pending_approval';
+export type NotificationType = 'low_stock' | 'order_status' | 'due_payment' | 'pending_approval' | 'product_review';
 
 export interface AppNotification {
   id: string;
@@ -335,6 +368,10 @@ export interface AppNotification {
   message: string;
   targetScreen?: string; // 'products' | 'orders' | 'due_payments' | 'users' | 'suppliers'
   targetId?: string;
+  subAction?: string;
+  targetUserId?: string;
+  forRoles?: string[];
+  rejectionReason?: string;
   createdAt: number;
   read: boolean;
   readBy?: string[];

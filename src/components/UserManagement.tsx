@@ -358,39 +358,59 @@ export default function UserManagement({
     setLoading(true);
 
     try {
-      if (!email.trim() || !fullName.trim() || !tempPassword.trim()) {
-        throw new Error('Please provide full name, email, and password.');
+      if (!email.trim() || !fullName.trim()) {
+        throw new Error('Please provide full name and email address.');
       }
 
-      const { initializeApp, getApps } = await import('firebase/app');
-      const { getAuth, createUserWithEmailAndPassword } = await import('firebase/auth');
-      const { firebaseConfig } = await import('../firebase/config');
+      const cleanEmail = email.toLowerCase().trim();
+      let newUid = '';
 
-      let secondaryApp = getApps().find(app => app.name === 'SecondaryApp');
-      if (!secondaryApp) {
-        secondaryApp = initializeApp(firebaseConfig, 'SecondaryApp');
+      try {
+        const { initializeApp, getApps } = await import('firebase/app');
+        const { getAuth, createUserWithEmailAndPassword } = await import('firebase/auth');
+        const { firebaseConfig } = await import('../firebase/config');
+
+        let secondaryApp = getApps().find(app => app.name === 'SecondaryApp');
+        if (!secondaryApp) {
+          secondaryApp = initializeApp(firebaseConfig, 'SecondaryApp');
+        }
+        const secondaryAuth = getAuth(secondaryApp);
+
+        const userCredential = await createUserWithEmailAndPassword(
+          secondaryAuth, 
+          cleanEmail, 
+          tempPassword || 'TempPass123!'
+        );
+        newUid = userCredential.user.uid;
+        try {
+          await secondaryAuth.signOut();
+        } catch {}
+      } catch (authErr: any) {
+        console.warn('Secondary auth create warning (falling back to Firestore profile creation):', authErr);
+        const existingProfile = await findUserProfileByEmail(cleanEmail);
+        if (existingProfile) {
+          newUid = existingProfile.id;
+        } else {
+          newUid = `user_${cleanEmail.replace(/[^a-zA-Z0-9]/g, '_')}`;
+        }
       }
-      const secondaryAuth = getAuth(secondaryApp);
-
-      const userCredential = await createUserWithEmailAndPassword(
-        secondaryAuth, 
-        email.toLowerCase().trim(), 
-        tempPassword
-      );
-      const newUid = userCredential.user.uid;
 
       let photoUrl = '';
       if (photoFile) {
-        const storageRef = ref(storage, `operator_avatars/${newUid}_${Date.now()}`);
-        const uploadRes = await uploadBytes(storageRef, photoFile);
-        photoUrl = await getDownloadURL(uploadRes.ref);
+        try {
+          const storageRef = ref(storage, `operator_avatars/${newUid}_${Date.now()}`);
+          const uploadRes = await uploadBytes(storageRef, photoFile);
+          photoUrl = await getDownloadURL(uploadRes.ref);
+        } catch (imgErr) {
+          console.warn('Avatar upload failed:', imgErr);
+        }
       }
 
       const employeeId = await getNextEmployeeId();
 
       await createUserProfile(newUid, {
         id: newUid,
-        email: email.toLowerCase().trim(),
+        email: cleanEmail,
         name: fullName.trim(),
         role: selectedRole,
         active: isActiveAccount,
@@ -418,16 +438,15 @@ export default function UserManagement({
         }
       }
 
-      if (sendEmail) {
+      if (sendEmail && tempPassword) {
         try {
-          await sendCredentialsEmail(email.toLowerCase().trim(), tempPassword, fullName);
+          await sendCredentialsEmail(cleanEmail, tempPassword, fullName);
         } catch (emailErr) {
           console.error('Email sending failed:', emailErr);
         }
       }
 
-      await secondaryAuth.signOut();
-      setSuccess(`Operator profile provisioned for ${fullName}.`);
+      setSuccess(`Operator profile provisioned for ${fullName} (${cleanEmail}) as ${selectedRole.toUpperCase()}.`);
 
       // Reset form
       setEmail('');

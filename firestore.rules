@@ -540,8 +540,28 @@ service cloud.firestore {
     // ==========================================
     match /products/{docId} {
       allow read: if isSignedIn();
-      allow create: if isAdmin() || (hasPreOrderPerm('preOrderReceiveStock') && request.resource.data.status == 'pending_review');
-      allow update: if isAdmin() || hasPreOrderPerm('preOrderReceiveStock') || hasPreOrderPerm('preOrderConvertSale') || hasPreOrderPerm('preOrderUpdateStatus');
+      allow create: if isAdmin() || (
+        isActiveUser() &&
+        request.resource.data.status == 'pending_review' &&
+        !request.resource.data.get('archived', false)
+      );
+      allow update: if isAdmin() ||
+        hasPreOrderPerm('preOrderReceiveStock') ||
+        hasPreOrderPerm('preOrderConvertSale') ||
+        hasPreOrderPerm('preOrderUpdateStatus') ||
+        (
+          isActiveUser() &&
+          resource.data.status == 'pending_review' &&
+          request.resource.data.status == 'pending_review' &&
+          !request.resource.data.get('archived', false) &&
+          (
+            resource.data.get('createdById', '') == request.auth.uid ||
+            (
+              resource.data.get('submittedBy', {}) is map &&
+              resource.data.submittedBy.get('uid', '') == request.auth.uid
+            )
+          )
+        );
       allow delete: if isAdmin();
     }
     match /categories/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
@@ -584,7 +604,11 @@ service cloud.firestore {
     match /incomes/{docId} { allow read, write: if isSuperAdmin(); }
     match /notifications/{docId} {
       allow read: if isSignedIn();
-      allow create, delete: if isAdmin();
+      allow create: if isAdmin() || (
+        isActiveUser() &&
+        request.resource.data.type == 'pending_approval'
+      );
+      allow delete: if isAdmin();
       allow update: if isAdmin() || (
         isActiveUser() &&
         request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read', 'readBy', 'dismissedBy'])
