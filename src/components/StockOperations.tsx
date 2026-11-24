@@ -21,7 +21,8 @@ interface StockOperationsProps {
   products: Product[];
   user: UserProfile | null;
   onRefreshData: () => Promise<void>;
-  initialAction?: string; // e.g. "in" automatically pre-selected
+  initialAction?: string; // e.g. "in", "out", "adjust", "ledger"
+  onActionChange?: (action: 'in' | 'out' | 'adjust' | 'ledger') => void;
   requireCheckIn?: () => boolean;
   initialProductId?: string;
 }
@@ -31,15 +32,25 @@ export default function StockOperations({
   user,
   onRefreshData,
   initialAction = 'in',
+  onActionChange,
   requireCheckIn,
   initialProductId = ''
 }: StockOperationsProps) {
   const isStaff = user?.role === 'staff';
 
+  const normalizeAction = (act?: string): 'in' | 'out' | 'adjust' | 'ledger' => {
+    if (act === 'in' || act === 'out' || act === 'adjust' || act === 'ledger') return act;
+    return 'ledger';
+  };
+
   // Tabs for action selection
   const [activeAction, setActiveAction] = useState<'in' | 'out' | 'adjust' | 'ledger'>(
-    initialAction === 'in' ? 'in' : 'ledger'
+    normalizeAction(initialAction)
   );
+
+  useEffect(() => {
+    setActiveAction(normalizeAction(initialAction));
+  }, [initialAction]);
 
   // Global Ledger Master List
   const [ledgerLogs, setLedgerLogs] = useState<StockLog[]>([]);
@@ -233,7 +244,7 @@ export default function StockOperations({
       <div className="border-b border-slate-200 overflow-x-auto no-scrollbar">
         <div className="flex gap-4 min-w-max pb-2 px-1">
           <button
-            onClick={() => { setActiveAction('in'); resetForm(); }}
+            onClick={() => { setActiveAction('in'); resetForm(); onActionChange?.('in'); }}
             className={`pb-2.5 px-1 font-semibold text-sm transition-all border-b-2 cursor-pointer ${
               activeAction === 'in'
                 ? 'border-amber-400 text-slate-900 font-extrabold'
@@ -243,7 +254,7 @@ export default function StockOperations({
             Stock IN
           </button>
           <button
-            onClick={() => { setActiveAction('out'); resetForm(); }}
+            onClick={() => { setActiveAction('out'); resetForm(); onActionChange?.('out'); }}
             className={`pb-2.5 px-1 font-semibold text-sm transition-all border-b-2 cursor-pointer ${
               activeAction === 'out'
                 ? 'border-amber-400 text-slate-900 font-extrabold'
@@ -253,7 +264,7 @@ export default function StockOperations({
             Stock OUT
           </button>
           <button
-            onClick={() => { setActiveAction('adjust'); resetForm(); }}
+            onClick={() => { setActiveAction('adjust'); resetForm(); onActionChange?.('adjust'); }}
             className={`pb-2.5 px-1 font-semibold text-sm transition-all border-b-2 cursor-pointer ${
               activeAction === 'adjust'
                 ? 'border-amber-400 text-slate-900 font-extrabold'
@@ -263,7 +274,7 @@ export default function StockOperations({
             Adjustment
           </button>
           <button
-            onClick={() => { setActiveAction('ledger'); resetForm(); }}
+            onClick={() => { setActiveAction('ledger'); resetForm(); onActionChange?.('ledger'); }}
             className={`pb-2.5 px-1 font-semibold text-sm transition-all border-b-2 cursor-pointer ${
               activeAction === 'ledger'
                 ? 'border-amber-400 text-slate-900 font-extrabold'

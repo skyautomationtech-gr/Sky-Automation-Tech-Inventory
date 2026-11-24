@@ -76,12 +76,16 @@ interface UserManagementProps {
   user: UserProfile;
   rolePermissions?: RolePermissionsMap | null;
   onRolePermissionsUpdated?: (updated: RolePermissionsMap) => void;
+  initialTab?: 'registry' | 'pending' | 'permissions';
+  onTabChange?: (tab: 'registry' | 'pending' | 'permissions') => void;
 }
 
 export default function UserManagement({
   user,
   rolePermissions: externalRolePermissions,
   onRolePermissionsUpdated,
+  initialTab,
+  onTabChange,
 }: UserManagementProps) {
   const [users, setUsers] = useState<UserProfile[]>([]);
   const [loading, setLoading] = useState(false);
@@ -89,7 +93,18 @@ export default function UserManagement({
   const [success, setSuccess] = useState('');
 
   // Tab control
-  const [activeTab, setActiveTab] = useState<'registry' | 'pending' | 'permissions'>('registry');
+  const [activeTab, setActiveTab] = useState<'registry' | 'pending' | 'permissions'>(
+    initialTab && user?.role === 'superadmin' ? initialTab : 'registry'
+  );
+
+  useEffect(() => {
+    if (!initialTab) return;
+    if (user?.role === 'superadmin') {
+      setActiveTab(initialTab);
+    } else {
+      setActiveTab('registry');
+    }
+  }, [initialTab, user?.role]);
 
   // Role Permissions Matrix state (/settings/rolePermissions)
   const [rolePermsMatrix, setRolePermsMatrix] = useState<RolePermissionsMap>(() =>
@@ -788,7 +803,7 @@ export default function UserManagement({
       {isSuperAdmin && (
         <div className="flex items-center gap-1 bg-white p-1 rounded-xl border border-slate-200/80 shadow-2xs w-fit flex-wrap">
           <button
-            onClick={() => setActiveTab('registry')}
+            onClick={() => { setActiveTab('registry'); onTabChange?.('registry'); }}
             className={`px-3 py-1.5 text-xs font-bold rounded-lg transition cursor-pointer ${
               activeTab === 'registry' 
                 ? 'bg-slate-900 text-amber-400 shadow-2xs' 
@@ -798,7 +813,7 @@ export default function UserManagement({
             Active Registry ({filteredUsers.length})
           </button>
           <button
-            onClick={() => setActiveTab('pending')}
+            onClick={() => { setActiveTab('pending'); onTabChange?.('pending'); }}
             className={`px-3 py-1.5 text-xs font-bold rounded-lg transition flex items-center gap-1.5 cursor-pointer ${
               activeTab === 'pending' 
                 ? 'bg-slate-900 text-amber-400 shadow-2xs' 
@@ -813,7 +828,7 @@ export default function UserManagement({
             )}
           </button>
           <button
-            onClick={() => setActiveTab('permissions')}
+            onClick={() => { setActiveTab('permissions'); onTabChange?.('permissions'); }}
             className={`px-3 py-1.5 text-xs font-bold rounded-lg transition flex items-center gap-1.5 cursor-pointer ${
               activeTab === 'permissions'
                 ? 'bg-slate-900 text-amber-400 shadow-2xs'

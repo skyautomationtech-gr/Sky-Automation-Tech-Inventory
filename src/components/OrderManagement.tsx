@@ -63,13 +63,19 @@ interface OrderManagementProps {
   requireCheckIn?: () => boolean;
   initialOrderId?: string | null;
   clearInitialOrderId?: () => void;
+  initialCreateMode?: boolean;
+  clearInitialCreateMode?: () => void;
+  onCreateModeChange?: (isOpen: boolean) => void;
 }
 
 export default function OrderManagement({ 
   user, 
   requireCheckIn,
   initialOrderId,
-  clearInitialOrderId
+  clearInitialOrderId,
+  initialCreateMode = false,
+  clearInitialCreateMode,
+  onCreateModeChange
 }: OrderManagementProps) {
   // Lists
   const [orders, setOrders] = useState<Order[]>([]);
@@ -235,6 +241,19 @@ export default function OrderManagement({
       }
     }
   }, [initialOrderId, orders, clearInitialOrderId]);
+
+  useEffect(() => {
+    if (initialCreateMode) {
+      if (hasManageOrders) {
+        setShowCreateModal(true);
+      }
+      clearInitialCreateMode?.();
+    }
+  }, [initialCreateMode, hasManageOrders, clearInitialCreateMode]);
+
+  useEffect(() => {
+    onCreateModeChange?.(showCreateModal);
+  }, [showCreateModal]);
 
   // Helper validation
   const validateBdPhone = (phone: string) => {

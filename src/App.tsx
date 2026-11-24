@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { onAuthStateChanged, signOut, EmailAuthProvider, reauthenticateWithCredential } from 'firebase/auth';
 import { auth, isFirebaseConfigured } from './firebase/config';
 import { 
@@ -12,6 +12,8 @@ import {
   getBrands,
   getProductColors,
   getProductModels,
+  getProductAvailableStock,
+  getAllUsers,
   subscribeToProducts,
   subscribeToCategories,
   subscribeToBrands,
@@ -47,8 +49,9 @@ import {
   exportEverythingWorkbook
 } from './utils/excelExport';
 import { UserProfile, Product, Category, Brand, CompanySettings, ProductColor, ProductModel, RolePermissionsMap } from './types';
-import { getRolePermissions } from './firebase/preOrderDb';
-import { isPreOrderTab } from './preOrders/constants';
+import { getPreOrderStatsSummary, getRolePermissions } from './firebase/preOrderDb';
+import { hasPermission, isPreOrderTab } from './preOrders/constants';
+import { SidebarBadgeCounts, normalizeDefaultSubAction } from './navigation/sidebarConfig';
 import { EMAILJS_CONFIG } from './config/emailjs';
 import { sendOTPEmail } from './lib/emailjs';
 import { 
@@ -75,7 +78,7 @@ import SplashAndAuth from './components/SplashAndAuth';
 import OnboardingWizard from './components/OnboardingWizard';
 import Sidebar from './components/Sidebar';
 import DashboardView from './components/DashboardView';
-import ProductManagement from './components/ProductManagement';
+import ProductManagement, { ProductSubTab } from './components/ProductManagement';
 import StockOperations from './components/StockOperations';
 import UserManagement from './components/UserManagement';
 import AttendanceLog from './components/AttendanceLog';
@@ -238,10 +241,18 @@ export default function App() {
     initialId?: string | null;
   } | null>(null);
 
-  // Sub-action passing (e.g., automatically opening add product drawer)
+  // Sub-action passing & sidebar deep-link tracking
+  const [currentSubAction, setCurrentSubAction] = useState<string | undefined>(undefined);
   const [initialProductAddMode, setInitialProductAddMode] = useState(false);
+  const [productSubTab, setProductSubTab] = useState<ProductSubTab>('catalog');
   const [initialStockAction, setInitialStockAction] = useState('in');
   const [initialStockProductId, setInitialStockProductId] = useState('');
+  const [initialOrderCreateMode, setInitialOrderCreateMode] = useState(false);
+  const [usersSubTab, setUsersSubTab] = useState<'registry' | 'pending' | 'permissions'>('registry');
+  const [accountingSubTab, setAccountingSubTab] = useState<string>('overview');
+  const [financialsSubTab, setFinancialsSubTab] = useState<'overview' | 'income' | 'expenses'>('overview');
+  const [pendingUsersCount, setPendingUsersCount] = useState<number>(0);
+  const [pendingPreOrderVerificationsCount, setPendingPreOrderVerificationsCount] = useState<number>(0);
 
   const [showClearDataModal, setShowClearDataModal] = useState(false);
   const [clearDataPassword, setClearDataPassword] = useState('');
@@ -608,6 +619,25 @@ export default function App() {
       if (brandsList && brandsList.length > 0) setBrands(brandsList);
       if (colorsList && colorsList.length > 0) setProductColors(colorsList);
       if (modelsList && modelsList.length > 0) setProductModels(modelsList);
+
+      if (user?.role === 'superadmin') {
+        getAllUsers()
+          .then((allUsers) => {
+            const count = (allUsers || []).filter(
+              (u) => u.status === 'pending_approval' || u.status === 'rejected'
+            ).length;
+            setPendingUsersCount(count);
+          })
+          .catch(() => {});
+      }
+
+      if (hasPermission(user, rolePermissions, 'preOrderView')) {
+        getPreOrderStatsSummary()
+          .then((stats) => {
+            setPendingPreOrderVerificationsCount(stats?.pendingPaymentCount || 0);
+          })
+          .catch(() => {});
+      }
     } catch (error: any) {
       console.warn("Firestore access error in refreshApplicationData:", error);
       if (checkIfQuotaError(error)) {
@@ -643,8 +673,28 @@ export default function App() {
   useEffect(() => {
     if (!publicTrackingRoute.isTrackingRoute && authReady && user && firebaseAuthed && profileLoaded && !isOnboarding) {
       getRolePermissions()
-        .then((perms) => setRolePermissions(perms))
+        .then((perms) => {
+          setRolePermissions(perms);
+          if (hasPermission(user, perms, 'preOrderView')) {
+            getPreOrderStatsSummary()
+              .then((stats) => setPendingPreOrderVerificationsCount(stats?.pendingPaymentCount || 0))
+              .catch(() => {});
+          }
+        })
         .catch(() => {});
+
+      if (user.role === 'superadmin') {
+        getAllUsers()
+          .then((allUsers) => {
+            const count = (allUsers || []).filter(
+              (u) => u.status === 'pending_approval' || u.status === 'rejected'
+            ).length;
+            setPendingUsersCount(count);
+          })
+          .catch(() => {});
+      } else {
+        setPendingUsersCount(0);
+      }
 
       // Note: Subscriptions immediately return the cached or latest snapshot,
       // so we avoid an extra redundant batch of getDocs calls on mount.
@@ -759,29 +809,72 @@ export default function App() {
     setCompanySettings(null);
     setIsOnboarding(false);
     setCurrentTab('dashboard');
+    setCurrentSubAction(undefined);
+    setPendingUsersCount(0);
+    setPendingPreOrderVerificationsCount(0);
   };
 
   const SUPERADMIN_ONLY_TABS = new Set(['accounting', 'financials', 'reports', 'audit_logs', 'settings']);
   const isUserSuperAdmin = user?.role === 'superadmin';
+  const isUserStaff = user?.role === 'staff';
+
+  const sidebarBadges: SidebarBadgeCounts = useMemo(() => {
+    const outOfStockCount = products.filter(
+      (p) => !p.archived && (p.stockStatus === 'out_of_stock' || getProductAvailableStock(p) <= 0)
+    ).length;
+    const archiveCount = products.filter((p) => p.archived).length;
+    const pendingProductsCount = products.filter(
+      (p) => !p.archived && p.status === 'pending_review'
+    ).length;
+    const deletionRequestsCount = products.filter(
+      (p) => p.deletionStatus === 'pending_approval'
+    ).length;
+    return {
+      outOfStockCount,
+      archiveCount,
+      pendingProductsCount,
+      deletionRequestsCount,
+      pendingPreOrderVerificationsCount,
+      pendingUsersCount,
+    };
+  }, [products, pendingPreOrderVerificationsCount, pendingUsersCount]);
 
   useEffect(() => {
     if (user && !isUserSuperAdmin && SUPERADMIN_ONLY_TABS.has(currentTab)) {
       setCurrentTab('dashboard');
+      setCurrentSubAction(undefined);
     }
   }, [user, isUserSuperAdmin, currentTab]);
 
   // Execute navigation immediately (after any dirty confirmation)
   const performNavigate = (tab: string, subAction?: string, initialId?: string | null) => {
-    if (SUPERADMIN_ONLY_TABS.has(tab) && !isUserSuperAdmin) {
+    const resolvedTab = tab === 'due_payments' ? 'receivables' : tab;
+    if (SUPERADMIN_ONLY_TABS.has(resolvedTab) && !isUserSuperAdmin) {
       setCurrentTab('dashboard');
+      setCurrentSubAction(undefined);
       return;
     }
-    setCurrentTab(tab);
-    if (tab === 'products') {
-      if (subAction === 'add') {
+
+    const normalizedSub = normalizeDefaultSubAction(resolvedTab, subAction);
+    setCurrentTab(resolvedTab);
+    setCurrentSubAction(normalizedSub);
+
+    if (resolvedTab === 'products') {
+      if (subAction === 'add' || subAction === 'create') {
         setInitialProductAddMode(true);
+        setProductSubTab('catalog');
       } else {
         setInitialProductAddMode(false);
+        const targetSub = (normalizedSub || 'catalog') as ProductSubTab;
+        if ((targetSub === 'attributes' || targetSub === 'pending') && isUserStaff) {
+          setProductSubTab('catalog');
+          setCurrentSubAction('catalog');
+        } else if (targetSub === 'deletion_requests' && !isUserSuperAdmin) {
+          setProductSubTab('catalog');
+          setCurrentSubAction('catalog');
+        } else {
+          setProductSubTab(targetSub);
+        }
       }
       setInitialProductId(initialId || null);
     } else {
@@ -789,29 +882,55 @@ export default function App() {
       setInitialProductId(null);
     }
 
-    if (tab === 'stock') {
-      if (subAction === 'in') {
-        setInitialStockAction('in');
-      } else {
-        setInitialStockAction('ledger');
-      }
+    if (resolvedTab === 'stock') {
+      const targetAction =
+        normalizedSub === 'in' || normalizedSub === 'out' || normalizedSub === 'adjust' || normalizedSub === 'ledger'
+          ? normalizedSub
+          : 'ledger';
+      setInitialStockAction(targetAction);
+      setCurrentSubAction(targetAction);
     } else {
       setInitialStockAction('ledger');
     }
 
-    if (tab === 'orders') {
+    if (resolvedTab === 'orders') {
+      const openCreate = subAction === 'create' || subAction === 'new';
+      setInitialOrderCreateMode(openCreate);
       setInitialOrderId(initialId || null);
+      setCurrentSubAction(openCreate ? 'create' : 'list');
     } else {
+      setInitialOrderCreateMode(false);
       setInitialOrderId(null);
     }
 
-    if (tab === 'customers') {
+    if (resolvedTab === 'users') {
+      const targetUserTab: 'registry' | 'pending' | 'permissions' =
+        isUserSuperAdmin && (normalizedSub === 'pending' || normalizedSub === 'permissions')
+          ? normalizedSub
+          : 'registry';
+      setUsersSubTab(targetUserTab);
+      setCurrentSubAction(targetUserTab);
+    }
+
+    if (resolvedTab === 'accounting') {
+      const targetAccTab = normalizedSub || 'overview';
+      setAccountingSubTab(targetAccTab);
+      setCurrentSubAction(targetAccTab);
+    }
+
+    if (resolvedTab === 'financials') {
+      const targetFinTab: 'overview' | 'income' | 'expenses' =
+        normalizedSub === 'income' || normalizedSub === 'expenses' ? normalizedSub : 'overview';
+      setFinancialsSubTab(targetFinTab);
+    }
+
+    if (resolvedTab === 'customers') {
       setInitialCustomerId(initialId || null);
     } else {
       setInitialCustomerId(null);
     }
 
-    if (tab === 'preorder_list') {
+    if (resolvedTab === 'preorder_list') {
       if (initialId) setSelectedPreOrderId(initialId);
     } else {
       setSelectedPreOrderId(null);
@@ -1158,10 +1277,12 @@ export default function App() {
           {/* Sidebar Navigation */}
           <Sidebar 
             currentTab={currentTab} 
+            currentSubAction={currentSubAction}
             setCurrentTab={navigateToTab} 
             onNavigate={navigateToTab}
             user={user} 
             rolePermissions={rolePermissions}
+            badges={sidebarBadges}
             onLogout={handleLogout}
             isOpen={isSidebarOpen}
             setIsOpen={setIsSidebarOpen}
@@ -1180,6 +1301,7 @@ export default function App() {
             {/* Sticky Top Header Bar (Laptop & Mobile Glass Header) */}
             <TopBar 
               currentTab={currentTab}
+              currentSubAction={currentSubAction}
               onNavigate={navigateToTab}
               user={user}
               rolePermissions={rolePermissions}
@@ -1248,6 +1370,11 @@ export default function App() {
               user={user} 
               onRefreshData={refreshApplicationData}
               initialAddMode={initialProductAddMode}
+              initialSubTab={productSubTab}
+              onSubTabChange={(subTab) => {
+                setProductSubTab(subTab);
+                setCurrentSubAction(subTab);
+              }}
               requireCheckIn={requireCheckIn}
               initialProductId={initialProductId}
               clearInitialProductId={() => setInitialProductId(null)}
@@ -1255,6 +1382,7 @@ export default function App() {
                 setInitialStockAction('in');
                 setInitialStockProductId(productId);
                 setCurrentTab('stock');
+                setCurrentSubAction('in');
               }}
             />
           </ErrorBoundary>
@@ -1268,6 +1396,10 @@ export default function App() {
               user={user} 
               onRefreshData={refreshApplicationData}
               initialAction={initialStockAction}
+              onActionChange={(act) => {
+                setInitialStockAction(act);
+                setCurrentSubAction(act);
+              }}
               requireCheckIn={requireCheckIn}
               initialProductId={initialStockProductId}
             />
@@ -1415,6 +1547,11 @@ export default function App() {
               user={user}
               rolePermissions={rolePermissions}
               onRolePermissionsUpdated={(updated) => setRolePermissions(updated)}
+              initialTab={usersSubTab}
+              onTabChange={(tab) => {
+                setUsersSubTab(tab);
+                setCurrentSubAction(tab);
+              }}
             />
           </ErrorBoundary>
         )}
@@ -1440,6 +1577,13 @@ export default function App() {
               requireCheckIn={requireCheckIn} 
               initialOrderId={initialOrderId}
               clearInitialOrderId={() => setInitialOrderId(null)}
+              initialCreateMode={initialOrderCreateMode}
+              clearInitialCreateMode={() => setInitialOrderCreateMode(false)}
+              onCreateModeChange={(isOpen) => {
+                if (currentTab === 'orders') {
+                  setCurrentSubAction(isOpen ? 'create' : 'list');
+                }
+              }}
             />
           </ErrorBoundary>
         )}
@@ -1465,6 +1609,11 @@ export default function App() {
               user={user} 
               products={products} 
               onRefreshData={refreshApplicationData} 
+              initialTab={financialsSubTab}
+              onTabChange={(tab) => {
+                setFinancialsSubTab(tab);
+                setCurrentSubAction(tab);
+              }}
             />
           ) : (
             <div className="bg-red-50 border border-red-200 rounded-3xl p-8 max-w-lg mx-auto text-center space-y-4 my-12 shadow-sm">
@@ -1485,7 +1634,14 @@ export default function App() {
         {currentTab === 'accounting' && (
           isUserSuperAdmin ? (
             <ErrorBoundary fallbackTitle="Accounting Desk encountered an issue">
-              <AccountingDesk user={user} />
+              <AccountingDesk 
+                user={user} 
+                initialTab={accountingSubTab}
+                onTabChange={(tab) => {
+                  setAccountingSubTab(tab);
+                  setCurrentSubAction(tab);
+                }}
+              />
             </ErrorBoundary>
           ) : (
             <div className="bg-red-50 border border-red-200 rounded-3xl p-8 max-w-lg mx-auto text-center space-y-4 my-12 shadow-sm">

@@ -66,6 +66,16 @@ import {
   getVariantAvailableStock
 } from '../firebase/db';
 
+export type ProductSubTab =
+  | 'catalog'
+  | 'categories'
+  | 'brands'
+  | 'attributes'
+  | 'out_of_stock'
+  | 'pending'
+  | 'archive'
+  | 'deletion_requests';
+
 interface ProductManagementProps {
   products: Product[];
   categories: Category[];
@@ -75,6 +85,8 @@ interface ProductManagementProps {
   user: UserProfile | null;
   onRefreshData: () => Promise<void>;
   initialAddMode?: boolean; // opens drawer automatically if navigated from dashboard
+  initialSubTab?: ProductSubTab;
+  onSubTabChange?: (tab: ProductSubTab) => void;
   requireCheckIn?: () => boolean;
   initialProductId?: string | null;
   clearInitialProductId?: () => void;
@@ -90,6 +102,8 @@ export default function ProductManagement({
   user,
   onRefreshData,
   initialAddMode = false,
+  initialSubTab,
+  onSubTabChange,
   requireCheckIn,
   initialProductId,
   clearInitialProductId,
@@ -99,7 +113,7 @@ export default function ProductManagement({
   const isSuperAdmin = user?.role === 'superadmin' || (user?.role as string) === 'super_admin';
 
   // Sub tabs
-  const [activeSubTab, setActiveSubTab] = useState<'catalog' | 'categories' | 'brands' | 'attributes' | 'out_of_stock' | 'pending' | 'archive' | 'deletion_requests'>('catalog');
+  const [activeSubTab, setActiveSubTab] = useState<ProductSubTab>(initialSubTab || 'catalog');
   const [viewMode, setViewMode] = useState<'table' | 'grid'>('table');
 
   // List management states
@@ -691,6 +705,24 @@ export default function ProductManagement({
       openAddDrawer();
     }
   }, [initialAddMode]);
+
+  useEffect(() => {
+    if (!initialSubTab) return;
+    if ((initialSubTab === 'attributes' || initialSubTab === 'pending') && isStaff) {
+      setActiveSubTab('catalog');
+      return;
+    }
+    if (initialSubTab === 'deletion_requests' && !isSuperAdmin) {
+      setActiveSubTab('catalog');
+      return;
+    }
+    setActiveSubTab(initialSubTab);
+  }, [initialSubTab, isStaff, isSuperAdmin]);
+
+  const handleSelectSubTab = (tab: ProductSubTab) => {
+    setActiveSubTab(tab);
+    onSubTabChange?.(tab);
+  };
 
   useEffect(() => {
     if (initialProductId) {
@@ -1554,7 +1586,7 @@ export default function ProductManagement({
       <div className="border-b border-slate-200 overflow-x-auto no-scrollbar">
         <div className="flex gap-4 min-w-max pb-1">
           <button
-            onClick={() => setActiveSubTab('catalog')}
+            onClick={() => handleSelectSubTab('catalog')}
             className={`pb-2.5 px-1 font-semibold text-sm transition-all border-b-2 cursor-pointer whitespace-nowrap ${
               activeSubTab === 'catalog'
                 ? 'border-amber-400 text-slate-900 font-extrabold'
@@ -1564,7 +1596,7 @@ export default function ProductManagement({
             Product Catalog
           </button>
           <button
-            onClick={() => setActiveSubTab('categories')}
+            onClick={() => handleSelectSubTab('categories')}
             className={`pb-2.5 px-1 font-semibold text-sm transition-all border-b-2 cursor-pointer whitespace-nowrap ${
               activeSubTab === 'categories'
                 ? 'border-amber-400 text-slate-900 font-extrabold'
@@ -1574,7 +1606,7 @@ export default function ProductManagement({
             Categories CRUD
           </button>
           <button
-            onClick={() => setActiveSubTab('brands')}
+            onClick={() => handleSelectSubTab('brands')}
             className={`pb-2.5 px-1 font-semibold text-sm transition-all border-b-2 cursor-pointer whitespace-nowrap ${
               activeSubTab === 'brands'
                 ? 'border-amber-400 text-slate-900 font-extrabold'
@@ -1585,7 +1617,7 @@ export default function ProductManagement({
           </button>
           {!isStaff && (
             <button
-              onClick={() => setActiveSubTab('attributes')}
+              onClick={() => handleSelectSubTab('attributes')}
               className={`pb-2.5 px-1 font-semibold text-sm transition-all border-b-2 cursor-pointer whitespace-nowrap ${
                 activeSubTab === 'attributes'
                   ? 'border-amber-400 text-slate-900 font-extrabold'
@@ -1597,7 +1629,7 @@ export default function ProductManagement({
           )}
           {!isStaff && (
             <button
-              onClick={() => setActiveSubTab('pending')}
+              onClick={() => handleSelectSubTab('pending')}
               className={`pb-2.5 px-1 font-semibold text-sm transition-all border-b-2 cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
                 activeSubTab === 'pending'
                   ? 'border-amber-400 text-slate-900 font-extrabold'
@@ -1613,7 +1645,7 @@ export default function ProductManagement({
             </button>
           )}
           <button
-            onClick={() => setActiveSubTab('out_of_stock')}
+            onClick={() => handleSelectSubTab('out_of_stock')}
             className={`pb-2.5 px-1 font-semibold text-sm transition-all border-b-2 cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
               activeSubTab === 'out_of_stock'
                 ? 'border-amber-400 text-slate-900 font-extrabold'
@@ -1628,7 +1660,7 @@ export default function ProductManagement({
             )}
           </button>
           <button
-            onClick={() => setActiveSubTab('archive')}
+            onClick={() => handleSelectSubTab('archive')}
             className={`pb-2.5 px-1 font-semibold text-sm transition-all border-b-2 cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
               activeSubTab === 'archive'
                 ? 'border-amber-400 text-slate-900 font-extrabold'
@@ -1644,7 +1676,7 @@ export default function ProductManagement({
           </button>
           {user?.role === 'superadmin' && (
             <button
-              onClick={() => setActiveSubTab('deletion_requests')}
+              onClick={() => handleSelectSubTab('deletion_requests')}
               className={`pb-2.5 px-1 font-semibold text-sm transition-all border-b-2 cursor-pointer whitespace-nowrap flex items-center gap-1.5 ${
                 activeSubTab === 'deletion_requests'
                   ? 'border-amber-400 text-slate-900 font-extrabold'

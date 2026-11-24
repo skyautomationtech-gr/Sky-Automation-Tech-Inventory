@@ -24,11 +24,24 @@ import { subscribeToAccountingBaselineSettings, DEFAULT_ACCOUNTING_BASELINE } fr
 
 interface AccountingDeskProps {
   user: UserProfile;
+  initialTab?: string;
+  onTabChange?: (tab: string) => void;
 }
 
-export const AccountingDesk: React.FC<AccountingDeskProps> = ({ user }) => {
-  const [activeTab, setActiveTab] = useState<string>('overview');
+export const AccountingDesk: React.FC<AccountingDeskProps> = ({ user, initialTab, onTabChange }) => {
+  const [activeTab, setActiveTab] = useState<string>(initialTab || 'overview');
   const [baseline, setBaseline] = useState<AccountingBaselineSettings>(DEFAULT_ACCOUNTING_BASELINE);
+
+  useEffect(() => {
+    if (initialTab) {
+      setActiveTab(initialTab);
+    }
+  }, [initialTab]);
+
+  const handleSelectTab = (tabId: string) => {
+    setActiveTab(tabId);
+    onTabChange?.(tabId);
+  };
 
   useEffect(() => {
     const unsub = subscribeToAccountingBaselineSettings(data => {
@@ -80,7 +93,7 @@ export const AccountingDesk: React.FC<AccountingDeskProps> = ({ user }) => {
             return (
               <button
                 key={tab.id}
-                onClick={() => setActiveTab(tab.id)}
+                onClick={() => handleSelectTab(tab.id)}
                 className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all whitespace-nowrap cursor-pointer ${
                   isActive 
                     ? 'bg-gold-500 text-slate-950 shadow-xs' 
@@ -99,7 +112,7 @@ export const AccountingDesk: React.FC<AccountingDeskProps> = ({ user }) => {
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 shadow-sm min-h-[500px]">
         <ErrorBoundary fallbackTitle="Accounting Module Encountered an Issue">
           {activeTab === 'overview' && (
-            <AccountingOverview user={user} onSelectTab={(t) => setActiveTab(t)} />
+            <AccountingOverview user={user} onSelectTab={(t) => handleSelectTab(t)} />
           )}
           {activeTab === 'investments' && (
             <InvestmentsTab user={user} />

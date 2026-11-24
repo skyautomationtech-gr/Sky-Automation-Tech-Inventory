@@ -24,9 +24,11 @@ import { ThemeToggle } from '../design-system/ThemeToggle';
 import { TAB_DIRECTORY } from './Breadcrumbs';
 import { GlobalSearchPalette } from './GlobalSearchPalette';
 import { auth } from '../firebase/config';
+import { buildSidebarGroups, findActiveNavigationMatch } from '../navigation/sidebarConfig';
 
 interface TopBarProps {
   currentTab: string;
+  currentSubAction?: string;
   onNavigate: (tab: string, subAction?: string, initialId?: string | null) => void;
   user: UserProfile | null;
   rolePermissions?: RolePermissionsMap | null;
@@ -42,6 +44,7 @@ interface TopBarProps {
 
 export const TopBar: React.FC<TopBarProps> = ({
   currentTab,
+  currentSubAction,
   onNavigate,
   user,
   rolePermissions = null,
@@ -106,11 +109,20 @@ export const TopBar: React.FC<TopBarProps> = ({
   }, []);
 
   const isCheckedIn = user?.currentSessionStatus === 'checked_in';
+  const navGroups = React.useMemo(
+    () => buildSidebarGroups({ user, rolePermissions }),
+    [user, rolePermissions]
+  );
+  const activeNavMatch = React.useMemo(
+    () => findActiveNavigationMatch(navGroups, currentTab, currentSubAction),
+    [navGroups, currentTab, currentSubAction]
+  );
   const tabMeta = TAB_DIRECTORY[currentTab] || {
     group: 'Workspace',
     label: currentTab.replace(/_/g, ' '),
     icon: Package
   };
+  const activePageTitle = activeNavMatch?.subItem?.label || activeNavMatch?.group.title || tabMeta.label;
 
   const getRoleBadgeColor = (role?: string) => {
     switch (role) {
@@ -155,7 +167,7 @@ export const TopBar: React.FC<TopBarProps> = ({
           {/* Page Title (Vertically centered, single line, min-w-[180px]) */}
           <div className="min-w-0 flex items-center gap-2">
             <h2 className="text-xl font-semibold text-slate-900 dark:text-white tracking-tight truncate leading-tight whitespace-nowrap">
-              {tabMeta.label}
+              {activePageTitle}
             </h2>
             {dataLoading && (
               <span className="inline-flex items-center gap-1 text-[10px] text-amber-500 font-mono shrink-0">

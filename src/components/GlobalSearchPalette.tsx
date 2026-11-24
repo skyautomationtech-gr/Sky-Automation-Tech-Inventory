@@ -38,8 +38,8 @@ import {
   getBrands 
 } from '../firebase/db';
 import { searchPreOrdersForCommandPalette } from '../firebase/preOrderDb';
-import { TAB_DIRECTORY } from './Breadcrumbs';
 import { PRE_ORDER_NAV_ITEMS, formatBDT, hasPermission, isPreOrderAdminRole, isPreOrderTab } from '../preOrders/constants';
+import { buildSidebarGroups } from '../navigation/sidebarConfig';
 
 interface GlobalSearchPaletteProps {
   isOpen: boolean;
@@ -154,45 +154,64 @@ export const GlobalSearchPalette: React.FC<GlobalSearchPaletteProps> = ({
     } catch {}
   };
 
-  // 1. Pages / Modules
+  // 1. Pages / Modules (mirrors restructured Sidebar groups & sub-items)
   const pageResults = useMemo(() => {
     if (activeFilter !== 'all' && activeFilter !== 'pages') return [];
-    const canViewPreOrders = hasPermission(user, rolePermissions, 'preOrderView');
-    return Object.entries(TAB_DIRECTORY)
-      .filter(([id, meta]) => {
-        if (id === 'accounting' && !isSuperAdmin) return false;
-        if (id === 'financials' && !isSuperAdmin) return false;
-        if (id === 'reports' && !isSuperAdmin) return false;
-        if (id === 'audit_logs' && !isSuperAdmin) return false;
-        if (id === 'settings' && !isSuperAdmin) return false;
-        if (id === 'attendance' && !isSuperAdmin) return false;
-        if (id === 'users' && !isPrivileged) return false;
+    const groups = buildSidebarGroups({ user, rolePermissions });
+    const entries: Array<{
+      id: string;
+      label: string;
+      groupTitle: string;
+      icon: React.ComponentType<{ size?: number; className?: string }>;
+      tab: string;
+      subAction?: string;
+      keywords: string;
+    }> = [];
 
-        if (isPreOrderTab(id)) {
-          if (!canViewPreOrders) return false;
-          const navMeta = PRE_ORDER_NAV_ITEMS.find((p) => p.id === id);
-          if (navMeta && !hasPermission(user, rolePermissions, navMeta.requiredPermission)) {
-            return false;
-          }
-        }
+    groups.forEach((group) => {
+      if (group.singleTab) {
+        entries.push({
+          id: group.id,
+          label: group.title,
+          groupTitle: group.title,
+          icon: group.icon,
+          tab: group.singleTab,
+          keywords: `${group.title} ${group.singleTab}`,
+        });
+      } else {
+        group.items.forEach((item) => {
+          entries.push({
+            id: item.id,
+            label: item.label,
+            groupTitle: group.title,
+            icon: group.icon,
+            tab: item.tab,
+            subAction: item.subAction,
+            keywords: `${item.label} ${group.title} ${item.tab} ${item.subAction || ''} ${item.keywords || ''}`,
+          });
+        });
+      }
+    });
 
-        if (!query.trim()) return true;
-        const q = query.toLowerCase();
-        return meta.label.toLowerCase().includes(q) || meta.group.toLowerCase().includes(q) || id.includes(q);
+    const q = query.toLowerCase().trim();
+    return entries
+      .filter((entry) => {
+        if (!q) return true;
+        return entry.keywords.toLowerCase().includes(q);
       })
-      .map(([id, meta]) => ({
+      .map((entry) => ({
         type: 'page' as const,
-        id,
-        title: meta.label,
-        subtitle: `Module · ${meta.group}`,
-        icon: meta.icon,
+        id: entry.id,
+        title: entry.label,
+        subtitle: `Module · ${entry.groupTitle}`,
+        icon: entry.icon,
         action: () => {
-          saveRecentSearch(meta.label);
-          onNavigate(id);
+          saveRecentSearch(entry.label);
+          onNavigate(entry.tab, entry.subAction);
           onClose();
-        }
+        },
       }));
-  }, [query, activeFilter, isSuperAdmin, isPrivileged, user, rolePermissions, onNavigate, onClose]);
+  }, [query, activeFilter, user, rolePermissions, onNavigate, onClose]);
 
   // 2. Products
   const productResults = useMemo(() => {

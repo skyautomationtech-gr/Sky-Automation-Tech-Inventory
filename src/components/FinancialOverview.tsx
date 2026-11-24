@@ -74,6 +74,8 @@ interface FinancialOverviewProps {
   user: UserProfile;
   products: any[];
   onRefreshData?: () => void;
+  initialTab?: 'overview' | 'income' | 'expenses';
+  onTabChange?: (tab: 'overview' | 'income' | 'expenses') => void;
 }
 
 export const EXPENSE_CATEGORIES: ExpenseCategory[] = [
@@ -153,9 +155,20 @@ export const PAYMENT_METHODS: { id: IncomePaymentMethod; label: string; icon: st
   { id: 'Other', label: 'Other', icon: '💳', bg: 'bg-slate-50', text: 'text-slate-700', border: 'border-slate-200' }
 ];
 
-export default function FinancialOverview({ user, products, onRefreshData }: FinancialOverviewProps) {
+export default function FinancialOverview({ user, products, onRefreshData, initialTab, onTabChange }: FinancialOverviewProps) {
   // Navigation
-  const [activeTab, setActiveTab] = useState<'overview' | 'income' | 'expenses'>('overview');
+  const [activeTab, setActiveTab] = useState<'overview' | 'income' | 'expenses'>(initialTab || 'overview');
+
+  useEffect(() => {
+    if (initialTab) {
+      setActiveTab(initialTab);
+    }
+  }, [initialTab]);
+
+  const handleTabSelect = (tab: 'overview' | 'income' | 'expenses') => {
+    setActiveTab(tab);
+    onTabChange?.(tab);
+  };
 
   // Permission evaluation
   const canManageFinances = useMemo(() => {
@@ -1492,7 +1505,7 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
           <div className="flex flex-wrap items-center gap-2 self-start">
             <div className="bg-slate-800/90 p-1.5 rounded-2xl flex border border-slate-700/50 shadow-inner">
               <button
-                onClick={() => setActiveTab('overview')}
+                onClick={() => handleTabSelect('overview')}
                 className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
                   activeTab === 'overview'
                     ? 'bg-[#D4AF37] text-slate-950 shadow-md font-black'
@@ -1503,7 +1516,7 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
                 <span>Overview</span>
               </button>
               <button
-                onClick={() => setActiveTab('income')}
+                onClick={() => handleTabSelect('income')}
                 className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
                   activeTab === 'income'
                     ? 'bg-emerald-500 text-slate-950 shadow-md font-black'
@@ -1514,7 +1527,7 @@ export default function FinancialOverview({ user, products, onRefreshData }: Fin
                 <span>💵 Income (আয়)</span>
               </button>
               <button
-                onClick={() => setActiveTab('expenses')}
+                onClick={() => handleTabSelect('expenses')}
                 className={`px-3.5 sm:px-4 py-2 rounded-xl text-xs sm:text-sm font-bold transition-all flex items-center gap-1.5 cursor-pointer ${
                   activeTab === 'expenses'
                     ? 'bg-[#D4AF37] text-slate-950 shadow-md font-black'
