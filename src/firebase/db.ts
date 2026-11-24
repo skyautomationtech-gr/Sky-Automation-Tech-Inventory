@@ -234,6 +234,81 @@ export async function updatePrivateEmploymentInfo(userId: string, data: PrivateE
   }
 }
 
+export const PERMANENT_SUPERADMIN_EMAIL = 'skyautomationtech@gmail.com';
+
+export function isPermanentSuperAdminEmail(email?: string | null): boolean {
+  return (email || '').toLowerCase().trim() === PERMANENT_SUPERADMIN_EMAIL;
+}
+
+export async function ensurePermanentSuperAdminProfile(
+  uid: string,
+  email?: string | null,
+  displayName?: string | null
+): Promise<UserProfile | null> {
+  const cleanUid = (uid || '').trim();
+  const cleanEmail = (email || auth?.currentUser?.email || '').toLowerCase().trim();
+  if (!cleanUid || !isPermanentSuperAdminEmail(cleanEmail) || !auth?.currentUser) {
+    return null;
+  }
+
+  let existing: UserProfile | null = null;
+  try {
+    const snap = await getDoc(doc(db, 'users', cleanUid));
+    if (snap.exists()) {
+      existing = { id: snap.id, ...(snap.data() as any) } as UserProfile;
+    }
+  } catch (err) {
+    console.warn('ensurePermanentSuperAdminProfile read by UID failed:', err);
+  }
+
+  if (!existing) {
+    try {
+      const q = query(collection(db, 'users'), where('email', '==', PERMANENT_SUPERADMIN_EMAIL), limit(1));
+      const snap = await getDocs(q);
+      if (!snap.empty) {
+        const legacyDoc = snap.docs[0];
+        existing = { id: legacyDoc.id, ...(legacyDoc.data() as any) } as UserProfile;
+      }
+    } catch {}
+  }
+
+  const requiredBrands = ['SAT', 'GZ', 'RTX'];
+  const hasAllBrands = requiredBrands.every((b) => existing?.subBrandAccess?.includes(b));
+  const needsRepair =
+    !existing ||
+    existing.id !== cleanUid ||
+    existing.role !== 'superadmin' ||
+    existing.active !== true ||
+    existing.status !== 'approved' ||
+    !hasAllBrands;
+
+  const permanentProfile: UserProfile = {
+    ...(existing || {}),
+    id: cleanUid,
+    email: PERMANENT_SUPERADMIN_EMAIL,
+    name: existing?.name || displayName?.trim() || 'Super Admin',
+    role: 'superadmin',
+    status: 'approved',
+    active: true,
+    subBrandAccess: ['SAT', 'GZ', 'RTX'],
+    createdAt: existing?.createdAt || Date.now(),
+    updatedAt: Date.now()
+  };
+
+  if (needsRepair) {
+    try {
+      const sanitized = sanitizeData(permanentProfile);
+      await setDoc(doc(db, 'users', cleanUid), sanitized, { merge: true });
+      dbCache.users = null;
+    } catch (err) {
+      console.warn('ensurePermanentSuperAdminProfile remote write failed:', err);
+    }
+  }
+
+  localStore.set('user_' + cleanUid, permanentProfile);
+  return permanentProfile;
+}
+
 export async function getUserProfile(
   userId: string,
   options?: { strictFirestore?: boolean }
@@ -257,9 +332,22 @@ export async function getUserProfile(
       
       if (docSnap.exists()) {
         const data = docSnap.data();
-        const profile = { id: docSnap.id, ...(data as any) } as UserProfile;
+        let profile = { id: docSnap.id, ...(data as any) } as UserProfile;
+        if (isPermanentSuperAdminEmail(profile.email) && (profile.role !== 'superadmin' || profile.active !== true || profile.status !== 'approved')) {
+          const repaired = await ensurePermanentSuperAdminProfile(docSnap.id, profile.email, profile.name);
+          if (repaired) profile = repaired;
+        }
         localStore.set('user_' + trimmedUid, profile);
         return profile;
+      }
+
+      if (auth.currentUser.uid === trimmedUid && isPermanentSuperAdminEmail(auth.currentUser.email)) {
+        const ensured = await ensurePermanentSuperAdminProfile(
+          trimmedUid,
+          auth.currentUser.email,
+          auth.currentUser.displayName
+        );
+        if (ensured) return ensured;
       }
 
       if (strict) {
@@ -409,6 +497,21 @@ export async function findUserProfileByEmail(email: string): Promise<UserProfile
 }
 
 export async function deleteUserProfile(userId: string): Promise<void> {
+  const cachedTarget = localStore.get<UserProfile>('user_' + userId);
+  if (isPermanentSuperAdminEmail(cachedTarget?.email)) {
+    throw new Error('Permanent Super Admin account cannot be deleted.');
+  }
+  try {
+    const snap = await getDoc(doc(db, 'users', userId));
+    if (snap.exists() && isPermanentSuperAdminEmail((snap.data() as any)?.email)) {
+      throw new Error('Permanent Super Admin account cannot be deleted.');
+    }
+  } catch (checkErr: any) {
+    if (checkErr?.message?.includes('Permanent Super Admin')) {
+      throw checkErr;
+    }
+  }
+
   dbCache.users = null;
   localStore.remove('user_' + userId);
   try {
@@ -424,11 +527,22 @@ export async function createUserProfile(userId: string, data: Partial<UserProfil
   try {
     const docRef = doc(db, 'users', userId);
     const sanitizedData = sanitizeData(data);
+    const isPermanent = isPermanentSuperAdminEmail(sanitizedData.email);
     
     const finalData = {
       ...sanitizedData,
-      active: sanitizedData.active !== undefined ? sanitizedData.active : true,
-      subBrandAccess: sanitizedData.subBrandAccess || ['SAT', 'GZ', 'RTX'],
+      ...(isPermanent
+        ? {
+            email: PERMANENT_SUPERADMIN_EMAIL,
+            role: 'superadmin',
+            status: 'approved',
+            active: true,
+            subBrandAccess: ['SAT', 'GZ', 'RTX'],
+          }
+        : {
+            active: sanitizedData.active !== undefined ? sanitizedData.active : true,
+            subBrandAccess: sanitizedData.subBrandAccess || ['SAT', 'GZ', 'RTX'],
+          }),
       createdAt: sanitizedData.createdAt || Date.now()
     };
     
@@ -449,6 +563,9 @@ if (typeof window !== 'undefined') {
 
 export async function initializeUser(userId: string, data: Partial<UserProfile>): Promise<boolean> {
   const sanitizedData = sanitizeData(data);
+  const permanentOwner =
+    isPermanentSuperAdminEmail(sanitizedData.email) ||
+    isPermanentSuperAdminEmail(auth?.currentUser?.email);
   const usersCol = collection(db, 'users');
   let isFirstUser = false;
 
@@ -470,14 +587,16 @@ export async function initializeUser(userId: string, data: Partial<UserProfile>)
     }
   }
 
+  const autoPromoteSuperAdmin = permanentOwner || isFirstUser;
   const docRef = doc(db, 'users', userId);
   const profile: UserProfile = {
     ...sanitizedData,
     id: userId,
-    role: isFirstUser ? 'superadmin' : (sanitizedData.role || 'staff'),
-    subBrandAccess: isFirstUser ? ['SAT', 'GZ', 'RTX'] : (sanitizedData.subBrandAccess || ['SAT', 'GZ', 'RTX']),
-    status: isFirstUser ? 'approved' : (sanitizedData.status || 'pending_approval'),
-    active: isFirstUser ? true : (sanitizedData.active ?? true),
+    ...(permanentOwner ? { email: PERMANENT_SUPERADMIN_EMAIL } : {}),
+    role: autoPromoteSuperAdmin ? 'superadmin' : (sanitizedData.role || 'staff'),
+    subBrandAccess: autoPromoteSuperAdmin ? ['SAT', 'GZ', 'RTX'] : (sanitizedData.subBrandAccess || ['SAT', 'GZ', 'RTX']),
+    status: autoPromoteSuperAdmin ? 'approved' : (sanitizedData.status || 'pending_approval'),
+    active: autoPromoteSuperAdmin ? true : (sanitizedData.active ?? true),
     createdAt: Date.now()
   } as UserProfile;
   
@@ -485,22 +604,38 @@ export async function initializeUser(userId: string, data: Partial<UserProfile>)
 
   try {
     await setDoc(docRef, profile);
-    return isFirstUser;
+    return autoPromoteSuperAdmin;
   } catch (error: any) {
     console.warn("initializeUser: Remote setDoc failed, saved locally:", error);
-    return isFirstUser;
+    return autoPromoteSuperAdmin;
   }
 }
 
 export async function updateUserProfile(userId: string, data: Partial<UserProfile>): Promise<void> {
   dbCache.users = null;
   const existing = localStore.get<UserProfile>('user_' + userId);
+  const isPermanent =
+    isPermanentSuperAdminEmail(existing?.email) ||
+    isPermanentSuperAdminEmail(data.email);
+
+  const sanitizedData = sanitizeData(
+    isPermanent
+      ? {
+          ...data,
+          email: PERMANENT_SUPERADMIN_EMAIL,
+          role: 'superadmin',
+          status: 'approved',
+          active: true,
+          subBrandAccess: ['SAT', 'GZ', 'RTX'],
+        }
+      : data
+  );
+
   if (existing) {
-    localStore.set('user_' + userId, { ...existing, ...data });
+    localStore.set('user_' + userId, { ...existing, ...sanitizedData });
   }
   const docRef = doc(db, 'users', userId);
   try {
-    const sanitizedData = sanitizeData(data);
     await setDoc(docRef, sanitizedData as any, { merge: true });
   } catch (error) {
     console.warn('updateUserProfile remote write failed, saved locally:', error);

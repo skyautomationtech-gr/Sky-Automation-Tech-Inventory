@@ -234,7 +234,7 @@ export default function CompanySettingsView({
   useEffect(() => {
     getAccountingBaselineSettings().then(b => {
       if (b) {
-        setBaselineCash(Number(b.baselineCash) || 2250);
+        setBaselineCash(Number(b.baselineCash) || 0);
         setBaselineInvestment(Number(b.baselineInvestment) || 39550);
         setBaselineCutoffDate(b.cutoffDate || new Date().toISOString().split('T')[0]);
         setBaselineNote(b.note || '');
@@ -246,7 +246,7 @@ export default function CompanySettingsView({
     setIsSavingBaseline(true);
     try {
       await saveAccountingBaselineSettings({
-        baselineCash: Number(baselineCash) || 2250,
+        baselineCash: Number(baselineCash) || 0,
         baselineInvestment: Number(baselineInvestment) || 39550,
         cutoffDate: baselineCutoffDate,
         cutoffTimestamp: new Date(baselineCutoffDate).getTime() || Date.now(),
@@ -1658,11 +1658,11 @@ export default function CompanySettingsView({
                     onChange={(e) => setBaselineCash(parseFloat(e.target.value) || 0)}
                     disabled={!isSuperAdmin}
                     className="w-full bg-white border border-slate-200 rounded-xl py-2 pl-7 pr-3 text-sm font-mono font-bold text-slate-900 focus:ring-2 focus:ring-amber-500 focus:outline-hidden disabled:bg-slate-100"
-                    placeholder="2250"
+                    placeholder="0"
                   />
                 </div>
                 <p className="text-[11px] text-slate-500">
-                  বর্তমানে ক্যাশে নির্ধারিত টাকা: <strong>৳২,২৫০</strong>
+                  বর্তমানে ক্যাশে নির্ধারিত টাকা: <strong>৳{Number(baselineCash || 0).toLocaleString()}</strong>
                 </p>
               </div>
 
@@ -1714,7 +1714,7 @@ export default function CompanySettingsView({
                   onChange={(e) => setBaselineNote(e.target.value)}
                   disabled={!isSuperAdmin}
                   className="w-full bg-white border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-900 focus:ring-2 focus:ring-amber-500 focus:outline-hidden disabled:bg-slate-100"
-                  placeholder="যেমন: ক্যাশ ২,২৫০ টাকা ও বিনিয়োগ ৩৯,৫৫০ টাকা থেকে নতুন হিসাব চালু"
+                  placeholder="যেমন: বর্তমান ক্যাশ ও বিনিয়োগ থেকে নতুন হিসাব চালু"
                 />
                 <p className="text-[11px] text-slate-500">
                   অ্যাকাউন্টিং অডিটের জন্য বিবরণ

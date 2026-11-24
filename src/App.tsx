@@ -19,6 +19,8 @@ import {
   subscribeToProductModels,
   saveCompanySettings,
   promoteUserToSuperAdmin,
+  isPermanentSuperAdminEmail,
+  ensurePermanentSuperAdminProfile,
   clearSampleData,
   seedInitialDataIfEmpty,
   syncProductStockStatuses,
@@ -413,6 +415,19 @@ export default function App() {
                 profile = (await getUserProfile(firebaseUser.uid, { strictFirestore: true })) || healedProfile;
               } catch (e) {
                 console.warn('Could not self-heal profile UID:', e);
+              }
+            }
+          }
+
+          if (isPermanentSuperAdminEmail(firebaseUser.email)) {
+            if (!profile || profile.role !== 'superadmin' || profile.active !== true || profile.status !== 'approved') {
+              const ensured = await ensurePermanentSuperAdminProfile(
+                firebaseUser.uid,
+                firebaseUser.email,
+                firebaseUser.displayName || profile?.name
+              );
+              if (ensured) {
+                profile = ensured;
               }
             }
           }

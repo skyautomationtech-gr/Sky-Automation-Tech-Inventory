@@ -4,7 +4,9 @@ import {
   getUserProfile,
   findUserProfileByEmail,
   deleteUserProfile,
-  getBranches
+  getBranches,
+  isPermanentSuperAdminEmail,
+  ensurePermanentSuperAdminProfile
 } from '../firebase/db';
 import { 
   signInWithEmailAndPassword, 
@@ -416,6 +418,16 @@ export default function SplashAndAuth({
         profile =
           (await getUserProfile(userId, { strictFirestore: true }).catch(() => null)) ||
           (await findUserProfileByEmail(cleanEmail));
+        if (isPermanentSuperAdminEmail(cleanEmail)) {
+          const ensured = await ensurePermanentSuperAdminProfile(
+            userId,
+            cleanEmail,
+            userCredential.user.displayName || profile?.name
+          );
+          if (ensured) {
+            profile = ensured;
+          }
+        }
       } catch (authErr: any) {
         if (authErr?.code === 'auth/too-many-requests') {
           const until = Date.now() + LOGIN_LOCKOUT_MS;
@@ -628,6 +640,16 @@ export default function SplashAndAuth({
         }
         if (!profile && email) {
           profile = await findUserProfileByEmail(email.toLowerCase().trim());
+        }
+        if (currentUser && isPermanentSuperAdminEmail(currentUser.email || email)) {
+          const ensured = await ensurePermanentSuperAdminProfile(
+            currentUser.uid,
+            currentUser.email || email,
+            currentUser.displayName || profile?.name
+          );
+          if (ensured) {
+            profile = ensured;
+          }
         }
         if (!profile) {
           if (currentUser) {

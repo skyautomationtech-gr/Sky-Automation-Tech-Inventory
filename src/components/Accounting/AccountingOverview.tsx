@@ -273,7 +273,7 @@ export const AccountingOverview: React.FC<AccountingOverviewProps> = ({ user, on
     .reduce((s, p) => s + (Number(p.amount) || 0), 0);
 
   const totalCashInHand = Math.max(0, 
-    (Number(baseline.baselineCash) || 2250) +
+    (Number(baseline.baselineCash) || 0) +
     cashInPostCutoff +
     dueCashCollectedPostCutoff +
     newOrdersCashIncome +
@@ -468,7 +468,7 @@ export const AccountingOverview: React.FC<AccountingOverviewProps> = ({ user, on
               ৳{totalCashInHand.toLocaleString()}
             </div>
             <p className="text-[11px] text-slate-500 dark:text-slate-400 mt-2 leading-relaxed">
-              ভিত্তি ক্যাশ: ৳{Number(baseline.baselineCash || 2250).toLocaleString()} {dueCashCollectedPostCutoff > 0 && `+ বকেয়া: ৳${dueCashCollectedPostCutoff.toLocaleString()}`} {newOrdersCashIncome > 0 && `+ অর্ডার: ৳${newOrdersCashIncome.toLocaleString()}`}
+              ভিত্তি ক্যাশ: ৳{Number(baseline.baselineCash || 0).toLocaleString()} {dueCashCollectedPostCutoff > 0 && `+ বকেয়া: ৳${dueCashCollectedPostCutoff.toLocaleString()}`} {newOrdersCashIncome > 0 && `+ অর্ডার: ৳${newOrdersCashIncome.toLocaleString()}`}
               {preOrderSummary.postCutoffCashDelta !== 0 && ` ${preOrderSummary.postCutoffCashDelta >= 0 ? '+' : '-'} প্রি-অর্ডার: ৳${Math.abs(preOrderSummary.postCutoffCashDelta).toLocaleString()}`}
             </p>
             {(preOrderSummary.customerAdvancesLiability > 0 || preOrderSummary.postingCount > 0) && (
@@ -778,7 +778,7 @@ export const AccountingOverview: React.FC<AccountingOverviewProps> = ({ user, on
             <div className="space-y-3 text-xs">
               <div className="flex justify-between py-2 border-b border-slate-100 dark:border-slate-800">
                 <span className="text-slate-600 dark:text-slate-400">ভিত্তি ক্যাশ (Baseline Starting Cash)</span>
-                <span className="font-bold text-slate-900 dark:text-white tabular-nums">৳{(Number(baseline.baselineCash) || 2250).toLocaleString()}</span>
+                <span className="font-bold text-slate-900 dark:text-white tabular-nums">৳{(Number(baseline.baselineCash) || 0).toLocaleString()}</span>
               </div>
               <div className="flex justify-between py-2 border-b border-slate-100 dark:border-slate-800">
                 <span className="text-slate-600 dark:text-slate-400">বকেয়া আদায় (Due Collections)</span>

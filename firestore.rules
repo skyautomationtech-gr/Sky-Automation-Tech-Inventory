@@ -77,18 +77,50 @@ service cloud.firestore {
     // ==========================================
     // USERS, PRIVATE EMPLOYMENT, LOGIN HISTORY & ATTENDANCE
     // ==========================================
+    function isProtectedOwnerDoc(data) {
+      return ('email' in data) &&
+        data.email is string &&
+        data.email.lower() == 'skyautomationtech@gmail.com';
+    }
+
     match /users/{userId} {
       allow read: if isSignedIn() && (isOwner(userId) || isAdmin());
-      allow create: if isAdmin() || isOwner(userId);
-      // Self-update allowed fields only
-      allow update: if isSignedIn() && isOwner(userId) &&
+      allow create: if (
+        isOwnerEmailSuperAdmin() &&
+        isOwner(userId) &&
+        request.resource.data.role in ['superadmin', 'super_admin'] &&
+        request.resource.data.get('active', true) != false &&
+        request.resource.data.get('status', 'approved') == 'approved'
+      ) || isAdmin() || (
+        isOwner(userId) &&
+        !isProtectedOwnerDoc(request.resource.data)
+      );
+      // Self-update allowed fields only; permanent owner stays superadmin/active/approved
+      allow update: if isSignedIn() && isOwner(userId) && (
         request.resource.data.diff(resource.data).affectedKeys().hasOnly([
           'name', 'phone', 'address', 'dob', 'gender', 'photoUrl',
           'notificationPrefs', 'twoFactorEnabled', 'lastLoginAt', 'sessionsRevokedAt',
           'themePreference', 'currentSessionStatus', 'currentSessionId', 'currentSessionDate'
-        ]);
-      allow update: if isAdmin();
-      allow delete: if isSuperAdmin();
+        ]) ||
+        (
+          isOwnerEmailSuperAdmin() &&
+          request.resource.data.role in ['superadmin', 'super_admin'] &&
+          request.resource.data.get('active', true) != false &&
+          request.resource.data.get('status', 'approved') == 'approved' &&
+          isProtectedOwnerDoc(request.resource.data)
+        )
+      );
+      allow update: if isAdmin() && (
+        !isProtectedOwnerDoc(resource.data) ||
+        (
+          isOwnerEmailSuperAdmin() &&
+          request.resource.data.role in ['superadmin', 'super_admin'] &&
+          request.resource.data.get('active', true) != false &&
+          request.resource.data.get('status', 'approved') == 'approved' &&
+          isProtectedOwnerDoc(request.resource.data)
+        )
+      );
+      allow delete: if isSuperAdmin() && !isProtectedOwnerDoc(resource.data);
     }
 
     match /users/{userId}/loginHistory/{loginId} {

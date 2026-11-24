@@ -9,7 +9,8 @@ import {
   updateUserProfile, 
   getPrivateEmploymentInfo,
   updatePrivateEmploymentInfo,
-  getNextEmployeeId
+  getNextEmployeeId,
+  isPermanentSuperAdminEmail
 } from '../firebase/db';
 import {
   getRolePermissions,
@@ -482,6 +483,10 @@ export default function UserManagement({
   };
 
   const handleRejectUser = async (targetUser: UserProfile) => {
+    if (isPermanentSuperAdminEmail(targetUser.email)) {
+      setError('Permanent Super Admin cannot be rejected or suspended.');
+      return;
+    }
     const reason = window.prompt(`Enter rejection reason for ${targetUser.name}:`, 'Application requirements not met.');
     if (reason === null) return;
 
@@ -505,6 +510,11 @@ export default function UserManagement({
   };
 
   const handleDeleteRequest = async (targetUserId: string) => {
+    const targetUser = users.find((u) => u.id === targetUserId);
+    if (isPermanentSuperAdminEmail(targetUser?.email)) {
+      setError('Permanent Super Admin cannot be deleted.');
+      return;
+    }
     if (!window.confirm('Are you sure you want to delete this registration request?')) {
       return;
     }
@@ -526,12 +536,22 @@ export default function UserManagement({
   };
 
   const startEdit = (targetUser: UserProfile) => {
+    if (isPermanentSuperAdminEmail(targetUser.email)) {
+      setError('Permanent Super Admin role and access cannot be modified.');
+      return;
+    }
     setEditingUserId(targetUser.id);
     setEditRole(targetUser.role || 'staff');
     setEditBrandAccess(targetUser.subBrandAccess || ['SAT']);
   };
 
   const handleUpdateUserRoleAndAccess = async (targetUserId: string) => {
+    const targetUser = users.find((u) => u.id === targetUserId);
+    if (isPermanentSuperAdminEmail(targetUser?.email)) {
+      setError('Permanent Super Admin role and access cannot be modified.');
+      setEditingUserId(null);
+      return;
+    }
     setError('');
     setSuccess('');
     setLoading(true);
@@ -551,6 +571,10 @@ export default function UserManagement({
   };
 
   const handleToggleUserActive = async (targetUser: UserProfile) => {
+    if (isPermanentSuperAdminEmail(targetUser.email)) {
+      setError('Permanent Super Admin account cannot be locked or deactivated.');
+      return;
+    }
     const isCurrentlyActive = targetUser.active !== false;
     const newActiveState = !isCurrentlyActive;
 
@@ -1461,7 +1485,7 @@ export default function UserManagement({
                                 </>
                               ) : (
                                 <>
-                                  {isSuperAdmin && (
+                                  {isSuperAdmin && !isPermanentSuperAdminEmail(u.email) && (
                                     <>
                                       <button
                                         onClick={() => startEdit(u)}
@@ -1481,7 +1505,11 @@ export default function UserManagement({
                                     </>
                                   )}
 
-                                  {u.id !== user.id && (
+                                  {isPermanentSuperAdminEmail(u.email) ? (
+                                    <span className="py-1 px-2 text-[10px] font-bold bg-amber-50 text-amber-700 border border-amber-200 rounded">
+                                      Permanent Owner
+                                    </span>
+                                  ) : u.id !== user.id && (
                                     <button
                                       onClick={() => handleToggleUserActive(u)}
                                       className={`py-1 px-2 text-xs font-bold rounded transition cursor-pointer ${
