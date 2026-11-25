@@ -139,6 +139,7 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
 
   // Section 2 — Product
   const [linkedProductId, setLinkedProductId] = useState('');
+  const [linkedVariantId, setLinkedVariantId] = useState('');
   const [productName, setProductName] = useState('');
   const [category, setCategory] = useState('');
   const [sku, setSku] = useState('');
@@ -238,6 +239,7 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
         model.trim() ||
         variant.trim() ||
         color.trim() ||
+        linkedVariantId.trim() ||
         Number(sellingUnitPrice) > 0 ||
         Number(advanceAmount) > 0 ||
         productImageFile ||
@@ -255,6 +257,7 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
     model,
     variant,
     color,
+    linkedVariantId,
     sellingUnitPrice,
     advanceAmount,
     productImageFile,
@@ -407,8 +410,15 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
     }));
   }, [suppliers]);
 
+  const linkedProductVariants = useMemo(() => {
+    if (!linkedProductId) return [];
+    const found = products.find((p) => p.id === linkedProductId);
+    return found?.variants || [];
+  }, [linkedProductId, products]);
+
   const handleLinkProductChange = (prodId: string) => {
     setLinkedProductId(prodId);
+    setLinkedVariantId('');
     if (!prodId) return;
     const found = products.find((p) => p.id === prodId);
     if (!found) return;
@@ -416,8 +426,16 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
     setProductName(found.name);
     if (found.category) setCategory(found.category);
     if (found.sku) setSku(found.sku);
-    if (found.model) setModel(found.model);
-    if (found.color) setColor(found.color);
+    if (found.variants && found.variants.length > 0) {
+      const firstVar = found.variants[0];
+      setLinkedVariantId(firstVar.id);
+      if (firstVar.color) setColor(firstVar.color);
+      if (firstVar.model) setModel(firstVar.model);
+      setVariant(`${firstVar.color} / ${firstVar.model}`);
+    } else {
+      if (found.model) setModel(found.model);
+      if (found.color) setColor(found.color);
+    }
     if (found.sellingPrice > 0) setSellingUnitPrice(String(found.sellingPrice));
     if (canViewChinaCost && found.purchasePrice > 0 && !chinaUnitCost) {
       setChinaUnitCost(String(found.purchasePrice));
@@ -426,6 +444,18 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
       setProductImageFile(null);
       setProductImagePreview(found.imageUrl);
       setUploadedProductImageUrl(found.imageUrl);
+    }
+  };
+
+  const handleVariantSelect = (varId: string) => {
+    setLinkedVariantId(varId);
+    if (!varId) return;
+    const foundProd = products.find((p) => p.id === linkedProductId);
+    const varItem = foundProd?.variants?.find((v) => v.id === varId);
+    if (varItem) {
+      if (varItem.color) setColor(varItem.color);
+      if (varItem.model) setModel(varItem.model);
+      setVariant(`${varItem.color} / ${varItem.model}`);
     }
   };
 
@@ -632,6 +662,7 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
           color: color.trim(),
           productImage: finalProductImageUrl || '',
           linkedProductId: linkedProductId || undefined,
+          linkedVariantId: linkedVariantId || undefined,
           qty: Math.round(qty),
           sellingUnitPrice: Number(sellingUnitPrice),
           deliveryCharge: Number(deliveryCharge || 0),
@@ -901,6 +932,23 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
                   </div>
                 </FormField>
               </div>
+
+              {linkedProductId && linkedProductVariants.length > 0 && (
+                <div className="p-3 rounded-xl bg-teal-50/60 dark:bg-teal-950/30 border border-teal-200/80 dark:border-teal-800/60">
+                  <FormField label="Product Variant (Color / Model / Size)">
+                    <Select
+                      options={linkedProductVariants.map((v) => ({
+                        value: v.id,
+                        label: `${v.color || 'Standard'} / ${v.model || 'Standard'}`,
+                        sublabel: `Stock: ${v.stock} pcs`,
+                      }))}
+                      value={linkedVariantId}
+                      onChange={(val) => handleVariantSelect(String(val))}
+                      placeholder="Select variant..."
+                    />
+                  </FormField>
+                </div>
+              )}
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <FormField

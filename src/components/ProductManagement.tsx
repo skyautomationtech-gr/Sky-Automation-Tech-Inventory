@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { 
   Plus, 
   Search, 
@@ -21,49 +22,53 @@ import {
   Check,
   FolderPlus,
   Coins,
-  ArrowLeft,
-  ArrowRight,
   PackagePlus,
   RefreshCw,
-  Clock
+  Clock,
+  Eye,
+  User,
+  ImageOff,
+  Inbox,
+  CheckCircle2,
+  XCircle,
+  Loader2,
 } from 'lucide-react';
 import { exportProductsToCSV, exportBrandsToCSV, exportCategoriesToCSV, exportProductsToExcel } from '../utils/excelExport';
 import { ResellerSyncModal } from './ResellerSyncModal';
-import { motion } from 'motion/react';
-import { QRCodeSVG } from 'qrcode.react';
+import ProductFormModal from './ProductFormModal';
+import PendingProductReviewModal from './PendingProductReviewModal';
 import Barcode from './Barcode';
+import { QRCodeSVG } from 'qrcode.react';
 import { generateBarcodePDF } from '../utils/barcodePdf';
 import { getBrandLogo } from '../utils/brandLogos';
+import {
+  normalizeProductImages,
+  buildCategoryPathLabel,
+} from '../utils/productImageUpload';
 import JsBarcode from 'jsbarcode';
-import { Product, Variant, Category, Brand, UserProfile, StockLog, ProductColor, ProductModel } from '../types';
+import { Product, Category, Brand, UserProfile, StockLog, ProductColor, ProductModel, ProductEditHistoryEntry } from '../types';
 import { 
-  getProducts, 
-  addProduct, 
   updateProduct, 
   archiveProduct, 
   deleteProduct,
-  getCategories, 
   addCategory, 
   deleteCategory,
   updateCategory,
-  getBrands, 
   addBrand, 
   deleteBrand,
   updateBrand,
   getStockLogs,
   getOrders,
   getInvoices,
-  getProductAttributes,
-  saveProductAttributes,
+  addProduct,
   addProductColor,
-  updateProductColor,
   deleteProductColor,
   addProductModel,
-  updateProductModel,
   deleteProductModel,
-  getUniqueBarcodeValue,
   getProductAvailableStock,
-  getVariantAvailableStock
+  getVariantAvailableStock,
+  addNotification,
+  logAuditAction
 } from '../firebase/db';
 
 export type ProductSubTab =
@@ -91,6 +96,66 @@ interface ProductManagementProps {
   initialProductId?: string | null;
   clearInitialProductId?: () => void;
   onNavigateToStock?: (productId: string) => void;
+}
+
+function ProductThumbnail({
+  product,
+  alt,
+  className = 'w-10 h-10 object-cover rounded-lg border border-slate-200 dark:border-slate-700',
+  fallbackClassName = 'w-10 h-10 rounded-lg border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-slate-400 dark:text-slate-500',
+  wrapperClassName = 'relative inline-block shrink-0',
+  showCountBadge = false,
+}: {
+  product: Partial<Product>;
+  alt?: string;
+  className?: string;
+  fallbackClassName?: string;
+  wrapperClassName?: string;
+  showCountBadge?: boolean;
+}) {
+  const images = normalizeProductImages(product);
+  const src = images[0];
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    setFailed(false);
+  }, [src]);
+
+  if (!src || failed) {
+    return (
+      <div className={fallbackClassName} title={src ? 'Image failed to load' : 'No image'}>
+        {src ? <ImageOff size={15} /> : <Tag size={15} />}
+      </div>
+    );
+  }
+
+  return (
+    <div className={wrapperClassName}>
+      <img
+        src={src}
+        alt={alt || product.name || 'Product'}
+        referrerPolicy="no-referrer"
+        onError={() => setFailed(true)}
+        className={className}
+      />
+      {showCountBadge && images.length > 1 && (
+        <span className="absolute -bottom-1 -right-1 px-1 py-0.2 rounded bg-slate-900 text-white text-[9px] font-mono font-bold border border-white dark:border-slate-900 shadow-2xs">
+          +{images.length - 1}
+        </span>
+      )}
+    </div>
+  );
+}
+
+function formatShortDateTime(ts?: number): string {
+  if (!ts || Number.isNaN(ts)) return '—';
+  return new Date(ts).toLocaleString([], {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric',
+    hour: '2-digit',
+    minute: '2-digit',
+  });
 }
 
 export default function ProductManagement({
@@ -159,9 +224,19 @@ export default function ProductManagement({
   const [editingBrandId, setEditingBrandId] = useState<string | null>(null);
   const [editingBrandName, setEditingBrandName] = useState<string>('');
 
-  // Rejection state for products
-  const [rejectingProductId, setRejectingProductId] = useState<string | null>(null);
-  const [rejectionReasonText, setRejectionReasonText] = useState<string>('');
+  // Pending Products Queue & Review states
+  const [preservePendingEdit, setPreservePendingEdit] = useState(false);
+  const [reviewProductId, setReviewProductId] = useState<string | null>(null);
+  const [pendingSearch, setPendingSearch] = useState('');
+  const [pendingSubBrandFilter, setPendingSubBrandFilter] = useState('');
+  const [pendingSubmitterFilter, setPendingSubmitterFilter] = useState('');
+  const [pendingLoading, setPendingLoading] = useState(false);
+  const [pendingError, setPendingError] = useState<string | null>(null);
+  const [pendingActionLoadingId, setPendingActionLoadingId] = useState<string | null>(null);
+  const [rejectModalProduct, setRejectModalProduct] = useState<Product | null>(null);
+  const [rejectModalReason, setRejectModalReason] = useState('');
+  const [rejectModalError, setRejectModalError] = useState('');
+  const [submittingReject, setSubmittingReject] = useState(false);
 
   // Custom confirmation dialog state
   const [confirmDialog, setConfirmDialog] = useState<{
@@ -192,11 +267,25 @@ export default function ProductManagement({
         setIsExportDropdownOpen(false);
       }
     };
+    document.addEventListener('mousedown', handleClickOutside);
+    return () => document.removeEventListener('mousedown', handleClickOutside);
   }, []);
 
   // Reload Catalog data automatically when page opens
+  const refreshQueueWithState = async () => {
+    setPendingLoading(true);
+    setPendingError(null);
+    try {
+      await onRefreshData?.();
+    } catch (err: any) {
+      setPendingError(err?.message || 'Failed to load pending products queue.');
+    } finally {
+      setPendingLoading(false);
+    }
+  };
+
   useEffect(() => {
-    onRefreshData?.();
+    refreshQueueWithState();
   }, []);
 
   // Quick Inline Pricing & Stock Edit State
@@ -256,37 +345,10 @@ export default function ProductManagement({
     }
   };
 
-  // Form state
-  const [formName, setFormName] = useState('');
-  const [formSku, setFormSku] = useState('');
-  const [formMainCategory, setFormMainCategory] = useState('');
-  const [formSubCategory, setFormSubCategory] = useState('');
-  const [formChildCategory, setFormChildCategory] = useState('');
-  const [formCategory, setFormCategory] = useState(''); // kept for backward compatibility/displays
-  const [formBrand, setFormBrand] = useState('');
-  const [formSubBrand, setFormSubBrand] = useState<'SAT' | 'GZ' | 'RTX'>('SAT');
-  const [formCostPrice, setFormCostPrice] = useState<number | ''>('');
-  const [formSellingPrice, setFormSellingPrice] = useState<number | ''>('');
-  const [formReorderThreshold, setFormReorderThreshold] = useState<number | ''>(5);
-  const [formImages, setFormImages] = useState<string[]>([]);
-  const [formVariants, setFormVariants] = useState<Variant[]>([
-    { id: '1', color: 'Default', model: 'Standard', stock: 10 }
-  ]);
-
   // Category CRUD states
   const [newCatLevel, setNewCatLevel] = useState<'main' | 'sub' | 'child'>('main');
   const [newCatParentMainId, setNewCatParentMainId] = useState('');
   const [newCatParentSubId, setNewCatParentSubId] = useState('');
-
-  // Rejection states
-  const [isRejectionModalOpen, setIsRejectionModalOpen] = useState(false);
-  const [rejectionReasonInput, setRejectionReasonInput] = useState('');
-  const [productToReject, setProductToReject] = useState<Product | null>(null);
-
-  // Wizard state variables
-  const [wizardStep, setWizardStep] = useState<number>(1);
-  const [wizardMaxStep, setWizardMaxStep] = useState<number>(1);
-  const [stepErrors, setStepErrors] = useState<{[key: string]: string}>({});
 
   // Custom confirmation trigger
   const showConfirm = (title: string, message: string, onConfirm: () => void) => {
@@ -339,150 +401,6 @@ export default function ProductManagement({
     }
   };
 
-  const validateStep = (step: number): boolean => {
-    const errors: {[key: string]: string} = {};
-    
-    if (step === 1) {
-      if (!formName.trim()) {
-        errors.name = 'Product Display Name is required';
-      }
-      if (!formSku.trim()) {
-        errors.sku = 'SKU Code is required';
-      }
-      if (!formMainCategory) {
-        errors.mainCategory = 'Main Category is required';
-      }
-
-      // Sub Category is only required if there are sub-categories available under the selected Main Category
-      const mainParentId = categories.find(p => p.name === formMainCategory && (p.level === 'main' || !p.level))?.id;
-      const availableSubCats = formMainCategory
-        ? categories.filter(c => c.level === 'sub' && c.parentId === mainParentId)
-        : [];
-      if (availableSubCats.length > 0 && !formSubCategory) {
-        errors.subCategory = 'Sub Category is required';
-      }
-
-      // Child Category is only required if there are child-categories available under the selected Sub Category
-      const subParentId = categories.find(s => s.name === formSubCategory && s.level === 'sub' && s.parentId === mainParentId)?.id;
-      const availableChildCats = formSubCategory
-        ? categories.filter(c => c.level === 'child' && c.parentId === subParentId)
-        : [];
-      if (availableChildCats.length > 0 && !formChildCategory) {
-        errors.childCategory = 'Child Category is required';
-      }
-
-      if (!formBrand && brands.length > 0) {
-        errors.brand = 'Brand is required';
-      }
-    } else if (step === 2) {
-      if (formCostPrice === '') {
-        errors.costPrice = 'Purchase Price is required';
-      } else if (Number(formCostPrice) < 0) {
-        errors.costPrice = 'Purchase Price cannot be negative';
-      }
-      if (formSellingPrice === '') {
-        errors.sellingPrice = 'Selling Price is required';
-      } else if (Number(formSellingPrice) <= 0) {
-        errors.sellingPrice = 'Selling Price must be greater than 0';
-      }
-      if (Number(formReorderThreshold) < 0) {
-        errors.reorderThreshold = 'Reorder threshold cannot be negative';
-      }
-    } else if (step === 3) {
-      if (formVariants.length === 0) {
-        errors.variants = 'At least one variant configuration is required';
-      } else {
-        formVariants.forEach((v, idx) => {
-          if (!v.color || !v.color.trim()) {
-            errors[`variant-color-${v.id || idx}`] = `Color/Finish is required for Variant #${idx + 1}`;
-          }
-          if (!v.model || !v.model.trim()) {
-            errors[`variant-model-${v.id || idx}`] = `Model/Size is required for Variant #${idx + 1}`;
-          }
-          if (v.stock < 0) {
-            errors[`variant-stock-${v.id || idx}`] = `Stock cannot be negative for Variant #${idx + 1}`;
-          }
-        });
-      }
-    }
-    
-    setStepErrors(errors);
-    return Object.keys(errors).length === 0;
-  };
-
-  const handleNextStep = () => {
-    if (validateStep(wizardStep)) {
-      const nextStep = wizardStep + 1;
-      setWizardStep(nextStep);
-      setWizardMaxStep(prev => Math.max(prev, nextStep));
-      setStepErrors({});
-    }
-  };
-
-  const handlePrevStep = () => {
-    if (wizardStep > 1) {
-      setWizardStep(wizardStep - 1);
-      setStepErrors({});
-    }
-  };
-
-  const handleJumpToStep = (step: number) => {
-    // Only allow jumping back, or jumping forward if the steps between are fully validated
-    if (step < wizardStep) {
-      setWizardStep(step);
-      setStepErrors({});
-    } else if (step <= wizardMaxStep) {
-      // Validate all intermediate steps
-      let allValid = true;
-      for (let s = 1; s < step; s++) {
-        if (!validateStep(s)) {
-          allValid = false;
-          setWizardStep(s);
-          break;
-        }
-      }
-      if (allValid) {
-        setWizardStep(step);
-        setStepErrors({});
-      }
-    }
-  };
-
-  const handleCancelForm = () => {
-    console.log("CANCEL FUNCTION CALLED");
-    const isDirty = editModeProduct 
-      ? (formName !== editModeProduct.name || 
-         formSku !== editModeProduct.sku || 
-         formMainCategory !== editModeProduct.mainCategory || 
-         formSubCategory !== editModeProduct.subCategory || 
-         formChildCategory !== editModeProduct.childCategory || 
-         formBrand !== editModeProduct.brand || 
-         formCostPrice !== editModeProduct.costPrice || 
-         formSellingPrice !== editModeProduct.sellingPrice || 
-         formReorderThreshold !== editModeProduct.reorderThreshold || 
-         formImages.length !== (editModeProduct.images?.length || 0))
-      : (formName.trim() !== '' || Number(formSellingPrice) > 0 || formImages.length > 0 || formVariants.some(v => v.color !== 'Default' || v.model !== 'Standard'));
-
-    if (isDirty) {
-      showConfirm(
-        "Discard Progress?",
-        "Are you sure you want to discard your changes? Your progress will be lost.",
-        () => {
-          setIsDrawerOpen(false);
-        }
-      );
-    } else {
-      setIsDrawerOpen(false);
-    }
-  };
-
-  const [isSkuDirty, setIsSkuDirty] = useState(false);
-  
-  const [customColorValue, setCustomColorValue] = useState<{[key: string]: string}>({});
-  const [submitting, setSubmitting] = useState(false);
-  const [customSizeValue, setCustomSizeValue] = useState<{[key: string]: string}>({});
-  const [isCustomColorMode, setIsCustomColorMode] = useState<{[key: string]: boolean}>({});
-  const [isCustomSizeMode, setIsCustomSizeMode] = useState<{[key: string]: boolean}>({});
 
   // Barcode & bulk printing states
   const [selectedBarcodeTab, setSelectedBarcodeTab] = useState<'sku' | 'variants'>('sku');
@@ -626,78 +544,8 @@ export default function ProductManagement({
       }
     });
 
-    await generateBarcodePDF(itemsToPrint, `Bulk_${selectedProducts.length}_Products`);
+  await generateBarcodePDF(itemsToPrint, `Bulk_${selectedProducts.length}_Products`);
   };
-
-  // Helper functions for custom attributes
-  const handleAddCustomColor = async (color: string) => {
-    const trimmed = color.trim();
-    if (trimmed && !productColors.find(c => c.name.toLowerCase() === trimmed.toLowerCase())) {
-      try {
-        await addProductColor(trimmed, '#000000');
-        await onRefreshData();
-      } catch (err) {
-        console.error("Failed to add custom color", err);
-      }
-    }
-  };
-
-  const handleAddCustomSize = async (size: string) => {
-    const trimmed = size.trim();
-    if (trimmed && !productModels.find(m => m.name.toLowerCase() === trimmed.toLowerCase())) {
-      try {
-        await addProductModel(trimmed);
-        await onRefreshData();
-      } catch (err) {
-        console.error("Failed to add custom size", err);
-      }
-    }
-  };
-  // Helper function to dynamically generate SKU code
-  const generateSkuCode = (subBrand: string, category: string, brandName: string) => {
-    const div = subBrand || 'SAT';
-    
-    let cat = 'GEN';
-    if (category) {
-      const cleanCat = category.replace(/[^a-zA-Z ]/g, '');
-      const parts = cleanCat.split(/\s+/).filter(p => p.length > 0);
-      if (parts.length >= 2) {
-        cat = (parts[0].substring(0, 1) + parts[1].substring(0, 2)).toUpperCase();
-      } else {
-        cat = category.substring(0, 3).toUpperCase();
-      }
-    }
-
-    let brnd = 'UNK';
-    if (brandName) {
-      const cleanBrnd = brandName.replace(/[^a-zA-Z ]/g, '');
-      const parts = cleanBrnd.split(/\s+/).filter(p => p.length > 0);
-      if (parts.length >= 2) {
-        brnd = (parts[0].substring(0, 1) + parts[1].substring(0, 2)).toUpperCase();
-      } else {
-        brnd = brandName.substring(0, 3).toUpperCase();
-      }
-    }
-
-    const prefix = `${div}-${cat}-${brnd}-`;
-    const matchingProducts = products.filter(p => p.sku && p.sku.startsWith(prefix));
-    let nextNum = matchingProducts.length + 1;
-    
-    while (products.some(p => p.sku === `${prefix}${String(nextNum).padStart(3, '0')}`)) {
-      nextNum++;
-    }
-    
-    return `${prefix}${String(nextNum).padStart(3, '0')}`;
-  };
-
-
-  // Auto generate SKU when brand/category/division changes
-  useEffect(() => {
-    if (!editModeProduct && !isSkuDirty) {
-      const generated = generateSkuCode(formSubBrand, formCategory, formBrand);
-      setFormSku(generated);
-    }
-  }, [formSubBrand, formCategory, formBrand, editModeProduct, isSkuDirty, products]);
 
   // Handle drawer auto-trigger
   useEffect(() => {
@@ -731,13 +579,17 @@ export default function ProductManagement({
     if (initialProductId) {
       const p = products.find(p => p.id === initialProductId);
       if (p) {
-        setSelectedProduct(p);
+        if (p.status === 'pending_review' && (isSuperAdmin || p.submittedBy?.uid === user?.id || p.createdById === user?.id)) {
+          setReviewProductId(p.id);
+        } else {
+          setSelectedProduct(p);
+        }
       }
       if (clearInitialProductId) {
         clearInitialProductId();
       }
     }
-  }, [initialProductId, products, clearInitialProductId]);
+  }, [initialProductId, products, clearInitialProductId, isSuperAdmin, user?.id]);
 
   // Fetch product logs on product selection
   useEffect(() => {
@@ -750,300 +602,241 @@ export default function ProductManagement({
     }
   }, [selectedProduct]);
 
-  // Open Add Product Drawer
+  // Open Add Product Modal
   const openAddDrawer = () => {
     setEditModeProduct(null);
-    setIsSkuDirty(false);
-    setFormError('');
-    setFormSuccess('');
-    setFormName('');
-    
-    // Initialize 3-level categories
-    const mainCats = categories.filter(c => c.level === 'main');
-    const initialMain = mainCats[0]?.name || '';
-    setFormMainCategory(initialMain);
-    setFormSubCategory('');
-    setFormChildCategory('');
-    setFormCategory(initialMain);
-
-    const initialBrand = brands[0]?.name || '';
-    setFormBrand(initialBrand);
-    setFormSubBrand('SAT');
-    setFormCostPrice('');
-    setFormSellingPrice('');
-    setFormReorderThreshold(5);
-    setFormImages([]);
-    setFormVariants([{ id: Date.now().toString(), color: 'Default', model: 'Standard', stock: 10 }]);
-    
-    // Clear custom mode maps
-    setCustomColorValue({});
-    setCustomSizeValue({});
-    setIsCustomColorMode({});
-    setIsCustomSizeMode({});
-    
-    // Set wizard initial state
-    setWizardStep(1);
-    setWizardMaxStep(1);
-    setStepErrors({});
-    
-    // Generate initial SKU
-    const initialSku = generateSkuCode('SAT', initialMain, initialBrand);
-    setFormSku(initialSku);
+    setPreservePendingEdit(false);
     setIsDrawerOpen(true);
   };
 
-  // Open Edit Product Drawer
-  const openEditDrawer = (product: Product) => {
+  // Open Edit Product Modal
+  const openEditDrawer = (product: Product, preservePending: boolean = false) => {
     setEditModeProduct(product);
-    setIsSkuDirty(true);
-    setFormError('');
-    setFormSuccess('');
-    setFormName(product.name);
-    setFormSku(product.sku);
-    
-    // Set 3-level categories for editing
-    setFormMainCategory(product.mainCategory || product.category || '');
-    setFormSubCategory(product.subCategory || '');
-    setFormChildCategory(product.childCategory || '');
-    setFormCategory(product.category || '');
-
-    setFormBrand(product.brand);
-    setFormSubBrand(product.subBrand);
-    setFormCostPrice(product.costPrice);
-    setFormSellingPrice(product.sellingPrice);
-    setFormReorderThreshold(product.reorderThreshold);
-    setFormImages(product.images || []);
-    setFormVariants((product.variants || []).map(v => ({ ...v })));
-    
-    // Clear custom mode maps
-    setCustomColorValue({});
-    setCustomSizeValue({});
-    setIsCustomColorMode({});
-    setIsCustomSizeMode({});
-    
-    // Set wizard initial state
-    setWizardStep(1);
-    setWizardMaxStep(5);
-    setStepErrors({});
-    
+    setPreservePendingEdit(preservePending || product.status === 'pending_review');
     setIsDrawerOpen(true);
   };
 
-  // Variants handlers
-  const addVariantField = () => {
-    setFormVariants([
-      ...formVariants,
-      { id: Date.now().toString(), color: '', model: '', stock: 0 }
-    ]);
-  };
-
-  const removeVariantField = (id: string) => {
-    if (formVariants.length > 1) {
-      setFormVariants(formVariants.filter(v => v.id !== id));
-    }
-  };
-
-  const updateVariantValue = (id: string, field: 'color' | 'model' | 'stock', value: string | number) => {
-    setFormVariants(
-      formVariants.map(v => (v.id === id ? { ...v, [field]: value } : v))
-    );
-  };
-
-  // Image handlers
-  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const files = e.target.files;
-    if (files && files.length > 0) {
-      Array.from(files).forEach(file => {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          if (reader.result && typeof reader.result === 'string') {
-            setFormImages(prev => [...prev, reader.result as string]);
-          }
-        };
-        reader.readAsDataURL(file as any);
-      });
-    }
-  };
-
-  const removeImage = (idx: number) => {
-    setFormImages(formImages.filter((_, i) => i !== idx));
-  };
-
-  // SKU auto generation
-  const handleAutoGenerateSku = () => {
-    const generated = generateSkuCode(formSubBrand, formCategory, formBrand);
-    setFormSku(generated);
-    setIsSkuDirty(false);
-  };
-
-  // Form Submit (Add or Edit Product)
-  const handleFormSubmit = async (e: React.FormEvent) => {
-    e.preventDefault();
-    console.log("SUBMIT FUNCTION CALLED", {wizardStep, formName, formSku, formMainCategory, formSubCategory, formChildCategory, formBrand, formCostPrice, formSellingPrice, formVariants});
-
-    // If not on step 5, just run next step logic and do not submit yet!
-    if (wizardStep < 5) {
-      handleNextStep();
-      return;
-    }
-
-    if (submitting) return;
-
+  // Pending Queue Approval & Rejection Logic (preserves Super Admin only approval rules)
+  const executeApproveProduct = async (product: Product) => {
+    if (!isSuperAdmin) return;
+    setPendingActionLoadingId(product.id);
     setFormError('');
     setFormSuccess('');
-
-    // Full validation check
-    if (!validateStep(1)) {
-      setFormError('Please complete Step 1 with correct inputs before submitting.');
-      setWizardStep(1);
-      return;
-    }
-    if (!validateStep(2)) {
-      setFormError('Please complete Step 2 with correct inputs before submitting.');
-      setWizardStep(2);
-      return;
-    }
-    if (!validateStep(3)) {
-      setFormError('Please complete Step 3 with correct inputs before submitting.');
-      setWizardStep(3);
-      return;
-    }
-    
-    if (requireCheckIn && !requireCheckIn()) return;
-
-    const finalSku = formSku.trim().toUpperCase();
-
-    // SKU must be unique - check against existing active products
-    const isDuplicateSku = products.some(
-      p => p.sku.toUpperCase() === finalSku && 
-      (!editModeProduct || p.id !== editModeProduct.id) && 
-      !p.archived
-    );
-    if (isDuplicateSku) {
-      setFormError(`SKU Code "${finalSku}" is already assigned to another active product. SKU must be unique.`);
-      setWizardStep(1);
-      return;
-    }
-
-    setSubmitting(true);
-
-    // Determine status for workflow:
-    // Only Super Admin additions/edits are auto-approved. Staff & Admin additions/edits go to pending_review for Super Admin approval.
-    let finalStatus: 'pending_review' | 'approved' | 'rejected' = 'approved';
-    if (!isSuperAdmin) {
-      finalStatus = 'pending_review';
-    } else {
-      finalStatus = 'approved';
-    }
-
-    // Generate short unique codes for barcode values if they don't exist or are legacy long formats
-    const generatedInSession = new Set<string>();
-    const needsMigration = (val: string | undefined, originalSku?: string): boolean => {
-      if (!val) return true;
-      if (originalSku && val === originalSku) return true;
-      if (val.includes('-') && val.length > 10) return true;
-      if (!val.includes('-')) return true;
-      return false;
-    };
-
-    let mainBarcodeValue = editModeProduct?.barcodeValue;
-    if (needsMigration(mainBarcodeValue, finalSku)) {
-      mainBarcodeValue = getUniqueBarcodeValue(formSubBrand, products, generatedInSession);
-      generatedInSession.add(mainBarcodeValue);
-    }
-
-    for (const v of formVariants) {
-      const cleanColor = v.color.trim();
-      const cleanModel = v.model.trim();
-      const existingV = editModeProduct?.variants?.find(ev => ev.id === v.id || (ev.color === cleanColor && ev.model === cleanModel));
-      const reservedQty = Number(existingV?.reservedQty ?? v.reservedQty) || 0;
-      if (Number(v.stock) < reservedQty) {
-        setFormError(`Variant "${cleanColor} ${cleanModel}" has ${reservedQty} pcs reserved for Pre-Orders and cannot go below ${reservedQty}.`);
-        setSubmitting(false);
-        setWizardStep(2);
-        return;
-      }
-    }
-
-    const updatedVariants = formVariants.map(v => {
-      const cleanColor = v.color.trim();
-      const cleanModel = v.model.trim();
-      const vColorCode = cleanColor.toUpperCase().replace(/[^A-Z0-9]/g, '-').replace(/-+/g, '-');
-      const vModelCode = cleanModel.toUpperCase().replace(/[^A-Z0-9]/g, '-').replace(/-+/g, '-');
-      const oldLongBarcodeValue = `${finalSku}-${vColorCode}-${vModelCode}`;
-
-      // Get existing variant to reuse its barcode value and preserve reservedQty
-      const existingV = editModeProduct?.variants?.find(ev => ev.id === v.id || (ev.color === cleanColor && ev.model === cleanModel));
-      let vBarcodeValue = v.barcodeValue || existingV?.barcodeValue;
-
-      if (needsMigration(vBarcodeValue, oldLongBarcodeValue) || needsMigration(vBarcodeValue, finalSku)) {
-        vBarcodeValue = getUniqueBarcodeValue(formSubBrand, products, generatedInSession);
-        generatedInSession.add(vBarcodeValue);
-      }
-
-      const preservedReserved = Number(existingV?.reservedQty ?? v.reservedQty) || 0;
-      return {
-        ...v,
-        color: cleanColor,
-        model: cleanModel,
-        stock: Number(v.stock),
-        ...(preservedReserved > 0 ? { reservedQty: preservedReserved } : {}),
-        barcodeValue: vBarcodeValue
-      };
-    });
-
-    // Prepare payload
-    const productPayload = {
-      name: formName.trim(),
-      sku: finalSku,
-      category: formMainCategory || '', // for backward compatibility/displays
-      mainCategory: formMainCategory || '',
-      subCategory: formSubCategory || '',
-      childCategory: formChildCategory || '',
-      brand: formBrand || '',
-      subBrand: formSubBrand || '',
-      costPrice: Number(formCostPrice),
-      sellingPrice: Number(formSellingPrice),
-      reorderThreshold: Number(formReorderThreshold),
-      images: formImages || [],
-      variants: updatedVariants,
-      archived: false,
-      createdAt: editModeProduct ? editModeProduct.createdAt : Date.now(),
-      barcodeValue: mainBarcodeValue,
-      status: finalStatus,
-      rejectionReason: finalStatus === 'pending_review' ? '' : (editModeProduct?.rejectionReason || ''),
-      ...(editModeProduct?.reservedQty !== undefined ? { reservedQty: editModeProduct.reservedQty } : {}),
-      ...(editModeProduct?.reservedForPreOrders ? { reservedForPreOrders: editModeProduct.reservedForPreOrders } : {})
-    };
-
     try {
-      if (editModeProduct) {
-        // Edit existing product
-        await updateProduct(editModeProduct.id, productPayload);
-        setFormSuccess(finalStatus === 'pending_review' && editModeProduct.status === 'rejected' 
-          ? 'Product details updated and resubmitted for approval successfully!'
-          : 'Product details updated successfully!'
-        );
-      } else {
-        // Create new product
-        await addProduct(productPayload, user?.id || '', user?.name || 'Operator');
-        setFormSuccess(finalStatus === 'pending_review'
-          ? 'New product successfully submitted for review and approval!'
-          : 'New product successfully published to catalog!'
-        );
-      }
+      const nowTs = Date.now();
+      const existingHistory: ProductEditHistoryEntry[] = Array.isArray(product.editHistory)
+        ? product.editHistory
+        : [];
+      const approvedEntry: ProductEditHistoryEntry = {
+        id: `eh-${nowTs}-${Math.random().toString(36).slice(2, 6)}`,
+        editedByUid: user?.id || '',
+        editedByName: user?.name || 'Super Admin',
+        editedByRole: user?.role || 'superadmin',
+        editedAt: nowTs,
+        action: 'approved',
+        changes: [],
+      };
+
+      await updateProduct(product.id, {
+        status: 'approved',
+        rejectionReason: '',
+        approvedBy: {
+          uid: user?.id || '',
+          name: user?.name || 'Super Admin',
+          role: user?.role || 'superadmin',
+        },
+        approvedAt: nowTs,
+        editHistory: [...existingHistory, approvedEntry],
+      });
+
+      await logAuditAction(
+        'UPDATE',
+        'Product',
+        product.id,
+        product.name,
+        `Approved pending product (SKU: ${product.sku}, Selling: ৳${product.sellingPrice})`,
+        user
+      );
+
+      const submitterUid = product.submittedBy?.uid || product.createdById;
+      await addNotification({
+        type: 'product_review',
+        title: 'Product Approved',
+        message: `Your product "${product.name}" (SKU: ${product.sku}) was approved by ${user?.name || 'Super Admin'} and published to the catalog.`,
+        targetScreen: 'products',
+        subAction: 'catalog',
+        targetId: product.id,
+        ...(submitterUid ? { targetUserId: submitterUid } : {}),
+        forRoles: ['admin', 'manager', 'staff'],
+      });
 
       await onRefreshData();
-      
-      setTimeout(() => {
-        setIsDrawerOpen(false);
-        setSubmitting(false);
-      }, 1500);
+      if (reviewProductId === product.id) {
+        setReviewProductId(null);
+      }
+      setFormSuccess(`Approved "${product.name}" and notified submitter.`);
+      setTimeout(() => setFormSuccess(''), 3500);
     } catch (err: any) {
-      console.error(err);
-      setFormError(err.message || 'Failed to persist product record to cloud database.');
-      setSubmitting(false);
+      console.error('Approval failed:', err);
+      setFormError(err?.message || `Failed to approve "${product.name}".`);
+      setTimeout(() => setFormError(''), 4000);
+    } finally {
+      setPendingActionLoadingId(null);
     }
+  };
+
+  const handleRequestApproveProduct = (product: Product) => {
+    if (!isSuperAdmin) return;
+    showConfirm(
+      'Approve Pending Product?',
+      `Approve "${product.name}" (SKU: ${product.sku}) and publish it to the active catalog?`,
+      () => {
+        executeApproveProduct(product);
+      }
+    );
+  };
+
+  const handleConfirmRejectProduct = async (product: Product, reason: string) => {
+    if (!isSuperAdmin) return;
+    const trimmedReason = reason.trim();
+    if (!trimmedReason) {
+      throw new Error('Rejection reason is required.');
+    }
+    setPendingActionLoadingId(product.id);
+    setFormError('');
+    setFormSuccess('');
+    try {
+      const nowTs = Date.now();
+      const existingHistory: ProductEditHistoryEntry[] = Array.isArray(product.editHistory)
+        ? product.editHistory
+        : [];
+      const rejectedEntry: ProductEditHistoryEntry = {
+        id: `eh-${nowTs}-${Math.random().toString(36).slice(2, 6)}`,
+        editedByUid: user?.id || '',
+        editedByName: user?.name || 'Super Admin',
+        editedByRole: user?.role || 'superadmin',
+        editedAt: nowTs,
+        action: 'rejected',
+        note: trimmedReason,
+        changes: [],
+      };
+
+      await updateProduct(product.id, {
+        status: 'rejected',
+        rejectionReason: trimmedReason,
+        rejectedBy: {
+          uid: user?.id || '',
+          name: user?.name || 'Super Admin',
+          role: user?.role || 'superadmin',
+        },
+        rejectedAt: nowTs,
+        editHistory: [...existingHistory, rejectedEntry],
+      });
+
+      await logAuditAction(
+        'UPDATE',
+        'Product',
+        product.id,
+        product.name,
+        `Rejected pending product (SKU: ${product.sku}). Reason: ${trimmedReason}`,
+        user
+      );
+
+      const submitterUid = product.submittedBy?.uid || product.createdById;
+      await addNotification({
+        type: 'product_review',
+        title: 'Product Rejected',
+        message: `Your product "${product.name}" (SKU: ${product.sku}) was rejected. Reason: ${trimmedReason}`,
+        rejectionReason: trimmedReason,
+        targetScreen: 'products',
+        subAction: 'catalog',
+        targetId: product.id,
+        ...(submitterUid ? { targetUserId: submitterUid } : {}),
+        forRoles: ['admin', 'manager', 'staff'],
+      });
+
+      await onRefreshData();
+      if (reviewProductId === product.id) {
+        setReviewProductId(null);
+      }
+      setFormSuccess(`Rejected "${product.name}" and notified submitter.`);
+      setTimeout(() => setFormSuccess(''), 3500);
+    } catch (err: any) {
+      console.error('Rejection failed:', err);
+      setFormError(err?.message || `Failed to reject "${product.name}".`);
+      setTimeout(() => setFormError(''), 4000);
+      throw err;
+    } finally {
+      setPendingActionLoadingId(null);
+    }
+  };
+
+  const handleApproveAllPending = (itemsToApprove: Product[]) => {
+    if (!isSuperAdmin || itemsToApprove.length === 0) return;
+    showConfirm(
+      `Approve All ${itemsToApprove.length} Pending Products?`,
+      `This will immediately publish all ${itemsToApprove.length} filtered pending product(s) to the active catalog and notify submitters.`,
+      async () => {
+        setPendingLoading(true);
+        setFormError('');
+        setFormSuccess('');
+        try {
+          for (const item of itemsToApprove) {
+            const nowTs = Date.now();
+            const existingHistory: ProductEditHistoryEntry[] = Array.isArray(item.editHistory)
+              ? item.editHistory
+              : [];
+            const approvedEntry: ProductEditHistoryEntry = {
+              id: `eh-${nowTs}-${Math.random().toString(36).slice(2, 6)}`,
+              editedByUid: user?.id || '',
+              editedByName: user?.name || 'Super Admin',
+              editedByRole: user?.role || 'superadmin',
+              editedAt: nowTs,
+              action: 'approved',
+              changes: [],
+            };
+            await updateProduct(item.id, {
+              status: 'approved',
+              rejectionReason: '',
+              approvedBy: {
+                uid: user?.id || '',
+                name: user?.name || 'Super Admin',
+                role: user?.role || 'superadmin',
+              },
+              approvedAt: nowTs,
+              editHistory: [...existingHistory, approvedEntry],
+            });
+            await logAuditAction(
+              'UPDATE',
+              'Product',
+              item.id,
+              item.name,
+              `Bulk approved pending product (SKU: ${item.sku})`,
+              user
+            );
+            const submitterUid = item.submittedBy?.uid || item.createdById;
+            await addNotification({
+              type: 'product_review',
+              title: 'Product Approved',
+              message: `Your product "${item.name}" (SKU: ${item.sku}) was approved by ${user?.name || 'Super Admin'} and published to the catalog.`,
+              targetScreen: 'products',
+              subAction: 'catalog',
+              targetId: item.id,
+              ...(submitterUid ? { targetUserId: submitterUid } : {}),
+              forRoles: ['admin', 'manager', 'staff'],
+            });
+          }
+          await onRefreshData();
+          setFormSuccess(`Successfully approved all ${itemsToApprove.length} pending products!`);
+          setTimeout(() => setFormSuccess(''), 3500);
+        } catch (err: any) {
+          setFormError(err?.message || 'Failed to approve all pending products.');
+          setTimeout(() => setFormError(''), 4000);
+        } finally {
+          setPendingLoading(false);
+        }
+      }
+    );
   };
 
   // Archive / Soft Delete product
@@ -1582,6 +1375,10 @@ export default function ProductManagement({
     }
   };
 
+  const reviewProduct = reviewProductId
+    ? products.find((p) => p.id === reviewProductId) || null
+    : null;
+
   return (
     <div className="space-y-6">
 
@@ -1725,6 +1522,128 @@ export default function ProductManagement({
       {/* SUB TAB 1: PRODUCT CATALOG */}
       {activeSubTab === 'catalog' && (
         <div className="space-y-4">
+          {/* Submitter's Own Pending / Rejected Submissions (Non-SuperAdmin) */}
+          {!isSuperAdmin && (() => {
+            const mySubmissions = products.filter(
+              (p) =>
+                !p.archived &&
+                (p.status === 'pending_review' || p.status === 'rejected') &&
+                ((p.submittedBy?.uid && p.submittedBy.uid === user?.id) ||
+                  (p.createdById && p.createdById === user?.id))
+            );
+            if (mySubmissions.length === 0) return null;
+            return (
+              <div className="bg-white dark:bg-slate-900 rounded-2xl border border-amber-200 dark:border-amber-900/60 p-4 sm:p-5 space-y-3 shadow-xs">
+                <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 dark:border-slate-800 pb-3">
+                  <div className="flex items-center gap-2.5">
+                    <div className="p-2 rounded-xl bg-amber-100 dark:bg-amber-950/60 text-amber-700 dark:text-amber-300">
+                      <Clock size={16} />
+                    </div>
+                    <div>
+                      <h3 className="text-sm font-black text-slate-900 dark:text-white">
+                        My Submitted Products ({mySubmissions.length})
+                      </h3>
+                      <p className="text-xs text-slate-500 dark:text-slate-400">
+                        You can review and edit your own pending submissions before approval.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse text-xs sm:text-sm">
+                    <thead>
+                      <tr className="bg-slate-50 dark:bg-slate-800/70 border-b border-slate-200 dark:border-slate-800 text-[11px] font-mono uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                        <th className="py-2.5 px-3 font-bold">Image</th>
+                        <th className="py-2.5 px-3 font-bold">Product & SKU</th>
+                        <th className="py-2.5 px-3 font-bold">Category / Brand</th>
+                        <th className="py-2.5 px-3 font-bold text-right">Selling Price</th>
+                        <th className="py-2.5 px-3 font-bold text-center">Stock</th>
+                        <th className="py-2.5 px-3 font-bold">Status</th>
+                        <th className="py-2.5 px-3 font-bold text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                      {mySubmissions.map((item) => {
+                        const totalQty = (item.variants || []).reduce((s, v) => s + (v.stock || 0), 0);
+                        const canEditOwn = item.status === 'pending_review';
+                        return (
+                          <tr
+                            key={item.id}
+                            onClick={() => setReviewProductId(item.id)}
+                            className="hover:bg-slate-50 dark:hover:bg-slate-800/40 cursor-pointer transition-colors"
+                          >
+                            <td className="py-2.5 px-3">
+                              <ProductThumbnail product={item} showCountBadge />
+                            </td>
+                            <td className="py-2.5 px-3">
+                              <p className="font-bold text-slate-900 dark:text-white leading-tight">
+                                {item.name}
+                              </p>
+                              <p className="text-[11px] font-mono text-slate-500 dark:text-slate-400 mt-0.5">
+                                {item.sku}
+                              </p>
+                            </td>
+                            <td className="py-2.5 px-3 text-xs text-slate-600 dark:text-slate-300">
+                              <span className="block font-medium">{buildCategoryPathLabel(item)}</span>
+                              <span className="text-[11px] text-slate-400">{item.brand}</span>
+                            </td>
+                            <td className="py-2.5 px-3 text-right font-mono font-bold tabular-nums text-slate-900 dark:text-white">
+                              ৳{Number(item.sellingPrice || 0).toLocaleString()}
+                            </td>
+                            <td className="py-2.5 px-3 text-center font-mono font-bold tabular-nums text-slate-700 dark:text-slate-200">
+                              {totalQty} pcs
+                            </td>
+                            <td className="py-2.5 px-3">
+                              {item.status === 'rejected' ? (
+                                <div className="space-y-0.5">
+                                  <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-rose-500/15 text-rose-600 dark:text-rose-400 border border-rose-500/30 text-[10px] font-bold">
+                                    <XCircle size={11} /> Rejected
+                                  </span>
+                                  {item.rejectionReason && (
+                                    <p className="text-[11px] text-rose-600 dark:text-rose-400 line-clamp-1">
+                                      {item.rejectionReason}
+                                    </p>
+                                  )}
+                                </div>
+                              ) : (
+                                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30 text-[10px] font-bold">
+                                  <Clock size={11} /> Pending Review
+                                </span>
+                              )}
+                            </td>
+                            <td
+                              className="py-2.5 px-3 text-right"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <div className="inline-flex items-center gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => setReviewProductId(item.id)}
+                                  className="px-2.5 py-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold inline-flex items-center gap-1 cursor-pointer"
+                                >
+                                  <Eye size={13} /> View
+                                </button>
+                                {canEditOwn && (
+                                  <button
+                                    type="button"
+                                    onClick={() => openEditDrawer(item, true)}
+                                    className="px-2.5 py-1.5 rounded-lg bg-amber-400 hover:bg-amber-500 text-slate-950 text-xs font-bold inline-flex items-center gap-1 cursor-pointer"
+                                  >
+                                    <Edit3 size={13} /> Edit
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            );
+          })()}
           
           {/* Main List Column */}
           <div className="space-y-4">
@@ -1900,7 +1819,6 @@ export default function ProductManagement({
                           const reservedQty = Number(product.reservedQty) || 0;
                           const availQty = getProductAvailableStock(product);
                           const isLow = availQty <= (product.reorderThreshold ?? 5);
-                          const defaultImg = product.images?.[0] || 'https://images.unsplash.com/photo-1546868871-7041f2a55e12?auto=format&fit=crop&q=80&w=150';
 
                           return (
                             <tr 
@@ -1925,12 +1843,7 @@ export default function ProductManagement({
                                 />
                               </td>
                               <td className="py-3 px-4">
-                                <img 
-                                  src={defaultImg} 
-                                  alt={product.name} 
-                                  referrerPolicy="no-referrer"
-                                  className="w-10 h-10 object-cover rounded-lg border border-slate-100 flex-shrink-0" 
-                                />
+                                <ProductThumbnail product={product} />
                               </td>
                               <td className="py-3 px-3 min-w-[150px]">
                                 <p className="font-bold text-slate-900 leading-tight">{product.name}</p>
@@ -2091,7 +2004,6 @@ export default function ProductManagement({
                       const reservedQty = Number(product.reservedQty) || 0;
                       const availQty = getProductAvailableStock(product);
                       const isLow = availQty <= (product.reorderThreshold ?? 5);
-                      const defaultImg = product.images?.[0] || 'https://images.unsplash.com/photo-1546868871-7041f2a55e12?auto=format&fit=crop&q=80&w=150';
 
                       return (
                         <div 
@@ -2103,11 +2015,11 @@ export default function ProductManagement({
                         >
                           <div>
                             <div className="aspect-square w-full rounded-xl overflow-hidden bg-slate-50 relative flex items-center justify-center mb-3">
-                              <img 
-                                src={defaultImg} 
-                                alt={product.name} 
-                                referrerPolicy="no-referrer"
-                                className="w-full h-full object-cover" 
+                              <ProductThumbnail
+                                product={product}
+                                wrapperClassName="relative w-full h-full block"
+                                className="w-full h-full object-cover"
+                                fallbackClassName="w-full h-full bg-slate-100 flex items-center justify-center text-slate-400"
                               />
                               <div className="absolute top-2 left-2" onClick={(e) => e.stopPropagation()}>
                                 <input
@@ -2203,7 +2115,6 @@ export default function ProductManagement({
                     const reservedQty = Number(product.reservedQty) || 0;
                     const availQty = getProductAvailableStock(product);
                     const isLow = availQty <= (product.reorderThreshold ?? 5);
-                    const defaultImg = product.images?.[0] || 'https://images.unsplash.com/photo-1546868871-7041f2a55e12?auto=format&fit=crop&q=80&w=150';
 
                     return (
                       <div 
@@ -2218,11 +2129,11 @@ export default function ProductManagement({
                             onClick={() => setSelectedProduct(product)}
                             className="aspect-square w-full rounded-lg overflow-hidden bg-slate-50 relative flex items-center justify-center cursor-pointer mb-1.5"
                           >
-                            <img 
-                              src={defaultImg} 
-                              alt={product.name} 
-                              referrerPolicy="no-referrer"
-                              className="w-full h-full object-cover" 
+                            <ProductThumbnail
+                              product={product}
+                              wrapperClassName="relative w-full h-full block"
+                              className="w-full h-full object-cover"
+                              fallbackClassName="w-full h-full bg-slate-100 flex items-center justify-center text-slate-400"
                             />
 
                             {/* Checkbox overlay */}
@@ -3403,198 +3314,515 @@ export default function ProductManagement({
           </div>
         </div>
       )}
-      {activeSubTab === 'pending' && isSuperAdmin && (
-        <div className="bg-white p-5 rounded-2xl border border-slate-100 shadow-sm space-y-4">
-          <div className="border-b border-slate-100 pb-3 flex justify-between items-center flex-wrap gap-2">
-            <div>
-              <h3 className="text-sm font-bold text-slate-950 font-sans">Pending Products Approval Queue</h3>
-              <p className="text-sm text-slate-400 mt-0.5">
-                {isSuperAdmin ? 'Review, approve, or reject products submitted by Admin & Staff operators.' : 'Products waiting for Super Admin review and approval.'}
-              </p>
-            </div>
-            <div className="flex items-center gap-2">
-              {isSuperAdmin && products.filter(p => p.status === 'pending_review' && !p.archived).length > 0 && (
+      {activeSubTab === 'pending' && isSuperAdmin && (() => {
+        const allPendingProducts = products
+          .filter((p) => p.status === 'pending_review' && !p.archived)
+          .sort((a, b) => (b.submittedAt || b.createdAt || 0) - (a.submittedAt || a.createdAt || 0));
+
+        // Build unique submitters for filter dropdown
+        const submitterOptionsMap = new Map<string, string>();
+        allPendingProducts.forEach((p) => {
+          const key = p.submittedBy?.uid || p.createdById || p.submittedBy?.name || p.createdBy || 'unknown';
+          const label = p.submittedBy?.name || p.createdBy || 'Unknown';
+          if (!submitterOptionsMap.has(key)) {
+            submitterOptionsMap.set(key, label);
+          }
+        });
+        const submitterOptions = Array.from(submitterOptionsMap.entries());
+
+        const searchLower = pendingSearch.trim().toLowerCase();
+        const filteredPendingProducts = allPendingProducts.filter((p) => {
+          const subName = (p.submittedBy?.name || p.createdBy || 'Unknown').toLowerCase();
+          const subKey = p.submittedBy?.uid || p.createdById || p.submittedBy?.name || p.createdBy || 'unknown';
+          const catPath = buildCategoryPathLabel(p).toLowerCase();
+
+          const matchesQuery =
+            !searchLower ||
+            (p.name || '').toLowerCase().includes(searchLower) ||
+            (p.sku || '').toLowerCase().includes(searchLower) ||
+            (p.brand || '').toLowerCase().includes(searchLower) ||
+            catPath.includes(searchLower) ||
+            subName.includes(searchLower);
+
+          const matchesSubBrand =
+            !pendingSubBrandFilter || (p.subBrand || 'SAT') === pendingSubBrandFilter;
+
+          const matchesSubmitter =
+            !pendingSubmitterFilter || subKey === pendingSubmitterFilter;
+
+          return matchesQuery && matchesSubBrand && matchesSubmitter;
+        });
+
+        const hasActiveFilters = Boolean(
+          pendingSearch.trim() || pendingSubBrandFilter || pendingSubmitterFilter
+        );
+
+        return (
+          <div className="w-full bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs overflow-hidden">
+            {/* Queue Header */}
+            <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3 bg-slate-50/70 dark:bg-slate-950/60">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2.5">
+                  <h3 className="text-base font-black text-slate-900 dark:text-white">
+                    Pending Products Approval Queue
+                  </h3>
+                  <span className="px-2.5 py-0.5 rounded-full bg-amber-500/15 text-amber-700 dark:text-amber-300 border border-amber-500/30 text-xs font-mono font-bold tabular-nums">
+                    {allPendingProducts.length} Pending
+                  </span>
+                </div>
+                <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                  Click any row or Review to inspect full photos, barcode, variants, and edit before approving.
+                </p>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-2">
                 <button
                   type="button"
-                  onClick={async () => {
-                    const pendingList = products.filter(p => p.status === 'pending_review' && !p.archived);
-                    try {
-                      for (const p of pendingList) {
-                        await updateProduct(p.id, { status: 'approved' });
-                      }
-                      await onRefreshData();
-                      setFormSuccess(`Successfully approved all ${pendingList.length} pending products!`);
-                      setTimeout(() => setFormSuccess(''), 3000);
-                    } catch (err) {
-                      setFormError('Failed to approve all products');
-                      setTimeout(() => setFormError(''), 3000);
-                    }
-                  }}
-                  className="px-3 py-1 bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs rounded-xl flex items-center gap-1 shadow-2xs cursor-pointer transition-colors"
+                  onClick={refreshQueueWithState}
+                  disabled={pendingLoading}
+                  className="px-3 py-2 rounded-xl bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-700 text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
                 >
-                  <Check size={12} />
-                  Approve All ({products.filter(p => p.status === 'pending_review' && !p.archived).length})
+                  <RefreshCw size={13} className={pendingLoading ? 'animate-spin' : ''} />
+                  <span>Refresh</span>
                 </button>
-              )}
-              <span className="px-2.5 py-1 bg-amber-50 text-amber-700 font-extrabold text-sm uppercase rounded-full border border-amber-100 font-mono">
-                {products.filter(p => p.status === 'pending_review' && !p.archived).length} Pending
-              </span>
-            </div>
-          </div>
 
-          <div className="space-y-4">
-            {products.filter(p => p.status === 'pending_review' && !p.archived).length === 0 ? (
-              <div className="py-12 text-center text-slate-400 italic flex flex-col items-center space-y-3">
-                <Check size={36} className="text-emerald-500 bg-emerald-50 p-2.5 rounded-full" />
-                <p className="text-sm font-semibold">All products approved! The queue is empty.</p>
+                {filteredPendingProducts.length > 0 && (
+                  <button
+                    type="button"
+                    disabled={pendingLoading || Boolean(pendingActionLoadingId)}
+                    onClick={() => handleApproveAllPending(filteredPendingProducts)}
+                    className="px-3.5 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold inline-flex items-center gap-1.5 shadow-2xs cursor-pointer disabled:opacity-50 transition-colors"
+                  >
+                    <Check size={13} />
+                    <span>
+                      Approve All ({filteredPendingProducts.length})
+                    </span>
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Search & Filters Row */}
+            <div className="px-5 py-3.5 border-b border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 grid grid-cols-1 md:grid-cols-12 gap-3 items-center">
+              <div className="md:col-span-6 relative">
+                <Search
+                  size={15}
+                  className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400"
+                />
+                <input
+                  type="text"
+                  value={pendingSearch}
+                  onChange={(e) => setPendingSearch(e.target.value)}
+                  placeholder="Search by product name, SKU, category, brand, or submitter..."
+                  className="w-full pl-9 pr-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-amber-400/30"
+                />
+              </div>
+
+              <div className="md:col-span-3">
+                <select
+                  value={pendingSubBrandFilter}
+                  onChange={(e) => setPendingSubBrandFilter(e.target.value)}
+                  aria-label="Filter by Sub-Brand"
+                  className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-sm text-slate-700 dark:text-slate-200 font-semibold cursor-pointer"
+                >
+                  <option value="">All Sub-Brands</option>
+                  <option value="SAT">SAT — Sky Automation Tech</option>
+                  <option value="GZ">GZ — GadgetZu</option>
+                  <option value="RTX">RTX — RTX Gadget</option>
+                </select>
+              </div>
+
+              <div className="md:col-span-3 flex items-center gap-2">
+                <select
+                  value={pendingSubmitterFilter}
+                  onChange={(e) => setPendingSubmitterFilter(e.target.value)}
+                  aria-label="Filter by Submitter"
+                  className="flex-1 min-w-0 px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-sm text-slate-700 dark:text-slate-200 font-semibold cursor-pointer"
+                >
+                  <option value="">Submitted By: Everyone</option>
+                  {submitterOptions.map(([key, label]) => (
+                    <option key={key} value={key}>
+                      {label}
+                    </option>
+                  ))}
+                </select>
+
+                {hasActiveFilters && (
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setPendingSearch('');
+                      setPendingSubBrandFilter('');
+                      setPendingSubmitterFilter('');
+                    }}
+                    className="px-2.5 py-2 rounded-xl bg-rose-50 dark:bg-rose-950/40 text-rose-600 dark:text-rose-400 border border-rose-200 dark:border-rose-900/60 text-xs font-bold cursor-pointer shrink-0"
+                    title="Reset filters"
+                  >
+                    Reset
+                  </button>
+                )}
+              </div>
+            </div>
+
+            {/* Body States: Error / Skeleton / Empty / Full-Width Table */}
+            {pendingError ? (
+              <div className="p-8 flex flex-col items-center justify-center text-center space-y-3">
+                <div className="w-12 h-12 rounded-2xl bg-rose-500/15 text-rose-500 flex items-center justify-center border border-rose-500/25">
+                  <AlertCircle size={22} />
+                </div>
+                <div>
+                  <p className="text-sm font-bold text-slate-900 dark:text-white">
+                    Unable to Load Pending Queue
+                  </p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                    {pendingError}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={refreshQueueWithState}
+                  className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 text-white text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer"
+                >
+                  <RefreshCw size={13} />
+                  <span>Retry</span>
+                </button>
+              </div>
+            ) : pendingLoading && allPendingProducts.length === 0 ? (
+              <div className="p-5 space-y-3" aria-busy="true" aria-label="Loading pending products">
+                {[0, 1, 2, 3].map((idx) => (
+                  <div
+                    key={idx}
+                    className="flex items-center gap-4 p-3 rounded-xl bg-slate-100/70 dark:bg-slate-800/50 animate-pulse"
+                  >
+                    <div className="w-11 h-11 rounded-xl bg-slate-200 dark:bg-slate-700 shrink-0" />
+                    <div className="flex-1 grid grid-cols-4 gap-3">
+                      <div className="h-4 rounded bg-slate-200 dark:bg-slate-700" />
+                      <div className="h-4 rounded bg-slate-200 dark:bg-slate-700" />
+                      <div className="h-4 rounded bg-slate-200 dark:bg-slate-700" />
+                      <div className="h-4 rounded bg-slate-200 dark:bg-slate-700" />
+                    </div>
+                  </div>
+                ))}
+              </div>
+            ) : allPendingProducts.length === 0 ? (
+              <div className="py-16 px-6 text-center flex flex-col items-center justify-center space-y-3">
+                <div className="w-14 h-14 rounded-2xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 border border-emerald-500/20 flex items-center justify-center">
+                  <Inbox size={26} />
+                </div>
+                <div>
+                  <p className="text-sm font-black text-slate-900 dark:text-white">
+                    No products waiting for approval
+                  </p>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+                    New or edited items submitted by Staff & Admin operators will appear here.
+                  </p>
+                </div>
+              </div>
+            ) : filteredPendingProducts.length === 0 ? (
+              <div className="py-12 px-6 text-center flex flex-col items-center justify-center space-y-3">
+                <p className="text-sm font-bold text-slate-700 dark:text-slate-200">
+                  No pending products match your current search or filters.
+                </p>
+                <button
+                  type="button"
+                  onClick={() => {
+                    setPendingSearch('');
+                    setPendingSubBrandFilter('');
+                    setPendingSubmitterFilter('');
+                  }}
+                  className="px-3.5 py-1.5 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-xs font-bold text-slate-700 dark:text-slate-200 cursor-pointer"
+                >
+                  Clear Filters
+                </button>
               </div>
             ) : (
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                {products.filter(p => p.status === 'pending_review' && !p.archived).map((product) => {
-                  return (
-                    <div key={product.id} className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-3.5 relative shadow-3xs flex flex-col justify-between">
-                      <div className="space-y-3">
-                        <div className="flex justify-between items-start gap-2">
-                          <div>
-                            <span className="text-[9px] font-bold text-amber-600 bg-amber-50 border border-amber-100 px-1.5 py-0.5 rounded-md uppercase tracking-wider font-mono">
-                              {product.subBrand || 'SAT'}
-                            </span>
-                            <h4 className="text-sm font-black text-slate-900 mt-1.5">{product.name}</h4>
-                            <p className="text-[9px] font-mono font-bold text-slate-400 uppercase mt-0.5">SKU: {product.sku}</p>
+              <>
+                {/* Full-Width Desktop / Laptop Table */}
+                <div className="hidden md:block w-full overflow-x-auto">
+                  <table className="w-full text-left border-collapse text-sm">
+                    <thead>
+                      <tr className="bg-slate-50 dark:bg-slate-800/70 border-b border-slate-200 dark:border-slate-800 text-[11px] font-mono uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                        <th className="py-3.5 px-4 font-bold">Image</th>
+                        <th className="py-3.5 px-3 font-bold">Product Name & SKU</th>
+                        <th className="py-3.5 px-3 font-bold text-center">Sub-Brand</th>
+                        <th className="py-3.5 px-3 font-bold">Category / Brand</th>
+                        {!isStaff && (
+                          <th className="py-3.5 px-3 font-bold text-right">Purchase Price</th>
+                        )}
+                        <th className="py-3.5 px-3 font-bold text-right">Selling Price</th>
+                        <th className="py-3.5 px-3 font-bold text-right">Total Stock</th>
+                        <th className="py-3.5 px-3 font-bold">Submitted By</th>
+                        <th className="py-3.5 px-3 font-bold">Submitted Date</th>
+                        <th className="py-3.5 px-4 font-bold text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-slate-700 dark:text-slate-200">
+                      {filteredPendingProducts.map((product) => {
+                        const totalQty = (product.variants || []).reduce(
+                          (s, v) => s + (Number(v.stock) || 0),
+                          0
+                        );
+                        const submitterName =
+                          product.submittedBy?.name || product.createdBy || 'Unknown';
+                        const submitterRole = product.submittedBy?.role || 'operator';
+                        const submittedAt = product.submittedAt || product.createdAt;
+                        const isBusy = pendingActionLoadingId === product.id;
+
+                        return (
+                          <tr
+                            key={product.id}
+                            onClick={() => setReviewProductId(product.id)}
+                            className="hover:bg-amber-50/40 dark:hover:bg-slate-800/60 transition-colors cursor-pointer group"
+                          >
+                            <td className="py-3 px-4">
+                              <ProductThumbnail
+                                product={product}
+                                showCountBadge
+                                className="w-11 h-11 object-cover rounded-xl border border-slate-200 dark:border-slate-700"
+                                fallbackClassName="w-11 h-11 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-slate-400"
+                              />
+                            </td>
+                            <td className="py-3 px-3 min-w-[210px] max-w-[300px]">
+                              <p className="font-bold text-slate-900 dark:text-white leading-snug group-hover:text-amber-600 dark:group-hover:text-amber-400 transition-colors">
+                                {product.name}
+                              </p>
+                              <div className="flex flex-wrap items-center gap-2 mt-0.5">
+                                <span className="text-[11px] font-mono font-semibold text-slate-500 dark:text-slate-400">
+                                  {product.sku}
+                                </span>
+                                <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
+                                  {(product.variants || []).length} var
+                                </span>
+                              </div>
+                            </td>
+                            <td className="py-3 px-3 text-center">
+                              <span
+                                className={`inline-block text-[10px] font-mono font-black px-2 py-0.5 rounded-md border ${
+                                  product.subBrand === 'SAT'
+                                    ? 'bg-slate-900 text-amber-400 border-slate-800 dark:bg-amber-400/15 dark:text-amber-300 dark:border-amber-400/30'
+                                    : 'bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-800'
+                                }`}
+                              >
+                                {product.subBrand || 'SAT'}
+                              </span>
+                            </td>
+                            <td className="py-3 px-3 min-w-[160px] max-w-[240px]">
+                              <p
+                                className="text-xs font-semibold text-slate-800 dark:text-slate-200 truncate"
+                                title={buildCategoryPathLabel(product)}
+                              >
+                                {buildCategoryPathLabel(product)}
+                              </p>
+                              <p className="text-[11px] text-slate-500 dark:text-slate-400 truncate mt-0.5">
+                                {product.brand || 'Generic'}
+                              </p>
+                            </td>
+                            {!isStaff && (
+                              <td className="py-3 px-3 text-right font-mono font-semibold tabular-nums text-slate-700 dark:text-slate-300 whitespace-nowrap">
+                                ৳{Number(product.costPrice || 0).toLocaleString()}
+                              </td>
+                            )}
+                            <td className="py-3 px-3 text-right font-mono font-bold tabular-nums text-slate-900 dark:text-white whitespace-nowrap">
+                              ৳{Number(product.sellingPrice || 0).toLocaleString()}
+                            </td>
+                            <td className="py-3 px-3 text-right font-mono font-bold tabular-nums text-slate-800 dark:text-slate-200 whitespace-nowrap">
+                              {totalQty} pcs
+                            </td>
+                            <td className="py-3 px-3 min-w-[140px]">
+                              <div className="flex items-center gap-2">
+                                <span className="w-7 h-7 rounded-lg bg-amber-400/20 text-amber-800 dark:text-amber-300 border border-amber-400/30 flex items-center justify-center text-[10px] font-black shrink-0">
+                                  <User size={13} />
+                                </span>
+                                <div className="min-w-0">
+                                  <p className="text-xs font-bold text-slate-900 dark:text-white truncate">
+                                    {submitterName}
+                                  </p>
+                                  <p className="text-[10px] font-mono uppercase text-slate-500 dark:text-slate-400">
+                                    {submitterRole}
+                                  </p>
+                                </div>
+                              </div>
+                            </td>
+                            <td className="py-3 px-3 text-xs font-mono text-slate-500 dark:text-slate-400 whitespace-nowrap">
+                              {formatShortDateTime(submittedAt)}
+                            </td>
+                            <td
+                              className="py-3 px-4 text-right whitespace-nowrap"
+                              onClick={(e) => e.stopPropagation()}
+                            >
+                              <div className="inline-flex items-center gap-1.5">
+                                <button
+                                  type="button"
+                                  disabled={isBusy}
+                                  onClick={() => setReviewProductId(product.id)}
+                                  className="px-2.5 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 dark:bg-slate-100 dark:hover:bg-white text-white dark:text-slate-950 text-xs font-bold inline-flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                                >
+                                  <Eye size={13} />
+                                  <span>Review</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={isBusy}
+                                  onClick={() => openEditDrawer(product, true)}
+                                  title="Edit pending product"
+                                  className="p-1.5 rounded-lg bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 border border-slate-200 dark:border-slate-700 cursor-pointer disabled:opacity-50"
+                                >
+                                  <Edit3 size={13} />
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={isBusy}
+                                  onClick={() => handleRequestApproveProduct(product)}
+                                  title="Approve product"
+                                  className="px-2.5 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold inline-flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                                >
+                                  {isBusy ? (
+                                    <Loader2 size={13} className="animate-spin" />
+                                  ) : (
+                                    <Check size={13} />
+                                  )}
+                                  <span>Approve</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={isBusy}
+                                  onClick={() => {
+                                    setRejectModalProduct(product);
+                                    setRejectModalReason('');
+                                    setRejectModalError('');
+                                  }}
+                                  title="Reject product"
+                                  className="px-2.5 py-1.5 rounded-lg bg-rose-50 hover:bg-rose-100 dark:bg-rose-950/40 dark:hover:bg-rose-900/50 text-rose-700 dark:text-rose-300 border border-rose-200 dark:border-rose-800 text-xs font-bold inline-flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                                >
+                                  <X size={13} />
+                                  <span>Reject</span>
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+
+                {/* Mobile Compact Card List */}
+                <div className="md:hidden divide-y divide-slate-100 dark:divide-slate-800">
+                  {filteredPendingProducts.map((product) => {
+                    const totalQty = (product.variants || []).reduce(
+                      (s, v) => s + (Number(v.stock) || 0),
+                      0
+                    );
+                    const submitterName =
+                      product.submittedBy?.name || product.createdBy || 'Unknown';
+                    const submittedAt = product.submittedAt || product.createdAt;
+                    const isBusy = pendingActionLoadingId === product.id;
+
+                    return (
+                      <div
+                        key={product.id}
+                        onClick={() => setReviewProductId(product.id)}
+                        className="p-4 space-y-3 hover:bg-slate-50 dark:hover:bg-slate-800/40 cursor-pointer"
+                      >
+                        <div className="flex items-start gap-3">
+                          <ProductThumbnail
+                            product={product}
+                            showCountBadge
+                            className="w-12 h-12 object-cover rounded-xl border border-slate-200 dark:border-slate-700"
+                            fallbackClassName="w-12 h-12 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 flex items-center justify-center text-slate-400"
+                          />
+                          <div className="flex-1 min-w-0">
+                            <div className="flex items-center gap-2">
+                              <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-slate-900 text-amber-400">
+                                {product.subBrand || 'SAT'}
+                              </span>
+                              <span className="text-[11px] font-mono text-slate-500 truncate">
+                                {product.sku}
+                              </span>
+                            </div>
+                            <h4 className="text-sm font-bold text-slate-900 dark:text-white mt-0.5">
+                              {product.name}
+                            </h4>
+                            <p className="text-xs text-slate-500 dark:text-slate-400 truncate">
+                              {buildCategoryPathLabel(product)} • {product.brand}
+                            </p>
                           </div>
-                          {product.images?.[0] ? (
-                            <img src={product.images[0]} alt="Product" className="w-12 h-12 object-cover rounded-xl border border-slate-200" referrerPolicy="no-referrer" />
-                          ) : (
-                            <div className="w-12 h-12 bg-slate-100 border border-slate-200 rounded-xl flex items-center justify-center text-slate-300">
-                              <Tag size={16} />
+                        </div>
+
+                        <div className="grid grid-cols-3 gap-2 text-xs bg-slate-50 dark:bg-slate-800/50 p-2.5 rounded-xl">
+                          {!isStaff && (
+                            <div>
+                              <span className="text-[10px] text-slate-400 block">Cost</span>
+                              <span className="font-mono font-bold">
+                                ৳{Number(product.costPrice || 0).toLocaleString()}
+                              </span>
                             </div>
                           )}
-                        </div>
-
-                        <div className="grid grid-cols-2 gap-y-2 gap-x-4 border-t border-slate-100 pt-2 text-sm">
                           <div>
-                            <span className="text-slate-400 font-medium block">Category:</span>
-                            <span className="font-semibold text-slate-700 truncate block">{product.category}</span>
+                            <span className="text-[10px] text-slate-400 block">Selling</span>
+                            <span className="font-mono font-bold">
+                              ৳{Number(product.sellingPrice || 0).toLocaleString()}
+                            </span>
                           </div>
                           <div>
-                            <span className="text-slate-400 font-medium block">Brand:</span>
-                            <span className="font-semibold text-slate-700 truncate block">{product.brand}</span>
-                          </div>
-                          <div>
-                            <span className="text-slate-400 font-medium block">Purchase Price:</span>
-                            <span className="font-bold text-slate-800">৳ {product.costPrice.toLocaleString()}</span>
-                          </div>
-                          <div>
-                            <span className="text-slate-400 font-medium block">Selling Price:</span>
-                            <span className="font-bold text-slate-800">৳ {product.sellingPrice.toLocaleString()}</span>
+                            <span className="text-[10px] text-slate-400 block">Stock</span>
+                            <span className="font-mono font-bold">{totalQty} pcs</span>
                           </div>
                         </div>
 
-                        <div className="bg-white p-2.5 rounded-xl border border-slate-150 space-y-1.5">
-                          <span className="text-[9px] font-extrabold text-slate-400 uppercase tracking-wider block">Physical Variants ({product.variants?.length || 0})</span>
-                          <div className="max-h-[100px] overflow-y-auto space-y-1 pr-1">
-                            {product.variants?.map((v, idx) => (
-                              <div key={v.id || idx} className="flex justify-between items-center text-[9px] font-mono">
-                                <span className="font-semibold text-slate-600">{v.color} / {v.model}</span>
-                                <span className="font-black text-slate-800">{v.stock} pcs</span>
-                              </div>
-                            ))}
-                          </div>
+                        <div className="flex items-center justify-between text-[11px] text-slate-500 dark:text-slate-400">
+                          <span>By {submitterName}</span>
+                          <span className="font-mono">{formatShortDateTime(submittedAt)}</span>
+                        </div>
+
+                        <div
+                          className="grid grid-cols-4 gap-1.5"
+                          onClick={(e) => e.stopPropagation()}
+                        >
+                          <button
+                            type="button"
+                            onClick={() => setReviewProductId(product.id)}
+                            className="py-2 rounded-lg bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-950 text-xs font-bold cursor-pointer"
+                          >
+                            Review
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => openEditDrawer(product, true)}
+                            className="py-2 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 text-xs font-bold cursor-pointer"
+                          >
+                            Edit
+                          </button>
+                          <button
+                            type="button"
+                            disabled={isBusy}
+                            onClick={() => handleRequestApproveProduct(product)}
+                            className="py-2 rounded-lg bg-emerald-600 text-white text-xs font-bold cursor-pointer disabled:opacity-50"
+                          >
+                            Approve
+                          </button>
+                          <button
+                            type="button"
+                            disabled={isBusy}
+                            onClick={() => {
+                              setRejectModalProduct(product);
+                              setRejectModalReason('');
+                              setRejectModalError('');
+                            }}
+                            className="py-2 rounded-lg bg-rose-600 text-white text-xs font-bold cursor-pointer disabled:opacity-50"
+                          >
+                            Reject
+                          </button>
                         </div>
                       </div>
-
-                      {/* Approval Controls */}
-                      <div className="border-t border-slate-150 pt-3 space-y-2">
-                        {!isSuperAdmin ? (
-                          <div className="p-2.5 bg-amber-50 border border-amber-200/80 rounded-xl text-center text-xs text-amber-800 font-bold flex items-center justify-center gap-1.5">
-                            <Clock size={13} className="text-amber-600" />
-                            Awaiting Super Admin Approval
-                          </div>
-                        ) : rejectingProductId === product.id ? (
-                          <div className="space-y-2 p-2.5 bg-rose-50 border border-rose-100 rounded-xl">
-                            <label className="block text-[9px] font-bold text-rose-700 uppercase tracking-wider">Reason for Rejection</label>
-                            <input
-                              type="text"
-                              value={rejectionReasonText}
-                              onChange={(e) => setRejectionReasonText(e.target.value)}
-                              placeholder="e.g. Price mismatch or typo in variant details..."
-                              className="w-full bg-white border border-rose-200 rounded-lg py-1.5 px-2.5 text-sm text-slate-800 focus:outline-hidden"
-                            />
-                            <div className="flex gap-1.5 justify-end">
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setRejectingProductId(null);
-                                  setRejectionReasonText('');
-                                }}
-                                className="px-2.5 py-1 bg-slate-200 hover:bg-slate-300 rounded-md text-[9px] font-bold text-slate-600 cursor-pointer"
-                              >
-                                Cancel
-                              </button>
-                              <button
-                                type="button"
-                                onClick={async () => {
-                                  if (!rejectionReasonText.trim()) {
-                                    setFormError("Rejection reason is required.");
-                                    setTimeout(() => setFormError(''), 3000);
-                                    return;
-                                  }
-                                  try {
-                                    await updateProduct(product.id, { status: 'rejected', rejectionReason: rejectionReasonText.trim() });
-                                    await onRefreshData();
-                                    setRejectingProductId(null);
-                                    setRejectionReasonText('');
-                                    setFormSuccess(`Successfully rejected "${product.name}"`);
-                                    setTimeout(() => setFormSuccess(''), 3000);
-                                  } catch (err) {
-                                    setFormError(`Rejection failed`);
-                                    setTimeout(() => setFormError(''), 3000);
-                                  }
-                                }}
-                                className="px-2.5 py-1 bg-rose-500 hover:bg-rose-600 rounded-md text-[9px] font-bold text-white shadow-3xs cursor-pointer"
-                              >
-                                Confirm Reject
-                              </button>
-                            </div>
-                          </div>
-                        ) : (
-                          <div className="flex gap-2">
-                            <button
-                              onClick={async () => {
-                                try {
-                                  await updateProduct(product.id, { status: 'approved' });
-                                  await onRefreshData();
-                                  setFormSuccess(`Successfully approved "${product.name}"`);
-                                  setTimeout(() => setFormSuccess(''), 3000);
-                                } catch (err) {
-                                  setFormError(`Approval failed`);
-                                  setTimeout(() => setFormError(''), 3000);
-                                }
-                              }}
-                              className="flex-grow py-1.5 bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-sm rounded-lg shadow-3xs cursor-pointer flex items-center justify-center gap-1"
-                            >
-                              <Check size={12} /> Approve
-                            </button>
-                            <button
-                              onClick={() => {
-                                setRejectingProductId(product.id);
-                                setRejectionReasonText('');
-                              }}
-                              className="flex-grow py-1.5 bg-rose-500 hover:bg-rose-600 text-white font-bold text-sm rounded-lg shadow-3xs cursor-pointer flex items-center justify-center gap-1"
-                            >
-                              <X size={12} /> Reject
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
+                    );
+                  })}
+                </div>
+              </>
             )}
           </div>
-        </div>
-      )}
+        );
+      })()}
 
       {/* SUB TAB: OUT OF STOCK */}
       {activeSubTab === 'out_of_stock' && (
@@ -3627,18 +3855,12 @@ export default function ProductManagement({
                   </tr>
                 ) : (
                   products.filter(p => (p.stockStatus === 'out_of_stock' || getProductAvailableStock(p) <= 0) && !p.archived).map((product) => {
-                    const defaultImg = product.images?.[0] || 'https://images.unsplash.com/photo-1546868871-7041f2a55e12?auto=format&fit=crop&q=80&w=150';
                     const totalQty = (product.variants || []).reduce((s, v) => s + (v.stock || 0), 0);
                     const reservedQty = Number(product.reservedQty) || 0;
                     return (
                       <tr key={product.id} className="hover:bg-slate-50/50 transition-colors">
                         <td className="py-3 px-4">
-                          <img 
-                            src={defaultImg} 
-                            alt={product.name} 
-                            referrerPolicy="no-referrer"
-                            className="w-10 h-10 object-cover rounded-lg border border-slate-100" 
-                          />
+                          <ProductThumbnail product={product} />
                         </td>
                         <td className="py-3 px-3">
                           <p className="font-bold text-slate-900 leading-tight">{product.name}</p>
@@ -3735,16 +3957,10 @@ export default function ProductManagement({
                   </tr>
                 ) : (
                   products.filter(p => p.archived).map((product) => {
-                    const defaultImg = product.images?.[0] || 'https://images.unsplash.com/photo-1546868871-7041f2a55e12?auto=format&fit=crop&q=80&w=150';
                     return (
                       <tr key={product.id} className="hover:bg-slate-50/50 transition-colors">
                         <td className="py-3 px-4">
-                          <img 
-                            src={defaultImg} 
-                            alt={product.name} 
-                            referrerPolicy="no-referrer"
-                            className="w-10 h-10 object-cover rounded-lg border border-slate-100" 
-                          />
+                          <ProductThumbnail product={product} />
                         </td>
                         <td className="py-3 px-3">
                           <p className="font-bold text-slate-900 leading-tight">{product.name}</p>
@@ -3827,7 +4043,6 @@ export default function ProductManagement({
               </div>
             ) : (
               products.filter(p => p.deletionStatus === 'pending_approval').map((product) => {
-                const defaultImg = product.images?.[0] || 'https://images.unsplash.com/photo-1546868871-7041f2a55e12?auto=format&fit=crop&q=80&w=150';
                 return (
                   <div key={product.id} className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-3 flex flex-col justify-between animate-in fade-in zoom-in-95 duration-200">
                     <div className="space-y-3">
@@ -3839,7 +4054,11 @@ export default function ProductManagement({
                           <h4 className="text-sm font-black text-slate-900 mt-1.5">{product.name}</h4>
                           <p className="text-[9px] font-mono font-bold text-slate-400 uppercase mt-0.5">SKU: {product.sku}</p>
                         </div>
-                        <img src={defaultImg} alt="Product" className="w-12 h-12 object-cover rounded-xl border border-slate-200" referrerPolicy="no-referrer" />
+                        <ProductThumbnail
+                          product={product}
+                          className="w-12 h-12 object-cover rounded-xl border border-slate-200"
+                          fallbackClassName="w-12 h-12 rounded-xl border border-slate-200 bg-slate-100 flex items-center justify-center text-slate-400"
+                        />
                       </div>
                       
                       <div className="grid grid-cols-2 gap-y-2 gap-x-4 border-t border-slate-100 pt-2 text-sm">
@@ -3910,953 +4129,158 @@ export default function ProductManagement({
         </div>
       )}
 
-      {/* FULL-FEATURED MODAL FOR ADDING / EDITING PRODUCTS */}
-      {isDrawerOpen && (
-        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-md flex items-center justify-center p-3 sm:p-6 overflow-y-auto animate-in fade-in duration-200" role="dialog" aria-modal="true">
-          <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-4xl max-h-[92vh] flex flex-col overflow-hidden my-auto">
-            
-            {/* Modal Header */}
-            <div className="px-6 py-4 border-b border-slate-100 flex justify-between items-center bg-slate-900 text-white flex-shrink-0">
-              <div className="flex items-center gap-3">
-                <span className="text-[10px] font-mono tracking-widest font-extrabold text-amber-400 bg-amber-400/10 border border-amber-400/20 px-2.5 py-1 rounded-full uppercase">
-                  {editModeProduct ? 'Edit Mode' : 'New Product'}
-                </span>
+      {/* UNIFIED ADD / EDIT PRODUCT MODAL (Same Photo Compression/Upload & Validation Across Roles) */}
+      <ProductFormModal
+        isOpen={isDrawerOpen}
+        onClose={() => {
+          setIsDrawerOpen(false);
+          setEditModeProduct(null);
+          setPreservePendingEdit(false);
+        }}
+        editModeProduct={editModeProduct}
+        preservePendingStatus={preservePendingEdit}
+        isStaff={isStaff}
+        isSuperAdmin={isSuperAdmin}
+        user={user}
+        products={products}
+        categories={categories}
+        brands={brands}
+        productColors={productColors}
+        productModels={productModels}
+        requireCheckIn={requireCheckIn}
+        onRefreshData={onRefreshData}
+        onSaved={({ message }) => {
+          setFormSuccess(message);
+          setTimeout(() => setFormSuccess(''), 3500);
+        }}
+      />
+
+      {/* FULL-SCREEN PENDING PRODUCT REVIEW MODAL & IMAGE LIGHTBOX */}
+      <PendingProductReviewModal
+        product={reviewProduct}
+        isOpen={Boolean(reviewProduct)}
+        isStaff={isStaff}
+        canApprove={isSuperAdmin}
+        canEdit={Boolean(
+          reviewProduct &&
+            (isSuperAdmin ||
+              (reviewProduct.status === 'pending_review' &&
+                ((reviewProduct.submittedBy?.uid &&
+                  reviewProduct.submittedBy.uid === user?.id) ||
+                  (reviewProduct.createdById &&
+                    reviewProduct.createdById === user?.id))))
+        )}
+        actionLoading={Boolean(
+          reviewProduct && pendingActionLoadingId === reviewProduct.id
+        )}
+        onClose={() => setReviewProductId(null)}
+        onEdit={(prod) => openEditDrawer(prod, true)}
+        onRequestApprove={(prod) => handleRequestApproveProduct(prod)}
+        onConfirmReject={handleConfirmRejectProduct}
+      />
+
+      {/* PENDING QUEUE QUICK REJECTION DIALOG (When rejecting directly from Queue Table) */}
+      {rejectModalProduct &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            data-confirm-dialog="true"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Reject Pending Product"
+            className="fixed inset-0 z-[90] flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-xs"
+            onClick={() => !submittingReject && setRejectModalProduct(null)}
+          >
+            <form
+              onSubmit={async (e) => {
+                e.preventDefault();
+                const trimmed = rejectModalReason.trim();
+                if (!trimmed) {
+                  setRejectModalError('Please enter a rejection reason.');
+                  return;
+                }
+                setRejectModalError('');
+                setSubmittingReject(true);
+                try {
+                  await handleConfirmRejectProduct(rejectModalProduct, trimmed);
+                  setRejectModalProduct(null);
+                  setRejectModalReason('');
+                } catch (err: any) {
+                  setRejectModalError(err?.message || 'Failed to reject product.');
+                } finally {
+                  setSubmittingReject(false);
+                }
+              }}
+              onClick={(e) => e.stopPropagation()}
+              className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 max-w-md w-full space-y-4 shadow-2xl"
+            >
+              <div className="flex items-start justify-between gap-3">
                 <div>
-                  <h2 className="text-base sm:text-lg font-black text-white">
-                    {editModeProduct ? `Editing: ${formName || editModeProduct.name}` : 'Publish New Catalog Gadget'}
-                  </h2>
-                  <p className="text-xs text-slate-300">Set specs, pricing, variants, photography, and live inventory rules.</p>
+                  <h3 className="text-sm font-black text-slate-900 dark:text-white">
+                    Reject Pending Product
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                    Rejecting &ldquo;{rejectModalProduct.name}&rdquo; — reason will be sent to{' '}
+                    {rejectModalProduct.submittedBy?.name ||
+                      rejectModalProduct.createdBy ||
+                      'the submitter'}
+                    .
+                  </p>
                 </div>
+                <button
+                  type="button"
+                  disabled={submittingReject}
+                  onClick={() => setRejectModalProduct(null)}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-white cursor-pointer"
+                >
+                  <X size={16} />
+                </button>
               </div>
-              <button
-                onClick={handleCancelForm}
-                className="p-2 text-slate-400 hover:text-white hover:bg-slate-800 rounded-full cursor-pointer transition-colors"
-                title="Close Editor"
-              >
-                <X size={20} />
-              </button>
-            </div>
 
-              {/* Drawer Scrollable Content */}
-              <form onSubmit={handleFormSubmit} className="flex-grow overflow-y-auto p-5 md:p-6 space-y-6">
-                {formError && (
-                  <div className="bg-red-50 border border-red-200 text-red-600 p-4 rounded-xl text-sm flex items-start gap-2">
-                    <AlertCircle size={16} className="text-red-500 flex-shrink-0" />
-                    <p className="font-semibold">{formError}</p>
-                  </div>
-                )}
-
-                {formSuccess && (
-                  <div className="bg-teal-50 border border-teal-200 text-teal-700 p-4 rounded-xl text-sm flex items-center gap-2">
-                    <Check size={16} className="text-teal-500" />
-                    <p className="font-semibold">{formSuccess}</p>
-                  </div>
-                )}
-
-                {/* Step Indicator */}
-                <div className="mb-6">
-                  {/* Desktop Indicator */}
-                  <div className="hidden sm:flex items-center justify-between relative px-2 py-4">
-                    {/* Progress Line Background */}
-                    <div className="absolute top-[34px] left-4 right-4 h-0.5 bg-slate-100 rounded-full z-0" />
-                    
-                    {/* Active Progress Line */}
-                    <div 
-                      className="absolute top-[34px] left-4 h-0.5 bg-gradient-to-r from-amber-400 to-amber-500 rounded-full z-0 transition-all duration-500"
-                      style={{ width: `${((wizardMaxStep - 1) / 4) * (100 - (100 / 5))}%` }}
-                    />
-                    
-                    {[1, 2, 3, 4, 5].map((step) => {
-                      const isCompleted = step < wizardStep || (editModeProduct && wizardMaxStep >= step);
-                      const isActive = step === wizardStep;
-                      const isSelectable = step <= wizardMaxStep;
-                      
-                      let stepTitle = "";
-                      if (step === 1) stepTitle = "Basic Info";
-                      else if (step === 2) stepTitle = "Pricing";
-                      else if (step === 3) stepTitle = "Variants";
-                      else if (step === 4) stepTitle = "Photography";
-                      else if (step === 5) stepTitle = "Review";
-
-                      return (
-                        <button
-                          key={step}
-                          type="button"
-                          disabled={!isSelectable}
-                          onClick={() => handleJumpToStep(step)}
-                          className={`relative z-10 flex flex-col items-center group transition-all focus:outline-hidden ${
-                            isSelectable ? 'cursor-pointer' : 'cursor-not-allowed opacity-40'
-                          }`}
-                        >
-                          <div className={`size-7 rounded-full flex items-center justify-center font-black text-sm transition-all border ${
-                            isActive 
-                              ? 'bg-slate-900 text-amber-400 border-slate-900 scale-110 ring-4 ring-amber-400/20' 
-                              : isCompleted 
-                                ? 'bg-amber-400 text-slate-950 border-amber-400 font-extrabold' 
-                                : 'bg-white text-slate-400 border-slate-200 hover:border-slate-300'
-                          }`}>
-                            {isCompleted ? '✓' : step}
-                          </div>
-                          <span className={`text-[9px] font-black tracking-widest uppercase mt-2 transition-colors ${
-                            isActive ? 'text-slate-900' : isCompleted ? 'text-slate-700' : 'text-slate-400'
-                          }`}>
-                            {stepTitle}
-                          </span>
-                        </button>
-                      );
-                    })}
-                  </div>
-
-                  {/* Mobile Indicator */}
-                  <div className="sm:hidden space-y-2">
-                    <div className="flex justify-between items-center px-1">
-                      <span className="text-[9px] font-extrabold text-slate-400 uppercase tracking-widest font-mono">
-                        Step {wizardStep} of 5
-                      </span>
-                      <span className="text-sm font-black text-slate-800">
-                        {wizardStep === 1 && "Basic Info"}
-                        {wizardStep === 2 && "Pricing & Thresholds"}
-                        {wizardStep === 3 && "Variants & Stock"}
-                        {wizardStep === 4 && "Photography & Barcode"}
-                        {wizardStep === 5 && "Review & Submit"}
-                      </span>
-                    </div>
-                    <div className="h-1 w-full bg-slate-100 rounded-full overflow-hidden">
-                      <div 
-                        className="h-full bg-gradient-to-r from-amber-400 to-amber-500 rounded-full transition-all duration-500"
-                        style={{ width: `${(wizardStep / 5) * 100}%` }}
-                      />
-                    </div>
-                  </div>
-                </div>
-
-                {/* STEP 1: BASIC INFO */}
-                {wizardStep === 1 && (
-                  <motion.div
-                    key="step-1"
-                    initial={{ opacity: 0, x: 15 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{ duration: 0.25, ease: "easeOut" }}
-                    className="space-y-4"
-                  >
-                    <div className="bg-slate-50 border border-slate-150 p-5 rounded-2xl space-y-4 shadow-3xs">
-                      <div className="border-b border-slate-100 pb-3">
-                        <span className="text-[9px] font-extrabold text-amber-500 uppercase tracking-widest font-mono">Step 1 of 5</span>
-                        <h3 className="text-sm font-black text-slate-900 mt-1">Basic Info</h3>
-                        <p className="text-sm text-slate-400 mt-0.5 leading-relaxed">Identify the product name, company division mapping, and unique SKU format.</p>
-                      </div>
-
-                      <div>
-                        <label className="block text-sm font-bold uppercase tracking-wider text-slate-500 mb-1">
-                          Product Display Name <span className="text-red-500">*</span>
-                        </label>
-                        <input
-                          type="text"
-                          required
-                          value={formName}
-                          onChange={(e) => {
-                            setFormName(e.target.value);
-                            if (stepErrors.name) setStepErrors(prev => ({ ...prev, name: '' }));
-                          }}
-                          className={`w-full bg-white border rounded-xl py-2.5 px-3.5 text-sm text-slate-800 focus:outline-hidden focus:ring-4 transition-all ${
-                            stepErrors.name 
-                              ? 'border-red-350 focus:border-red-400 focus:ring-red-100' 
-                              : 'border-slate-200 focus:border-amber-400 focus:ring-amber-400/10'
-                          }`}
-                          placeholder="e.g. Joyroom JR-T03S Pro Earbuds"
-                        />
-                        {stepErrors.name && (
-                          <p className="text-sm font-semibold text-red-500 mt-1">{stepErrors.name}</p>
-                        )}
-                      </div>
-
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <div>
-                          <label className="block text-sm font-bold uppercase tracking-wider text-slate-500 mb-1">
-                            Division <span className="text-red-500">*</span>
-                          </label>
-                          <select
-                            value={formSubBrand}
-                            onChange={(e) => setFormSubBrand(e.target.value as any)}
-                            className="w-full bg-white border border-slate-200 rounded-xl py-2.5 px-3 text-sm text-slate-800 focus:outline-hidden focus:border-amber-400 focus:ring-4 focus:ring-amber-400/10 transition-all cursor-pointer"
-                          >
-                            <option value="SAT">Sky Automation Tech (SAT)</option>
-                          </select>
-                        </div>
-
-                        <div className="md:max-w-xs">
-                          <label className="block text-sm font-bold uppercase tracking-wider text-slate-500 mb-1">
-                            SKU Code Serial <span className="text-red-500">*</span>
-                          </label>
-                          <div className="flex gap-1.5">
-                            <input
-                              type="text"
-                              required
-                              value={formSku}
-                              onChange={(e) => {
-                                setFormSku(e.target.value);
-                                setIsSkuDirty(true);
-                                if (stepErrors.sku) setStepErrors(prev => ({ ...prev, sku: '' }));
-                              }}
-                              className={`flex-1 bg-white border rounded-xl py-2.5 px-3 text-sm font-mono text-slate-800 focus:outline-hidden uppercase focus:ring-4 transition-all ${
-                                stepErrors.sku
-                                  ? 'border-red-350 focus:border-red-400 focus:ring-red-100'
-                                  : 'border-slate-200 focus:border-amber-400 focus:ring-amber-400/10'
-                              }`}
-                              placeholder="MODEL-001"
-                            />
-                            <button
-                              type="button"
-                              onClick={handleAutoGenerateSku}
-                              className="px-2.5 bg-amber-400 hover:bg-amber-500 text-slate-950 font-bold rounded-xl border border-amber-350 transition-all flex items-center justify-center cursor-pointer shadow-3xs"
-                              title="Regenerate SKU automatically"
-                            >
-                              <Settings size={14} className="animate-spin-slow text-slate-950" />
-                            </button>
-                          </div>
-                          {stepErrors.sku && (
-                            <p className="text-sm font-semibold text-red-500 mt-1">{stepErrors.sku}</p>
-                          )}
-                        </div>
-                      </div>
-
-                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
-                        <div className="space-y-3">
-                          <div>
-                            <label className="block text-sm font-bold uppercase tracking-wider text-slate-500 mb-1">
-                              Main Category <span className="text-red-500">*</span>
-                            </label>
-                            <select
-                              value={formMainCategory}
-                              onChange={(e) => {
-                                const val = e.target.value;
-                                setFormMainCategory(val);
-                                setFormSubCategory('');
-                                setFormChildCategory('');
-                                setFormCategory(val); // backward compatibility
-                                if (stepErrors.mainCategory) setStepErrors(prev => ({ ...prev, mainCategory: '' }));
-                              }}
-                              className={`w-full bg-white border rounded-xl py-2.5 px-3 text-sm text-slate-800 focus:outline-hidden focus:ring-4 transition-all cursor-pointer ${
-                                stepErrors.mainCategory
-                                  ? 'border-red-350 focus:border-red-400 focus:ring-red-100'
-                                  : 'border-slate-200 focus:border-amber-400 focus:ring-amber-400/10'
-                              }`}
-                            >
-                              <option value="">-- Select Main --</option>
-                              {categories.filter(c => c.level === 'main' || !c.level).map(c => (
-                                <option key={c.id} value={c.name}>{c.name}</option>
-                              ))}
-                            </select>
-                            {stepErrors.mainCategory && (
-                              <p className="text-sm font-semibold text-red-500 mt-1">{stepErrors.mainCategory}</p>
-                            )}
-                          </div>
-
-                          <div>
-                            {(() => {
-                              const mainParentId = categories.find(p => p.name === formMainCategory && (p.level === 'main' || !p.level))?.id;
-                              const availableSubCats = formMainCategory ? categories.filter(c => c.level === 'sub' && c.parentId === mainParentId) : [];
-                              return (
-                                <>
-                                  <label className="block text-sm font-bold uppercase tracking-wider text-slate-500 mb-1">
-                                    Sub Category {availableSubCats.length > 0 && <span className="text-red-500">*</span>}
-                                  </label>
-                                  <select
-                                    value={formSubCategory}
-                                    disabled={!formMainCategory}
-                                    onChange={(e) => {
-                                      const val = e.target.value;
-                                      setFormSubCategory(val);
-                                      setFormChildCategory('');
-                                      if (stepErrors.subCategory) setStepErrors(prev => ({ ...prev, subCategory: '' }));
-                                    }}
-                                    className={`w-full bg-white border rounded-xl py-2.5 px-3 text-sm text-slate-800 focus:outline-hidden focus:ring-4 transition-all cursor-pointer ${
-                                      !formMainCategory ? 'opacity-50 cursor-not-allowed bg-slate-50' : ''
-                                    } ${
-                                      stepErrors.subCategory
-                                        ? 'border-red-350 focus:border-red-400 focus:ring-red-100'
-                                        : 'border-slate-200 focus:border-amber-400 focus:ring-amber-400/10'
-                                    }`}
-                                  >
-                                    <option value="">
-                                      {formMainCategory 
-                                        ? (availableSubCats.length > 0 ? '-- Select Sub --' : 'None (N/A)') 
-                                        : 'Select Main first'}
-                                    </option>
-                                    {availableSubCats.map(c => (
-                                      <option key={c.id} value={c.name}>{c.name}</option>
-                                    ))}
-                                  </select>
-                                </>
-                              );
-                            })()}
-                            {stepErrors.subCategory && (
-                              <p className="text-sm font-semibold text-red-500 mt-1">{stepErrors.subCategory}</p>
-                            )}
-                          </div>
-
-                          <div>
-                            {(() => {
-                              const mainParentId = categories.find(p => p.name === formMainCategory && (p.level === 'main' || !p.level))?.id;
-                              const subParentId = categories.find(s => s.name === formSubCategory && s.level === 'sub' && s.parentId === mainParentId)?.id;
-                              const availableChildCats = formSubCategory ? categories.filter(c => c.level === 'child' && c.parentId === subParentId) : [];
-                              return (
-                                <>
-                                  <label className="block text-sm font-bold uppercase tracking-wider text-slate-500 mb-1">
-                                    Child Category {availableChildCats.length > 0 && <span className="text-red-500">*</span>}
-                                  </label>
-                                  <select
-                                    value={formChildCategory}
-                                    disabled={!formSubCategory}
-                                    onChange={(e) => {
-                                      const val = e.target.value;
-                                      setFormChildCategory(val);
-                                      if (stepErrors.childCategory) setStepErrors(prev => ({ ...prev, childCategory: '' }));
-                                    }}
-                                    className={`w-full bg-white border rounded-xl py-2.5 px-3 text-sm text-slate-800 focus:outline-hidden focus:ring-4 transition-all cursor-pointer ${
-                                      !formSubCategory ? 'opacity-50 cursor-not-allowed bg-slate-50' : ''
-                                    } ${
-                                      stepErrors.childCategory
-                                        ? 'border-red-350 focus:border-red-400 focus:ring-red-100'
-                                        : 'border-slate-200 focus:border-amber-400 focus:ring-amber-400/10'
-                                    }`}
-                                  >
-                                    <option value="">
-                                      {formSubCategory 
-                                        ? (availableChildCats.length > 0 ? '-- Select Child --' : 'None (N/A)') 
-                                        : 'Select Sub first'}
-                                    </option>
-                                    {availableChildCats.map(c => (
-                                      <option key={c.id} value={c.name}>{c.name}</option>
-                                    ))}
-                                  </select>
-                                </>
-                              );
-                            })()}
-                            {stepErrors.childCategory && (
-                              <p className="text-sm font-semibold text-red-500 mt-1">{stepErrors.childCategory}</p>
-                            )}
-                          </div>
-                        </div>
-
-                        <div className="flex flex-col justify-start">
-                          <label className="block text-sm font-bold uppercase tracking-wider text-slate-500 mb-1">
-                            Brand {brands.length > 0 && <span className="text-red-500">*</span>}
-                          </label>
-                          <select
-                            value={formBrand}
-                            onChange={(e) => {
-                              setFormBrand(e.target.value);
-                              if (stepErrors.brand) setStepErrors(prev => ({ ...prev, brand: '' }));
-                            }}
-                            className={`w-full bg-white border rounded-xl py-2.5 px-3 text-sm text-slate-800 focus:outline-hidden focus:ring-4 transition-all cursor-pointer ${
-                              stepErrors.brand
-                                ? 'border-red-350 focus:border-red-400 focus:ring-red-100'
-                                : 'border-slate-200 focus:border-amber-400 focus:ring-amber-400/10'
-                            }`}
-                          >
-                            <option value="">-- Select Brand --</option>
-                            {brands.map(b => <option key={b.id} value={b.name}>{b.name}</option>)}
-                          </select>
-                          {stepErrors.brand && (
-                            <p className="text-sm font-semibold text-red-500 mt-1">{stepErrors.brand}</p>
-                          )}
-                        </div>
-                      </div>
-                    </div>
-                  </motion.div>
-                )}
-
-                {/* STEP 2: PRICING & THRESHOLDS */}
-                {wizardStep === 2 && (
-                  <motion.div
-                    key="step-2"
-                    initial={{ opacity: 0, x: 15 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{ duration: 0.25, ease: "easeOut" }}
-                    className="space-y-4"
-                  >
-                    <div className="bg-slate-50 border border-slate-150 p-5 rounded-2xl space-y-4 shadow-3xs">
-                      <div className="border-b border-slate-100 pb-3">
-                        <span className="text-[9px] font-extrabold text-amber-500 uppercase tracking-widest font-mono">Step 2 of 5</span>
-                        <h3 className="text-sm font-black text-slate-900 mt-1">Pricing & Thresholds</h3>
-                        <p className="text-sm text-slate-400 mt-0.5 leading-relaxed">Specify items' purchase costs, customer pricing structures, and inventory alarm ranges.</p>
-                      </div>
-
-                      <div className="grid grid-cols-2 gap-4">
-                        <div>
-                          <label className="block text-sm font-bold uppercase tracking-wider text-slate-500 mb-1">Purchase Price</label>
-                          <div className="relative flex rounded-xl shadow-3xs">
-                            <span className="inline-flex items-center rounded-l-xl border border-r-0 border-slate-200 bg-slate-100 px-3 text-slate-500 text-sm font-mono font-bold">
-                              ৳
-                            </span>
-                            <input
-                              type="number"
-                              disabled={isStaff}
-                              value={formCostPrice}
-                              onChange={(e) => {
-                                setFormCostPrice(e.target.value === '' ? '' : Number(e.target.value));
-                                if (stepErrors.costPrice) setStepErrors(prev => ({ ...prev, costPrice: '' }));
-                              }}
-                              className={`block w-full min-w-0 flex-1 rounded-none rounded-r-xl border bg-white py-2.5 px-3 text-sm text-slate-800 focus:outline-hidden font-mono focus:ring-4 transition-all ${
-                                stepErrors.costPrice
-                                  ? 'border-red-350 focus:border-red-400 focus:ring-red-100'
-                                  : 'border-slate-200 focus:border-amber-400 focus:ring-amber-400/10'
-                              }`}
-                            />
-                          </div>
-                          {stepErrors.costPrice && (
-                            <p className="text-sm font-semibold text-red-500 mt-1">{stepErrors.costPrice}</p>
-                          )}
-                        </div>
-                        
-                        <div>
-                          <label className="block text-sm font-bold uppercase tracking-wider text-slate-500 mb-1">
-                            Selling Price <span className="text-red-500">*</span>
-                          </label>
-                          <div className="relative flex rounded-xl shadow-3xs">
-                            <span className="inline-flex items-center rounded-l-xl border border-r-0 border-slate-200 bg-slate-100 px-3 text-slate-500 text-sm font-mono font-bold">
-                              ৳
-                            </span>
-                            <input
-                              type="number"
-                              value={formSellingPrice}
-                              onChange={(e) => {
-                                setFormSellingPrice(e.target.value === '' ? '' : Number(e.target.value));
-                                if (stepErrors.sellingPrice) setStepErrors(prev => ({ ...prev, sellingPrice: '' }));
-                              }}
-                              className={`block w-full min-w-0 flex-1 rounded-none rounded-r-xl border bg-white py-2.5 px-3 text-sm text-slate-800 focus:outline-hidden font-mono font-bold focus:ring-4 transition-all ${
-                                stepErrors.sellingPrice
-                                  ? 'border-red-350 focus:border-red-400 focus:ring-red-100'
-                                  : 'border-slate-200 focus:border-amber-400 focus:ring-amber-400/10'
-                              }`}
-                            />
-                          </div>
-                          {stepErrors.sellingPrice && (
-                            <p className="text-sm font-semibold text-red-500 mt-1">{stepErrors.sellingPrice}</p>
-                          )}
-                        </div>
-                      </div>
-
-                      {/* Calculated profit display */}
-                      {Number(formSellingPrice) > 0 && (
-                        <div className="flex flex-col gap-2 p-3 bg-white border border-slate-150 rounded-xl shadow-3xs">
-                          <div className="flex items-center justify-between text-sm font-bold">
-                            <span className="text-slate-500">Calculated Profit (৳):</span>
-                            <span className={`font-black font-mono text-sm ${
-                              Number(formSellingPrice) - Number(formCostPrice) >= 0 ? "text-emerald-600" : "text-red-600"
-                            }`}>
-                              ৳{(Number(formSellingPrice) - Number(formCostPrice)).toLocaleString()}
-                            </span>
-                          </div>
-                          <div className="flex items-center justify-between text-sm font-bold border-t border-slate-100 pt-2">
-                            <span className="text-slate-500">Profit Margin:</span>
-                            {(() => {
-                              const marginPercent = Math.round(((Number(formSellingPrice) - Number(formCostPrice)) / Number(formSellingPrice)) * 100);
-                              return (
-                                <span className={`px-2.5 py-1 rounded-lg text-sm font-black uppercase tracking-wider ${
-                                  marginPercent > 0 
-                                    ? "bg-emerald-50 text-emerald-700 border border-emerald-200" 
-                                    : marginPercent < 0 
-                                      ? "bg-red-50 text-red-700 border border-red-200" 
-                                      : "bg-slate-50 text-slate-700 border border-slate-200"
-                                }`}>
-                                  {marginPercent}% {marginPercent > 0 ? "Profit" : marginPercent < 0 ? "Loss" : "Break-even"}
-                                </span>
-                              );
-                            })()}
-                          </div>
-                        </div>
-                      )}
-
-                      {/* Warning: Selling price lower than cost price */}
-                      {Number(formSellingPrice) > 0 && Number(formSellingPrice) < Number(formCostPrice) && (
-                        <div className="bg-amber-50 border border-amber-200 text-amber-700 p-2.5 rounded-xl text-sm flex items-center gap-1.5 animate-pulse">
-                          <AlertCircle size={14} className="text-amber-500 flex-shrink-0" />
-                          <span className="font-bold">Selling price is lower than purchase cost.</span>
-                        </div>
-                      )}
-
-                      <div>
-                        <label className="block text-sm font-bold uppercase tracking-wider text-slate-500 mb-1">Reorder Alert Level</label>
-                        <input
-                          type="number"
-                          value={formReorderThreshold}
-                          onChange={(e) => {
-                            setFormReorderThreshold(e.target.value === '' ? '' : Number(e.target.value));
-                            if (stepErrors.reorderThreshold) setStepErrors(prev => ({ ...prev, reorderThreshold: '' }));
-                          }}
-                          className={`w-full bg-white border rounded-xl py-2.5 px-3.5 text-sm text-slate-800 focus:outline-hidden focus:ring-4 transition-all ${
-                            stepErrors.reorderThreshold
-                              ? 'border-red-350 focus:border-red-400 focus:ring-red-100'
-                              : 'border-slate-200 focus:border-amber-400 focus:ring-amber-400/10'
-                          }`}
-                        />
-                        <p className="text-sm text-slate-400 mt-1 italic leading-tight">Recommended: 5-10 units. An alert triggers when physical variant stock falls below this number.</p>
-                      </div>
-                    </div>
-                  </motion.div>
-                )}
-
-                {/* STEP 3: VARIANTS & STOCK */}
-                {wizardStep === 3 && (
-                  <motion.div
-                    key="step-3"
-                    initial={{ opacity: 0, x: 15 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{ duration: 0.25, ease: "easeOut" }}
-                    className="space-y-4"
-                  >
-                    <div className="bg-slate-50 border border-slate-150 p-5 rounded-2xl space-y-4 shadow-3xs">
-                      <div className="flex justify-between items-center border-b border-slate-100 pb-3">
-                        <div>
-                          <span className="text-[9px] font-extrabold text-amber-500 uppercase tracking-widest font-mono">Step 3 of 5</span>
-                          <h3 className="text-sm font-black text-slate-900 mt-1">Variants & Stock</h3>
-                          <p className="text-sm text-slate-400 mt-0.5 leading-relaxed">Map all physical product sizes and colors.</p>
-                        </div>
-                        <button
-                          type="button"
-                          onClick={addVariantField}
-                          className="text-sm font-bold text-slate-950 bg-amber-400 hover:bg-amber-500 px-3 py-1.5 rounded-lg border border-amber-350 transition-all flex items-center gap-1 shadow-3xs cursor-pointer"
-                        >
-                          <Plus size={12} /> Add Variant
-                        </button>
-                      </div>
-
-                      {stepErrors.variants && (
-                        <p className="text-sm font-bold text-red-600 bg-red-50 p-3 rounded-xl border border-red-100">{stepErrors.variants}</p>
-                      )}
-
-                      <div className="space-y-4 max-h-[380px] overflow-y-auto pr-1">
-                        {formVariants.map((variant, index) => (
-                          <div key={variant.id} className="p-4 bg-white rounded-2xl border border-slate-200 space-y-3 relative group shadow-3xs">
-                            <div className="flex justify-between items-center">
-                              <span className="text-sm font-bold text-slate-400 uppercase tracking-wider">
-                                Variant #{index + 1}
-                              </span>
-                              {formVariants.length > 1 && (
-                                <button
-                                  type="button"
-                                  onClick={() => removeVariantField(variant.id)}
-                                  className="text-slate-300 hover:text-red-500 transition-colors cursor-pointer"
-                                  title="Remove Variant"
-                                >
-                                  <Trash2 size={15} />
-                                </button>
-                              )}
-                            </div>
-
-                            <div className="grid grid-cols-2 gap-3">
-                              <div>
-                                <label className="text-[9px] font-bold text-slate-500 uppercase">Color/Finish</label>
-                                {!isCustomColorMode[variant.id] ? (
-                                  <select
-                                    value={variant.color}
-                                    onChange={(e) => {
-                                      const val = e.target.value;
-                                      if (val === '__add_custom__') {
-                                        setIsCustomColorMode(prev => ({ ...prev, [variant.id]: true }));
-                                        updateVariantValue(variant.id, 'color', '');
-                                      } else {
-                                        updateVariantValue(variant.id, 'color', val);
-                                      }
-                                      if (stepErrors[`variant-color-${variant.id}`]) {
-                                        setStepErrors(prev => ({ ...prev, [`variant-color-${variant.id}`]: '' }));
-                                      }
-                                    }}
-                                    className={`mt-1 w-full bg-slate-50 border rounded-xl py-2 px-3 text-sm text-slate-800 cursor-pointer ${
-                                      stepErrors[`variant-color-${variant.id}`] ? 'border-red-300 focus:ring-red-100' : 'border-slate-200 focus:ring-amber-400/10'
-                                    }`}
-                                  >
-                                    <option value="">-- Select Color --</option>
-                                    {variant.color && !productColors.some(c => c.name.toLowerCase() === variant.color.toLowerCase()) && (
-                                      <option value={variant.color}>{variant.color}</option>
-                                    )}
-                                    {productColors.map(c => <option key={c.id} value={c.name}>{c.name}</option>)}
-                                    <option value="__add_custom__" className="text-amber-600 font-bold">+ Add custom color...</option>
-                                  </select>
-                                ) : (
-                                  <div className="mt-1 flex gap-1.5">
-                                    <input
-                                      type="text"
-                                      placeholder="e.g. Matte Gray"
-                                      value={customColorValue[variant.id] || ''}
-                                      onChange={(e) => setCustomColorValue(prev => ({ ...prev, [variant.id]: e.target.value }))}
-                                      className="flex-grow bg-slate-50 border border-slate-200 rounded-xl py-1 px-2.5 text-sm focus:outline-hidden"
-                                    />
-                                    <button
-                                      type="button"
-                                      onClick={async () => {
-                                        const customVal = (customColorValue[variant.id] || '').trim();
-                                        if (customVal) {
-                                          await handleAddCustomColor(customVal);
-                                          updateVariantValue(variant.id, 'color', customVal);
-                                          setIsCustomColorMode(prev => ({ ...prev, [variant.id]: false }));
-                                        }
-                                      }}
-                                      className="px-2 bg-amber-400 hover:bg-amber-500 font-bold rounded-lg text-sm text-slate-950 shadow-xs cursor-pointer"
-                                    >
-                                      Save
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setIsCustomColorMode(prev => ({ ...prev, [variant.id]: false }));
-                                        updateVariantValue(variant.id, 'color', '');
-                                      }}
-                                      className="px-1.5 bg-slate-100 hover:bg-slate-200 rounded-lg text-sm text-slate-500 cursor-pointer"
-                                    >
-                                      Cancel
-                                    </button>
-                                  </div>
-                                )}
-                                {stepErrors[`variant-color-${variant.id}`] && (
-                                  <p className="text-[9px] font-semibold text-red-500 mt-1">{stepErrors[`variant-color-${variant.id}`]}</p>
-                                )}
-                              </div>
-
-                              <div>
-                                <label className="text-[9px] font-bold text-slate-500 uppercase">Model/Size</label>
-                                {!isCustomSizeMode[variant.id] ? (
-                                  <select
-                                    value={variant.model}
-                                    onChange={(e) => {
-                                      const val = e.target.value;
-                                      if (val === '__add_custom__') {
-                                        setIsCustomSizeMode(prev => ({ ...prev, [variant.id]: true }));
-                                        updateVariantValue(variant.id, 'model', '');
-                                      } else {
-                                        updateVariantValue(variant.id, 'model', val);
-                                      }
-                                      if (stepErrors[`variant-model-${variant.id}`]) {
-                                        setStepErrors(prev => ({ ...prev, [`variant-model-${variant.id}`]: '' }));
-                                      }
-                                    }}
-                                    className={`mt-1 w-full bg-slate-50 border rounded-xl py-2 px-3 text-sm text-slate-800 cursor-pointer ${
-                                      stepErrors[`variant-model-${variant.id}`] ? 'border-red-300 focus:ring-red-100' : 'border-slate-200 focus:ring-amber-400/10'
-                                    }`}
-                                  >
-                                    <option value="">-- Select Size/Model --</option>
-                                    {variant.model && !productModels.some(s => s.name.toLowerCase() === variant.model.toLowerCase()) && (
-                                      <option value={variant.model}>{variant.model}</option>
-                                    )}
-                                    {productModels.map(s => <option key={s.id} value={s.name}>{s.name}</option>)}
-                                    <option value="__add_custom__" className="text-amber-600 font-bold">+ Add custom size...</option>
-                                  </select>
-                                ) : (
-                                  <div className="mt-1 flex gap-1.5">
-                                    <input
-                                      type="text"
-                                      placeholder="e.g. 1TB"
-                                      value={customSizeValue[variant.id] || ''}
-                                      onChange={(e) => setCustomSizeValue(prev => ({ ...prev, [variant.id]: e.target.value }))}
-                                      className="flex-grow bg-slate-50 border border-slate-200 rounded-xl py-1 px-2.5 text-sm focus:outline-hidden"
-                                    />
-                                    <button
-                                      type="button"
-                                      onClick={async () => {
-                                        const customVal = (customSizeValue[variant.id] || '').trim();
-                                        if (customVal) {
-                                          await handleAddCustomSize(customVal);
-                                          updateVariantValue(variant.id, 'model', customVal);
-                                          setIsCustomSizeMode(prev => ({ ...prev, [variant.id]: false }));
-                                        }
-                                      }}
-                                      className="px-2 bg-amber-400 hover:bg-amber-500 font-bold rounded-lg text-sm text-slate-950 shadow-xs cursor-pointer"
-                                    >
-                                      Save
-                                    </button>
-                                    <button
-                                      type="button"
-                                      onClick={() => {
-                                        setIsCustomSizeMode(prev => ({ ...prev, [variant.id]: false }));
-                                        updateVariantValue(variant.id, 'model', '');
-                                      }}
-                                      className="px-1.5 bg-slate-100 hover:bg-slate-200 rounded-lg text-sm text-slate-500 cursor-pointer"
-                                    >
-                                      Cancel
-                                    </button>
-                                  </div>
-                                )}
-                                {stepErrors[`variant-model-${variant.id}`] && (
-                                  <p className="text-[9px] font-semibold text-red-500 mt-1">{stepErrors[`variant-model-${variant.id}`]}</p>
-                                )}
-                              </div>
-                            </div>
-
-                            <div>
-                              <label className="text-[9px] font-bold text-slate-500 uppercase">Initial Stock</label>
-                              <input
-                                type="number"
-                                value={variant.stock}
-                                onChange={(e) => {
-                                  updateVariantValue(variant.id, 'stock', e.target.value === '' ? '' : Number(e.target.value));
-                                  if (stepErrors[`variant-stock-${variant.id}`]) {
-                                    setStepErrors(prev => ({ ...prev, [`variant-stock-${variant.id}`]: '' }));
-                                  }
-                                }}
-                                className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-sm font-mono font-bold text-slate-800 focus:outline-hidden focus:ring-4 focus:ring-amber-400/10 transition-all"
-                              />
-                              {stepErrors[`variant-stock-${variant.id}`] && (
-                                <p className="text-[9px] font-semibold text-red-500 mt-1">{stepErrors[`variant-stock-${variant.id}`]}</p>
-                              )}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </motion.div>
-                )}
-
-                {/* STEP 4: PHOTOGRAPHY & PREVIEW */}
-                {wizardStep === 4 && (
-                  <motion.div
-                    key="step-4"
-                    initial={{ opacity: 0, x: 15 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{ duration: 0.25, ease: "easeOut" }}
-                    className="space-y-4"
-                  >
-                    <div className="bg-slate-50 border border-slate-150 p-5 rounded-2xl space-y-4 shadow-3xs">
-                      <div className="border-b border-slate-100 pb-3">
-                        <span className="text-[9px] font-extrabold text-amber-500 uppercase tracking-widest font-mono">Step 4 of 5</span>
-                        <h3 className="text-sm font-black text-slate-900 mt-1">Product Photography & Barcode</h3>
-                        <p className="text-sm text-slate-400 mt-0.5 leading-relaxed">Upload visual gadget images and review auto-generated barcode configurations.</p>
-                      </div>
-
-                      <div className="space-y-2">
-                        <label className="block text-sm font-bold uppercase tracking-wider text-slate-500 mb-1">Photography Assets</label>
-                        <div className="grid grid-cols-4 gap-2">
-                          {formImages.map((img, idx) => (
-                            <div key={idx} className="relative group aspect-square rounded-xl overflow-hidden border border-slate-200 bg-white shadow-3xs">
-                              <img src={img} alt="Preview" className="w-full h-full object-cover" referrerPolicy="no-referrer" />
-                              <button
-                                type="button"
-                                onClick={() => removeImage(idx)}
-                                className="absolute inset-0 flex items-center justify-center bg-slate-950/60 text-white opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer duration-200"
-                              >
-                                <Trash2 size={16} />
-                              </button>
-                            </div>
-                          ))}
-                          <label className="aspect-square rounded-xl border-2 border-dashed border-slate-250 hover:border-amber-400 hover:bg-amber-50 flex flex-col items-center justify-center text-slate-400 cursor-pointer transition-all">
-                            <Upload size={18} />
-                            <span className="text-[8px] font-extrabold mt-1 uppercase tracking-wider">Upload</span>
-                            <input type="file" className="hidden" accept="image/*" multiple onChange={handleImageUpload} />
-                          </label>
-                        </div>
-                      </div>
-
-                      {/* Barcode Tag live rendering preview */}
-                      <div className="border-t border-slate-200 pt-3.5 space-y-2">
-                        <div className="flex justify-between items-center">
-                          <span className="text-sm font-extrabold text-slate-500 uppercase tracking-widest font-mono">Live Barcode Tag Preview</span>
-                          <span className="text-[9px] font-mono font-bold text-amber-500 bg-amber-50 border border-amber-100 px-1.5 py-0.5 rounded-md uppercase tracking-wider">{formSku || 'TEMP-SKU'}</span>
-                        </div>
-                        <div className="bg-white p-4 rounded-xl border border-slate-150 flex flex-col items-center justify-center shadow-3xs">
-                          <Barcode 
-                            value={formSku || 'TEMP-SKU-CODE'} 
-                            height={44} 
-                            width={1.4} 
-                            fontSize={9} 
-                            margin={5} 
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  </motion.div>
-                )}
-
-                {/* STEP 5: REVIEW & SUBMIT */}
-                {wizardStep === 5 && (
-                  <motion.div
-                    key="step-5"
-                    initial={{ opacity: 0, x: 15 }}
-                    animate={{ opacity: 1, x: 0 }}
-                    transition={{ duration: 0.25, ease: "easeOut" }}
-                    className="space-y-4"
-                  >
-                    <div className="bg-slate-50 border border-slate-150 p-5 rounded-2xl space-y-4 shadow-3xs text-sm">
-                      <div className="border-b border-slate-100 pb-3">
-                        <span className="text-[9px] font-extrabold text-amber-500 uppercase tracking-widest font-mono">Step 5 of 5</span>
-                        <h3 className="text-sm font-black text-slate-900 mt-1">Review & Submit</h3>
-                        <p className="text-sm text-slate-400 mt-0.5 leading-relaxed">Review the entered specs and variant information before submission.</p>
-                      </div>
-
-                      <div className="space-y-3">
-                        <div className="bg-white p-4 rounded-xl border border-slate-150 space-y-2.5">
-                          <h4 className="text-sm font-bold text-slate-400 uppercase tracking-widest">Basic Details</h4>
-                          <div className="grid grid-cols-2 gap-y-2 gap-x-4">
-                            <div>
-                              <span className="text-slate-400 font-medium block">Display Name:</span>
-                              <span className="font-bold text-slate-800">{formName}</span>
-                            </div>
-                            <div>
-                              <span className="text-slate-400 font-medium block">SKU Code:</span>
-                              <span className="font-mono font-black text-slate-900 uppercase">{formSku}</span>
-                            </div>
-                            <div>
-                              <span className="text-slate-400 font-medium block">Hierarchy:</span>
-                              <span className="font-semibold text-slate-700">
-                                {formMainCategory} → {formSubCategory} → {formChildCategory}
-                              </span>
-                            </div>
-                            <div>
-                              <span className="text-slate-400 font-medium block">Brand & Division:</span>
-                              <span className="font-semibold text-slate-700">{formBrand} ({formSubBrand})</span>
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="bg-white p-4 rounded-xl border border-slate-150 space-y-2.5">
-                          <h4 className="text-sm font-bold text-slate-400 uppercase tracking-widest">Financial & Stock specs</h4>
-                          <div className="grid grid-cols-2 gap-y-2 gap-x-4">
-                            <div>
-                              <span className="text-slate-400 font-medium block">Purchase Price:</span>
-                              <span className="font-bold text-slate-800">৳{Number(formCostPrice).toLocaleString()}</span>
-                            </div>
-                            <div>
-                              <span className="text-slate-400 font-medium block">Selling Price:</span>
-                              <span className="font-bold text-slate-800">৳{Number(formSellingPrice).toLocaleString()}</span>
-                            </div>
-                            <div>
-                              <span className="text-slate-400 font-medium block">Live Profit (৳):</span>
-                              <span className={`font-black ${
-                                Number(formSellingPrice) - Number(formCostPrice) >= 0 ? "text-emerald-600" : "text-red-600"
-                              }`}>
-                                ৳{(Number(formSellingPrice) - Number(formCostPrice)).toLocaleString()}
-                              </span>
-                            </div>
-                            <div>
-                              <span className="text-slate-400 font-medium block">Alert Level:</span>
-                              <span className="font-semibold text-slate-700">{formReorderThreshold} units</span>
-                            </div>
-                          </div>
-                        </div>
-
-                        <div className="bg-white p-4 rounded-xl border border-slate-150 space-y-2.5">
-                          <h4 className="text-sm font-bold text-slate-400 uppercase tracking-widest">Variants Configured</h4>
-                          <div className="space-y-1.5 max-h-[150px] overflow-y-auto">
-                            {formVariants.map((v, i) => (
-                              <div key={v.id} className="flex justify-between items-center bg-slate-50 p-2 rounded-lg border border-slate-100 text-sm">
-                                <span className="font-bold text-slate-700">
-                                  Variant #{i + 1}: {v.color} / {v.model}
-                                </span>
-                                <span className="font-mono text-slate-500">
-                                  {v.stock} pcs | Code: {formSku}-{v.color.toUpperCase().replace(/\s+/g, '')}-{v.model.toUpperCase().replace(/\s+/g, '')}
-                                </span>
-                              </div>
-                            ))}
-                          </div>
-                        </div>
-
-                        {formImages.length > 0 && (
-                          <div className="bg-white p-4 rounded-xl border border-slate-150 space-y-2">
-                            <h4 className="text-sm font-bold text-slate-400 uppercase tracking-widest">Uploaded Images ({formImages.length})</h4>
-                            <div className="flex gap-2 overflow-x-auto py-1">
-                              {formImages.map((img, idx) => (
-                                <img key={idx} src={img} alt="Thumb" className="w-10 h-10 object-cover rounded-md border border-slate-200" referrerPolicy="no-referrer" />
-                              ))}
-                            </div>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </motion.div>
-                )}
-              </form>
-
-              {/* Drawer Sticky Footer with Back/Next/Publish controls */}
-              <div className="p-5 md:p-6 border-t border-slate-150 bg-slate-50 flex items-center justify-between gap-3">
-                {wizardStep > 1 ? (
-                  <button
-                    type="button"
-                    disabled={submitting}
-                    onClick={handlePrevStep}
-                    className="px-4 py-3 bg-white border border-slate-250 text-slate-700 font-bold rounded-xl text-sm hover:bg-slate-50 transition-all flex items-center gap-1.5 shadow-2xs cursor-pointer disabled:opacity-50"
-                  >
-                    <ArrowLeft size={14} /> Back
-                  </button>
-                ) : (
-                  <button
-                    type="button"
-                    disabled={submitting}
-                    onClick={handleCancelForm}
-                    className="px-4 py-3 bg-white border border-slate-250 text-slate-500 hover:text-slate-800 font-bold rounded-xl text-sm hover:bg-slate-50 transition-all cursor-pointer"
-                  >
-                    Cancel
-                  </button>
-                )}
-
-                {wizardStep < 5 ? (
-                  <div className="flex items-center gap-2 flex-grow justify-end">
-                    {wizardStep > 1 && (
-                      <button
-                        type="button"
-                        disabled={submitting}
-                        onClick={handleCancelForm}
-                        className="px-4 py-3 text-slate-500 hover:text-slate-800 font-bold text-sm transition-all cursor-pointer"
-                      >
-                        Cancel
-                      </button>
-                    )}
-                    {editModeProduct && (
-                      <button
-                        type="button"
-                        disabled={submitting}
-                        onClick={(e) => handleFormSubmit(e as any)}
-                        className="px-5 py-3 bg-teal-600 hover:bg-teal-700 text-white font-bold rounded-xl text-sm transition-all shadow-md active:scale-95 disabled:opacity-50 flex items-center justify-center gap-1.5 cursor-pointer"
-                      >
-                        <Check size={15} />
-                        <span>Save Changes</span>
-                      </button>
-                    )}
-                    <button
-                      type="button"
-                      disabled={submitting}
-                      onClick={handleNextStep}
-                      className="px-6 py-3 bg-slate-900 hover:bg-slate-950 text-white font-bold rounded-xl text-sm transition-all shadow-md flex items-center justify-center gap-1.5 cursor-pointer"
-                    >
-                      Continue <ArrowRight size={14} />
-                    </button>
-                  </div>
-                ) : (
-                  <>
-                    <button
-                      type="button"
-                      disabled={submitting}
-                      onClick={handleCancelForm}
-                      className="px-4 py-3 text-slate-500 hover:text-slate-800 font-bold text-sm transition-all cursor-pointer"
-                    >
-                      Cancel
-                    </button>
-                    <button
-                      type="button"
-                      disabled={submitting}
-                      onClick={(e) => {
-                        console.log("BUTTON CLICKED - RAW EVENT");
-                        handleFormSubmit(e as any);
-                      }}
-                      className="flex-grow py-3 bg-amber-400 hover:bg-amber-500 text-slate-950 font-bold rounded-xl text-sm transition-all shadow-md active:scale-95 disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2 cursor-pointer"
-                    >
-                      {submitting ? (
-                        <>
-                          <div className="w-4 h-4 border-2 border-slate-950 border-t-transparent rounded-full animate-spin" />
-                          <span>Publishing...</span>
-                        </>
-                      ) : (
-                        <>
-                          <Check size={14} />
-                          <span>{editModeProduct ? 'Commit Updates' : (user?.role === 'staff' ? 'Submit for Review' : 'Publish to Catalog')}</span>
-                        </>
-                      )}
-                    </button>
-                  </>
+              <div>
+                <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300 mb-1.5">
+                  Rejection Reason <span className="text-rose-500">*</span>
+                </label>
+                <textarea
+                  rows={3}
+                  autoFocus
+                  required
+                  value={rejectModalReason}
+                  onChange={(e) => {
+                    setRejectModalReason(e.target.value);
+                    if (rejectModalError) setRejectModalError('');
+                  }}
+                  placeholder="e.g. Incorrect price, incomplete variants, or low-quality product image..."
+                  className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-3 text-sm text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 focus:ring-rose-500/30 focus:border-rose-500"
+                />
+                {rejectModalError && (
+                  <p className="text-xs font-semibold text-rose-600 dark:text-rose-400 mt-1">
+                    {rejectModalError}
+                  </p>
                 )}
               </div>
 
-            </div>
-          </div>
+              <div className="flex justify-end gap-2 pt-1">
+                <button
+                  type="button"
+                  disabled={submittingReject}
+                  onClick={() => setRejectModalProduct(null)}
+                  className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-200 text-xs font-bold cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={submittingReject || !rejectModalReason.trim()}
+                  className="px-4 py-2 rounded-xl bg-rose-600 hover:bg-rose-700 disabled:opacity-50 text-white text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer"
+                >
+                  {submittingReject && <Loader2 size={13} className="animate-spin" />}
+                  <span>Confirm Rejection</span>
+                </button>
+              </div>
+            </form>
+          </div>,
+          document.body
         )}
 
       {/* BULK CSV IMPORT MODAL */}
@@ -4920,34 +4344,46 @@ export default function ProductManagement({
         </div>
       )}
 
-      {confirmDialog?.isOpen && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs">
-          <div className="bg-white rounded-2xl border border-slate-150 p-6 max-w-sm w-full space-y-4 shadow-xl">
-            <div className="space-y-1.5">
-              <h3 className="text-sm font-black text-slate-950 font-sans">{confirmDialog.title}</h3>
-              <p className="text-sm text-slate-500 leading-relaxed font-sans">{confirmDialog.message}</p>
+      {confirmDialog?.isOpen &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            data-confirm-dialog="true"
+            role="dialog"
+            aria-modal="true"
+            className="fixed inset-0 z-[100] flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs"
+            onClick={() => setConfirmDialog(null)}
+          >
+            <div
+              className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-6 max-w-sm w-full space-y-4 shadow-xl"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <div className="space-y-1.5">
+                <h3 className="text-sm font-black text-slate-950 dark:text-white font-sans">{confirmDialog.title}</h3>
+                <p className="text-sm text-slate-500 dark:text-slate-400 leading-relaxed font-sans">{confirmDialog.message}</p>
+              </div>
+              <div className="flex gap-2.5 justify-end">
+                <button
+                  type="button"
+                  onClick={() => setConfirmDialog(null)}
+                  className="px-4 py-2 bg-slate-100 hover:bg-slate-200 dark:bg-slate-800 dark:hover:bg-slate-700 text-slate-600 dark:text-slate-200 rounded-xl text-sm font-bold transition-all cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => {
+                    confirmDialog.onConfirm();
+                  }}
+                  className="px-4 py-2 bg-slate-900 hover:bg-slate-950 dark:bg-amber-400 dark:hover:bg-amber-500 text-white dark:text-slate-950 rounded-xl text-sm font-bold transition-all shadow-md cursor-pointer"
+                >
+                  Confirm
+                </button>
+              </div>
             </div>
-            <div className="flex gap-2.5 justify-end">
-              <button
-                type="button"
-                onClick={() => setConfirmDialog(null)}
-                className="px-4 py-2 bg-slate-100 hover:bg-slate-200 text-slate-600 rounded-xl text-sm font-bold transition-all cursor-pointer"
-              >
-                Cancel
-              </button>
-              <button
-                type="button"
-                onClick={() => {
-                  confirmDialog.onConfirm();
-                }}
-                className="px-4 py-2 bg-slate-900 hover:bg-slate-950 text-white rounded-xl text-sm font-bold transition-all shadow-md cursor-pointer"
-              >
-                Confirm
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+          </div>,
+          document.body
+        )}
 
       {/* Sky Inventory Product-Only Sync Integration Modal */}
       <ResellerSyncModal

@@ -11,6 +11,8 @@ import {
   ExternalLink,
   Plane,
   RefreshCw,
+  CheckCircle2,
+  XCircle,
 } from 'lucide-react';
 import {
   collection,
@@ -62,6 +64,8 @@ interface UnifiedNotificationItem {
   createdAt: number;
   read: boolean;
   targetScreen?: string;
+  subAction?: string;
+  targetId?: string;
   preOrderId?: string;
   subBrand?: 'SAT' | 'GZ' | 'RTX';
   severity?: 'info' | 'warning' | 'urgent';
@@ -193,7 +197,8 @@ export default function NotificationCenter({
         .filter(
           (n) =>
             !n.dismissedBy?.includes(user.id || '') &&
-            (isSuperAdmin || n.type !== 'pending_approval')
+            (isSuperAdmin || n.type !== 'pending_approval') &&
+            (!n.targetUserId || n.targetUserId === user.id)
         )
         .forEach((n) => {
           const isRead = Boolean(n.read || n.readBy?.includes(user.id || ''));
@@ -206,6 +211,8 @@ export default function NotificationCenter({
             createdAt: n.createdAt,
             read: isRead,
             targetScreen: n.targetScreen,
+            subAction: n.subAction,
+            targetId: n.targetId,
           });
         });
 
@@ -606,13 +613,14 @@ export default function NotificationCenter({
       const targetTab =
         notif.targetScreen === 'due_payments' ? 'receivables' : notif.targetScreen;
       const targetSubAction =
-        notif.type === 'pending_approval' && targetTab === 'users'
+        notif.subAction ||
+        (notif.type === 'pending_approval' && (targetTab === 'users' || targetTab === 'products')
           ? 'pending'
-          : undefined;
+          : undefined);
       onNavigate(
         targetTab,
         targetSubAction,
-        notif.source === 'preorder' ? notif.preOrderId || null : null
+        notif.source === 'preorder' ? notif.preOrderId || null : notif.targetId || null
       );
       setIsOpen(false);
     }
@@ -640,6 +648,12 @@ export default function NotificationCenter({
         return <Clock size={16} className="text-rose-500" />;
       case 'pending_approval':
         return <UserCheck size={16} className="text-teal-500" />;
+      case 'product_review':
+        return item.title.toLowerCase().includes('reject') ? (
+          <XCircle size={16} className="text-rose-500" />
+        ) : (
+          <CheckCircle2 size={16} className="text-emerald-500" />
+        );
       default:
         return <Bell size={16} className="text-slate-500 dark:text-slate-400" />;
     }

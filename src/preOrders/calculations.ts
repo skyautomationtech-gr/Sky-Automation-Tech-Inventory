@@ -1,4 +1,4 @@
-import { PreOrderPayment, PreOrderPaymentState, PreOrderStatus } from '../types';
+import { PreOrderPayment, PreOrderPaymentState, PreOrderStatus, PreOrderItem } from '../types';
 import { PRE_ORDER_ALLOWED_TRANSITIONS } from './constants';
 
 /**
@@ -20,8 +20,9 @@ export function roundMoney(amount: number | string | undefined | null): number {
 }
 
 export interface PreOrderCalculationInput {
-  qty: number;
-  sellingUnitPrice: number;
+  items?: PreOrderItem[];
+  qty?: number;
+  sellingUnitPrice?: number;
   deliveryCharge?: number;
   discount?: number;
   chinaUnitCost?: number;
@@ -48,24 +49,42 @@ export interface PreOrderFinancialSummary {
  * Pure integer-safe Pre-Order financial calculation helper.
  *
  * Formulas:
- *   subtotal              = sellingUnitPrice * qty
+ *   subtotal              = sum(item.qty * item.sellingUnitPrice)
  *   totalAmount           = subtotal + deliveryCharge - discount
  *   verifiedCollected     = sum(verified non-refund collections) - sum(verified reversals of collections)
  *   verifiedRefunded      = sum(verified refunds) - sum(verified reversals of refunds)
  *   verifiedNetPaid       = verifiedCollected - verifiedRefunded
  *   dueAmount             = totalAmount - verifiedCollected + verifiedRefunded
- *   expectedProfit        = totalAmount - deliveryCharge - (chinaUnitCost * qty) - shippingCost
+ *   expectedProfit        = totalAmount - deliveryCharge - sum(item.qty * item.chinaUnitCost) - shippingCost
  *   expectedProfitPercent = netProductRevenue > 0 ? (expectedProfit / netProductRevenue) * 100 : 0
  */
 export function calculatePreOrderFinancials(input: PreOrderCalculationInput): PreOrderFinancialSummary {
-  const safeQty = Math.max(0, Math.round(Number(input.qty) || 0));
-  const unitPricePaisa = Math.max(0, toPaisa(input.sellingUnitPrice));
+  let subtotalPaisa = 0;
+  let totalChinaCostPaisa = 0;
+  let totalQty = 0;
+
+  if (Array.isArray(input.items) && input.items.length > 0) {
+    for (const item of input.items) {
+      const q = Math.max(0, Math.round(Number(item.qty) || 0));
+      const up = Math.max(0, toPaisa(item.sellingUnitPrice));
+      const cp = Math.max(0, toPaisa(item.chinaUnitCost));
+      subtotalPaisa += q * up;
+      totalChinaCostPaisa += q * cp;
+      totalQty += q;
+    }
+  } else {
+    totalQty = Math.max(0, Math.round(Number(input.qty) || 0));
+    const unitPricePaisa = Math.max(0, toPaisa(input.sellingUnitPrice));
+    const chinaCostPaisa = Math.max(0, toPaisa(input.chinaUnitCost));
+    subtotalPaisa = totalQty * unitPricePaisa;
+    totalChinaCostPaisa = totalQty * chinaCostPaisa;
+  }
+
+  const safeQty = totalQty;
   const deliveryPaisa = Math.max(0, toPaisa(input.deliveryCharge));
   const discountPaisa = Math.max(0, toPaisa(input.discount));
-  const chinaCostPaisa = Math.max(0, toPaisa(input.chinaUnitCost));
   const shippingCostPaisa = Math.max(0, toPaisa(input.shippingCost));
 
-  const subtotalPaisa = safeQty * unitPricePaisa;
   const totalAmountPaisa = Math.max(0, subtotalPaisa + deliveryPaisa - discountPaisa);
 
   let verifiedCollectedPaisa = 0;
@@ -99,7 +118,6 @@ export function calculatePreOrderFinancials(input: PreOrderCalculationInput): Pr
   const verifiedNetPaidPaisa = verifiedCollectedPaisa - verifiedRefundedPaisa;
   const dueAmountPaisa = totalAmountPaisa - verifiedCollectedPaisa + verifiedRefundedPaisa;
 
-  const totalChinaCostPaisa = safeQty * chinaCostPaisa;
   const netRevenuePaisa = totalAmountPaisa - deliveryPaisa;
   const expectedProfitPaisa =
     netRevenuePaisa - totalChinaCostPaisa - shippingCostPaisa;

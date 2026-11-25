@@ -817,6 +817,26 @@ export type PreOrderPaymentMethod = 'Cash' | 'bKash' | 'Nagad' | 'Rocket' | 'Ban
 
 export type PreOrderPaymentState = 'unpaid' | 'partially_paid' | 'fully_paid' | 'refunded';
 
+export interface PreOrderItem {
+  itemId: string;
+  linkedProductId?: string;
+  linkedVariantId?: string;
+  productName: string;
+  imageUrl?: string;
+  category?: string;
+  sku?: string;
+  model?: string;
+  variant?: string;
+  color?: string;
+  qty: number;
+  chinaUnitCost?: number;
+  sellingUnitPrice: number;
+  lineTotal: number;
+  receivedQty?: number;
+  deliveredQty?: number;
+  notes?: string;
+}
+
 export interface PreOrder {
   id: string;
   preOrderNumber: string; // e.g. "PO-0001"
@@ -829,7 +849,13 @@ export interface PreOrder {
   customerAddress: string;
   salesChannel?: SalesChannel | string;
 
-  // Product / Item details
+  // Product / Item details (Supports MULTIPLE products & variants via items)
+  items: PreOrderItem[];
+  itemCount?: number;
+  totalQty?: number;
+  searchKeywords?: string[];
+
+  // Backward compatibility legacy single fields (derived or mapped)
   productName: string;
   category?: string;
   sku?: string;

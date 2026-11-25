@@ -50,6 +50,7 @@ import {
   PreOrderConversionLock,
   PreOrderCustomsStatus,
   PreOrderIntegrityReport,
+  PreOrderItem,
   PreOrderNotification,
   PreOrderPayment,
   PreOrderPaymentMethod,
@@ -477,6 +478,7 @@ export interface CreatePreOrderInput {
   productImage?: string;
   linkedProductId?: string;
   linkedVariantId?: string;
+  items?: PreOrderItem[];
   qty: number;
   sellingUnitPrice: number;
   deliveryCharge?: number;
@@ -528,31 +530,73 @@ export async function createPreOrder(
   if (!input.customerAddress?.trim()) {
     throw new Error('Customer delivery address is required.');
   }
-  if (!input.productName?.trim()) {
-    throw new Error('Product name is required.');
+
+  const items: PreOrderItem[] = Array.isArray(input.items) && input.items.length > 0
+    ? input.items.map((it, idx) => ({
+        itemId: it.itemId || `item-${idx + 1}`,
+        linkedProductId: it.linkedProductId || '',
+        linkedVariantId: it.linkedVariantId || '',
+        productName: it.productName?.trim() || 'Pre-Order Item',
+        imageUrl: it.imageUrl || '',
+        category: it.category?.trim() || '',
+        sku: it.sku?.trim() || '',
+        model: it.model?.trim() || '',
+        variant: it.variant?.trim() || '',
+        color: it.color?.trim() || '',
+        qty: Math.max(1, Math.round(Number(it.qty) || 1)),
+        chinaUnitCost: Number(it.chinaUnitCost || 0),
+        sellingUnitPrice: Number(it.sellingUnitPrice || 0),
+        lineTotal: Math.max(1, Math.round(Number(it.qty) || 1)) * Number(it.sellingUnitPrice || 0),
+        receivedQty: 0,
+        deliveredQty: 0,
+      }))
+    : [{
+        itemId: 'item-1',
+        linkedProductId: input.linkedProductId || '',
+        linkedVariantId: input.linkedVariantId || '',
+        productName: input.productName?.trim() || 'Pre-Order Item',
+        imageUrl: input.productImage || '',
+        category: input.category?.trim() || '',
+        sku: input.sku?.trim() || '',
+        model: input.model?.trim() || '',
+        variant: input.variant?.trim() || '',
+        color: input.color?.trim() || '',
+        qty: Math.max(1, Math.round(Number(input.qty || input.qty === 0 ? input.qty : 1) || 1)),
+        chinaUnitCost: Number(input.chinaUnitCost || 0),
+        sellingUnitPrice: Number(input.sellingUnitPrice || 0),
+        lineTotal: Math.max(1, Math.round(Number(input.qty || 1) || 1)) * Number(input.sellingUnitPrice || 0),
+        receivedQty: 0,
+        deliveredQty: 0,
+      }];
+
+  const itemCount = items.length;
+  const totalQty = items.reduce((s, it) => s + it.qty, 0);
+  const searchKeywords = Array.from(new Set(
+    items.flatMap((it) => [
+      ...(it.productName ? [it.productName.toLowerCase()] : []),
+      ...(it.sku ? [it.sku.toLowerCase()] : []),
+      ...(it.model ? [it.model.toLowerCase()] : []),
+      ...(it.color ? [it.color.toLowerCase()] : []),
+      ...(it.variant ? [it.variant.toLowerCase()] : []),
+    ])
+  ));
+
+  if (totalQty < 1) {
+    throw new Error('Total quantity must be at least 1.');
   }
 
-  const safeQty = Math.round(Number(input.qty) || 0);
-  if (safeQty < 1) {
-    throw new Error('Quantity must be at least 1.');
-  }
-
-  const unitPrice = Number(input.sellingUnitPrice);
   const deliveryCharge = Number(input.deliveryCharge || 0);
   const discount = Number(input.discount || 0);
-  const chinaUnitCost = Number(input.chinaUnitCost || 0);
   const shippingCost = Number(input.shippingCost || 0);
   const initialAdvanceAmount = roundMoney(input.initialAdvance?.amount || 0);
 
   if (
-    unitPrice < 0 ||
     deliveryCharge < 0 ||
     discount < 0 ||
-    chinaUnitCost < 0 ||
     shippingCost < 0 ||
     initialAdvanceAmount < 0
   ) {
-    throw new Error('Prices, charges, discounts, and advance amounts cannot be negative.');
+    throw new Error('Charges, discounts, and advance amounts cannot be negative.');
   }
 
   const orderDate = input.orderDate || getTodayIsoDate();
@@ -567,11 +611,9 @@ export async function createPreOrder(
   const initialPaymentStatus = shouldAutoVerify ? 'verified' : 'pending';
 
   const calc = calculatePreOrderFinancials({
-    qty: safeQty,
-    sellingUnitPrice: unitPrice,
+    items,
     deliveryCharge,
     discount,
-    chinaUnitCost,
     shippingCost,
     payments:
       initialAdvanceAmount > 0
@@ -722,19 +764,23 @@ export async function createPreOrder(
       customerWhatsapp: normalizedWhatsapp,
       customerAddress: input.customerAddress.trim(),
       salesChannel: input.salesChannel || 'Direct/WhatsApp',
-      productName: input.productName.trim(),
-      category: input.category?.trim() || '',
-      sku: input.sku?.trim() || '',
-      model: input.model?.trim() || '',
-      variant: input.variant?.trim() || '',
-      color: input.color?.trim() || '',
+      items,
+      itemCount,
+      totalQty,
+      searchKeywords,
+      productName: items[0]?.productName || 'Pre-Order Item',
+      category: items[0]?.category || '',
+      sku: items[0]?.sku || '',
+      model: items[0]?.model || '',
+      variant: items[0]?.variant || '',
+      color: items[0]?.color || '',
       productUrl: input.productUrl?.trim() || '',
       productSpecs: input.productSpecs?.trim() || '',
-      productImage: input.productImage || '',
-      linkedProductId: input.linkedProductId || '',
-      linkedVariantId: input.linkedVariantId || '',
-      qty: calc.qty,
-      sellingUnitPrice: roundMoney(unitPrice),
+      productImage: items[0]?.imageUrl || '',
+      linkedProductId: items[0]?.linkedProductId || '',
+      linkedVariantId: items[0]?.linkedVariantId || '',
+      qty: totalQty,
+      sellingUnitPrice: items[0]?.sellingUnitPrice || 0,
       subtotal: calc.subtotal,
       deliveryCharge: calc.deliveryCharge,
       discount: calc.discount,
@@ -780,11 +826,12 @@ export async function createPreOrder(
       updatedBy: actor.id,
     };
 
+    const primaryChinaUnitCost = Number(input.chinaUnitCost ?? items[0]?.chinaUnitCost ?? 0);
     const privateCostDoc: PreOrderPrivateCost = {
       preOrderId,
-      chinaUnitCost: roundMoney(chinaUnitCost),
+      chinaUnitCost: roundMoney(primaryChinaUnitCost),
       shippingCost: roundMoney(shippingCost),
-      supplierUnitCost: roundMoney(input.supplierUnitCost ?? chinaUnitCost),
+      supplierUnitCost: roundMoney(input.supplierUnitCost ?? primaryChinaUnitCost),
       expectedProfit: calc.expectedProfit,
       internalNotes: input.internalNotes?.trim() || '',
       supplierOrderRef: input.supplierOrderRef?.trim() || '',

@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Plus,
   Trash2,
@@ -353,7 +354,8 @@ export default function ProductFormModal({
         (!isStaff && Number(formCostPrice) !== Number(editModeProduct.costPrice)) ||
         Number(formSellingPrice) !== Number(editModeProduct.sellingPrice) ||
         Number(formReorderThreshold) !== Number(editModeProduct.reorderThreshold) ||
-        JSON.stringify(formImages) !== JSON.stringify(normalizeProductImages(editModeProduct))
+        JSON.stringify(formImages) !== JSON.stringify(normalizeProductImages(editModeProduct)) ||
+        JSON.stringify(formVariants) !== JSON.stringify(editModeProduct.variants || [])
       : formName.trim() !== '' ||
         Number(formSellingPrice) > 0 ||
         formImages.length > 0 ||
@@ -755,9 +757,12 @@ export default function ProductFormModal({
       ? Math.round((profitValue / Number(formSellingPrice)) * 100)
       : 0;
 
-  return (
+  if (typeof document === 'undefined') return null;
+
+  return createPortal(
     <div
-      className="fixed inset-0 z-[75] flex justify-end bg-slate-950/60 backdrop-blur-xs"
+      data-product-form-modal="true"
+      className="fixed inset-0 z-[80] flex justify-end bg-slate-950/60 backdrop-blur-xs"
       onClick={() => !submitting && handleCancelForm()}
     >
       <div
@@ -1499,7 +1504,7 @@ export default function ProductFormModal({
                         </span>
                       )}
 
-                      <div className="absolute inset-x-0 bottom-0 p-1 bg-slate-950/75 flex items-center justify-between gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                      <div className="absolute inset-x-0 bottom-0 p-1 bg-slate-950/75 flex items-center justify-between gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
                         <div className="flex items-center gap-0.5">
                           <button
                             type="button"
@@ -1810,6 +1815,7 @@ export default function ProductFormModal({
           </div>
         </div>
       )}
-    </div>
+    </div>,
+    document.body
   );
 }
