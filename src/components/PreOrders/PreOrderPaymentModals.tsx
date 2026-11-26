@@ -1,12 +1,15 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   AlertTriangle,
   Banknote,
+  CheckCircle2,
   Receipt,
   RotateCcw,
   ShieldAlert,
+  ShieldCheck,
   Trash2,
+  XCircle,
 } from 'lucide-react';
 import {
   PreOrder,
@@ -18,6 +21,7 @@ import {
   PRE_ORDER_PAYMENT_METHODS,
   formatBDT,
   isPreOrderAdminRole,
+  normalizePaymentTxnRef,
   normalizePreOrderItems,
 } from '../../preOrders/constants';
 import {
@@ -97,6 +101,7 @@ export const CollectPaymentModal: React.FC<CollectPaymentModalProps> = ({
   const [duplicateOverrideReason, setDuplicateOverrideReason] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const submitInFlightRef = useRef(false);
 
   useEffect(() => {
     if (isOpen && order) {
@@ -148,7 +153,7 @@ export const CollectPaymentModal: React.FC<CollectPaymentModalProps> = ({
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (submitting) return;
+    if (submitting || submitInFlightRef.current) return;
     setErrorMsg('');
 
     if (parsedAmount <= 0) {
@@ -168,10 +173,11 @@ export const CollectPaymentModal: React.FC<CollectPaymentModalProps> = ({
       return;
     }
     if (duplicateNeedsOverride && !duplicateOverrideReason.trim()) {
-      setErrorMsg('Please enter an Admin override reason to record a duplicate transaction ID & amount.');
+      setErrorMsg('Please enter an Admin override reason to record a pending duplicate Transaction ID.');
       return;
     }
 
+    submitInFlightRef.current = true;
     setSubmitting(true);
     try {
       let receiptUrl = '';
@@ -210,16 +216,22 @@ export const CollectPaymentModal: React.FC<CollectPaymentModalProps> = ({
       onClose();
     } catch (err: any) {
       const msg = err?.message || 'Failed to record payment.';
-      if (msg.startsWith('DUPLICATE_TXN_ADMIN:')) {
+      if (msg.startsWith('DUPLICATE_TXN_VERIFIED:')) {
+        setDuplicateNeedsOverride(false);
+        setDuplicateOverrideReason('');
+        setErrorMsg(msg.replace('DUPLICATE_TXN_VERIFIED:', '').trim());
+      } else if (msg.startsWith('DUPLICATE_TXN_ADMIN:')) {
         setDuplicateNeedsOverride(true);
         setErrorMsg(msg.replace('DUPLICATE_TXN_ADMIN:', '').trim());
       } else if (msg.startsWith('DUPLICATE_TXN:')) {
+        setDuplicateNeedsOverride(false);
         setErrorMsg(msg.replace('DUPLICATE_TXN:', '').trim());
       } else {
         setErrorMsg(msg);
       }
-      toast.error(msg.replace(/^DUPLICATE_TXN(_ADMIN)?:\s*/, ''));
+      toast.error(msg.replace(/^DUPLICATE_TXN(_ADMIN|_VERIFIED)?:\s*/, ''));
     } finally {
+      submitInFlightRef.current = false;
       setSubmitting(false);
     }
   };
@@ -287,7 +299,11 @@ export const CollectPaymentModal: React.FC<CollectPaymentModalProps> = ({
             <Select
               options={PRE_ORDER_PAYMENT_METHODS.map((m) => ({ value: m, label: m }))}
               value={method}
-              onChange={(val) => setMethod(val as PreOrderPaymentMethod)}
+              onChange={(val) => {
+                setMethod(val as PreOrderPaymentMethod);
+                setDuplicateNeedsOverride(false);
+                setDuplicateOverrideReason('');
+              }}
               searchable={false}
             />
           </FormField>
@@ -382,13 +398,13 @@ export const CollectPaymentModal: React.FC<CollectPaymentModalProps> = ({
           <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800 space-y-2">
             <div className="flex items-center gap-2 text-xs font-bold text-rose-800 dark:text-rose-200">
               <AlertTriangle className="w-4 h-4 shrink-0" />
-              Duplicate Transaction Detected — Admin Override Required
+              Pending Duplicate Transaction ID Detected — Admin Override Required
             </div>
             <FormField label="Admin Override Reason" required>
               <Input
                 value={duplicateOverrideReason}
                 onChange={(e) => setDuplicateOverrideReason(e.target.value)}
-                placeholder="Explain why this identical Transaction ID + Amount is valid..."
+                placeholder="Explain why this duplicate pending Transaction ID is valid..."
               />
             </FormField>
           </div>
@@ -816,6 +832,276 @@ export const RejectPaymentModal: React.FC<RejectPaymentModalProps> = ({
             disabled={submitting || !reason.trim()}
           >
             Reject Payment
+          </Button>
+        </div>
+      </form>
+    </Modal>
+  );
+};
+
+// ==========================================
+// 5. SUPER ADMIN SELF-VERIFICATION DIALOG
+// ==========================================
+
+export interface SuperAdminSelfVerifyModalProps {
+  isOpen: boolean;
+  onClose: () => void;
+  payment: PreOrderPayment | null;
+  initialDecision?: 'verified' | 'rejected';
+  user: UserProfile;
+  onSuccess: () => void;
+}
+
+export const SuperAdminSelfVerifyModal: React.FC<SuperAdminSelfVerifyModalProps> = ({
+  isOpen,
+  onClose,
+  payment,
+  initialDecision = 'verified',
+  user,
+  onSuccess,
+}) => {
+  const toast = useToast();
+  const [decision, setDecision] = useState<'verified' | 'rejected'>(initialDecision);
+  const [statementChecked, setStatementChecked] = useState(false);
+  const [verifyNote, setVerifyNote] = useState('');
+  const [confirmTxnId, setConfirmTxnId] = useState('');
+  const [errorMsg, setErrorMsg] = useState('');
+  const [submitting, setSubmitting] = useState(false);
+  const submitInFlightRef = useRef(false);
+
+  useEffect(() => {
+    if (isOpen) {
+      setDecision(initialDecision);
+      setStatementChecked(false);
+      setVerifyNote('');
+      setConfirmTxnId('');
+      setErrorMsg('');
+    }
+  }, [isOpen, initialDecision, payment?.id]);
+
+  if (!payment) return null;
+
+  const isNonCash = payment.method !== 'Cash';
+  const expectedRef = (payment.referenceNo || '').trim();
+  const needsTxnRetype = isNonCash && expectedRef.length > 0;
+  const txnMatches =
+    !needsTxnRetype ||
+    normalizePaymentTxnRef(confirmTxnId) === normalizePaymentTxnRef(expectedRef);
+
+  const canSubmit =
+    statementChecked &&
+    verifyNote.trim().length > 0 &&
+    txnMatches &&
+    !submitting;
+
+  const handleSubmit = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (submitting || submitInFlightRef.current) return;
+    setErrorMsg('');
+
+    if (!statementChecked) {
+      setErrorMsg('Please confirm that you checked this transaction in your bKash/Nagad/Bank statement.');
+      return;
+    }
+    if (!verifyNote.trim()) {
+      setErrorMsg('Please enter a verification / audit note.');
+      return;
+    }
+    if (needsTxnRetype && !txnMatches) {
+      setErrorMsg('Re-typed Transaction ID does not match the payment entry.');
+      return;
+    }
+
+    submitInFlightRef.current = true;
+    setSubmitting(true);
+    try {
+      const res = await verifyPreOrderPayment(
+        payment.preOrderId,
+        payment.id,
+        decision,
+        actorFromUser(user),
+        {
+          selfVerified: true,
+          verifyNote: verifyNote.trim(),
+          rejectionReason: decision === 'rejected' ? verifyNote.trim() : undefined,
+          confirmedReferenceNo: confirmTxnId.trim(),
+        }
+      );
+      toast.success(
+        decision === 'verified'
+          ? `Self-verified ${formatBDT(payment.amount)} on ${payment.preOrderNumber}.`
+          : `Self-rejected ${formatBDT(payment.amount)} on ${payment.preOrderNumber}.`
+      );
+      if (res.trackingSyncWarning) {
+        toast.warning(res.trackingSyncWarning);
+      }
+      onSuccess();
+      onClose();
+    } catch (err: any) {
+      const msg = err?.message || 'Failed to process Super Admin self-verification.';
+      setErrorMsg(msg);
+      toast.error(msg);
+    } finally {
+      submitInFlightRef.current = false;
+      setSubmitting(false);
+    }
+  };
+
+  return (
+    <Modal
+      isOpen={isOpen}
+      onClose={() => !submitting && onClose()}
+      title="Super Admin Self-Verification Confirmation"
+      subtitle={`${payment.preOrderNumber} • Recorded by ${payment.recordedByName || user.name}`}
+      size="md"
+    >
+      <form onSubmit={handleSubmit} className="space-y-4">
+        <div className="p-3.5 rounded-xl bg-amber-50/80 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 text-xs text-amber-900 dark:text-amber-200 flex items-start gap-2.5">
+          <ShieldCheck className="w-4 h-4 shrink-0 mt-0.5 text-amber-600 dark:text-amber-400" />
+          <div>
+            <div className="font-bold">Super Admin Statement Verification Required</div>
+            <p className="mt-0.5 text-amber-800/90 dark:text-amber-300/90">
+              You recorded this payment entry yourself. Confirm the transaction details against your statement before approving or rejecting. This action is logged as{' '}
+              <strong>&ldquo;self-verified by Super Admin&rdquo;</strong>.
+            </p>
+          </div>
+        </div>
+
+        {/* Summary Card */}
+        <div className="p-3.5 rounded-xl bg-slate-50 dark:bg-slate-950/60 border border-slate-200 dark:border-slate-800 grid grid-cols-2 gap-3 text-xs">
+          <div>
+            <div className="text-slate-400">Payment Method</div>
+            <div className="font-semibold text-slate-900 dark:text-slate-100 mt-0.5">
+              {payment.method}
+            </div>
+          </div>
+          <div>
+            <div className="text-slate-400">Amount</div>
+            <div className="font-mono font-bold text-slate-900 dark:text-slate-100 mt-0.5">
+              {formatBDT(payment.amount)}
+            </div>
+          </div>
+          <div>
+            <div className="text-slate-400">Transaction ID</div>
+            <div className="font-mono font-semibold text-slate-900 dark:text-slate-100 mt-0.5 break-all">
+              {payment.referenceNo || '—'}
+            </div>
+          </div>
+          <div>
+            <div className="text-slate-400">Customer / Sender Number</div>
+            <div className="font-mono font-semibold text-slate-900 dark:text-slate-100 mt-0.5">
+              {payment.customerPhone || '—'}
+            </div>
+          </div>
+        </div>
+
+        {/* Action Toggle */}
+        <div className="grid grid-cols-2 gap-2">
+          <button
+            type="button"
+            disabled={submitting}
+            onClick={() => setDecision('verified')}
+            className={`flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-bold transition-colors cursor-pointer ${
+              decision === 'verified'
+                ? 'bg-emerald-50 border-emerald-500 text-emerald-800 dark:bg-emerald-950/50 dark:border-emerald-500 dark:text-emerald-200'
+                : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300'
+            }`}
+          >
+            <CheckCircle2 className="w-3.5 h-3.5" />
+            Verify Payment
+          </button>
+          <button
+            type="button"
+            disabled={submitting}
+            onClick={() => setDecision('rejected')}
+            className={`flex items-center justify-center gap-1.5 px-3 py-2 rounded-xl border text-xs font-bold transition-colors cursor-pointer ${
+              decision === 'rejected'
+                ? 'bg-rose-50 border-rose-500 text-rose-800 dark:bg-rose-950/50 dark:border-rose-500 dark:text-rose-200'
+                : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300'
+            }`}
+          >
+            <XCircle className="w-3.5 h-3.5" />
+            Reject Payment
+          </button>
+        </div>
+
+        {/* Mandatory Statement Checkbox */}
+        <label className="flex items-start gap-2.5 p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs text-slate-800 dark:text-slate-200 cursor-pointer select-none">
+          <input
+            type="checkbox"
+            checked={statementChecked}
+            onChange={(e) => setStatementChecked(e.target.checked)}
+            className="mt-0.5 rounded border-slate-300 text-[#D4AF37] focus:ring-[#D4AF37]"
+          />
+          <span className="font-medium">
+            I checked this transaction in my bKash/Nagad/Bank statement
+          </span>
+        </label>
+
+        {/* Non-Cash Transaction ID Re-type Confirmation */}
+        {needsTxnRetype && (
+          <FormField
+            label="Re-type Transaction ID to Confirm Match"
+            required
+            error={
+              confirmTxnId.trim().length > 0 && !txnMatches
+                ? 'Does not match Transaction ID above'
+                : undefined
+            }
+            hint="Required for non-cash self-verification (spaces/case ignored)"
+          >
+            <Input
+              value={confirmTxnId}
+              onChange={(e) => setConfirmTxnId(e.target.value)}
+              placeholder={`Type ${expectedRef} to confirm...`}
+              className="font-mono"
+            />
+          </FormField>
+        )}
+
+        {/* Mandatory Note Field */}
+        <FormField
+          label={decision === 'rejected' ? 'Rejection / Verification Note' : 'Verification Note'}
+          required
+          hint="Recorded permanently in the Super Admin audit entry"
+        >
+          <Textarea
+            rows={2}
+            value={verifyNote}
+            onChange={(e) => setVerifyNote(e.target.value)}
+            placeholder={
+              decision === 'rejected'
+                ? 'e.g. Duplicate entry or transaction not reflected in statement...'
+                : 'e.g. Verified against bKash merchant app statement...'
+            }
+          />
+        </FormField>
+
+        {errorMsg && (
+          <div className="p-2.5 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-xs text-rose-700 dark:text-rose-300 flex items-center gap-2">
+            <AlertCircle className="w-4 h-4 shrink-0" />
+            <span>{errorMsg}</span>
+          </div>
+        )}
+
+        <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100 dark:border-slate-800">
+          <Button type="button" variant="secondary" disabled={submitting} onClick={onClose}>
+            Cancel
+          </Button>
+          <Button
+            type="submit"
+            variant={decision === 'rejected' ? 'danger' : 'primary'}
+            isLoading={submitting}
+            disabled={!canSubmit}
+            leftIcon={
+              decision === 'rejected' ? (
+                <XCircle className="w-3.5 h-3.5" />
+              ) : (
+                <ShieldCheck className="w-3.5 h-3.5" />
+              )
+            }
+          >
+            {decision === 'rejected' ? 'Confirm Self-Reject' : 'Confirm Self-Verify'}
           </Button>
         </div>
       </form>

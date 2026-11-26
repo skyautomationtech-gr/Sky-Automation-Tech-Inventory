@@ -1,19 +1,22 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { DocumentData, QueryDocumentSnapshot } from 'firebase/firestore';
 import {
   AlertCircle,
+  AlertTriangle,
   Banknote,
   CheckCircle2,
   ChevronLeft,
   ChevronRight,
   Clock,
   CreditCard,
+  Database,
   MessageCircle,
   Phone,
   Receipt,
   RefreshCw,
   RotateCcw,
   ShieldAlert,
+  ShieldCheck,
   Wallet,
   XCircle,
 } from 'lucide-react';
@@ -37,16 +40,20 @@ import {
   formatPreOrderProductLabel,
   hasPermission,
   isPreOrderAdminRole,
+  isPreOrderSuperAdmin,
   normalizeBdPhone,
   normalizePreOrderItems,
 } from '../../preOrders/constants';
 import { getSuppliers } from '../../firebase/db';
 import {
+  BackfillPaymentTxnLocksResult,
   EnrichedPreOrderPayment,
   PreOrderPaymentsSummaryKPIs,
   actorFromUser,
+  backfillPaymentTxnLocks,
   getPreOrderById,
   getPreOrderPaymentsSummary,
+  markPreOrderPaymentAsDuplicate,
   queryPreOrderDueList,
   queryPreOrderPaymentsGroup,
   verifyPreOrderPayment,
@@ -55,7 +62,9 @@ import {
   Badge,
   Button,
   Card,
+  ConfirmDialog,
   Input,
+  Modal,
   SearchInput,
   Select,
   Skeleton,
@@ -69,6 +78,7 @@ import {
   CollectPaymentModal,
   RejectPaymentModal,
   ReversePaymentModal,
+  SuperAdminSelfVerifyModal,
 } from './PreOrderPaymentModals';
 import PreOrderPaymentReceiptModal from './PreOrderPaymentReceiptModal';
 
@@ -116,9 +126,10 @@ export const PaymentManagementView: React.FC<PaymentManagementViewProps> = ({
   const canCollect = hasPermission(user, rolePermissions, 'preOrderCollectPayment');
   const canVerify = hasPermission(user, rolePermissions, 'preOrderVerifyPayment');
   const isAdmin = isPreOrderAdminRole(user.role);
+  const isSuperAdmin = isPreOrderSuperAdmin(user);
 
   const allowedSubBrands = useMemo<Array<'SAT' | 'GZ' | 'RTX'>>(() => {
-    const isSuper = user.role === 'superadmin' || (user.role as string) === 'super_admin';
+    const isSuper = isPreOrderSuperAdmin(user);
     if (isSuper || !user.subBrandAccess || user.subBrandAccess.length === 0) {
       return ['SAT', 'GZ', 'RTX'];
     }
@@ -126,7 +137,7 @@ export const PaymentManagementView: React.FC<PaymentManagementViewProps> = ({
       (b): b is 'SAT' | 'GZ' | 'RTX' => b === 'SAT' || b === 'GZ' || b === 'RTX'
     );
     return valid.length > 0 ? valid : ['SAT'];
-  }, [user.role, user.subBrandAccess]);
+  }, [user]);
 
   const [activeTab, setActiveTab] = useState<PaymentPageTab>('ledger');
 
@@ -166,6 +177,7 @@ export const PaymentManagementView: React.FC<PaymentManagementViewProps> = ({
   const [error, setError] = useState('');
   const [indexNotice, setIndexNotice] = useState('');
   const [verifyingId, setVerifyingId] = useState<string | null>(null);
+  const verifyInFlightRef = useRef(false);
 
   // Supporting state for drawer & modals
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
@@ -173,6 +185,14 @@ export const PaymentManagementView: React.FC<PaymentManagementViewProps> = ({
   const [drawerInitialTab, setDrawerInitialTab] = useState<'overview' | 'payments'>('payments');
   const [rejectTarget, setRejectTarget] = useState<PreOrderPayment | null>(null);
   const [reverseTarget, setReverseTarget] = useState<PreOrderPayment | null>(null);
+  const [selfVerifyTarget, setSelfVerifyTarget] = useState<{
+    payment: PreOrderPayment;
+    decision: 'verified' | 'rejected';
+  } | null>(null);
+  const [duplicateTarget, setDuplicateTarget] = useState<PreOrderPayment | null>(null);
+  const [markingDuplicate, setMarkingDuplicate] = useState(false);
+  const [backfillingLocks, setBackfillingLocks] = useState(false);
+  const [backfillReport, setBackfillReport] = useState<BackfillPaymentTxnLocksResult | null>(null);
   const [collectOrder, setCollectOrder] = useState<PreOrder | null>(null);
   const [receiptData, setReceiptData] = useState<{
     order: PreOrder;
@@ -289,11 +309,16 @@ export const PaymentManagementView: React.FC<PaymentManagementViewProps> = ({
   }, [loadSummary, loadData]);
 
   const handleQuickVerify = async (p: PreOrderPayment) => {
-    if (!canVerify || verifyingId) return;
+    if (!canVerify || verifyingId || verifyInFlightRef.current) return;
     if (p.recordedBy === user.id) {
-      toast.error('You cannot verify your own payment entry.');
+      if (isSuperAdmin) {
+        setSelfVerifyTarget({ payment: p, decision: 'verified' });
+      } else {
+        toast.error('Staff and Admin cannot verify their own payment entry.');
+      }
       return;
     }
+    verifyInFlightRef.current = true;
     setVerifyingId(p.id);
     try {
       await verifyPreOrderPayment(p.preOrderId, p.id, 'verified', actorFromUser(user));
@@ -302,7 +327,54 @@ export const PaymentManagementView: React.FC<PaymentManagementViewProps> = ({
     } catch (err: any) {
       toast.error(err?.message || 'Failed to verify payment.');
     } finally {
+      verifyInFlightRef.current = false;
       setVerifyingId(null);
+    }
+  };
+
+  const handleConfirmMarkDuplicate = async () => {
+    if (!duplicateTarget || !isAdmin || markingDuplicate) return;
+    setMarkingDuplicate(true);
+    try {
+      const res = await markPreOrderPaymentAsDuplicate(
+        duplicateTarget.preOrderId,
+        duplicateTarget.id,
+        actorFromUser(user)
+      );
+      toast.success(
+        `Marked ${duplicateTarget.preOrderNumber} (${formatBDT(duplicateTarget.amount)}) as duplicate and rejected.`
+      );
+      if (res.trackingSyncWarning) {
+        toast.warning(res.trackingSyncWarning);
+      }
+      setDuplicateTarget(null);
+      await refreshAll();
+    } catch (err: any) {
+      toast.error(err?.message || 'Failed to mark payment as duplicate.');
+    } finally {
+      setMarkingDuplicate(false);
+    }
+  };
+
+  const handleRunBackfillLocks = async () => {
+    if (!isAdmin || backfillingLocks) return;
+    setBackfillingLocks(true);
+    try {
+      const res = await backfillPaymentTxnLocks(actorFromUser(user));
+      setBackfillReport(res);
+      if (res.conflicts.length > 0) {
+        toast.warning(
+          `Backfill finished: ${res.created} lock(s) created, ${res.conflicts.length} duplicate conflict(s) found.`
+        );
+      } else {
+        toast.success(
+          `Backfill complete: ${res.created} created, ${res.updated} updated, ${res.alreadyLocked} already locked.`
+        );
+      }
+    } catch (err: any) {
+      toast.error(err?.message || 'Failed to backfill transaction ID locks.');
+    } finally {
+      setBackfillingLocks(false);
     }
   };
 
@@ -366,15 +438,30 @@ export const PaymentManagementView: React.FC<PaymentManagementViewProps> = ({
           </p>
         </div>
 
-        <Button
-          type="button"
-          variant="secondary"
-          size="sm"
-          onClick={refreshAll}
-          leftIcon={<RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />}
-        >
-          Refresh Ledger
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          {isAdmin && (
+            <Button
+              type="button"
+              variant="secondary"
+              size="sm"
+              isLoading={backfillingLocks}
+              disabled={backfillingLocks}
+              onClick={handleRunBackfillLocks}
+              leftIcon={<Database className="w-3.5 h-3.5 text-[#D4AF37]" />}
+            >
+              Backfill Txn Locks
+            </Button>
+          )}
+          <Button
+            type="button"
+            variant="secondary"
+            size="sm"
+            onClick={refreshAll}
+            leftIcon={<RefreshCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />}
+          >
+            Refresh Ledger
+          </Button>
+        </div>
       </div>
 
       {/* Top 4 Summary KPI Cards */}
@@ -588,7 +675,11 @@ export const PaymentManagementView: React.FC<PaymentManagementViewProps> = ({
                 ) : (
                   ledgerRows.map((p) => {
                     const isSelfRecorded = p.recordedBy === user.id;
-                    const canVerifyThis = canVerify && p.status === 'pending' && !isSelfRecorded;
+                    const canVerifyOther = canVerify && p.status === 'pending' && !isSelfRecorded;
+                    const canSelfVerifySuper =
+                      canVerify && p.status === 'pending' && isSelfRecorded && isSuperAdmin;
+                    const canMarkDuplicate =
+                      isAdmin && p.status === 'pending' && (!isSelfRecorded || isSuperAdmin);
                     const canReverseThis =
                       isAdmin && p.status === 'verified' && p.type !== 'reversal' && !p.isReversed;
 
@@ -643,7 +734,7 @@ export const PaymentManagementView: React.FC<PaymentManagementViewProps> = ({
                           {p.referenceNo || '—'}
                         </td>
                         <td className="px-4 py-3 whitespace-nowrap">
-                          <div className="flex items-center gap-1">
+                          <div className="flex flex-wrap items-center gap-1">
                             <Badge
                               variant={
                                 p.status === 'verified'
@@ -656,31 +747,74 @@ export const PaymentManagementView: React.FC<PaymentManagementViewProps> = ({
                             >
                               {p.status}
                             </Badge>
+                            {p.selfVerified && (
+                              <Badge variant="gold" size="xs" title={p.verifyNote || 'Self-verified by Super Admin'}>
+                                Self-verified
+                              </Badge>
+                            )}
                             {p.isReversed && (
                               <Badge variant="neutral" size="xs">
                                 Reversed
                               </Badge>
                             )}
                           </div>
+                          {p.status === 'rejected' && p.rejectionReason && (
+                            <div className="text-[10px] text-rose-600 dark:text-rose-400 mt-0.5 truncate max-w-[160px]" title={p.rejectionReason}>
+                              {p.rejectionReason}
+                            </div>
+                          )}
                         </td>
                         <td className="px-4 py-3 whitespace-nowrap text-slate-600 dark:text-slate-300">
                           {p.recordedByName || p.recordedBy}
                         </td>
                         <td className="px-4 py-3 whitespace-nowrap text-slate-600 dark:text-slate-300">
-                          {p.verifiedByName || '—'}
+                          <div>{p.verifiedByName || '—'}</div>
+                          {p.verifyNote && (
+                            <div className="text-[10px] text-slate-400 truncate max-w-[140px]" title={p.verifyNote}>
+                              {p.verifyNote}
+                            </div>
+                          )}
                         </td>
                         <td className="px-4 py-3 whitespace-nowrap text-right">
                           <div className="inline-flex items-center justify-end gap-1">
-                            {p.status === 'pending' && canVerify && isSelfRecorded && (
+                            {p.status === 'pending' && canVerify && isSelfRecorded && !isSuperAdmin && (
                               <span
-                                title="Another user must verify your own entry"
+                                title="Staff and Admin cannot verify their own entry — another verifier must review it"
                                 className="inline-flex items-center gap-1 px-2 py-1 rounded text-[10px] font-medium bg-slate-100 dark:bg-slate-800 text-slate-500"
                               >
                                 <ShieldAlert className="w-3 h-3" />
                                 Own entry
                               </span>
                             )}
-                            {canVerifyThis && (
+                            {canSelfVerifySuper && (
+                              <>
+                                <Button
+                                  type="button"
+                                  variant="primary"
+                                  size="xs"
+                                  disabled={Boolean(verifyingId)}
+                                  onClick={() =>
+                                    setSelfVerifyTarget({ payment: p, decision: 'verified' })
+                                  }
+                                  leftIcon={<ShieldCheck className="w-3 h-3" />}
+                                >
+                                  Verify (Self)
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="danger"
+                                  size="xs"
+                                  disabled={Boolean(verifyingId)}
+                                  onClick={() =>
+                                    setSelfVerifyTarget({ payment: p, decision: 'rejected' })
+                                  }
+                                  leftIcon={<XCircle className="w-3 h-3" />}
+                                >
+                                  Reject
+                                </Button>
+                              </>
+                            )}
+                            {canVerifyOther && (
                               <>
                                 <Button
                                   type="button"
@@ -704,6 +838,19 @@ export const PaymentManagementView: React.FC<PaymentManagementViewProps> = ({
                                   Reject
                                 </Button>
                               </>
+                            )}
+                            {canMarkDuplicate && (
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="xs"
+                                disabled={Boolean(verifyingId) || markingDuplicate}
+                                onClick={() => setDuplicateTarget(p)}
+                                title="Reject pending entry as Duplicate entry and release its Transaction ID lock"
+                                className="text-rose-600 hover:text-rose-700 dark:text-rose-400"
+                              >
+                                Mark duplicate
+                              </Button>
                             )}
                             {canReverseThis && (
                               <Button
@@ -974,6 +1121,105 @@ export const PaymentManagementView: React.FC<PaymentManagementViewProps> = ({
         user={user}
         onSuccess={refreshAll}
       />
+
+      <SuperAdminSelfVerifyModal
+        isOpen={Boolean(selfVerifyTarget)}
+        onClose={() => setSelfVerifyTarget(null)}
+        payment={selfVerifyTarget?.payment || null}
+        initialDecision={selfVerifyTarget?.decision || 'verified'}
+        user={user}
+        onSuccess={refreshAll}
+      />
+
+      <ConfirmDialog
+        isOpen={Boolean(duplicateTarget)}
+        onClose={() => !markingDuplicate && setDuplicateTarget(null)}
+        onConfirm={handleConfirmMarkDuplicate}
+        title="Mark pending payment as duplicate?"
+        message={
+          duplicateTarget
+            ? `Reject ${duplicateTarget.preOrderNumber} (${formatBDT(duplicateTarget.amount)} via ${duplicateTarget.method}${
+                duplicateTarget.referenceNo ? `, TrxID ${duplicateTarget.referenceNo}` : ''
+              }) with reason "Duplicate entry"? It will stay visible in history, be excluded from totals, and release any lock held by this entry.`
+            : ''
+        }
+        confirmLabel="Mark as Duplicate"
+        cancelLabel="Cancel"
+        variant="danger"
+        isLoading={markingDuplicate}
+      />
+
+      <Modal
+        isOpen={Boolean(backfillReport)}
+        onClose={() => setBackfillReport(null)}
+        title="Transaction ID Lock Backfill Summary"
+        subtitle="Global payments_txn_locks synchronization report"
+        size="md"
+      >
+        {backfillReport && (
+          <div className="space-y-4 text-xs">
+            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5">
+              <div className="p-2.5 rounded-lg bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-800">
+                <div className="text-slate-400">Scanned</div>
+                <div className="font-mono font-bold text-sm mt-0.5">{backfillReport.scanned}</div>
+              </div>
+              <div className="p-2.5 rounded-lg bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800">
+                <div className="text-emerald-700 dark:text-emerald-300">Locks Created</div>
+                <div className="font-mono font-bold text-sm mt-0.5">{backfillReport.created}</div>
+              </div>
+              <div className="p-2.5 rounded-lg bg-blue-50 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800">
+                <div className="text-blue-700 dark:text-blue-300">Already Locked</div>
+                <div className="font-mono font-bold text-sm mt-0.5">{backfillReport.alreadyLocked}</div>
+              </div>
+              <div className="p-2.5 rounded-lg bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800">
+                <div className="text-amber-700 dark:text-amber-300">Conflicts</div>
+                <div className="font-mono font-bold text-sm mt-0.5">{backfillReport.conflicts.length}</div>
+              </div>
+            </div>
+
+            {backfillReport.conflicts.length > 0 ? (
+              <div className="space-y-2">
+                <div className="flex items-center gap-1.5 font-bold text-rose-700 dark:text-rose-300">
+                  <AlertTriangle className="w-4 h-4" />
+                  Duplicate Transaction IDs Detected ({backfillReport.conflicts.length})
+                </div>
+                <p className="text-slate-500">
+                  Use <strong>Mark duplicate</strong> on duplicate pending entries, then re-verify the valid entry or re-run Backfill.
+                </p>
+                <div className="max-h-56 overflow-y-auto space-y-1.5 pr-1">
+                  {backfillReport.conflicts.map((c, idx) => (
+                    <div
+                      key={`${c.lockId}_${idx}`}
+                      className="p-2.5 rounded-lg bg-rose-50/70 dark:bg-rose-950/20 border border-rose-200 dark:border-rose-800/70"
+                    >
+                      <div className="font-mono font-bold text-rose-800 dark:text-rose-200">
+                        {c.method} · {c.referenceNo} ({c.lockId})
+                      </div>
+                      <div className="text-slate-600 dark:text-slate-300 mt-0.5">
+                        Locked by: <strong>{c.primaryPreOrderNumber}</strong> ({c.primaryPaymentId}, {c.primaryStatus})
+                      </div>
+                      <div className="text-rose-700 dark:text-rose-300">
+                        Duplicate: <strong>{c.conflictPreOrderNumber}</strong> ({c.conflictPaymentId}, {formatBDT(c.conflictAmount)}, {c.conflictStatus})
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-800 text-emerald-800 dark:text-emerald-200 flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 shrink-0" />
+                <span>All eligible non-cash payment Transaction IDs are uniquely locked with zero duplicate conflicts.</span>
+              </div>
+            )}
+
+            <div className="flex justify-end pt-2">
+              <Button type="button" variant="primary" size="sm" onClick={() => setBackfillReport(null)}>
+                Close
+              </Button>
+            </div>
+          </div>
+        )}
+      </Modal>
 
       {/* B&W Receipt + PDF Modal */}
       <PreOrderPaymentReceiptModal

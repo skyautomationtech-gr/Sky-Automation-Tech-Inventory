@@ -43,6 +43,7 @@ import {
   OrderItem,
   OrderPaymentHistory,
   OtherReceivable,
+  PaymentTxnLock,
   PreOrder,
   PreOrderAuditAction,
   PreOrderAuditEntry,
@@ -122,15 +123,18 @@ import {
   PRE_ORDER_EDIT_LOCKED_STATUSES,
   PRE_ORDER_FORWARD_FLOW,
   PRE_ORDER_LOCKED_PART6_STATUS,
+  buildPaymentTxnLockId,
   buildPreOrderSearchKeywords,
   computeItemCostMap,
   formatPreOrderProductLabel,
   getTodayIsoDate,
   isPreOrderAdminRole,
   isPreOrderOverdue,
+  isPreOrderSuperAdmin,
   isValidBdPhone,
   mergeWithDefaultRolePermissions,
   normalizeBdPhone,
+  normalizePaymentTxnRef,
   normalizePreOrderItems,
   sanitizePreOrderItemsForDoc,
   summarizePreOrderItemsLegacyFields,
@@ -158,6 +162,7 @@ export interface PreOrderActor {
   id: string;
   name: string;
   role: string;
+  email?: string;
 }
 
 export function actorFromUser(user: UserProfile | null | undefined): PreOrderActor {
@@ -165,11 +170,55 @@ export function actorFromUser(user: UserProfile | null | undefined): PreOrderAct
     id: user?.id || 'system',
     name: user?.name || 'System Operator',
     role: user?.role || 'staff',
+    email: user?.email || undefined,
   };
 }
 
 function isAdminRole(role?: string): boolean {
   return role === 'superadmin' || role === 'super_admin' || role === 'admin';
+}
+
+function evaluateTxnLockConflict(params: {
+  existingLock?: Partial<PaymentTxnLock> | null;
+  actor: PreOrderActor;
+  method: string;
+  referenceNo: string;
+  duplicateOverrideReason?: string;
+}): { writePrimaryLock: boolean } {
+  const { existingLock, actor, method, referenceNo, duplicateOverrideReason } = params;
+  if (!existingLock) {
+    return { writePrimaryLock: true };
+  }
+  const existingTarget = existingLock.preOrderNumber
+    ? `Pre-Order ${existingLock.preOrderNumber}`
+    : existingLock.invoiceNumber
+    ? `Invoice ${existingLock.invoiceNumber}`
+    : existingLock.orderId
+    ? `Order ${existingLock.orderId}`
+    : 'another order';
+  const existingEntry = existingLock.paymentId ? `Entry ${existingLock.paymentId}` : 'an existing entry';
+  const existingAmt = Number(existingLock.amount || 0);
+  const amtPart = existingAmt > 0 ? `, ৳${existingAmt.toLocaleString()}` : '';
+
+  if (existingLock.status === 'verified') {
+    throw new Error(
+      `DUPLICATE_TXN_VERIFIED: Transaction ID "${referenceNo}" (${method}) is already VERIFIED on ${existingTarget} (${existingEntry}${amtPart}). Verified transaction IDs cannot be overridden.`
+    );
+  }
+
+  if (!isPreOrderAdminRole(actor.role)) {
+    throw new Error(
+      `DUPLICATE_TXN: Transaction ID "${referenceNo}" (${method}) is already used on ${existingTarget} (${existingEntry}${amtPart}, status: ${existingLock.status || 'pending'}). Only an Admin or Super Admin can override a pending duplicate.`
+    );
+  }
+
+  if (!duplicateOverrideReason?.trim()) {
+    throw new Error(
+      `DUPLICATE_TXN_ADMIN: Transaction ID "${referenceNo}" (${method}) is already used on ${existingTarget} (${existingEntry}${amtPart}, status: ${existingLock.status || 'pending'}). Enter an Admin override reason to proceed.`
+    );
+  }
+
+  return { writePrimaryLock: false };
 }
 
 function generateId(prefix: string): string {
@@ -525,6 +574,7 @@ export interface CreatePreOrderInput {
     receivedAt?: number;
     note?: string;
     autoVerify?: boolean;
+    duplicateOverrideReason?: string;
   };
 }
 
@@ -734,15 +784,22 @@ export async function createPreOrder(
   let createdNewCustomerRecord: Customer | null = null;
 
   const statsSummaryRef = doc(db, 'preOrderStats', 'summary');
+  const initTrimmedRef = input.initialAdvance?.referenceNo?.trim() || '';
+  const initLockId =
+    initialAdvanceAmount > 0 && input.initialAdvance
+      ? buildPaymentTxnLockId(input.initialAdvance.method, initTrimmedRef)
+      : '';
+  const initLockRef = initLockId ? doc(db, 'payments_txn_locks', initLockId) : null;
 
   await runTransaction(db, async (txn) => {
     // 1. ALL TRANSACTION READS FIRST
-    const [existingPoSnap, phoneIdxSnap, poCounterSnap, custCounterSnap, statsSnap] = await Promise.all([
+    const [existingPoSnap, phoneIdxSnap, poCounterSnap, custCounterSnap, statsSnap, initLockSnap] = await Promise.all([
       txn.get(preOrderRef),
       txn.get(phoneIndexRef),
       txn.get(preOrderCounterRef),
       txn.get(customerCounterRef),
       txn.get(statsSummaryRef),
+      initLockRef ? txn.get(initLockRef) : Promise.resolve(null),
     ]);
 
     if (existingPoSnap.exists()) {
@@ -752,6 +809,18 @@ export async function createPreOrder(
       resolvedCustomerDocId = existingData.customerId || '';
       resolvedCustomerCode = existingData.customerCode || '';
       return;
+    }
+
+    let writeInitPrimaryLock = Boolean(initLockId);
+    if (initLockId && input.initialAdvance && initLockSnap?.exists()) {
+      const lockCheck = evaluateTxnLockConflict({
+        existingLock: initLockSnap.data() as PaymentTxnLock,
+        actor,
+        method: input.initialAdvance.method,
+        referenceNo: initTrimmedRef,
+        duplicateOverrideReason: input.initialAdvance.duplicateOverrideReason,
+      });
+      writeInitPrimaryLock = lockCheck.writePrimaryLock;
     }
 
     const indexedCustDocId = phoneIdxSnap.exists()
@@ -972,12 +1041,14 @@ export async function createPreOrder(
         type: 'advance',
         amount: initialAdvanceAmount,
         method: input.initialAdvance.method,
-        referenceNo: input.initialAdvance.referenceNo?.trim() || '',
+        referenceNo: initTrimmedRef,
         receiptUrl: input.initialAdvance.receiptUrl || '',
         receivedAt: input.initialAdvance.receivedAt || now,
         note: input.initialAdvance.note?.trim() || 'Initial advance payment',
         status: initialPaymentStatus,
         idempotencyKey: `${safeIdempotency}_init`,
+        duplicateOverrideReason: input.initialAdvance.duplicateOverrideReason?.trim() || '',
+        txnLockId: initLockId || undefined,
         recordedBy: actor.id,
         recordedByName: actor.name,
         createdAt: now,
@@ -990,6 +1061,33 @@ export async function createPreOrder(
           : {}),
       };
       txn.set(paymentRef, sanitizeData(paymentDoc));
+
+      if (initLockRef && initLockId && writeInitPrimaryLock) {
+        const lockDoc: PaymentTxnLock = {
+          id: initLockId,
+          method: input.initialAdvance.method,
+          normalizedMethod: initLockId.split('_')[0] || '',
+          normalizedReferenceNo: normalizePaymentTxnRef(initTrimmedRef),
+          referenceNo: initTrimmedRef,
+          source: 'pre_order',
+          preOrderId,
+          preOrderNumber: createdNumber,
+          paymentId,
+          amount: initialAdvanceAmount,
+          status: initialPaymentStatus,
+          createdBy: actor.id,
+          createdByName: actor.name,
+          createdAt: now,
+          ...(shouldAutoVerify
+            ? {
+                verifiedBy: actor.id,
+                verifiedByName: actor.name,
+                verifiedAt: now,
+              }
+            : {}),
+        };
+        txn.set(initLockRef, sanitizeData(lockDoc));
+      }
 
       if (shouldAutoVerify) {
         const advancePosting = buildAdvanceVerifiedPosting({
@@ -2110,6 +2208,8 @@ export async function collectPreOrderPayment(
 
   const preOrderRef = doc(db, 'preOrders', preOrderId);
   const paymentRef = doc(db, 'preOrders', preOrderId, 'payments', paymentId);
+  const lockId = buildPaymentTxnLockId(input.method, trimmedRef);
+  const lockRef = lockId ? doc(db, 'payments_txn_locks', lockId) : null;
   const auditRef = doc(db, 'preOrderAudit', generateId('AUD'));
   const notifRef = doc(db, 'preOrderNotifications', generateId('NTF'));
 
@@ -2117,11 +2217,12 @@ export async function collectPreOrderPayment(
   let resultOrder!: PreOrder;
 
   await runTransaction(db, async (txn) => {
-    const [orderSnap, existingPaymentSnap, existingLedger, statsSnap] = await Promise.all([
+    const [orderSnap, existingPaymentSnap, existingLedger, statsSnap, lockSnap] = await Promise.all([
       txn.get(preOrderRef),
       txn.get(paymentRef),
       loadAndLockOrderLedgerInTxn(txn, preOrderId),
       txn.get(doc(db, 'preOrderStats', 'summary')),
+      lockRef ? txn.get(lockRef) : Promise.resolve(null),
     ]);
 
     if (!orderSnap.exists()) throw new Error('Pre-order not found.');
@@ -2156,31 +2257,51 @@ export async function collectPreOrderPayment(
       );
     }
 
-    // Duplicate (transaction ID + amount) protection on this pre-order
-    if (trimmedRef) {
-      const reversedIds = new Set(
-        existingLedger
-          .filter((p) => p.type === 'reversal' && p.reversesPaymentId)
-          .map((p) => p.reversesPaymentId as string)
-      );
-      const duplicateMatch = existingLedger.find(
-        (p) =>
-          p.type !== 'reversal' &&
-          p.status !== 'rejected' &&
-          !reversedIds.has(p.id) &&
-          (p.referenceNo || '').trim().toLowerCase() === trimmedRef.toLowerCase() &&
-          toPaisa(p.amount) === toPaisa(safeAmount)
-      );
-      if (duplicateMatch) {
-        if (!isPreOrderAdminRole(actor.role)) {
-          throw new Error(
-            `DUPLICATE_TXN: Transaction ID "${trimmedRef}" with amount ৳${safeAmount.toLocaleString()} already exists on ${order.preOrderNumber}. Only an Admin or Super Admin can override.`
-          );
-        }
-        if (!input.duplicateOverrideReason?.trim()) {
-          throw new Error(
-            `DUPLICATE_TXN_ADMIN: Transaction ID "${trimmedRef}" with amount ৳${safeAmount.toLocaleString()} already exists on ${order.preOrderNumber}. Enter an Admin override reason to proceed.`
-          );
+    // Global Transaction ID Uniqueness Lock check (method + normalized TrxID) for non-cash payments
+    let writePrimaryLock = Boolean(lockId);
+    if (lockId) {
+      if (lockSnap?.exists()) {
+        const lockCheck = evaluateTxnLockConflict({
+          existingLock: lockSnap.data() as PaymentTxnLock,
+          actor,
+          method: input.method,
+          referenceNo: trimmedRef,
+          duplicateOverrideReason: input.duplicateOverrideReason,
+        });
+        writePrimaryLock = lockCheck.writePrimaryLock;
+      } else {
+        // Fallback check on this order's ledger in case historical entries haven't been backfilled yet
+        const reversedIds = new Set(
+          existingLedger
+            .filter((p) => p.type === 'reversal' && p.reversesPaymentId)
+            .map((p) => p.reversesPaymentId as string)
+        );
+        const legacyDup = existingLedger.find(
+          (p) =>
+            p.type !== 'reversal' &&
+            p.type !== 'refund' &&
+            p.status !== 'rejected' &&
+            !reversedIds.has(p.id) &&
+            buildPaymentTxnLockId(p.method, p.referenceNo) === lockId
+        );
+        if (legacyDup) {
+          const lockCheck = evaluateTxnLockConflict({
+            existingLock: {
+              id: lockId,
+              method: legacyDup.method,
+              referenceNo: legacyDup.referenceNo || trimmedRef,
+              preOrderId,
+              preOrderNumber: order.preOrderNumber,
+              paymentId: legacyDup.id,
+              amount: legacyDup.amount,
+              status: legacyDup.status === 'verified' ? 'verified' : 'pending',
+            },
+            actor,
+            method: input.method,
+            referenceNo: trimmedRef,
+            duplicateOverrideReason: input.duplicateOverrideReason,
+          });
+          writePrimaryLock = lockCheck.writePrimaryLock;
         }
       }
     }
@@ -2202,6 +2323,7 @@ export async function collectPreOrderPayment(
       status: nextStatus,
       idempotencyKey: input.idempotencyKey.trim(),
       duplicateOverrideReason: input.duplicateOverrideReason?.trim() || '',
+      txnLockId: lockId || undefined,
       recordedBy: actor.id,
       recordedByName: actor.name,
       createdAt: now,
@@ -2218,6 +2340,25 @@ export async function collectPreOrderPayment(
     const { patch } = buildDerivedOrderFinancialPatch(order, nextLedger, actor.id, now);
 
     txn.set(paymentRef, sanitizeData(paymentDoc));
+    if (lockRef && lockId && writePrimaryLock) {
+      const lockDoc: PaymentTxnLock = {
+        id: lockId,
+        method: input.method,
+        normalizedMethod: lockId.split('_')[0] || '',
+        normalizedReferenceNo: normalizePaymentTxnRef(trimmedRef),
+        referenceNo: trimmedRef,
+        source: 'pre_order',
+        preOrderId,
+        preOrderNumber: order.preOrderNumber,
+        paymentId,
+        amount: safeAmount,
+        status: nextStatus,
+        createdBy: actor.id,
+        createdByName: actor.name,
+        createdAt: now,
+      };
+      txn.set(lockRef, sanitizeData(lockDoc));
+    }
     txn.update(preOrderRef, sanitizeData(patch));
 
     if (nextStatus === 'verified') {
@@ -2241,12 +2382,17 @@ export async function collectPreOrderPayment(
         preOrderId,
         preOrderNumber: order.preOrderNumber,
         action: 'PAYMENT_RECORDED' as PreOrderAuditAction,
-        summary: `Collected ${nextStatus} ${input.type} of ৳${safeAmount.toLocaleString()} (${input.method}) on ${order.preOrderNumber}`,
+        summary: `Collected ${nextStatus} ${input.type} of ৳${safeAmount.toLocaleString()} (${input.method}) on ${order.preOrderNumber}${
+          input.duplicateOverrideReason?.trim()
+            ? ` [Override: ${input.duplicateOverrideReason.trim()}]`
+            : ''
+        }`,
         metadata: {
           paymentId,
           type: input.type,
           method: input.method,
           referenceNo: trimmedRef,
+          txnLockId: lockId || '',
           status: nextStatus,
           duplicateOverrideReason: input.duplicateOverrideReason?.trim() || '',
           before: {
@@ -2340,14 +2486,30 @@ export async function collectPreOrderPayment(
   };
 }
 
+export interface VerifyPreOrderPaymentOptions {
+  rejectionReason?: string;
+  verifyNote?: string;
+  selfVerified?: boolean;
+  confirmedReferenceNo?: string;
+  isDuplicateMark?: boolean;
+}
+
 export async function verifyPreOrderPayment(
   preOrderId: string,
   paymentId: string,
   decision: 'verified' | 'rejected',
   actor: PreOrderActor,
-  rejectionReason?: string
+  rejectionReasonOrOptions?: string | VerifyPreOrderPaymentOptions
 ): Promise<PreOrder & { trackingSyncWarning?: string }> {
-  if (decision === 'rejected' && !rejectionReason?.trim()) {
+  const opts: VerifyPreOrderPaymentOptions =
+    typeof rejectionReasonOrOptions === 'string'
+      ? { rejectionReason: rejectionReasonOrOptions }
+      : rejectionReasonOrOptions || {};
+
+  const rejectionReason = opts.rejectionReason?.trim() || '';
+  const verifyNote = opts.verifyNote?.trim() || '';
+
+  if (decision === 'rejected' && !rejectionReason) {
     throw new Error('Please provide a reason when rejecting a payment.');
   }
 
@@ -2375,19 +2537,71 @@ export async function verifyPreOrderPayment(
     if (payment.status !== 'pending') {
       throw new Error(`Payment has already been ${payment.status}.`);
     }
-    if (payment.recordedBy === actor.id) {
+
+    const isSelf = payment.recordedBy === actor.id;
+    const actorIsSuperAdmin = isPreOrderSuperAdmin(actor);
+
+    if (isSelf && !actorIsSuperAdmin) {
       throw new Error(
-        'Self-verification is not allowed. Another authorized verifier must verify or reject this payment.'
+        'Self-verification is not allowed for Staff or Admins. Only another authorized verifier (or Super Admin on their own entry via confirmation dialog) can verify or reject this payment.'
       );
     }
 
-    const paymentPatch = {
+    if (isSelf && actorIsSuperAdmin) {
+      if (!opts.selfVerified) {
+        throw new Error(
+          'Super Admin self-verification requires the statement check confirmation dialog.'
+        );
+      }
+      if (!verifyNote) {
+        throw new Error('A verification note is required when Super Admin verifies or rejects their own entry.');
+      }
+      if (
+        decision === 'verified' &&
+        payment.method !== 'Cash' &&
+        (payment.referenceNo || '').trim() &&
+        normalizePaymentTxnRef(opts.confirmedReferenceNo) !== normalizePaymentTxnRef(payment.referenceNo)
+      ) {
+        throw new Error(
+          `Confirmed Transaction ID does not match "${payment.referenceNo}".`
+        );
+      }
+    }
+
+    const lockId =
+      payment.type !== 'refund' && payment.type !== 'reversal'
+        ? payment.txnLockId || buildPaymentTxnLockId(payment.method, payment.referenceNo)
+        : '';
+    const lockRef = lockId ? doc(db, 'payments_txn_locks', lockId) : null;
+    const lockSnap = lockRef ? await txn.get(lockRef) : null;
+
+    if (decision === 'verified' && lockSnap?.exists()) {
+      const lockData = lockSnap.data() as PaymentTxnLock;
+      if (lockData.paymentId !== paymentId && lockData.status === 'verified') {
+        throw new Error(
+          `Cannot verify: Transaction ID "${payment.referenceNo}" (${payment.method}) is already VERIFIED on ${
+            lockData.preOrderNumber || lockData.orderId || 'another order'
+          } (Entry ${lockData.paymentId}). Reject or mark this duplicate entry instead.`
+        );
+      }
+    }
+
+    const isSelfVerifiedOutcome = isSelf && actorIsSuperAdmin && decision === 'verified';
+    const effectiveVerifyNote = verifyNote || (isSelf && opts.isDuplicateMark ? 'Marked as duplicate entry' : '');
+
+    const paymentPatch: Record<string, any> = {
       status: decision,
       verifiedBy: actor.id,
       verifiedByName: actor.name,
       verifiedAt: now,
-      rejectionReason: decision === 'rejected' ? rejectionReason?.trim() || 'Rejected' : '',
+      rejectionReason: decision === 'rejected' ? rejectionReason || 'Rejected' : '',
     };
+    if (effectiveVerifyNote) {
+      paymentPatch.verifyNote = effectiveVerifyNote;
+    }
+    if (isSelfVerifiedOutcome) {
+      paymentPatch.selfVerified = true;
+    }
 
     const nextLedger = existingLedger.map((p) =>
       p.id === paymentId ? { ...p, ...paymentPatch } : p
@@ -2402,6 +2616,34 @@ export async function verifyPreOrderPayment(
 
     txn.update(paymentRef, sanitizeData(paymentPatch));
     txn.update(preOrderRef, sanitizeData(patch));
+
+    if (lockRef && lockId) {
+      if (decision === 'verified') {
+        const prevLock = lockSnap?.exists() ? (lockSnap.data() as PaymentTxnLock) : null;
+        const lockDoc: PaymentTxnLock = {
+          id: lockId,
+          method: payment.method,
+          normalizedMethod: lockId.split('_')[0] || '',
+          normalizedReferenceNo: normalizePaymentTxnRef(payment.referenceNo),
+          referenceNo: (payment.referenceNo || '').trim(),
+          source: 'pre_order',
+          preOrderId,
+          preOrderNumber: order.preOrderNumber,
+          paymentId,
+          amount: payment.amount,
+          status: 'verified',
+          createdBy: prevLock?.paymentId === paymentId ? prevLock.createdBy : payment.recordedBy,
+          createdByName: prevLock?.paymentId === paymentId ? prevLock.createdByName : payment.recordedByName,
+          createdAt: prevLock?.paymentId === paymentId ? prevLock.createdAt : payment.createdAt,
+          verifiedBy: actor.id,
+          verifiedByName: actor.name,
+          verifiedAt: now,
+        };
+        txn.set(lockRef, sanitizeData(lockDoc));
+      } else if (decision === 'rejected' && lockSnap?.exists() && lockSnap.data()?.paymentId === paymentId) {
+        txn.delete(lockRef);
+      }
+    }
 
     if (decision === 'verified') {
       if (payment.type === 'refund') {
@@ -2431,21 +2673,42 @@ export async function verifyPreOrderPayment(
       }
     }
 
+    const auditAction: PreOrderAuditAction = opts.isDuplicateMark
+      ? 'PAYMENT_MARKED_DUPLICATE'
+      : isSelf
+      ? decision === 'verified'
+        ? 'PAYMENT_SELF_VERIFIED'
+        : 'PAYMENT_SELF_REJECTED'
+      : decision === 'verified'
+      ? 'PAYMENT_VERIFIED'
+      : 'PAYMENT_REJECTED';
+
+    const auditSummary = opts.isDuplicateMark
+      ? `Marked pending ${payment.type} (${paymentId}) of ৳${payment.amount.toLocaleString()} on ${order.preOrderNumber} as duplicate (${rejectionReason})`
+      : isSelf
+      ? `${decision === 'verified' ? 'Self-verified' : 'Self-rejected'} by Super Admin: ${payment.type} of ৳${payment.amount.toLocaleString()} (${payment.method}${
+          payment.referenceNo ? `, TrxID ${payment.referenceNo}` : ''
+        }) on ${order.preOrderNumber} — Note: ${effectiveVerifyNote}`
+      : `${decision === 'verified' ? 'Verified' : 'Rejected'} ${payment.type} of ৳${payment.amount.toLocaleString()} on ${order.preOrderNumber}`;
+
     txn.set(
       auditRef,
       sanitizeData({
         id: auditRef.id,
         preOrderId,
         preOrderNumber: order.preOrderNumber,
-        action: (decision === 'verified'
-          ? 'PAYMENT_VERIFIED'
-          : 'PAYMENT_REJECTED') as PreOrderAuditAction,
-        summary: `${decision === 'verified' ? 'Verified' : 'Rejected'} ${payment.type} of ৳${payment.amount.toLocaleString()} on ${order.preOrderNumber}`,
+        action: auditAction,
+        summary: auditSummary,
         metadata: {
           paymentId,
           amount: payment.amount,
+          method: payment.method,
+          referenceNo: payment.referenceNo || '',
           decision,
+          selfVerified: isSelfVerifiedOutcome,
+          verifyNote: effectiveVerifyNote,
           rejectionReason: paymentPatch.rejectionReason,
+          isDuplicateMark: Boolean(opts.isDuplicateMark),
           before: {
             paymentStatus: payment.status,
             advancePaid: order.advancePaid || 0,
@@ -2497,10 +2760,22 @@ export async function verifyPreOrderPayment(
         type: decision === 'verified' ? 'payment_verified' : 'payment_rejected',
         category: 'event',
         severity: decision === 'verified' ? 'info' : 'warning',
-        title: `${decision === 'verified' ? 'Payment Verified' : 'Payment Rejected'} · ${order.preOrderNumber}`,
+        title: `${
+          isSelf
+            ? decision === 'verified'
+              ? 'Payment Self-Verified (Super Admin)'
+              : 'Payment Self-Rejected (Super Admin)'
+            : decision === 'verified'
+            ? 'Payment Verified'
+            : opts.isDuplicateMark
+            ? 'Duplicate Payment Rejected'
+            : 'Payment Rejected'
+        } · ${order.preOrderNumber}`,
         message:
           decision === 'verified'
-            ? `৳${payment.amount.toLocaleString()} (${payment.method}) verified by ${actor.name}.`
+            ? `৳${payment.amount.toLocaleString()} (${payment.method}) ${
+                isSelf ? 'self-verified by Super Admin' : `verified by ${actor.name}`
+              }.`
             : `৳${payment.amount.toLocaleString()} rejected by ${actor.name}: ${paymentPatch.rejectionReason}`,
         targetTab: 'preorder_payments',
         forRoles: ['superadmin', 'admin', 'manager', 'staff'],
@@ -2520,6 +2795,287 @@ export async function verifyPreOrderPayment(
     updatedOrder.trackingSyncWarning = syncRes.error;
   }
   return updatedOrder;
+}
+
+export async function markPreOrderPaymentAsDuplicate(
+  preOrderId: string,
+  paymentId: string,
+  actor: PreOrderActor
+): Promise<PreOrder & { trackingSyncWarning?: string }> {
+  if (!isPreOrderAdminRole(actor.role)) {
+    throw new Error('Only Admin or Super Admin can mark a pending payment as duplicate.');
+  }
+  return verifyPreOrderPayment(preOrderId, paymentId, 'rejected', actor, {
+    rejectionReason: 'Duplicate entry',
+    verifyNote: 'Marked as duplicate entry',
+    selfVerified: isPreOrderSuperAdmin(actor),
+    isDuplicateMark: true,
+  });
+}
+
+export interface BackfillTxnLockConflict {
+  lockId: string;
+  method: string;
+  referenceNo: string;
+  primaryPreOrderNumber: string;
+  primaryPaymentId: string;
+  primaryStatus: string;
+  conflictPreOrderNumber: string;
+  conflictPaymentId: string;
+  conflictAmount: number;
+  conflictStatus: string;
+}
+
+export interface BackfillPaymentTxnLocksResult {
+  scanned: number;
+  eligible: number;
+  created: number;
+  updated: number;
+  alreadyLocked: number;
+  skipped: number;
+  conflicts: BackfillTxnLockConflict[];
+}
+
+/**
+ * Idempotent Admin action: scans existing Pre-Order non-cash payments (and any Order paymentHistory with TrxIDs)
+ * and creates `payments_txn_locks/{METHOD_TRXID}` documents while surfacing duplicate conflicts.
+ */
+export async function backfillPaymentTxnLocks(
+  actor: PreOrderActor
+): Promise<BackfillPaymentTxnLocksResult> {
+  if (!isPreOrderAdminRole(actor.role)) {
+    throw new Error('Only Admin or Super Admin can run Transaction ID lock backfill.');
+  }
+
+  const now = Date.now();
+  const [paymentsSnap, existingLocksSnap, ordersSnap] = await Promise.all([
+    getDocs(query(collectionGroup(db, 'payments'), limit(2000))),
+    getDocs(collection(db, 'payments_txn_locks')),
+    getDocs(query(collection(db, 'orders'), limit(1000))).catch(() => null),
+  ]);
+
+  const allPayments = paymentsSnap.docs.map((d) => ({
+    ...(d.data() as PreOrderPayment),
+    id: d.id,
+  }));
+
+  const reversedIds = new Set<string>();
+  for (const p of allPayments) {
+    if (p.type === 'reversal' && p.reversesPaymentId) {
+      reversedIds.add(p.reversesPaymentId);
+    }
+  }
+
+  const existingLockMap = new Map<string, PaymentTxnLock>();
+  existingLocksSnap.forEach((d) => {
+    existingLockMap.set(d.id, { ...(d.data() as PaymentTxnLock), id: d.id });
+  });
+
+  // Sort eligible pre-order payments: verified first, then earliest createdAt
+  const eligiblePayments: PreOrderPayment[] = [];
+  let skipped = 0;
+
+  for (const p of allPayments) {
+    if (
+      p.type === 'reversal' ||
+      p.type === 'refund' ||
+      p.status === 'rejected' ||
+      reversedIds.has(p.id)
+    ) {
+      skipped++;
+      continue;
+    }
+    const lockId = buildPaymentTxnLockId(p.method, p.referenceNo);
+    if (!lockId) {
+      skipped++;
+      continue;
+    }
+    eligiblePayments.push(p);
+  }
+
+  eligiblePayments.sort((a, b) => {
+    const aVer = a.status === 'verified' ? 0 : 1;
+    const bVer = b.status === 'verified' ? 0 : 1;
+    if (aVer !== bVer) return aVer - bVer;
+    return (a.createdAt || 0) - (b.createdAt || 0);
+  });
+
+  let created = 0;
+  let updated = 0;
+  let alreadyLocked = 0;
+  const conflicts: BackfillTxnLockConflict[] = [];
+  const pendingWrites: Array<{ id: string; data: PaymentTxnLock }> = [];
+  const plannedMap = new Map<string, PaymentTxnLock>(existingLockMap);
+
+  for (const p of eligiblePayments) {
+    const lockId = buildPaymentTxnLockId(p.method, p.referenceNo);
+    const trimmedRef = (p.referenceNo || '').trim();
+    const existing = plannedMap.get(lockId);
+
+    if (existing) {
+      if (existing.paymentId === p.id) {
+        if (p.status === 'verified' && existing.status !== 'verified') {
+          const upgraded: PaymentTxnLock = {
+            ...existing,
+            status: 'verified',
+            verifiedBy: p.verifiedBy || actor.id,
+            verifiedByName: p.verifiedByName || actor.name,
+            verifiedAt: p.verifiedAt || now,
+          };
+          plannedMap.set(lockId, upgraded);
+          pendingWrites.push({ id: lockId, data: upgraded });
+          updated++;
+        } else {
+          alreadyLocked++;
+        }
+      } else {
+        conflicts.push({
+          lockId,
+          method: p.method,
+          referenceNo: trimmedRef,
+          primaryPreOrderNumber: existing.preOrderNumber || existing.orderId || existing.id,
+          primaryPaymentId: existing.paymentId,
+          primaryStatus: existing.status,
+          conflictPreOrderNumber: p.preOrderNumber || p.preOrderId,
+          conflictPaymentId: p.id,
+          conflictAmount: p.amount,
+          conflictStatus: p.status,
+        });
+      }
+      continue;
+    }
+
+    const newLock: PaymentTxnLock = {
+      id: lockId,
+      method: p.method,
+      normalizedMethod: lockId.split('_')[0] || '',
+      normalizedReferenceNo: normalizePaymentTxnRef(trimmedRef),
+      referenceNo: trimmedRef,
+      source: 'pre_order',
+      preOrderId: p.preOrderId,
+      preOrderNumber: p.preOrderNumber,
+      paymentId: p.id,
+      amount: p.amount,
+      status: p.status === 'verified' ? 'verified' : 'pending',
+      createdBy: p.recordedBy || actor.id,
+      createdByName: p.recordedByName || '',
+      createdAt: p.createdAt || now,
+      ...(p.status === 'verified'
+        ? {
+            verifiedBy: p.verifiedBy || actor.id,
+            verifiedByName: p.verifiedByName || actor.name,
+            verifiedAt: p.verifiedAt || now,
+          }
+        : {}),
+    };
+    plannedMap.set(lockId, newLock);
+    pendingWrites.push({ id: lockId, data: newLock });
+    created++;
+  }
+
+  // Also inspect normal orders if any paymentHistory items carry a transaction reference
+  if (ordersSnap) {
+    ordersSnap.forEach((orderDoc) => {
+      const ord = orderDoc.data() as Order;
+      const history = Array.isArray(ord.paymentHistory) ? ord.paymentHistory : [];
+      history.forEach((ph: any, idx: number) => {
+        if (ph?.isPreOrderAdvance) return;
+        const refVal = String(ph?.referenceNo || ph?.transactionId || '').trim();
+        if (!refVal) return;
+        const lockId = buildPaymentTxnLockId(ph.method || ord.paymentMethod, refVal);
+        if (!lockId) return;
+        const existing = plannedMap.get(lockId);
+        const ordPayId = `ORD_${orderDoc.id}_${idx}`;
+        if (existing) {
+          if (existing.paymentId !== ordPayId) {
+            conflicts.push({
+              lockId,
+              method: ph.method || ord.paymentMethod,
+              referenceNo: refVal,
+              primaryPreOrderNumber: existing.preOrderNumber || existing.orderId || existing.id,
+              primaryPaymentId: existing.paymentId,
+              primaryStatus: existing.status,
+              conflictPreOrderNumber: `Order ${orderDoc.id}`,
+              conflictPaymentId: ordPayId,
+              conflictAmount: Number(ph.amount || 0),
+              conflictStatus: 'verified',
+            });
+          } else {
+            alreadyLocked++;
+          }
+          return;
+        }
+        const orderLock: PaymentTxnLock = {
+          id: lockId,
+          method: ph.method || ord.paymentMethod || 'bKash',
+          normalizedMethod: lockId.split('_')[0] || '',
+          normalizedReferenceNo: normalizePaymentTxnRef(refVal),
+          referenceNo: refVal,
+          source: 'order',
+          orderId: orderDoc.id,
+          paymentId: ordPayId,
+          amount: Number(ph.amount || 0),
+          status: 'verified',
+          createdBy: ph.recordedBy || ord.createdBy || actor.id,
+          createdAt: Number(ph.date || ord.createdAt || now),
+          verifiedBy: actor.id,
+          verifiedByName: actor.name,
+          verifiedAt: now,
+        };
+        plannedMap.set(lockId, orderLock);
+        pendingWrites.push({ id: lockId, data: orderLock });
+        created++;
+      });
+    });
+  }
+
+  // Commit batched lock writes (chunk <= 400 ops per Firestore batch)
+  const chunkSize = 400;
+  for (let i = 0; i < pendingWrites.length; i += chunkSize) {
+    const chunk = pendingWrites.slice(i, i + chunkSize);
+    const batch = writeBatch(db);
+    for (const item of chunk) {
+      batch.set(doc(db, 'payments_txn_locks', item.id), sanitizeData(item.data));
+    }
+    await batch.commit();
+  }
+
+  // Write audit log entry
+  const auditRef = doc(db, 'preOrderAudit', generateId('AUD'));
+  await setDoc(
+    auditRef,
+    sanitizeData({
+      id: auditRef.id,
+      preOrderId: 'GLOBAL',
+      preOrderNumber: 'GLOBAL',
+      action: 'TXN_LOCKS_BACKFILLED' as PreOrderAuditAction,
+      summary: `Backfilled ${created} transaction ID lock(s), updated ${updated}, ${alreadyLocked} already locked, ${conflicts.length} conflict(s) detected`,
+      metadata: {
+        scanned: allPayments.length,
+        eligible: eligiblePayments.length,
+        created,
+        updated,
+        alreadyLocked,
+        skipped,
+        conflictsCount: conflicts.length,
+        conflicts: conflicts.slice(0, 25),
+      },
+      userId: actor.id,
+      userName: actor.name,
+      userRole: actor.role,
+      timestamp: now,
+    })
+  );
+
+  return {
+    scanned: allPayments.length,
+    eligible: eligiblePayments.length,
+    created,
+    updated,
+    alreadyLocked,
+    skipped,
+    conflicts,
+  };
 }
 
 export async function reversePreOrderPayment(

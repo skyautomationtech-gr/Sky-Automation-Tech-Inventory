@@ -200,6 +200,7 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
   }, [user.role, user.subBrandAccess]);
 
   const idempotencyKeyRef = useRef<string>(generateIdempotencyKey());
+  const submitInFlightRef = useRef<boolean>(false);
   const lookupSeqRef = useRef<number>(0);
   const lineSeqRef = useRef<number>(2);
 
@@ -227,6 +228,8 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
   const [advanceAmount, setAdvanceAmount] = useState<string>('0');
   const [paymentMethod, setPaymentMethod] = useState<PreOrderPaymentMethod>('bKash');
   const [paymentRefNo, setPaymentRefNo] = useState('');
+  const [initDuplicateNeedsOverride, setInitDuplicateNeedsOverride] = useState(false);
+  const [initDuplicateOverrideReason, setInitDuplicateOverrideReason] = useState('');
   const [paymentReceivedAt, setPaymentReceivedAt] = useState<string>(() =>
     getLocalDateTimeInputValue()
   );
@@ -810,6 +813,14 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
     if (parsedAdvance > 0 && paymentMethod !== 'Cash' && !paymentRefNo.trim()) {
       errors.paymentRefNo = `Transaction ID is required for ${paymentMethod}.`;
     }
+    if (
+      parsedAdvance > 0 &&
+      initDuplicateNeedsOverride &&
+      !initDuplicateOverrideReason.trim()
+    ) {
+      errors.initDuplicateOverrideReason =
+        'Admin override reason is required for a pending duplicate Transaction ID.';
+    }
 
     if (estimatedDeliveryDate && orderDate && estimatedDeliveryDate < orderDate) {
       errors.estimatedDeliveryDate = 'Expected arrival date cannot be before order date.';
@@ -826,9 +837,10 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
 
   const handleSavePreOrder = async (e?: React.FormEvent) => {
     e?.preventDefault();
-    if (!canCreate || submitting) return;
+    if (!canCreate || submitting || submitInFlightRef.current) return;
     if (!validateForm()) return;
 
+    submitInFlightRef.current = true;
     setSubmitting(true);
     try {
       const resolvedImageUrls: Record<string, string> = {};
@@ -941,6 +953,7 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
                   receiptUrl: finalReceiptUrl || '',
                   receivedAt: Number.isFinite(parsedReceivedTs) ? parsedReceivedTs : Date.now(),
                   autoVerify: shouldVerify,
+                  duplicateOverrideReason: initDuplicateOverrideReason.trim() || undefined,
                 }
               : undefined,
         },
@@ -959,8 +972,23 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
       onCreated(result);
     } catch (err: any) {
       console.error('Create Pre-Order failed:', err);
-      toast.error(err?.message || 'Failed to save Pre-Order. Your form data has been kept.');
+      const rawMsg = err?.message || 'Failed to save Pre-Order. Your form data has been kept.';
+      if (rawMsg.startsWith('DUPLICATE_TXN_ADMIN:')) {
+        setInitDuplicateNeedsOverride(true);
+        const clean = rawMsg.replace('DUPLICATE_TXN_ADMIN:', '').trim();
+        setFieldErrors((prev) => ({ ...prev, paymentRefNo: clean }));
+        toast.error(clean);
+      } else if (rawMsg.startsWith('DUPLICATE_TXN_VERIFIED:') || rawMsg.startsWith('DUPLICATE_TXN:')) {
+        setInitDuplicateNeedsOverride(false);
+        setInitDuplicateOverrideReason('');
+        const clean = rawMsg.replace(/^DUPLICATE_TXN(_VERIFIED)?:\s*/, '').trim();
+        setFieldErrors((prev) => ({ ...prev, paymentRefNo: clean }));
+        toast.error(clean);
+      } else {
+        toast.error(rawMsg);
+      }
     } finally {
+      submitInFlightRef.current = false;
       setSubmitting(false);
       setSubmitStatusText('');
     }
@@ -1713,7 +1741,11 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
                 <Select
                   options={PRE_ORDER_PAYMENT_METHODS.map((m) => ({ value: m, label: m }))}
                   value={paymentMethod}
-                  onChange={(val) => setPaymentMethod(val as PreOrderPaymentMethod)}
+                  onChange={(val) => {
+                    setPaymentMethod(val as PreOrderPaymentMethod);
+                    setInitDuplicateNeedsOverride(false);
+                    setInitDuplicateOverrideReason('');
+                  }}
                   searchable={false}
                   disabled={parsedAdvance <= 0}
                 />
@@ -1735,6 +1767,8 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
                       value={paymentRefNo}
                       onChange={(e) => {
                         setPaymentRefNo(e.target.value);
+                        setInitDuplicateNeedsOverride(false);
+                        setInitDuplicateOverrideReason('');
                         clearItemError('paymentRefNo');
                       }}
                       placeholder="e.g. TRX9A8B7C6D"
@@ -1820,6 +1854,28 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
                           Cash entry will start as <strong>Pending Verification</strong> until approved by an authorized verifier.
                         </span>
                       )}
+                    </div>
+                  )}
+                  {initDuplicateNeedsOverride && isAdminActor && (
+                    <div className="sm:col-span-2 p-3 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800 space-y-2">
+                      <div className="flex items-center gap-2 text-xs font-bold text-rose-800 dark:text-rose-200">
+                        <AlertCircle className="w-4 h-4 shrink-0" />
+                        Pending Duplicate Transaction ID Detected — Admin Override Required
+                      </div>
+                      <FormField
+                        label="Admin Override Reason"
+                        required
+                        error={fieldErrors.initDuplicateOverrideReason}
+                      >
+                        <Input
+                          value={initDuplicateOverrideReason}
+                          onChange={(e) => {
+                            setInitDuplicateOverrideReason(e.target.value);
+                            clearItemError('initDuplicateOverrideReason');
+                          }}
+                          placeholder="Explain why this duplicate pending Transaction ID is valid..."
+                        />
+                      </FormField>
                     </div>
                   )}
                 </>

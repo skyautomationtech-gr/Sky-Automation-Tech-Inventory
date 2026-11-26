@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   ArrowRightLeft,
@@ -75,6 +75,7 @@ import {
   isPreOrderAdminRole,
   isPreOrderOverdue,
   isPreOrderPartiallyReceived,
+  isPreOrderSuperAdmin,
   isValidBdPhone,
   normalizeBdPhone,
   normalizePreOrderItems,
@@ -98,6 +99,7 @@ import {
   getPreOrderFullDetail,
   getPreOrderReceipts,
   getPreOrderSupplierPayments,
+  markPreOrderPaymentAsDuplicate,
   recalculatePreOrderFromLedger,
   regeneratePublicTrackingToken,
   syncPublicTracking,
@@ -110,6 +112,7 @@ import {
 import {
   Badge,
   Button,
+  ConfirmDialog,
   CurrencyInput,
   Drawer,
   FormField,
@@ -133,6 +136,7 @@ import {
   RefundPaymentModal,
   RejectPaymentModal,
   ReversePaymentModal,
+  SuperAdminSelfVerifyModal,
 } from './PreOrderPaymentModals';
 import PreOrderPaymentReceiptModal from './PreOrderPaymentReceiptModal';
 import PreOrderShipmentTab from './PreOrderShipmentTab';
@@ -214,6 +218,7 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
   const toast = useToast();
 
   const isAdminUser = isPreOrderAdminRole(user.role);
+  const isSuperAdmin = isPreOrderSuperAdmin(user);
   const canEdit = hasPermission(user, rolePermissions, 'preOrderEdit');
   const canViewProfit = hasPermission(user, rolePermissions, 'preOrderViewProfit');
   const canViewSupplier = hasPermission(user, rolePermissions, 'preOrderSupplier') || isAdminUser;
@@ -227,7 +232,7 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
   const canViewAudit = isAdminUser;
 
   const allowedSubBrands = useMemo<Array<'SAT' | 'GZ' | 'RTX'>>(() => {
-    const isSuper = user.role === 'superadmin' || (user.role as string) === 'super_admin';
+    const isSuper = isPreOrderSuperAdmin(user);
     if (isSuper || !user.subBrandAccess || user.subBrandAccess.length === 0) {
       return ['SAT', 'GZ', 'RTX'];
     }
@@ -235,7 +240,7 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
       (b): b is 'SAT' | 'GZ' | 'RTX' => b === 'SAT' || b === 'GZ' || b === 'RTX'
     );
     return valid.length > 0 ? valid : ['SAT'];
-  }, [user.role, user.subBrandAccess]);
+  }, [user]);
 
   const [activeTab, setActiveTab] = useState<DetailTab>(initialTab);
   const [loading, setLoading] = useState(false);
@@ -254,8 +259,15 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
   const [showStatusDialog, setShowStatusDialog] = useState(false);
   const [rejectTarget, setRejectTarget] = useState<PreOrderPayment | null>(null);
   const [reverseTarget, setReverseTarget] = useState<PreOrderPayment | null>(null);
+  const [selfVerifyTarget, setSelfVerifyTarget] = useState<{
+    payment: PreOrderPayment;
+    decision: 'verified' | 'rejected';
+  } | null>(null);
+  const [duplicateTarget, setDuplicateTarget] = useState<PreOrderPayment | null>(null);
+  const [markingDuplicate, setMarkingDuplicate] = useState(false);
   const [printableReceiptPayment, setPrintableReceiptPayment] = useState<PreOrderPayment | null>(null);
   const [verifyingId, setVerifyingId] = useState<string | null>(null);
+  const verifyInFlightRef = useRef(false);
   const [recalculating, setRecalculating] = useState(false);
   const [timelineFilter, setTimelineFilter] = useState<'all' | 'status' | 'payments'>('all');
 
@@ -870,11 +882,16 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
   };
 
   const handleVerifyPayment = async (payment: PreOrderPayment) => {
-    if (!order || !canVerifyPayment || verifyingId) return;
+    if (!order || !canVerifyPayment || verifyingId || verifyInFlightRef.current) return;
     if (payment.recordedBy === user.id) {
-      toast.error('You cannot verify your own payment entry.');
+      if (isSuperAdmin) {
+        setSelfVerifyTarget({ payment, decision: 'verified' });
+      } else {
+        toast.error('Staff and Admin cannot verify their own payment entry.');
+      }
       return;
     }
+    verifyInFlightRef.current = true;
     setVerifyingId(payment.id);
     try {
       const res = await verifyPreOrderPayment(order.id, payment.id, 'verified', actorFromUser(user));
@@ -890,7 +907,36 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
     } catch (err: any) {
       toast.error(err?.message || 'Failed to verify payment.');
     } finally {
+      verifyInFlightRef.current = false;
       setVerifyingId(null);
+    }
+  };
+
+  const handleConfirmMarkDuplicate = async () => {
+    if (!order || !duplicateTarget || !isAdminUser || markingDuplicate) return;
+    setMarkingDuplicate(true);
+    try {
+      const res = await markPreOrderPaymentAsDuplicate(
+        order.id,
+        duplicateTarget.id,
+        actorFromUser(user)
+      );
+      toast.success(
+        `Marked ${formatBDT(duplicateTarget.amount)} as duplicate and rejected.`
+      );
+      if (res.trackingSyncWarning) {
+        setLastTrackingSyncWarning(res.trackingSyncWarning);
+        toast.warning(res.trackingSyncWarning);
+      } else {
+        setLastTrackingSyncWarning('');
+      }
+      setDuplicateTarget(null);
+      await loadDetail();
+      onUpdated?.();
+    } catch (err: any) {
+      toast.error(err?.message || 'Failed to mark payment as duplicate.');
+    } finally {
+      setMarkingDuplicate(false);
     }
   };
 
@@ -2405,8 +2451,12 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
                     {payments.map((p) => {
                       const isReversed = reversedPaymentIds.has(p.id);
                       const isSelfRecorded = p.recordedBy === user.id;
-                      const canVerifyThis =
+                      const canVerifyOther =
                         canVerifyPayment && p.status === 'pending' && !isSelfRecorded;
+                      const canSelfVerifySuper =
+                        canVerifyPayment && p.status === 'pending' && isSelfRecorded && isSuperAdmin;
+                      const canMarkDuplicate =
+                        isAdminUser && p.status === 'pending' && (!isSelfRecorded || isSuperAdmin);
                       const canReverseThis =
                         isAdminUser &&
                         p.status === 'verified' &&
@@ -2442,6 +2492,11 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
                               >
                                 {p.status === 'pending' ? 'Pending verification' : p.status}
                               </Badge>
+                              {p.selfVerified && (
+                                <Badge variant="gold" size="xs" title={p.verifyNote || 'Self-verified by Super Admin'}>
+                                  Self-verified
+                                </Badge>
+                              )}
                               {isReversed && (
                                 <Badge variant="neutral" size="xs">
                                   Reversed
@@ -2464,6 +2519,11 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
                                 {p.note}
                               </div>
                             )}
+                            {p.verifyNote && (
+                              <div className="text-xs text-slate-500 dark:text-slate-400">
+                                Verification note: {p.verifyNote}
+                              </div>
+                            )}
                             {p.rejectionReason && (
                               <div className="text-xs text-rose-600 dark:text-rose-400">
                                 Rejection reason: {p.rejectionReason}
@@ -2472,13 +2532,44 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
                           </div>
 
                           <div className="flex flex-wrap items-center gap-1.5 shrink-0">
-                            {p.status === 'pending' && canVerifyPayment && isSelfRecorded && (
-                              <span className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-slate-100 dark:bg-slate-800 text-[11px] text-slate-500">
+                            {p.status === 'pending' && canVerifyPayment && isSelfRecorded && !isSuperAdmin && (
+                              <span
+                                title="Staff and Admin cannot verify their own entry — another verifier must review it"
+                                className="inline-flex items-center gap-1 px-2 py-1 rounded-md bg-slate-100 dark:bg-slate-800 text-[11px] text-slate-500"
+                              >
                                 <ShieldAlert className="w-3 h-3" />
                                 Own entry
                               </span>
                             )}
-                            {canVerifyThis && (
+                            {canSelfVerifySuper && (
+                              <>
+                                <Button
+                                  type="button"
+                                  variant="primary"
+                                  size="xs"
+                                  disabled={Boolean(verifyingId)}
+                                  onClick={() =>
+                                    setSelfVerifyTarget({ payment: p, decision: 'verified' })
+                                  }
+                                  leftIcon={<ShieldCheck className="w-3 h-3" />}
+                                >
+                                  Verify (Self)
+                                </Button>
+                                <Button
+                                  type="button"
+                                  variant="danger"
+                                  size="xs"
+                                  disabled={Boolean(verifyingId)}
+                                  onClick={() =>
+                                    setSelfVerifyTarget({ payment: p, decision: 'rejected' })
+                                  }
+                                  leftIcon={<XCircle className="w-3 h-3" />}
+                                >
+                                  Reject
+                                </Button>
+                              </>
+                            )}
+                            {canVerifyOther && (
                               <>
                                 <Button
                                   type="button"
@@ -2502,6 +2593,18 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
                                   Reject
                                 </Button>
                               </>
+                            )}
+                            {canMarkDuplicate && (
+                              <Button
+                                type="button"
+                                variant="ghost"
+                                size="xs"
+                                disabled={Boolean(verifyingId) || markingDuplicate}
+                                onClick={() => setDuplicateTarget(p)}
+                                className="text-rose-600 hover:text-rose-700 dark:text-rose-400"
+                              >
+                                Mark duplicate
+                              </Button>
                             )}
                             {canReverseThis && (
                               <Button
@@ -3023,6 +3126,36 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
           loadDetail();
           onUpdated?.();
         }}
+      />
+
+      <SuperAdminSelfVerifyModal
+        isOpen={Boolean(selfVerifyTarget)}
+        onClose={() => setSelfVerifyTarget(null)}
+        payment={selfVerifyTarget?.payment || null}
+        initialDecision={selfVerifyTarget?.decision || 'verified'}
+        user={user}
+        onSuccess={() => {
+          loadDetail();
+          onUpdated?.();
+        }}
+      />
+
+      <ConfirmDialog
+        isOpen={Boolean(duplicateTarget)}
+        onClose={() => !markingDuplicate && setDuplicateTarget(null)}
+        onConfirm={handleConfirmMarkDuplicate}
+        title="Mark pending payment as duplicate?"
+        message={
+          duplicateTarget
+            ? `Reject ${duplicateTarget.preOrderNumber} (${formatBDT(duplicateTarget.amount)} via ${duplicateTarget.method}${
+                duplicateTarget.referenceNo ? `, TrxID ${duplicateTarget.referenceNo}` : ''
+              }) with reason "Duplicate entry"? It will stay visible in history, be excluded from totals, and release any lock held by this entry.`
+            : ''
+        }
+        confirmLabel="Mark as Duplicate"
+        cancelLabel="Cancel"
+        variant="danger"
+        isLoading={markingDuplicate}
       />
 
       <PreOrderStatusDialog

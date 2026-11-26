@@ -491,6 +491,9 @@
         "createdAt": { "type": "number" },
         "verifiedBy": { "type": "string" },
         "verifiedAt": { "type": "number" },
+        "verifyNote": { "type": "string" },
+        "selfVerified": { "type": "boolean" },
+        "txnLockId": { "type": "string" },
         "reversesPaymentId": { "type": "string" },
         "reversedPaymentType": { "type": "string" },
         "reversalReason": { "type": "string" }
@@ -760,6 +763,31 @@
         "receivedBy": { "type": "string" },
         "receivedAt": { "type": "number" }
       }
+    },
+    "PaymentTxnLock": {
+      "title": "PaymentTxnLock",
+      "description": "Global non-cash (method + normalized transactionId) uniqueness lock preventing duplicate TrxIDs across pre-orders and orders",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "method": { "type": "string" },
+        "normalizedMethod": { "type": "string" },
+        "normalizedReferenceNo": { "type": "string" },
+        "referenceNo": { "type": "string" },
+        "source": { "type": "string" },
+        "preOrderId": { "type": "string" },
+        "preOrderNumber": { "type": "string" },
+        "orderId": { "type": "string" },
+        "invoiceNumber": { "type": "string" },
+        "paymentId": { "type": "string" },
+        "amount": { "type": "number" },
+        "status": { "type": "string" },
+        "createdBy": { "type": "string" },
+        "createdAt": { "type": "number" },
+        "verifiedBy": { "type": "string" },
+        "verifiedAt": { "type": "number" }
+      },
+      "required": ["id", "method", "normalizedReferenceNo", "paymentId", "status", "createdAt"]
     }
   },
   "firestore": {
@@ -918,6 +946,10 @@
     "/preOrderConversions/{preOrderId}": {
       "schema": "PreOrderConversionLock",
       "description": "Idempotency lock collection preventing duplicate pre-order to sale conversions"
+    },
+    "/payments_txn_locks/{lockId}": {
+      "schema": "PaymentTxnLock",
+      "description": "Global non-cash (method + normalized transactionId) uniqueness lock collection"
     }
   }
 }

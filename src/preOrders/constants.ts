@@ -260,6 +260,46 @@ export function isPreOrderAdminRole(role?: string | null): boolean {
   return role === 'superadmin' || role === 'super_admin' || role === 'admin';
 }
 
+export const PROTECTED_OWNER_SUPERADMIN_EMAIL = 'skyautomationtech@gmail.com';
+
+export function isPreOrderSuperAdmin(
+  user?: { role?: string | null; email?: string | null } | null
+): boolean {
+  if (!user) return false;
+  if (user.role === 'superadmin' || user.role === 'super_admin') return true;
+  if (user.email && user.email.trim().toLowerCase() === PROTECTED_OWNER_SUPERADMIN_EMAIL) {
+    return true;
+  }
+  return false;
+}
+
+/**
+ * Normalizes a non-cash payment transaction ID: trimmed, uppercase, all spaces removed.
+ */
+export function normalizePaymentTxnRef(raw?: string | null): string {
+  return (raw || '').trim().toUpperCase().replace(/\s+/g, '');
+}
+
+/**
+ * Builds deterministic global uniqueness lock document ID for non-cash payments:
+ * `payments_txn_locks/{METHOD_TRANSACTIONID}` (e.g. `BKASH_DKJ2OQN004`).
+ * Returns `''` for Cash payments or empty transaction IDs.
+ */
+export function buildPaymentTxnLockId(
+  method?: string | null,
+  referenceNo?: string | null
+): string {
+  const normMethod = (method || '')
+    .trim()
+    .toUpperCase()
+    .replace(/[^A-Z0-9]/g, '');
+  if (!normMethod || normMethod === 'CASH') return '';
+  const normRef = normalizePaymentTxnRef(referenceNo);
+  if (!normRef) return '';
+  const safeRef = normRef.replace(/[^A-Z0-9_-]/g, '_');
+  return `${normMethod}_${safeRef}`.slice(0, 120);
+}
+
 export function getSelectablePreOrderTransitions(
   currentStatus: PreOrderStatus,
   options?: { isAdmin?: boolean; verifiedRefunded?: number }

@@ -1020,6 +1020,31 @@ export interface PreOrderPayment {
   reversedPaymentType?: PreOrderPaymentType;
   reversalReason?: string;
   duplicateOverrideReason?: string;
+  verifyNote?: string;
+  selfVerified?: boolean;
+  txnLockId?: string;
+}
+
+export interface PaymentTxnLock {
+  id: string; // e.g. BKASH_DKJ2OQN004
+  method: PreOrderPaymentMethod | string;
+  normalizedMethod: string;
+  normalizedReferenceNo: string;
+  referenceNo: string;
+  source: 'pre_order' | 'order' | 'invoice';
+  preOrderId?: string;
+  preOrderNumber?: string;
+  orderId?: string;
+  invoiceNumber?: string;
+  paymentId: string;
+  amount: number;
+  status: 'pending' | 'verified';
+  createdBy: string;
+  createdByName?: string;
+  createdAt: number;
+  verifiedBy?: string;
+  verifiedByName?: string;
+  verifiedAt?: number;
 }
 
 export interface PreOrderStatusHistory {
@@ -1233,10 +1258,14 @@ export type PreOrderAuditAction =
   | 'STATUS_CHANGED'
   | 'PAYMENT_RECORDED'
   | 'PAYMENT_VERIFIED'
+  | 'PAYMENT_SELF_VERIFIED'
   | 'PAYMENT_REJECTED'
+  | 'PAYMENT_SELF_REJECTED'
+  | 'PAYMENT_MARKED_DUPLICATE'
   | 'PAYMENT_REVERSED'
   | 'REFUND_RECORDED'
   | 'LEDGER_RECALCULATED'
+  | 'TXN_LOCKS_BACKFILLED'
   | 'SHIPMENT_UPDATED'
   | 'SHIPMENT_DOC_UPLOADED'
   | 'SHIPMENT_DOC_DELETED'

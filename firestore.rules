@@ -450,9 +450,18 @@ service cloud.firestore {
           hasPreOrderPerm('preOrderVerifyPayment') &&
           resource.data.status == 'pending' &&
           request.resource.data.status in ['verified', 'rejected'] &&
-          request.auth.uid != resource.data.recordedBy &&
+          (
+            request.auth.uid != resource.data.recordedBy ||
+            (
+              isSuperAdmin() &&
+              request.resource.data.get('verifyNote', '') is string &&
+              request.resource.data.get('verifyNote', '').size() > 0 &&
+              (request.resource.data.status == 'rejected' || request.resource.data.get('selfVerified', false) == true)
+            )
+          ) &&
+          (request.resource.data.get('selfVerified', false) == false || isSuperAdmin()) &&
           request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-            'status', 'verifiedBy', 'verifiedByName', 'verifiedAt', 'rejectionReason'
+            'status', 'verifiedBy', 'verifiedByName', 'verifiedAt', 'rejectionReason', 'verifyNote', 'selfVerified'
           ]) &&
           request.resource.data.amount == resource.data.amount &&
           request.resource.data.type == resource.data.type &&
@@ -656,6 +665,34 @@ service cloud.firestore {
         request.resource.data.preOrderId == preOrderId &&
         request.resource.data.orderId is string;
       allow update, delete: if false;
+    }
+
+    // Global Non-Cash Payment Transaction ID Uniqueness Locks
+    match /payments_txn_locks/{lockId} {
+      allow read: if hasPreOrderPerm('preOrderView') ||
+        hasPreOrderPerm('preOrderCreate') ||
+        hasPreOrderPerm('preOrderCollectPayment') ||
+        hasPreOrderPerm('preOrderVerifyPayment') ||
+        isAdmin();
+      allow create: if isValidId(lockId) &&
+        (hasPreOrderPerm('preOrderCreate') || hasPreOrderPerm('preOrderCollectPayment') || hasPreOrderPerm('preOrderVerifyPayment') || isAdmin()) &&
+        request.resource.data.id == lockId &&
+        request.resource.data.method is string &&
+        request.resource.data.normalizedReferenceNo is string &&
+        request.resource.data.paymentId is string &&
+        request.resource.data.status in ['pending', 'verified'];
+      allow update: if isValidId(lockId) &&
+        request.resource.data.id == lockId &&
+        request.resource.data.paymentId is string &&
+        request.resource.data.status in ['pending', 'verified'] &&
+        (resource.data.status != 'verified' || request.resource.data.paymentId == resource.data.paymentId) &&
+        (
+          hasPreOrderPerm('preOrderVerifyPayment') ||
+          isAdmin() ||
+          ((hasPreOrderPerm('preOrderCreate') || hasPreOrderPerm('preOrderCollectPayment')) && resource.data.status == 'rejected')
+        );
+      allow delete: if isValidId(lockId) &&
+        (hasPreOrderPerm('preOrderVerifyPayment') || isAdmin());
     }
 
     // ==========================================
