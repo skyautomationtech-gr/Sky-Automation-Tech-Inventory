@@ -34,9 +34,11 @@ import {
 import {
   PRE_ORDER_PAYMENT_METHODS,
   formatBDT,
+  formatPreOrderProductLabel,
   hasPermission,
   isPreOrderAdminRole,
   normalizeBdPhone,
+  normalizePreOrderItems,
 } from '../../preOrders/constants';
 import { getSuppliers } from '../../firebase/db';
 import {
@@ -841,10 +843,23 @@ export const PaymentManagementView: React.FC<PaymentManagementViewProps> = ({
                         <div className="text-[11px] font-mono text-slate-500">{ord.customerPhone}</div>
                       </td>
                       <td className="px-4 py-3">
-                        <div className="truncate max-w-[200px] font-medium text-slate-800 dark:text-slate-200">
-                          {ord.productName}
-                        </div>
-                        <div className="text-[11px] text-slate-400">Qty: {ord.qty}</div>
+                        {(() => {
+                          const orderItems = normalizePreOrderItems(ord);
+                          const totalQty =
+                            ord.totalQty ?? orderItems.reduce((s, it) => s + it.qty, 0);
+                          return (
+                            <>
+                              <div className="truncate max-w-[220px] font-medium text-slate-800 dark:text-slate-200">
+                                {formatPreOrderProductLabel(ord)}
+                              </div>
+                              <div className="text-[11px] text-slate-400">
+                                {orderItems.length > 1
+                                  ? `${orderItems.length} items · Qty: ${totalQty}`
+                                  : `Qty: ${totalQty}`}
+                              </div>
+                            </>
+                          );
+                        })()}
                       </td>
                       <td className="px-4 py-3 whitespace-nowrap">
                         <PreOrderStatusBadge status={ord.status} size="xs" />

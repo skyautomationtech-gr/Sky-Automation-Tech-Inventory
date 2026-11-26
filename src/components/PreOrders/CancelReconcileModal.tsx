@@ -14,9 +14,11 @@ import {
   UserProfile,
 } from '../../types';
 import {
-  formatBDT,
-  isPreOrderAdminRole,
   PRE_ORDER_PAYMENT_METHODS,
+  formatBDT,
+  formatPreOrderProductLabel,
+  isPreOrderAdminRole,
+  normalizePreOrderItems,
 } from '../../preOrders/constants';
 import { roundMoney, toPaisa } from '../../preOrders/calculations';
 import {
@@ -60,13 +62,25 @@ export const CancelReconcileModal: React.FC<CancelReconcileModalProps> = ({
   const isSuperAdmin =
     user.role === 'superadmin' || (user.role as string) === 'super_admin';
 
+  const orderItems = useMemo(() => normalizePreOrderItems(order), [order]);
+  const totalOrderedQty = useMemo(
+    () => order?.totalQty ?? orderItems.reduce((s, it) => s + (Number(it.qty) || 0), 0),
+    [order, orderItems]
+  );
+
   const verifiedNetPaid = Math.max(
     0,
     roundMoney((order?.advancePaid || 0) - (order?.refundedAmount || 0))
   );
   const actualShip = Math.max(0, Number(privateCost?.actualShippingCost) || 0);
   const totalSupplierExposure = roundMoney(supplierPaidBdt + actualShip);
-  const stockReceivedQty = Math.max(0, Number(order?.stockReceivedQty) || 0);
+  const stockReceivedQty = useMemo(() => {
+    const itemRecSum = orderItems.reduce(
+      (s, it) => s + Math.max(0, Number(it.receivedQty) || 0),
+      0
+    );
+    return itemRecSum > 0 ? itemRecSum : Math.max(0, Number(order?.stockReceivedQty) || 0);
+  }, [order, orderItems]);
 
   const [reason, setReason] = useState('');
   const [customerResolution, setCustomerResolution] =
@@ -255,6 +269,39 @@ export const CancelReconcileModal: React.FC<CancelReconcileModalProps> = ({
         </div>
       ) : (
         <form onSubmit={handleSubmit} className="space-y-4">
+          {/* Items Summary */}
+          <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/70 dark:bg-slate-950/50 space-y-2 text-xs">
+            <div className="flex items-center justify-between">
+              <span className="font-bold text-slate-700 dark:text-slate-200">
+                {formatPreOrderProductLabel(order)}
+              </span>
+              <span className="font-mono text-[11px] text-slate-500">
+                {orderItems.length} item(s) · {totalOrderedQty} ordered · {stockReceivedQty} received
+              </span>
+            </div>
+            {orderItems.length > 1 && (
+              <div className="space-y-1 pt-1 border-t border-slate-200/70 dark:border-slate-800">
+                {orderItems.map((it) => {
+                  const rec = Math.max(0, Number(it.receivedQty) || 0);
+                  return (
+                    <div
+                      key={it.itemId}
+                      className="flex items-center justify-between text-[11px] text-slate-600 dark:text-slate-300"
+                    >
+                      <span className="truncate pr-2">
+                        {it.productName}
+                        {it.variant || it.color ? ` (${[it.variant, it.color].filter(Boolean).join(' / ')})` : ''}
+                      </span>
+                      <span className="font-mono shrink-0">
+                        {rec}/{it.qty} pcs · {formatBDT(it.lineTotal ?? it.qty * it.sellingUnitPrice)}
+                      </span>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+
           <FormField label="Cancellation Reason" required>
             <Textarea
               rows={2}

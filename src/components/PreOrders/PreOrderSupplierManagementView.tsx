@@ -42,10 +42,13 @@ import {
   getPreOrdersBySupplier,
 } from '../../firebase/preOrderDb';
 import {
+  computeItemCostMap,
   formatBDT,
+  formatPreOrderProductLabel,
   hasPermission,
   isPreOrderAdminRole,
   isPreOrderOverdue,
+  normalizePreOrderItems,
 } from '../../preOrders/constants';
 import { fromPaisa, toPaisa } from '../../preOrders/calculations';
 import {
@@ -343,7 +346,12 @@ export const PreOrderSupplierManagementView: React.FC<PreOrderSupplierManagement
       if (o.status !== 'Cancelled' && o.status !== 'Refunded') {
         const priv = supplierCostsMap[o.id];
         if (priv) {
-          orderedPaisa += Math.max(0, Math.round(Number(o.qty || 0))) * Math.max(0, toPaisa(priv.chinaUnitCost));
+          const items = normalizePreOrderItems(o);
+          const costMap = computeItemCostMap(o, priv);
+          for (const it of items) {
+            const unitCost = costMap[it.itemId]?.chinaUnitCost ?? Number(priv.chinaUnitCost || 0);
+            orderedPaisa += Math.max(0, Math.round(Number(it.qty || 0))) * Math.max(0, toPaisa(unitCost));
+          }
         }
       }
     }
@@ -838,9 +846,22 @@ export const PreOrderSupplierManagementView: React.FC<PreOrderSupplierManagement
                         <tbody className="divide-y divide-slate-100 dark:divide-slate-800 tabular-nums">
                           {supplierOrders.map((ord) => {
                             const priv = supplierCostsMap[ord.id];
-                            const chinaCost = priv
-                              ? fromPaisa(Math.round(ord.qty || 0) * toPaisa(priv.chinaUnitCost))
-                              : 0;
+                            const orderItems = normalizePreOrderItems(ord);
+                            const totalQty =
+                              ord.totalQty ?? orderItems.reduce((s, it) => s + it.qty, 0);
+                            let chinaCostPaisa = 0;
+                            if (priv) {
+                              const costMap = computeItemCostMap(ord, priv);
+                              for (const it of orderItems) {
+                                const unitCost =
+                                  costMap[it.itemId]?.chinaUnitCost ??
+                                  Number(priv.chinaUnitCost || 0);
+                                chinaCostPaisa +=
+                                  Math.max(0, Math.round(Number(it.qty || 0))) *
+                                  Math.max(0, toPaisa(unitCost));
+                              }
+                            }
+                            const chinaCost = fromPaisa(chinaCostPaisa);
                             return (
                               <tr
                                 key={ord.id}
@@ -855,14 +876,17 @@ export const PreOrderSupplierManagementView: React.FC<PreOrderSupplierManagement
                                 </td>
                                 <td className="px-4 py-3">
                                   <div className="font-medium text-slate-800 dark:text-slate-200">
-                                    {ord.productName}
+                                    {formatPreOrderProductLabel(ord)}
                                   </div>
-                                  <div className="text-[11px] text-slate-400">{ord.customerName}</div>
+                                  <div className="text-[11px] text-slate-400">
+                                    {ord.customerName}
+                                    {orderItems.length > 1 ? ` · ${orderItems.length} items` : ''}
+                                  </div>
                                 </td>
                                 <td className="px-4 py-3 font-mono text-slate-600 dark:text-slate-300">
                                   {ord.supplierOrderRef || priv?.supplierOrderRef || '—'}
                                 </td>
-                                <td className="px-4 py-3 text-right font-mono font-bold">{ord.qty}</td>
+                                <td className="px-4 py-3 text-right font-mono font-bold">{totalQty}</td>
                                 <td className="px-4 py-3 text-right font-mono font-bold text-slate-900 dark:text-slate-100">
                                   {formatBDT(chinaCost)}
                                 </td>
@@ -1019,7 +1043,9 @@ export const PreOrderSupplierManagementView: React.FC<PreOrderSupplierManagement
                                   <div className="font-mono font-bold text-slate-900 dark:text-slate-100">
                                     {ord.preOrderNumber}
                                   </div>
-                                  <div className="text-[11px] text-slate-500">{ord.productName}</div>
+                                  <div className="text-[11px] text-slate-500">
+                                    {formatPreOrderProductLabel(ord)}
+                                  </div>
                                 </td>
                                 <td className="px-4 py-3">
                                   <div className="inline-flex items-center gap-1 font-medium">

@@ -5,7 +5,11 @@ import { Download, Printer, X } from 'lucide-react';
 import { CompanySettings, PreOrder, PreOrderPayment } from '../../types';
 import { getCompanySettings } from '../../firebase/db';
 import { getSubBrandCompanyInfo } from '../../utils/brandLogos';
-import { formatBDT } from '../../preOrders/constants';
+import {
+  formatBDT,
+  formatPreOrderProductLabel,
+  normalizePreOrderItems,
+} from '../../preOrders/constants';
 import { calculatePreOrderFinancials } from '../../preOrders/calculations';
 import { Button, Modal, useToast } from '../../design-system';
 
@@ -75,9 +79,10 @@ export const PreOrderPaymentReceiptModal: React.FC<PreOrderPaymentReceiptModalPr
   if (!isOpen || !order || !payment) return null;
 
   const brandInfo = getSubBrandCompanyInfo(order.subBrand || 'SAT', resolvedSettings);
+  const orderItems = normalizePreOrderItems(order);
+  const totalQty = order.totalQty ?? orderItems.reduce((s, it) => s + it.qty, 0);
   const netPaid = calculatePreOrderFinancials({
-    qty: order.qty,
-    sellingUnitPrice: order.sellingUnitPrice,
+    items: orderItems,
     deliveryCharge: order.deliveryCharge,
     discount: order.discount,
     payments: [
@@ -390,8 +395,21 @@ export const PreOrderPaymentReceiptModal: React.FC<PreOrderPaymentReceiptModalPr
                 Pre-Order Item & Receipt Info
               </div>
               <div style={{ fontWeight: 700, color: '#000000' }}>
-                {order.productName} (Qty: {order.qty})
+                {formatPreOrderProductLabel(order)} ({orderItems.length > 1 ? `${orderItems.length} items, ` : ''}Qty: {totalQty})
               </div>
+              {orderItems.length > 1 && (
+                <div style={{ fontSize: '10px', color: '#374151', marginTop: '3px' }}>
+                  {orderItems.map((it, i) => (
+                    <div key={it.itemId || i}>
+                      • {it.productName}
+                      {[it.model, it.variant, it.color].filter(Boolean).length > 0
+                        ? ` (${[it.model, it.variant, it.color].filter(Boolean).join(' / ')})`
+                        : ''}
+                      {` ×${it.qty}`}
+                    </div>
+                  ))}
+                </div>
+              )}
               <div style={{ fontSize: '11px', color: '#374151', marginTop: '2px' }}>
                 Sub-Brand: <strong>{order.subBrand}</strong> | Status: <strong>{order.status}</strong>
               </div>

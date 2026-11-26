@@ -52,8 +52,10 @@ import {
   CompanySettings,
   PreOrder,
   PreOrderAuditEntry,
+  PreOrderItem,
   PreOrderPayment,
   PreOrderPrivateCost,
+  PreOrderPrivateItemCost,
   PreOrderReceipt,
   PreOrderStatusHistory,
   PreOrderSupplierPayment,
@@ -63,19 +65,24 @@ import {
   UserProfile,
 } from '../../types';
 import {
+  MAX_PRE_ORDER_ITEMS,
   PRE_ORDER_EDIT_LOCKED_STATUSES,
   PRE_ORDER_FORWARD_FLOW,
+  computeItemCostMap,
   formatBDT,
   getTodayIsoDate,
   hasPermission,
   isPreOrderAdminRole,
   isPreOrderOverdue,
+  isPreOrderPartiallyReceived,
   isValidBdPhone,
   normalizeBdPhone,
+  normalizePreOrderItems,
 } from '../../preOrders/constants';
 import {
   calculatePerOrderSupplierSummary,
   calculatePreOrderFinancials,
+  roundMoney,
   toPaisa,
 } from '../../preOrders/calculations';
 import { uploadPreOrderImage, validateImageFile } from '../../preOrders/imageUpload';
@@ -115,6 +122,7 @@ import {
 } from '../../design-system';
 import {
   OverdueTag,
+  PartiallyReceivedTag,
   PaymentStateBadge,
   PreOrderStatusBadge,
   SubBrandBadge,
@@ -156,6 +164,25 @@ export interface PreOrderDetailDrawerProps {
 }
 
 type DetailTab = 'overview' | 'payments' | 'shipment' | 'supplier' | 'timeline' | 'audit';
+
+interface DraftDrawerItem {
+  itemId: string;
+  linkedProductId: string;
+  linkedVariantId: string;
+  productName: string;
+  category: string;
+  sku: string;
+  model: string;
+  variant: string;
+  color: string;
+  qty: number;
+  sellingUnitPrice: string;
+  chinaUnitCost: string;
+  imageUrl: string;
+  imageFile: File | null;
+  receivedQty: number;
+  damagedQty: number;
+}
 
 function formatDateTime(ts?: number): string {
   if (!ts) return '—';
@@ -266,19 +293,9 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
   const [editCustomerPhone, setEditCustomerPhone] = useState('');
   const [editCustomerWhatsapp, setEditCustomerWhatsapp] = useState('');
   const [editCustomerAddress, setEditCustomerAddress] = useState('');
-  const [editProductName, setEditProductName] = useState('');
-  const [editCategory, setEditCategory] = useState('');
-  const [editSku, setEditSku] = useState('');
-  const [editModel, setEditModel] = useState('');
-  const [editVariant, setEditVariant] = useState('');
-  const [editColor, setEditColor] = useState('');
-  const [editQty, setEditQty] = useState(1);
-  const [editProductImageFile, setEditProductImageFile] = useState<File | null>(null);
-  const [editProductImagePreview, setEditProductImagePreview] = useState('');
-  const [editSellingUnitPrice, setEditSellingUnitPrice] = useState('0');
+  const [editItems, setEditItems] = useState<DraftDrawerItem[]>([]);
   const [editDeliveryCharge, setEditDeliveryCharge] = useState('0');
   const [editDiscount, setEditDiscount] = useState('0');
-  const [editChinaUnitCost, setEditChinaUnitCost] = useState('0');
   const [editShippingCost, setEditShippingCost] = useState('0');
   const [editSupplierId, setEditSupplierId] = useState('');
   const [editSupplierOrderRef, setEditSupplierOrderRef] = useState('');
@@ -294,19 +311,38 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
       setEditCustomerPhone(ord.customerPhone || '');
       setEditCustomerWhatsapp(ord.customerWhatsapp || ord.customerPhone || '');
       setEditCustomerAddress(ord.customerAddress || '');
-      setEditProductName(ord.productName || '');
-      setEditCategory(ord.category || '');
-      setEditSku(ord.sku || '');
-      setEditModel(ord.model || '');
-      setEditVariant(ord.variant || '');
-      setEditColor(ord.color || '');
-      setEditQty(ord.qty || 1);
-      setEditProductImageFile(null);
-      setEditProductImagePreview(ord.productImage || '');
-      setEditSellingUnitPrice(String(ord.sellingUnitPrice ?? 0));
+
+      const normalized = normalizePreOrderItems(ord);
+      const costMap = computeItemCostMap(ord, priv);
+      setEditItems(
+        normalized.map((it) => ({
+          itemId: it.itemId,
+          linkedProductId: it.linkedProductId || '',
+          linkedVariantId: it.linkedVariantId || '',
+          productName: it.productName || '',
+          category: it.category || '',
+          sku: it.sku || '',
+          model: it.model || '',
+          variant: it.variant || '',
+          color: it.color || '',
+          qty: Math.max(1, Number(it.qty) || 1),
+          sellingUnitPrice: String(it.sellingUnitPrice ?? 0),
+          chinaUnitCost: String(costMap[it.itemId]?.chinaUnitCost ?? priv?.chinaUnitCost ?? 0),
+          imageUrl: it.imageUrl || '',
+          imageFile: null,
+          receivedQty: Math.max(
+            0,
+            Number(it.receivedQty ?? (normalized.length === 1 ? ord.stockReceivedQty : 0)) || 0
+          ),
+          damagedQty: Math.max(
+            0,
+            Number(it.damagedQty ?? (normalized.length === 1 ? ord.damagedQty : 0)) || 0
+          ),
+        }))
+      );
+
       setEditDeliveryCharge(String(ord.deliveryCharge ?? 0));
       setEditDiscount(String(ord.discount ?? 0));
-      setEditChinaUnitCost(String(priv?.chinaUnitCost ?? 0));
       setEditShippingCost(String(priv?.shippingCost ?? 0));
       setEditSupplierId(ord.supplierId || '');
       setEditSupplierOrderRef(ord.supplierOrderRef || priv?.supplierOrderRef || '');
@@ -406,9 +442,25 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
 
   const isConverted = Boolean(order?.convertedSaleId || order?.convertedOrderId);
   const financialFieldsLocked = isConverted || (hasAnyActivePayment && !isAdminUser);
-  const remainingStockToReceive = order
-    ? Math.max(0, order.qty - ((order.stockReceivedQty || 0) + (order.damagedQty || 0)))
-    : 0;
+
+  const orderItems = useMemo(() => normalizePreOrderItems(order), [order]);
+  const itemCostMap = useMemo(
+    () => computeItemCostMap(order, privateCost),
+    [order, privateCost]
+  );
+  const totalOrderedQty = useMemo(
+    () => order?.totalQty ?? orderItems.reduce((s, it) => s + (Number(it.qty) || 0), 0),
+    [order, orderItems]
+  );
+  const remainingStockToReceive = useMemo(() => {
+    if (!order) return 0;
+    return orderItems.reduce((sum, it) => {
+      const rec = Number(it.receivedQty ?? (orderItems.length === 1 ? order.stockReceivedQty : 0)) || 0;
+      const dmg = Number(it.damagedQty ?? (orderItems.length === 1 ? order.damagedQty : 0)) || 0;
+      return sum + Math.max(0, (Number(it.qty) || 0) - (rec + dmg));
+    }, 0);
+  }, [order, orderItems]);
+
   const canShowReceiveStock = Boolean(
     order &&
       !isConverted &&
@@ -432,14 +484,29 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
 
   const liveFinancials = useMemo(() => {
     if (!order) return null;
+    const calcItems: PreOrderItem[] = isEditing
+      ? editItems.map((it) => {
+          const q = Math.max(1, Math.round(Number(it.qty) || 1));
+          const sp = Math.max(0, Number(it.sellingUnitPrice || 0));
+          return {
+            itemId: it.itemId,
+            productName: it.productName,
+            qty: q,
+            sellingUnitPrice: sp,
+            lineTotal: roundMoney(q * sp),
+            chinaUnitCost: Math.max(0, Number(it.chinaUnitCost || 0)),
+          };
+        })
+      : orderItems.map((it) => ({
+          ...it,
+          chinaUnitCost:
+            itemCostMap[it.itemId]?.chinaUnitCost ?? privateCost?.chinaUnitCost ?? 0,
+        }));
+
     return calculatePreOrderFinancials({
-      qty: isEditing ? editQty : order.qty,
-      sellingUnitPrice: isEditing ? Number(editSellingUnitPrice || 0) : order.sellingUnitPrice,
+      items: calcItems,
       deliveryCharge: isEditing ? Number(editDeliveryCharge || 0) : order.deliveryCharge,
       discount: isEditing ? Number(editDiscount || 0) : order.discount,
-      chinaUnitCost: isEditing
-        ? Number(editChinaUnitCost || 0)
-        : privateCost?.chinaUnitCost || 0,
       shippingCost: isEditing
         ? Number(editShippingCost || 0)
         : privateCost?.shippingCost || 0,
@@ -453,14 +520,14 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
     });
   }, [
     order,
+    orderItems,
+    itemCostMap,
     payments,
     privateCost,
     isEditing,
-    editQty,
-    editSellingUnitPrice,
+    editItems,
     editDeliveryCharge,
     editDiscount,
-    editChinaUnitCost,
     editShippingCost,
   ]);
 
@@ -492,13 +559,11 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
     const names = Array.from(
       new Set([
         ...categories.map((c) => c.name).filter(Boolean),
-        ...(editCategory && !categories.some((c) => c.name === editCategory)
-          ? [editCategory]
-          : []),
+        ...editItems.map((it) => it.category).filter(Boolean),
       ])
     );
     return names.map((name) => ({ value: name, label: name }));
-  }, [categories, editCategory]);
+  }, [categories, editItems]);
 
   const supplierOptions = useMemo(() => {
     return suppliers.map((s) => ({
@@ -508,7 +573,78 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
     }));
   }, [suppliers]);
 
-  const handleEditImageSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
+  const updateEditItem = (itemId: string, patch: Partial<DraftDrawerItem>) => {
+    setEditItems((prev) =>
+      prev.map((it) => (it.itemId === itemId ? { ...it, ...patch } : it))
+    );
+  };
+
+  const handleAddEditItem = () => {
+    if (financialFieldsLocked) return;
+    if (editItems.length >= MAX_PRE_ORDER_ITEMS) {
+      toast.error(`Maximum ${MAX_PRE_ORDER_ITEMS} line items allowed.`);
+      return;
+    }
+    const uniqueId = `item-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+    setEditItems((prev) => [
+      ...prev,
+      {
+        itemId: uniqueId,
+        linkedProductId: '',
+        linkedVariantId: '',
+        productName: '',
+        category: categories[0]?.name || '',
+        sku: '',
+        model: '',
+        variant: '',
+        color: '',
+        qty: 1,
+        sellingUnitPrice: '0',
+        chinaUnitCost: '0',
+        imageUrl: '',
+        imageFile: null,
+        receivedQty: 0,
+        damagedQty: 0,
+      },
+    ]);
+  };
+
+  const handleDuplicateEditItem = (src: DraftDrawerItem) => {
+    if (financialFieldsLocked) return;
+    if (editItems.length >= MAX_PRE_ORDER_ITEMS) {
+      toast.error(`Maximum ${MAX_PRE_ORDER_ITEMS} line items allowed.`);
+      return;
+    }
+    const uniqueId = `item-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`;
+    setEditItems((prev) => [
+      ...prev,
+      {
+        ...src,
+        itemId: uniqueId,
+        receivedQty: 0,
+        damagedQty: 0,
+        imageFile: null,
+      },
+    ]);
+  };
+
+  const handleRemoveEditItem = (item: DraftDrawerItem) => {
+    if (financialFieldsLocked) return;
+    if (editItems.length <= 1) {
+      toast.error('Pre-order must keep at least 1 product line item.');
+      return;
+    }
+    if (item.receivedQty + item.damagedQty > 0) {
+      toast.error(`Cannot remove "${item.productName}" because stock was already received for it.`);
+      return;
+    }
+    setEditItems((prev) => prev.filter((it) => it.itemId !== item.itemId));
+  };
+
+  const handleEditItemImageSelect = (
+    itemId: string,
+    e: React.ChangeEvent<HTMLInputElement>
+  ) => {
     const file = e.target.files?.[0];
     e.target.value = '';
     if (!file) return;
@@ -517,11 +653,10 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
       toast.error(err);
       return;
     }
-    setEditProductImageFile(file);
     const reader = new FileReader();
     reader.onload = () => {
       if (typeof reader.result === 'string') {
-        setEditProductImagePreview(reader.result);
+        updateEditItem(itemId, { imageFile: file, imageUrl: reader.result });
       }
     };
     reader.readAsDataURL(file);
@@ -543,8 +678,8 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
       toast.error('Customer address is required.');
       return;
     }
-    if (!editProductName.trim()) {
-      toast.error('Product name is required.');
+    if (editItems.length === 0) {
+      toast.error('At least 1 product item is required.');
       return;
     }
     if (editEstimatedDeliveryDate && editOrderDate && editEstimatedDeliveryDate < editOrderDate) {
@@ -552,26 +687,51 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
       return;
     }
 
-    const nextUnitPrice = Number(editSellingUnitPrice || 0);
+    for (let i = 0; i < editItems.length; i++) {
+      const it = editItems[i];
+      if (!it.productName.trim()) {
+        toast.error(`Item #${i + 1}: Product name is required.`);
+        return;
+      }
+      const q = Math.round(Number(it.qty) || 0);
+      if (q < 1) {
+        toast.error(`Item #${i + 1} (${it.productName}): Quantity must be at least 1.`);
+        return;
+      }
+      if (q < it.receivedQty + it.damagedQty) {
+        toast.error(
+          `Item "${it.productName}" already has ${it.receivedQty + it.damagedQty} received/damaged units; qty cannot be lower.`
+        );
+        return;
+      }
+      const sp = Number(it.sellingUnitPrice || 0);
+      if (sp <= 0) {
+        toast.error(`Item #${i + 1} (${it.productName}): Selling price must be greater than 0.`);
+        return;
+      }
+      const cp = Number(it.chinaUnitCost || 0);
+      if (cp < 0) {
+        toast.error(`Item #${i + 1} (${it.productName}): China cost cannot be negative.`);
+        return;
+      }
+    }
+
     const nextDelivery = Number(editDeliveryCharge || 0);
     const nextDiscount = Number(editDiscount || 0);
-    const nextQty = Math.round(Number(editQty) || 0);
-
-    if (nextQty < 1) {
-      toast.error('Quantity must be at least 1.');
-      return;
-    }
-    if (nextUnitPrice <= 0) {
-      toast.error('Selling unit price must be greater than 0.');
-      return;
-    }
     if (nextDelivery < 0 || nextDiscount < 0) {
       toast.error('Delivery charge and discount cannot be negative.');
       return;
     }
     const subtotalCheck = calculatePreOrderFinancials({
-      qty: nextQty,
-      sellingUnitPrice: nextUnitPrice,
+      items: editItems.map((it) => ({
+        itemId: it.itemId,
+        productName: it.productName,
+        qty: Math.round(Number(it.qty) || 1),
+        sellingUnitPrice: Number(it.sellingUnitPrice || 0),
+        lineTotal: roundMoney(
+          Math.round(Number(it.qty) || 1) * Number(it.sellingUnitPrice || 0)
+        ),
+      })),
     }).subtotal;
     if (toPaisa(nextDiscount) > toPaisa(subtotalCheck)) {
       toast.error('Discount cannot exceed product subtotal.');
@@ -580,11 +740,46 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
 
     setSaving(true);
     try {
-      let nextImageUrl = editProductImagePreview;
-      if (editProductImageFile) {
-        const uploaded = await uploadPreOrderImage(editProductImageFile, 'products');
-        nextImageUrl = uploaded.url;
-      }
+      const resolvedUrls = await Promise.all(
+        editItems.map(async (it) => {
+          if (it.imageFile) {
+            const uploaded = await uploadPreOrderImage(it.imageFile, 'products');
+            return uploaded.url;
+          }
+          return it.imageUrl;
+        })
+      );
+
+      const originalItemsById = new Map<string, PreOrderItem>(
+        orderItems.map((o) => [o.itemId, o])
+      );
+      const nextItems: PreOrderItem[] = editItems.map((it, idx) => {
+        const orig = originalItemsById.get(it.itemId);
+        const safeQty = financialFieldsLocked && orig ? orig.qty : Math.round(Number(it.qty) || 1);
+        const safePrice =
+          financialFieldsLocked && orig
+            ? orig.sellingUnitPrice
+            : roundMoney(Number(it.sellingUnitPrice || 0));
+        return {
+          ...orig,
+          itemId: it.itemId,
+          linkedProductId: it.linkedProductId || orig?.linkedProductId || '',
+          linkedVariantId: it.linkedVariantId || orig?.linkedVariantId || '',
+          productName: it.productName.trim(),
+          category: it.category.trim(),
+          sku: it.sku.trim(),
+          model: it.model.trim(),
+          variant: it.variant.trim(),
+          color: it.color.trim(),
+          imageUrl: resolvedUrls[idx] || '',
+          qty: safeQty,
+          sellingUnitPrice: safePrice,
+          lineTotal: roundMoney(safeQty * safePrice),
+          receivedQty: orig?.receivedQty ?? it.receivedQty,
+          damagedQty: orig?.damagedQty ?? it.damagedQty,
+          deliveredQty: orig?.deliveredQty ?? 0,
+        };
+      });
 
       const selectedSupplier = suppliers.find((s) => s.id === editSupplierId);
       const actor = actorFromUser(user);
@@ -599,18 +794,10 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
             ? normalizeBdPhone(editCustomerWhatsapp)
             : normPhone,
           customerAddress: editCustomerAddress.trim(),
-          productName: editProductName.trim(),
-          category: editCategory.trim(),
-          sku: editSku.trim(),
-          model: editModel.trim(),
-          variant: editVariant.trim(),
-          color: editColor.trim(),
-          productImage: nextImageUrl || '',
+          items: nextItems,
           ...(financialFieldsLocked
             ? {}
             : {
-                qty: nextQty,
-                sellingUnitPrice: nextUnitPrice,
                 deliveryCharge: nextDelivery,
                 discount: nextDiscount,
               }),
@@ -625,10 +812,28 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
       );
 
       if (canViewProfit) {
-        const chinaNum = Number(editChinaUnitCost || 0);
-        const shipNum = Number(editShippingCost || 0);
+        const nextItemCosts: PreOrderPrivateItemCost[] = editItems.map((it) => {
+          const chinaUnit = roundMoney(Number(it.chinaUnitCost || 0));
+          return {
+            itemId: it.itemId,
+            chinaUnitCost: chinaUnit,
+            supplierUnitCost: chinaUnit,
+            lineChinaTotal: roundMoney(chinaUnit * Math.max(1, Math.round(Number(it.qty) || 1))),
+          };
+        });
+        const shipNum = roundMoney(Number(editShippingCost || 0));
+        const prevItemCostsJson = JSON.stringify(
+          (privateCost?.itemCosts || []).map((c) => ({
+            id: c.itemId,
+            c: roundMoney(c.chinaUnitCost),
+          }))
+        );
+        const nextItemCostsJson = JSON.stringify(
+          nextItemCosts.map((c) => ({ id: c.itemId, c: c.chinaUnitCost }))
+        );
+
         if (
-          chinaNum !== Number(privateCost?.chinaUnitCost || 0) ||
+          prevItemCostsJson !== nextItemCostsJson ||
           shipNum !== Number(privateCost?.shippingCost || 0) ||
           editInternalNotes.trim() !== (privateCost?.internalNotes || '') ||
           editSupplierOrderRef.trim() !== (privateCost?.supplierOrderRef || '')
@@ -636,7 +841,7 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
           await updatePreOrderPrivateCost(
             order.id,
             {
-              chinaUnitCost: chinaNum,
+              itemCosts: nextItemCosts,
               shippingCost: shipNum,
               internalNotes: editInternalNotes.trim(),
               supplierOrderRef: editSupplierOrderRef.trim(),
@@ -850,12 +1055,25 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
   const perOrderSupplierSummary = useMemo(() => {
     if (!order || !canViewSupplier) return null;
     return calculatePerOrderSupplierSummary({
-      qty: order.qty,
+      qty: totalOrderedQty,
+      items: orderItems.map((it) => ({
+        qty: it.qty,
+        chinaUnitCost:
+          itemCostMap[it.itemId]?.chinaUnitCost ?? privateCost?.chinaUnitCost ?? 0,
+      })),
       chinaUnitCost: privateCost?.chinaUnitCost || 0,
       preOrderId: order.id,
       supplierPayments: orderSupplierPayments,
     });
-  }, [order, canViewSupplier, privateCost?.chinaUnitCost, orderSupplierPayments]);
+  }, [
+    order,
+    totalOrderedQty,
+    orderItems,
+    itemCostMap,
+    canViewSupplier,
+    privateCost?.chinaUnitCost,
+    orderSupplierPayments,
+  ]);
 
   const reversedSupPayIds = useMemo(() => {
     const set = new Set<string>();
@@ -930,6 +1148,7 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
               </span>
               <SubBrandBadge subBrand={order.subBrand} />
               <PreOrderStatusBadge status={order.status} size="xs" />
+              {isPreOrderPartiallyReceived(order) && <PartiallyReceivedTag />}
               {needsRefundRequired && (
                 <Badge variant="danger" size="xs">
                   Refund required
@@ -1173,7 +1392,7 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
                         Warehouse Stock Intake
                       </div>
                       <div className="text-[11px] text-amber-800 dark:text-amber-300 mt-0.5 font-mono">
-                        Good: {order.stockReceivedQty || 0}/{order.qty} pcs
+                        Good: {order.stockReceivedQty || 0}/{totalOrderedQty} pcs
                         {(order.damagedQty || 0) > 0 ? ` • Damaged: ${order.damagedQty}` : ''}
                         {receipts.length > 0 ? ` (${receipts.length} receipt${receipts.length > 1 ? 's' : ''})` : ''}
                       </div>
@@ -1484,162 +1703,335 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
                   )}
                 </div>
 
-                {/* Product Info */}
+                {/* Multi-Item Order Lines */}
                 <div className="p-4 rounded-xl border border-slate-200 dark:border-slate-800 bg-slate-50/50 dark:bg-slate-950/40 space-y-3">
-                  <div className="flex items-center justify-between">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
                     <h4 className="text-xs font-bold uppercase tracking-wider text-slate-500 flex items-center gap-1.5">
                       <Package className="w-3.5 h-3.5" />
-                      Product Details
+                      Order Items ({isEditing ? editItems.length : orderItems.length} ·{' '}
+                      {isEditing
+                        ? editItems.reduce((s, i) => s + (Math.round(Number(i.qty) || 0)), 0)
+                        : totalOrderedQty}{' '}
+                      pcs)
                     </h4>
-                    {order.linkedProductId && (
-                      <Badge variant="info" size="xs">
-                        Linked Catalog Product
-                      </Badge>
+                    {isEditing && !financialFieldsLocked && (
+                      <Button
+                        type="button"
+                        variant="secondary"
+                        size="xs"
+                        leftIcon={<Plus className="w-3.5 h-3.5" />}
+                        onClick={handleAddEditItem}
+                      >
+                        Add Item
+                      </Button>
                     )}
                   </div>
 
                   {isEditing ? (
-                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                      <FormField label="Product Name" required className="sm:col-span-2">
-                        <Input
-                          value={editProductName}
-                          onChange={(e) => setEditProductName(e.target.value)}
-                        />
-                      </FormField>
-                      <FormField label="Category">
-                        <Select
-                          options={categoryOptions}
-                          value={editCategory}
-                          onChange={(val) => setEditCategory(String(val))}
-                          searchable
-                          isClearable
-                        />
-                      </FormField>
-                      <FormField label="SKU">
-                        <Input
-                          value={editSku}
-                          onChange={(e) => setEditSku(e.target.value)}
-                          className="font-mono"
-                        />
-                      </FormField>
-                      <FormField label="Model">
-                        <Input value={editModel} onChange={(e) => setEditModel(e.target.value)} />
-                      </FormField>
-                      <FormField label="Variant">
-                        <Input
-                          value={editVariant}
-                          onChange={(e) => setEditVariant(e.target.value)}
-                        />
-                      </FormField>
-                      <FormField label="Color">
-                        <Input value={editColor} onChange={(e) => setEditColor(e.target.value)} />
-                      </FormField>
-                      <FormField label="Quantity" required>
-                        <div className="inline-flex items-center gap-2">
-                          <button
-                            type="button"
-                            disabled={financialFieldsLocked}
-                            onClick={() => setEditQty((q) => Math.max(1, q - 1))}
-                            className="w-9 h-9 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 flex items-center justify-center cursor-pointer disabled:opacity-40"
+                    <div className="space-y-3">
+                      {editItems.map((it, idx) => {
+                        const itemHasReceipts = it.receivedQty + it.damagedQty > 0;
+                        const minAllowedQty = Math.max(1, it.receivedQty + it.damagedQty);
+                        return (
+                          <div
+                            key={it.itemId}
+                            className="p-3.5 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 space-y-3"
                           >
-                            <Minus className="w-3.5 h-3.5" />
-                          </button>
-                          <Input
-                            type="number"
-                            min={1}
-                            disabled={financialFieldsLocked}
-                            value={editQty}
-                            onChange={(e) =>
-                              setEditQty(Math.max(1, Math.round(Number(e.target.value) || 1)))
-                            }
-                            className="w-20 text-center font-mono font-bold"
-                          />
-                          <button
-                            type="button"
-                            disabled={financialFieldsLocked}
-                            onClick={() => setEditQty((q) => q + 1)}
-                            className="w-9 h-9 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 flex items-center justify-center cursor-pointer disabled:opacity-40"
-                          >
-                            <Plus className="w-3.5 h-3.5" />
-                          </button>
-                        </div>
-                      </FormField>
-                      <FormField label="Product Photo" className="sm:col-span-2">
-                        <div className="flex items-center gap-3">
-                          {editProductImagePreview ? (
-                            <div className="relative w-16 h-16 rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700">
-                              <img
-                                src={editProductImagePreview}
-                                alt={editProductName}
-                                className="w-full h-full object-cover"
-                              />
-                              <button
-                                type="button"
-                                onClick={() => {
-                                  setEditProductImageFile(null);
-                                  setEditProductImagePreview('');
-                                }}
-                                className="absolute top-0.5 right-0.5 w-5 h-5 rounded bg-rose-600 text-white flex items-center justify-center cursor-pointer"
-                              >
-                                <Trash2 className="w-3 h-3" />
-                              </button>
+                            <div className="flex items-center justify-between gap-2">
+                              <div className="flex items-center gap-2 text-xs font-bold text-slate-700 dark:text-slate-200">
+                                <span>Item #{idx + 1}</span>
+                                {it.linkedProductId && (
+                                  <Badge variant="info" size="xs">
+                                    Linked
+                                  </Badge>
+                                )}
+                                {itemHasReceipts && (
+                                  <Badge variant="gold" size="xs">
+                                    Received: {it.receivedQty}/{it.qty}
+                                  </Badge>
+                                )}
+                              </div>
+                              {!financialFieldsLocked && (
+                                <div className="flex items-center gap-1">
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="xs"
+                                    leftIcon={<Copy className="w-3 h-3" />}
+                                    onClick={() => handleDuplicateEditItem(it)}
+                                  >
+                                    Duplicate
+                                  </Button>
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="xs"
+                                    disabled={editItems.length <= 1 || itemHasReceipts}
+                                    onClick={() => handleRemoveEditItem(it)}
+                                    leftIcon={<Trash2 className="w-3 h-3 text-rose-500" />}
+                                  >
+                                    Remove
+                                  </Button>
+                                </div>
+                              )}
                             </div>
-                          ) : (
-                            <label className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-dashed border-slate-300 dark:border-slate-700 text-xs font-semibold cursor-pointer">
-                              <ImagePlus className="w-4 h-4 text-[#D4AF37]" />
-                              Upload Image
-                              <input
-                                type="file"
-                                accept="image/jpeg,image/png,image/webp"
-                                className="hidden"
-                                onChange={handleEditImageSelect}
-                              />
-                            </label>
-                          )}
-                        </div>
-                      </FormField>
+
+                            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                              <FormField label="Product Name" required className="sm:col-span-2">
+                                <Input
+                                  value={it.productName}
+                                  onChange={(e) =>
+                                    updateEditItem(it.itemId, { productName: e.target.value })
+                                  }
+                                />
+                              </FormField>
+                              <FormField label="Category">
+                                <Select
+                                  options={categoryOptions}
+                                  value={it.category}
+                                  onChange={(val) =>
+                                    updateEditItem(it.itemId, { category: String(val) })
+                                  }
+                                  searchable
+                                  isClearable
+                                />
+                              </FormField>
+                              <FormField label="SKU">
+                                <Input
+                                  value={it.sku}
+                                  onChange={(e) =>
+                                    updateEditItem(it.itemId, { sku: e.target.value })
+                                  }
+                                  className="font-mono"
+                                />
+                              </FormField>
+                              <FormField label="Model">
+                                <Input
+                                  value={it.model}
+                                  onChange={(e) =>
+                                    updateEditItem(it.itemId, { model: e.target.value })
+                                  }
+                                />
+                              </FormField>
+                              <FormField label="Variant">
+                                <Input
+                                  value={it.variant}
+                                  onChange={(e) =>
+                                    updateEditItem(it.itemId, { variant: e.target.value })
+                                  }
+                                />
+                              </FormField>
+                              <FormField label="Color">
+                                <Input
+                                  value={it.color}
+                                  onChange={(e) =>
+                                    updateEditItem(it.itemId, { color: e.target.value })
+                                  }
+                                />
+                              </FormField>
+                              <FormField label="Quantity" required>
+                                <div className="inline-flex items-center gap-2">
+                                  <button
+                                    type="button"
+                                    disabled={financialFieldsLocked || it.qty <= minAllowedQty}
+                                    onClick={() =>
+                                      updateEditItem(it.itemId, {
+                                        qty: Math.max(minAllowedQty, it.qty - 1),
+                                      })
+                                    }
+                                    className="w-9 h-9 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 flex items-center justify-center cursor-pointer disabled:opacity-40"
+                                  >
+                                    <Minus className="w-3.5 h-3.5" />
+                                  </button>
+                                  <Input
+                                    type="number"
+                                    min={minAllowedQty}
+                                    disabled={financialFieldsLocked}
+                                    value={it.qty}
+                                    onChange={(e) =>
+                                      updateEditItem(it.itemId, {
+                                        qty: Math.max(
+                                          minAllowedQty,
+                                          Math.round(Number(e.target.value) || minAllowedQty)
+                                        ),
+                                      })
+                                    }
+                                    className="w-20 text-center font-mono font-bold"
+                                  />
+                                  <button
+                                    type="button"
+                                    disabled={financialFieldsLocked}
+                                    onClick={() =>
+                                      updateEditItem(it.itemId, { qty: it.qty + 1 })
+                                    }
+                                    className="w-9 h-9 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900 flex items-center justify-center cursor-pointer disabled:opacity-40"
+                                  >
+                                    <Plus className="w-3.5 h-3.5" />
+                                  </button>
+                                </div>
+                              </FormField>
+
+                              <FormField label="Selling Price / Unit (৳)" required>
+                                <CurrencyInput
+                                  min={0}
+                                  disabled={financialFieldsLocked}
+                                  value={it.sellingUnitPrice}
+                                  onChange={(e) =>
+                                    updateEditItem(it.itemId, {
+                                      sellingUnitPrice: e.target.value,
+                                    })
+                                  }
+                                />
+                              </FormField>
+
+                              {canViewProfit && (
+                                <FormField label="China Cost / Unit (৳)">
+                                  <CurrencyInput
+                                    min={0}
+                                    value={it.chinaUnitCost}
+                                    onChange={(e) =>
+                                      updateEditItem(it.itemId, {
+                                        chinaUnitCost: e.target.value,
+                                      })
+                                    }
+                                  />
+                                </FormField>
+                              )}
+
+                              <FormField label="Item Photo" className="sm:col-span-2">
+                                <div className="flex items-center gap-3">
+                                  {it.imageUrl ? (
+                                    <div className="relative w-14 h-14 rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700">
+                                      <img
+                                        src={it.imageUrl}
+                                        alt={it.productName}
+                                        className="w-full h-full object-cover"
+                                      />
+                                      <button
+                                        type="button"
+                                        onClick={() =>
+                                          updateEditItem(it.itemId, {
+                                            imageFile: null,
+                                            imageUrl: '',
+                                          })
+                                        }
+                                        className="absolute top-0.5 right-0.5 w-5 h-5 rounded bg-rose-600 text-white flex items-center justify-center cursor-pointer"
+                                      >
+                                        <Trash2 className="w-3 h-3" />
+                                      </button>
+                                    </div>
+                                  ) : (
+                                    <label className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-dashed border-slate-300 dark:border-slate-700 text-xs font-semibold cursor-pointer">
+                                      <ImagePlus className="w-4 h-4 text-[#D4AF37]" />
+                                      Upload Image
+                                      <input
+                                        type="file"
+                                        accept="image/jpeg,image/png,image/webp"
+                                        className="hidden"
+                                        onChange={(e) =>
+                                          handleEditItemImageSelect(it.itemId, e)
+                                        }
+                                      />
+                                    </label>
+                                  )}
+                                  <span className="ml-auto font-mono text-xs font-bold text-slate-700 dark:text-slate-200">
+                                    Line Total:{' '}
+                                    {formatBDT(it.qty * Number(it.sellingUnitPrice || 0))}
+                                  </span>
+                                </div>
+                              </FormField>
+                            </div>
+                          </div>
+                        );
+                      })}
                     </div>
                   ) : (
-                    <div className="flex flex-col sm:flex-row gap-4 text-xs">
-                      {order.productImage && (
-                        <img
-                          src={order.productImage}
-                          alt={order.productName}
-                          className="w-20 h-20 rounded-xl object-cover border border-slate-200 dark:border-slate-700 shrink-0"
-                        />
-                      )}
-                      <div className="grid grid-cols-2 sm:grid-cols-3 gap-3 flex-1">
-                        <div className="col-span-2 sm:col-span-3">
-                          <div className="text-slate-400">Product Name</div>
-                          <div className="font-bold text-sm text-slate-900 dark:text-slate-100 mt-0.5">
-                            {order.productName}
+                    <div className="space-y-2.5">
+                      {orderItems.map((it) => {
+                        const chinaUnit = itemCostMap[it.itemId]?.chinaUnitCost ?? 0;
+                        const rec =
+                          Number(
+                            it.receivedQty ??
+                              (orderItems.length === 1 ? order.stockReceivedQty : 0)
+                          ) || 0;
+                        return (
+                          <div
+                            key={it.itemId}
+                            className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex flex-col sm:flex-row gap-3 text-xs"
+                          >
+                            {it.imageUrl ? (
+                              <img
+                                src={it.imageUrl}
+                                alt={it.productName}
+                                className="w-16 h-16 rounded-lg object-cover border border-slate-200 dark:border-slate-700 shrink-0"
+                              />
+                            ) : (
+                              <div className="w-16 h-16 rounded-lg bg-slate-100 dark:bg-slate-800 text-slate-400 flex items-center justify-center shrink-0">
+                                <Package className="w-5 h-5" />
+                              </div>
+                            )}
+
+                            <div className="flex-1 min-w-0 space-y-1.5">
+                              <div className="flex flex-wrap items-start justify-between gap-2">
+                                <div className="font-bold text-slate-900 dark:text-slate-100">
+                                  {it.productName}
+                                  {it.linkedProductId && (
+                                    <Badge variant="info" size="xs" className="ml-2">
+                                      Linked
+                                    </Badge>
+                                  )}
+                                </div>
+                                <div className="font-mono font-bold text-slate-900 dark:text-slate-100">
+                                  {formatBDT(it.lineTotal ?? it.qty * it.sellingUnitPrice)}
+                                </div>
+                              </div>
+
+                              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-[11px] text-slate-600 dark:text-slate-300">
+                                <div>
+                                  <span className="text-slate-400">Qty:</span>{' '}
+                                  <span className="font-mono font-bold">{it.qty}</span> ×{' '}
+                                  <span className="font-mono">
+                                    {formatBDT(it.sellingUnitPrice)}
+                                  </span>
+                                </div>
+                                <div>
+                                  <span className="text-slate-400">Received:</span>{' '}
+                                  <span className="font-mono font-semibold">
+                                    {rec}/{it.qty}
+                                  </span>
+                                </div>
+                                <div>
+                                  <span className="text-slate-400">SKU:</span>{' '}
+                                  <span className="font-mono">{it.sku || '—'}</span>
+                                </div>
+                                <div>
+                                  <span className="text-slate-400">Category:</span>{' '}
+                                  {it.category || '—'}
+                                </div>
+                              </div>
+
+                              {(it.model || it.variant || it.color || canViewProfit) && (
+                                <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-[11px] text-slate-500 dark:text-slate-400">
+                                  {(it.model || it.variant || it.color) && (
+                                    <span>
+                                      Spec:{' '}
+                                      {[it.model, it.variant, it.color]
+                                        .filter(Boolean)
+                                        .join(' / ')}
+                                    </span>
+                                  )}
+                                  {canViewProfit && (
+                                    <span className="font-mono text-amber-700 dark:text-amber-300">
+                                      China Cost: {formatBDT(chinaUnit)}/u (
+                                      {formatBDT(chinaUnit * it.qty)})
+                                    </span>
+                                  )}
+                                </div>
+                              )}
+                            </div>
                           </div>
-                        </div>
-                        <div>
-                          <div className="text-slate-400">Category</div>
-                          <div className="font-medium mt-0.5">{order.category || '—'}</div>
-                        </div>
-                        <div>
-                          <div className="text-slate-400">SKU</div>
-                          <div className="font-mono mt-0.5">{order.sku || '—'}</div>
-                        </div>
-                        <div>
-                          <div className="text-slate-400">Quantity</div>
-                          <div className="font-mono font-bold mt-0.5">{order.qty}</div>
-                        </div>
-                        <div>
-                          <div className="text-slate-400">Model</div>
-                          <div className="mt-0.5">{order.model || '—'}</div>
-                        </div>
-                        <div>
-                          <div className="text-slate-400">Variant</div>
-                          <div className="mt-0.5">{order.variant || '—'}</div>
-                        </div>
-                        <div>
-                          <div className="text-slate-400">Color</div>
-                          <div className="mt-0.5">{order.color || '—'}</div>
-                        </div>
-                      </div>
+                        );
+                      })}
                     </div>
                   )}
                 </div>
@@ -1661,14 +2053,6 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
 
                   {isEditing && (
                     <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 pb-3 border-b border-slate-200/70 dark:border-slate-800">
-                      <FormField label="Selling Price / Unit (৳)">
-                        <CurrencyInput
-                          min={0}
-                          disabled={financialFieldsLocked}
-                          value={editSellingUnitPrice}
-                          onChange={(e) => setEditSellingUnitPrice(e.target.value)}
-                        />
-                      </FormField>
                       <FormField label="Delivery Charge (৳)">
                         <CurrencyInput
                           min={0}
@@ -1687,22 +2071,13 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
                       </FormField>
 
                       {canViewProfit && (
-                        <>
-                          <FormField label="China Purchase Price / Unit (৳)">
-                            <CurrencyInput
-                              min={0}
-                              value={editChinaUnitCost}
-                              onChange={(e) => setEditChinaUnitCost(e.target.value)}
-                            />
-                          </FormField>
-                          <FormField label="Shipping Cost (Total ৳)">
-                            <CurrencyInput
-                              min={0}
-                              value={editShippingCost}
-                              onChange={(e) => setEditShippingCost(e.target.value)}
-                            />
-                          </FormField>
-                        </>
+                        <FormField label="Shipping Cost (Total ৳)">
+                          <CurrencyInput
+                            min={0}
+                            value={editShippingCost}
+                            onChange={(e) => setEditShippingCost(e.target.value)}
+                          />
+                        </FormField>
                       )}
                     </div>
                   )}
@@ -1710,11 +2085,10 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
                   {liveFinancials && (
                     <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs tabular-nums">
                       <div>
-                        <div className="text-slate-400">Unit Price</div>
+                        <div className="text-slate-400">Items / Total Qty</div>
                         <div className="font-mono font-semibold mt-0.5">
-                          {formatBDT(
-                            isEditing ? Number(editSellingUnitPrice || 0) : order.sellingUnitPrice
-                          )}
+                          {(isEditing ? editItems.length : orderItems.length)} lines •{' '}
+                          {liveFinancials.qty} pcs
                         </div>
                       </div>
                       <div>
@@ -1766,12 +2140,26 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
                   {canViewProfit && liveFinancials && (
                     <div className="pt-3 mt-2 border-t border-slate-200/70 dark:border-slate-800 grid grid-cols-3 gap-3 text-xs tabular-nums">
                       <div>
-                        <div className="text-slate-400">China Cost / Unit</div>
+                        <div className="text-slate-400">China Cost Total</div>
                         <div className="font-mono font-semibold mt-0.5">
                           {formatBDT(
                             isEditing
-                              ? Number(editChinaUnitCost || 0)
-                              : privateCost?.chinaUnitCost || 0
+                              ? editItems.reduce(
+                                  (s, it) =>
+                                    s +
+                                    Math.max(1, Math.round(Number(it.qty) || 1)) *
+                                      Math.max(0, Number(it.chinaUnitCost || 0)),
+                                  0
+                                )
+                              : orderItems.reduce(
+                                  (s, it) =>
+                                    s +
+                                    it.qty *
+                                      (itemCostMap[it.itemId]?.chinaUnitCost ??
+                                        privateCost?.chinaUnitCost ??
+                                        0),
+                                  0
+                                )
                           )}
                         </div>
                       </div>
@@ -2368,7 +2756,7 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
                   {perOrderSupplierSummary && (
                     <div className="grid grid-cols-3 gap-3 pt-3 border-t border-slate-200/70 dark:border-slate-800 text-xs tabular-nums">
                       <div>
-                        <div className="text-slate-400">China Cost Total (Qty {order.qty})</div>
+                        <div className="text-slate-400">China Cost Total (Qty {totalOrderedQty})</div>
                         <div className="font-mono font-bold text-sm text-slate-900 dark:text-slate-100 mt-0.5">
                           {formatBDT(perOrderSupplierSummary.chinaCostTotal)}
                         </div>
@@ -2683,7 +3071,7 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
         onClose={() => setShowCancelModal(false)}
         order={order}
         privateCost={privateCost}
-        supplierPaidBdt={perOrderSupplierSummary?.supplierPaid || 0}
+        supplierPaidBdt={perOrderSupplierSummary?.paidToSupplier || 0}
         user={user}
         onSuccess={() => {
           loadDetail();

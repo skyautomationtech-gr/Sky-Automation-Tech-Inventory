@@ -11,9 +11,12 @@ import {
 import {
   PRE_ORDER_NOT_OVERDUE_STATUSES,
   PRE_ORDER_STATUSES,
+  computeItemCostMap,
+  formatPreOrderProductLabel,
   getTodayIsoDate,
   isPreOrderOverdue,
   normalizeBdPhone,
+  normalizePreOrderItems,
 } from './constants';
 import {
   calculateActualShippingCost,
@@ -121,7 +124,12 @@ export function filterPreOrdersForReport(
     }
 
     if (prodQ) {
-      const prodHay = `${po.productName || ''} ${po.sku || ''} ${po.model || ''} ${po.variant || ''} ${po.color || ''}`.toLowerCase();
+      const items = normalizePreOrderItems(po);
+      const itemHay = items
+        .map((it) => `${it.productName || ''} ${it.sku || ''} ${it.model || ''} ${it.variant || ''} ${it.color || ''}`)
+        .join(' ');
+      const kwHay = (po.searchKeywords || []).join(' ');
+      const prodHay = `${po.productName || ''} ${po.sku || ''} ${po.model || ''} ${po.variant || ''} ${po.color || ''} ${itemHay} ${kwHay}`.toLowerCase();
       if (!prodHay.includes(prodQ)) return false;
     }
 
@@ -199,7 +207,7 @@ export function buildPeriodSummaryReport(
     const profP = isVoid ? 0 : toPaisa(priv?.expectedProfit || 0);
 
     bucket.ordersCount += 1;
-    bucket.qtyTotal += Number(po.qty || 0);
+    bucket.qtyTotal += Number(po.totalQty ?? po.qty ?? 0);
     bucket.orderValue = fromPaisa(toPaisa(bucket.orderValue) + valP);
     bucket.advanceCollected = fromPaisa(toPaisa(bucket.advanceCollected) + advP);
     bucket.dueAmount = fromPaisa(toPaisa(bucket.dueAmount) + dueP);
@@ -277,7 +285,7 @@ export function buildStatusOrdersReport(filteredOrders: PreOrder[]): BuiltReport
     if (!row) continue;
     const isVoid = po.status === 'Cancelled' || po.status === 'Refunded';
     row.orderCount += 1;
-    row.totalQty += Number(po.qty || 0);
+    row.totalQty += Number(po.totalQty ?? po.qty ?? 0);
     row.totalValue = fromPaisa(toPaisa(row.totalValue) + toPaisa(po.totalAmount));
     row.advancePaid = fromPaisa(toPaisa(row.advancePaid) + toPaisa(po.advancePaid));
     row.dueAmount = fromPaisa(toPaisa(row.dueAmount) + (isVoid ? 0 : Math.max(0, toPaisa(po.dueAmount))));
@@ -437,7 +445,7 @@ export function buildCustomerDueAgingReport(filteredOrders: PreOrder[]): BuiltRe
         subBrand: po.subBrand,
         customerName: po.customerName,
         customerPhone: po.customerPhone,
-        productName: po.productName,
+        productName: formatPreOrderProductLabel(po),
         status: po.status,
         orderDate: getPreOrderDay(po),
         estimatedDeliveryDate: po.estimatedDeliveryDate || 'TBA',
@@ -540,9 +548,15 @@ export function buildSupplierPaymentsReport(
     }
     const priv = privateCostsByOrder[po.id];
     if (priv && po.status !== 'Cancelled' && po.status !== 'Refunded') {
+      const items = normalizePreOrderItems(po);
+      const costMap = computeItemCostMap(po, priv);
       const supCalc = calculatePerOrderSupplierSummary({
-        qty: po.qty,
+        qty: po.totalQty ?? po.qty,
         chinaUnitCost: priv.chinaUnitCost || 0,
+        items: items.map((it) => ({
+          qty: it.qty,
+          chinaUnitCost: costMap[it.itemId]?.chinaUnitCost ?? priv.chinaUnitCost ?? 0,
+        })),
         preOrderId: po.id,
         supplierPayments,
       });
@@ -618,8 +632,8 @@ export function buildShippingCostReport(
     return {
       preOrderNumber: po.preOrderNumber,
       subBrand: po.subBrand,
-      productName: po.productName,
-      qty: po.qty,
+      productName: formatPreOrderProductLabel(po),
+      qty: po.totalQty ?? po.qty,
       shippingMethod: po.shippingMethod || '—',
       freightForwarder: po.freightForwarder || '—',
       estShipping,
@@ -678,8 +692,8 @@ export function buildDeliveredAndCancelledReport(filteredOrders: PreOrder[]): Bu
       subBrand: po.subBrand,
       customerName: po.customerName,
       customerPhone: po.customerPhone,
-      productName: po.productName,
-      qty: po.qty,
+      productName: formatPreOrderProductLabel(po),
+      qty: po.totalQty ?? po.qty,
       status: po.status,
       totalAmount: roundMoney(po.totalAmount),
       advancePaid: roundMoney(po.advancePaid),
@@ -743,33 +757,53 @@ export function buildProductWiseReport(filteredOrders: PreOrder[]): BuiltReportR
     }
   >();
 
+  const orderSeenByProduct = new Map<string, Set<string>>();
+
   for (const po of filteredOrders) {
-    const key = (po.sku || po.productName || 'Unnamed Product').trim().toLowerCase();
-    if (!byProd.has(key)) {
-      byProd.set(key, {
-        productKey: key,
-        productName: po.productName,
-        sku: po.sku || '—',
-        orderCount: 0,
-        totalQty: 0,
-        receivedGoodQty: 0,
-        damagedQty: 0,
-        grossValue: 0,
-        collectedValue: 0,
-        dueValue: 0,
-      });
-    }
-    const row = byProd.get(key)!;
+    const items = normalizePreOrderItems(po);
     const isVoid = po.status === 'Cancelled' || po.status === 'Refunded';
-    row.orderCount += 1;
-    row.totalQty += Number(po.qty || 0);
-    row.receivedGoodQty += Number(po.stockReceivedQty || 0);
-    row.damagedQty += Number(po.damagedQty || 0);
-    if (!isVoid) {
-      row.grossValue = fromPaisa(toPaisa(row.grossValue) + toPaisa(po.totalAmount));
-      row.dueValue = fromPaisa(toPaisa(row.dueValue) + Math.max(0, toPaisa(po.dueAmount)));
+    const orderSubtotalP = items.reduce((s, it) => s + Math.max(0, toPaisa(it.lineTotal)), 0);
+    const orderAdvP = Math.max(0, toPaisa(po.advancePaid));
+    const orderDueP = isVoid ? 0 : Math.max(0, toPaisa(po.dueAmount));
+
+    for (const item of items) {
+      const key = (item.sku || item.productName || 'Unnamed Product').trim().toLowerCase();
+      if (!byProd.has(key)) {
+        byProd.set(key, {
+          productKey: key,
+          productName: item.productName,
+          sku: item.sku || item.model || '—',
+          orderCount: 0,
+          totalQty: 0,
+          receivedGoodQty: 0,
+          damagedQty: 0,
+          grossValue: 0,
+          collectedValue: 0,
+          dueValue: 0,
+        });
+        orderSeenByProduct.set(key, new Set());
+      }
+      const row = byProd.get(key)!;
+      const seenSet = orderSeenByProduct.get(key)!;
+      if (!seenSet.has(po.id)) {
+        seenSet.add(po.id);
+        row.orderCount += 1;
+      }
+
+      row.totalQty += Math.max(0, Number(item.qty) || 0);
+      row.receivedGoodQty += Math.max(0, Number(item.receivedQty) || 0);
+      row.damagedQty += Math.max(0, Number(item.damagedQty) || 0);
+
+      const itemLineP = Math.max(0, toPaisa(item.lineTotal));
+      const shareRatio =
+        orderSubtotalP > 0 ? itemLineP / orderSubtotalP : 1 / Math.max(1, items.length);
+
+      if (!isVoid) {
+        row.grossValue = fromPaisa(toPaisa(row.grossValue) + itemLineP);
+        row.dueValue = fromPaisa(toPaisa(row.dueValue) + Math.round(orderDueP * shareRatio));
+      }
+      row.collectedValue = fromPaisa(toPaisa(row.collectedValue) + Math.round(orderAdvP * shareRatio));
     }
-    row.collectedValue = fromPaisa(toPaisa(row.collectedValue) + toPaisa(po.advancePaid));
   }
 
   const rows = Array.from(byProd.values()).sort((a, b) => b.totalQty - a.totalQty || b.grossValue - a.grossValue);
@@ -888,8 +922,15 @@ export function buildExpectedVsActualProfitReport(
 
   const rows = filteredOrders.map((po) => {
     const priv = privateCostsByOrder[po.id];
+    const items = normalizePreOrderItems(po);
+    const costMap = computeItemCostMap(po, priv);
+    const itemsWithCosts = items.map((it) => ({
+      ...it,
+      chinaUnitCost: costMap[it.itemId]?.chinaUnitCost ?? priv?.chinaUnitCost ?? 0,
+    }));
     const calc = calculatePreOrderFinancials({
-      qty: po.qty,
+      items: itemsWithCosts,
+      qty: po.totalQty ?? po.qty,
       sellingUnitPrice: po.sellingUnitPrice,
       deliveryCharge: po.deliveryCharge,
       discount: po.discount,
@@ -897,7 +938,12 @@ export function buildExpectedVsActualProfitReport(
       shippingCost: priv?.shippingCost || 0,
     });
 
-    const chinaTotal = roundMoney((priv?.chinaUnitCost || 0) * po.qty);
+    const chinaTotal = fromPaisa(
+      itemsWithCosts.reduce(
+        (s, it) => s + Math.max(0, Math.round(Number(it.qty) || 0)) * toPaisa(it.chinaUnitCost),
+        0
+      )
+    );
     const estShip = roundMoney(priv?.shippingCost || 0);
     const actShip = roundMoney(
       priv?.actualShippingCost ?? calculateActualShippingCost(priv?.shippingExpenses) ?? 0
@@ -918,7 +964,7 @@ export function buildExpectedVsActualProfitReport(
     return {
       preOrderNumber: po.preOrderNumber,
       subBrand: po.subBrand,
-      productName: po.productName,
+      productName: formatPreOrderProductLabel(po),
       status: po.status,
       netRevenue,
       chinaTotal,
@@ -983,7 +1029,7 @@ export function buildDelayReport(filteredOrders: PreOrder[]): BuiltReportResult 
         subBrand: po.subBrand,
         customerName: po.customerName,
         customerPhone: po.customerPhone,
-        productName: po.productName,
+        productName: formatPreOrderProductLabel(po),
         status: po.status,
         previousEta: po.previousEstimatedArrivalDate || '—',
         currentEta: eta || 'TBA',

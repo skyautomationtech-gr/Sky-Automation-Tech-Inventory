@@ -14,7 +14,13 @@ import {
   Supplier,
   UserProfile,
 } from '../../types';
-import { formatBDT, getTodayIsoDate, isPreOrderAdminRole } from '../../preOrders/constants';
+import {
+  formatBDT,
+  formatPreOrderProductLabel,
+  getTodayIsoDate,
+  isPreOrderAdminRole,
+  normalizePreOrderItems,
+} from '../../preOrders/constants';
 import { fromPaisa, roundMoney, toPaisa } from '../../preOrders/calculations';
 import { uploadPreOrderDocument, validatePreOrderDocumentFile } from '../../preOrders/imageUpload';
 import {
@@ -465,7 +471,10 @@ export const RecordSupplierPaymentModal: React.FC<RecordSupplierPaymentModalProp
                               </Badge>
                             </div>
                             <div className="text-[11px] text-slate-500 truncate">
-                              {ord.productName} (Qty {ord.qty})
+                              {formatPreOrderProductLabel(ord)} (Qty{' '}
+                              {ord.totalQty ??
+                                normalizePreOrderItems(ord).reduce((s, it) => s + it.qty, 0)}
+                              )
                             </div>
                           </div>
                         </label>

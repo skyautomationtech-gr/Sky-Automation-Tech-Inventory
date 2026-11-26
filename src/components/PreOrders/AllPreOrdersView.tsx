@@ -10,6 +10,7 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock,
+  Database,
   Edit3,
   Eye,
   Filter,
@@ -37,22 +38,33 @@ import {
 import {
   PRE_ORDER_STATUSES,
   formatBDT,
+  formatPreOrderProductLabel,
   hasPermission,
   isPreOrderAdminRole,
   isPreOrderOverdue,
+  isPreOrderPartiallyReceived,
+  normalizePreOrderItems,
 } from '../../preOrders/constants';
 import { getSuppliers } from '../../firebase/db';
-import { PreOrderSortField, queryPreOrdersPage } from '../../firebase/preOrderDb';
+import {
+  PreOrderSortField,
+  actorFromUser,
+  migrateLegacyPreOrdersToItems,
+  queryPreOrdersPage,
+} from '../../firebase/preOrderDb';
 import {
   Button,
   Card,
+  ConfirmDialog,
   Input,
   SearchInput,
   Select,
   Skeleton,
+  useToast,
 } from '../../design-system';
 import {
   OverdueTag,
+  PartiallyReceivedTag,
   PreOrderStatusBadge,
   SubBrandBadge,
 } from './PreOrderStatusBadge';
@@ -142,7 +154,11 @@ export const AllPreOrdersView: React.FC<AllPreOrdersViewProps> = ({
   const [openMenuRowId, setOpenMenuRowId] = useState<string | null>(null);
   const [statusTargetOrder, setStatusTargetOrder] = useState<PreOrder | null>(null);
   const [showIntegrityModal, setShowIntegrityModal] = useState(false);
+  const [expandedRowIds, setExpandedRowIds] = useState<Record<string, boolean>>({});
+  const [showMigrateConfirm, setShowMigrateConfirm] = useState(false);
+  const [migratingLegacy, setMigratingLegacy] = useState(false);
 
+  const toast = useToast();
   const canEdit = hasPermission(user, rolePermissions, 'preOrderEdit');
   const canUpdateStatus = hasPermission(user, rolePermissions, 'preOrderUpdateStatus');
 
@@ -363,17 +379,30 @@ export const AllPreOrdersView: React.FC<AllPreOrdersViewProps> = ({
           </p>
         </div>
 
-        <div className="flex items-center gap-2.5">
+        <div className="flex flex-wrap items-center gap-2.5">
           {isAdmin && (
-            <Button
-              type="button"
-              variant="secondary"
-              size="sm"
-              onClick={() => setShowIntegrityModal(true)}
-              leftIcon={<ShieldCheck className="w-3.5 h-3.5 text-[#D4AF37]" />}
-            >
-              Integrity Check
-            </Button>
+            <>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={() => setShowMigrateConfirm(true)}
+                isLoading={migratingLegacy}
+                leftIcon={<Database className="w-3.5 h-3.5 text-sky-600 dark:text-sky-400" />}
+                title="Convert legacy single-product pre-orders to multi-item format (safe & idempotent)"
+              >
+                Migrate Old Pre-Orders
+              </Button>
+              <Button
+                type="button"
+                variant="secondary"
+                size="sm"
+                onClick={() => setShowIntegrityModal(true)}
+                leftIcon={<ShieldCheck className="w-3.5 h-3.5 text-[#D4AF37]" />}
+              >
+                Integrity Check
+              </Button>
+            </>
           )}
           <Button
             type="button"
@@ -723,10 +752,21 @@ export const AllPreOrdersView: React.FC<AllPreOrdersViewProps> = ({
                     row.status,
                     row.stockReceived
                   );
+                  const rowItems = normalizePreOrderItems(row);
+                  const primaryItem = rowItems[0];
+                  const thumbUrl = primaryItem?.imageUrl || row.productImage;
+                  const totalQty = row.totalQty ?? rowItems.reduce((s, it) => s + (Number(it.qty) || 0), 0);
+                  const totalReceived = rowItems.reduce(
+                    (s, it) => s + (Number(it.receivedQty) || 0),
+                    0
+                  ) || row.stockReceivedQty || 0;
+                  const partiallyReceived = isPreOrderPartiallyReceived(row);
+                  const isExpanded = Boolean(expandedRowIds[row.id]);
+                  const hasMultipleLines = rowItems.length > 1;
 
                   return (
+                    <React.Fragment key={row.id}>
                     <tr
-                      key={row.id}
                       onClick={() => setActiveDrawerId(row.id)}
                       className="hover:bg-slate-50/90 dark:hover:bg-slate-800/40 transition-colors cursor-pointer"
                     >
@@ -753,11 +793,11 @@ export const AllPreOrdersView: React.FC<AllPreOrdersViewProps> = ({
                       </td>
 
                       <td className="px-4 py-3">
-                        <div className="flex items-center gap-2.5 min-w-[200px] max-w-[260px]">
-                          {row.productImage ? (
+                        <div className="flex items-center gap-2.5 min-w-[220px] max-w-[290px]">
+                          {thumbUrl ? (
                             <img
-                              src={row.productImage}
-                              alt={row.productName}
+                              src={thumbUrl}
+                              alt={primaryItem?.productName || row.productName}
                               className="w-8 h-8 rounded-lg object-cover border border-slate-200 dark:border-slate-700 shrink-0"
                             />
                           ) : (
@@ -765,13 +805,38 @@ export const AllPreOrdersView: React.FC<AllPreOrdersViewProps> = ({
                               <Package className="w-4 h-4" />
                             </div>
                           )}
-                          <div className="min-w-0">
+                          <div className="min-w-0 flex-1">
                             <div className="font-medium text-slate-900 dark:text-slate-100 truncate">
-                              {row.productName}
+                              {formatPreOrderProductLabel(row)}
                             </div>
-                            <div className="text-[11px] text-slate-500 dark:text-slate-400">
-                              Qty: <span className="font-mono font-bold">{row.qty}</span>
-                              {row.sku ? ` • ${row.sku}` : ''}
+                            <div className="text-[11px] text-slate-500 dark:text-slate-400 flex flex-wrap items-center gap-1.5">
+                              <span>
+                                {rowItems.length} item{rowItems.length > 1 ? 's' : ''} ·{' '}
+                                <span className="font-mono font-bold">{totalQty}</span> pcs
+                              </span>
+                              {primaryItem?.sku && !hasMultipleLines ? (
+                                <span>• {primaryItem.sku}</span>
+                              ) : null}
+                              {hasMultipleLines && (
+                                <button
+                                  type="button"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setExpandedRowIds((prev) => ({
+                                      ...prev,
+                                      [row.id]: !prev[row.id],
+                                    }));
+                                  }}
+                                  className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-[10px] font-semibold text-slate-700 dark:text-slate-200 hover:bg-slate-200 dark:hover:bg-slate-700 cursor-pointer"
+                                >
+                                  {isExpanded ? 'Hide items' : `+${rowItems.length - 1} lines`}
+                                  <ChevronDown
+                                    className={`w-3 h-3 transition-transform ${
+                                      isExpanded ? 'rotate-180' : ''
+                                    }`}
+                                  />
+                                </button>
+                              )}
                             </div>
                           </div>
                         </div>
@@ -780,14 +845,15 @@ export const AllPreOrdersView: React.FC<AllPreOrdersViewProps> = ({
                       <td className="px-4 py-3 whitespace-nowrap">
                         <div className="flex flex-col items-start gap-1">
                           <PreOrderStatusBadge status={row.status} size="xs" />
+                          {partiallyReceived && <PartiallyReceivedTag />}
                           {row.convertedInvoiceNumber && (
                             <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-100 text-emerald-800 border border-emerald-200 dark:bg-emerald-950/50 dark:text-emerald-300 dark:border-emerald-800">
                               {row.convertedInvoiceNumber}
                             </span>
                           )}
-                          {!row.convertedSaleId && (row.stockReceivedQty || 0) > 0 && (
+                          {!row.convertedSaleId && totalReceived > 0 && (
                             <span className="inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-100 text-amber-800 border border-amber-200 dark:bg-amber-950/50 dark:text-amber-300 dark:border-amber-800">
-                              Reserved: {row.stockReceivedQty}/{row.qty}
+                              Reserved: {totalReceived}/{totalQty}
                             </span>
                           )}
                           {row.status === 'Cancelled' &&
@@ -940,6 +1006,61 @@ export const AllPreOrdersView: React.FC<AllPreOrdersViewProps> = ({
                         )}
                       </td>
                     </tr>
+                    {isExpanded && hasMultipleLines && (
+                      <tr className="bg-slate-50/70 dark:bg-slate-950/40">
+                        <td colSpan={12} className="px-6 py-2.5">
+                          <div className="rounded-lg border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 overflow-hidden">
+                            <table className="w-full text-[11px] text-left">
+                              <thead className="bg-slate-50 dark:bg-slate-950/60 text-slate-500 uppercase tracking-wider">
+                                <tr>
+                                  <th className="px-3 py-1.5">Line Item</th>
+                                  <th className="px-3 py-1.5">Variant / Color / Model</th>
+                                  <th className="px-3 py-1.5 text-right">Qty</th>
+                                  <th className="px-3 py-1.5 text-right">Received</th>
+                                  <th className="px-3 py-1.5 text-right">Unit Price</th>
+                                  <th className="px-3 py-1.5 text-right">Line Total</th>
+                                </tr>
+                              </thead>
+                              <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                                {rowItems.map((it) => {
+                                  const varText = [it.model, it.variant, it.color]
+                                    .filter(Boolean)
+                                    .join(' / ');
+                                  return (
+                                    <tr key={it.itemId}>
+                                      <td className="px-3 py-1.5 font-medium text-slate-800 dark:text-slate-100">
+                                        {it.productName}
+                                        {it.sku ? (
+                                          <span className="ml-1.5 font-mono text-[10px] text-slate-400">
+                                            ({it.sku})
+                                          </span>
+                                        ) : null}
+                                      </td>
+                                      <td className="px-3 py-1.5 text-slate-500 dark:text-slate-400">
+                                        {varText || '—'}
+                                      </td>
+                                      <td className="px-3 py-1.5 text-right font-mono font-semibold">
+                                        {it.qty}
+                                      </td>
+                                      <td className="px-3 py-1.5 text-right font-mono text-slate-600 dark:text-slate-300">
+                                        {it.receivedQty || 0}/{it.qty}
+                                      </td>
+                                      <td className="px-3 py-1.5 text-right font-mono">
+                                        {formatBDT(it.sellingUnitPrice)}
+                                      </td>
+                                      <td className="px-3 py-1.5 text-right font-mono font-bold text-slate-900 dark:text-slate-100">
+                                        {formatBDT(it.lineTotal ?? it.qty * it.sellingUnitPrice)}
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                          </div>
+                        </td>
+                      </tr>
+                    )}
+                    </React.Fragment>
                   );
                 })
               )}
@@ -1034,6 +1155,45 @@ export const AllPreOrdersView: React.FC<AllPreOrdersViewProps> = ({
             setDrawerEditMode(false);
             setActiveDrawerId(poId);
           }}
+        />
+      )}
+
+      {/* One-time Idempotent Legacy Migration ConfirmDialog */}
+      {isAdmin && (
+        <ConfirmDialog
+          isOpen={showMigrateConfirm}
+          onClose={() => !migratingLegacy && setShowMigrateConfirm(false)}
+          onConfirm={async () => {
+            if (migratingLegacy) return;
+            setMigratingLegacy(true);
+            try {
+              const res = await migrateLegacyPreOrdersToItems(actorFromUser(user));
+              if (res.errors.length > 0) {
+                toast.warning(
+                  `Migrated ${res.migrated} pre-orders (${res.skipped} already up-to-date), with ${res.errors.length} error(s).`
+                );
+              } else if (res.migrated === 0) {
+                toast.info(
+                  `All ${res.scanned} pre-orders are already in multi-item format.`
+                );
+              } else {
+                toast.success(
+                  `Migrated ${res.migrated} legacy pre-order(s) to multi-item format (${res.skipped} skipped).`
+                );
+              }
+              setShowMigrateConfirm(false);
+              await fetchPage();
+            } catch (err: any) {
+              toast.error(err?.message || 'Legacy pre-order migration failed.');
+            } finally {
+              setMigratingLegacy(false);
+            }
+          }}
+          title="Migrate Old Pre-Orders to Items Format?"
+          message="This safe, idempotent action converts older single-product pre-orders into the new multi-item line format, adds search keywords, and strips any private cost fields from root pre-order documents without changing totals, payments, or statuses."
+          confirmLabel={migratingLegacy ? 'Migrating...' : 'Run Migration'}
+          variant="warning"
+          isLoading={migratingLegacy}
         />
       )}
     </div>

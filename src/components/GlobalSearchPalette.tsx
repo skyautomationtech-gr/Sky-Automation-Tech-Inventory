@@ -39,7 +39,15 @@ import {
   getBrands 
 } from '../firebase/db';
 import { searchPreOrdersForCommandPalette } from '../firebase/preOrderDb';
-import { PRE_ORDER_NAV_ITEMS, formatBDT, hasPermission, isPreOrderAdminRole, isPreOrderTab } from '../preOrders/constants';
+import {
+  PRE_ORDER_NAV_ITEMS,
+  formatBDT,
+  formatPreOrderProductLabel,
+  hasPermission,
+  isPreOrderAdminRole,
+  isPreOrderTab,
+  normalizePreOrderItems,
+} from '../preOrders/constants';
 import { buildSidebarGroups } from '../navigation/sidebarConfig';
 
 interface GlobalSearchPaletteProps {
@@ -293,12 +301,25 @@ export const GlobalSearchPalette: React.FC<GlobalSearchPaletteProps> = ({
       : preOrders
           .filter((po) => {
             if (!po) return false;
+            const orderItems = normalizePreOrderItems(po);
+            const itemMatch = orderItems.some(
+              (it) =>
+                it.productName?.toLowerCase().includes(q) ||
+                it.sku?.toLowerCase().includes(q) ||
+                it.model?.toLowerCase().includes(q) ||
+                it.variant?.toLowerCase().includes(q) ||
+                it.color?.toLowerCase().includes(q) ||
+                it.category?.toLowerCase().includes(q)
+            );
+            const keywordMatch = po.searchKeywords?.some((kw) => kw.toLowerCase().includes(q));
             return (
               po.preOrderNumber?.toLowerCase().includes(q) ||
               po.customerName?.toLowerCase().includes(q) ||
               po.customerPhone?.includes(q) ||
               po.productName?.toLowerCase().includes(q) ||
               po.sku?.toLowerCase().includes(q) ||
+              itemMatch ||
+              keywordMatch ||
               po.trackingNumber?.toLowerCase().includes(q) ||
               (canViewSupplier && po.supplierOrderRef?.toLowerCase().includes(q)) ||
               (canViewSupplier && po.supplierName?.toLowerCase().includes(q))
@@ -309,7 +330,7 @@ export const GlobalSearchPalette: React.FC<GlobalSearchPaletteProps> = ({
     return list.map((po) => ({
       type: 'preorder' as const,
       id: po.id,
-      title: `${po.preOrderNumber} · ${po.productName} (${po.subBrand})`,
+      title: `${po.preOrderNumber} · ${formatPreOrderProductLabel(po)} (${po.subBrand})`,
       subtitle: `${po.customerName} (${po.customerPhone}) · ${po.status} · Total ${formatBDT(po.totalAmount)}${po.trackingNumber ? ` · Trk: ${po.trackingNumber}` : ''}`,
       icon: Plane,
       action: () => {

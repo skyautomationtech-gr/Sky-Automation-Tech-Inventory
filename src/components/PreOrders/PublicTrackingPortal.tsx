@@ -63,6 +63,8 @@ const COPY = {
     orderId: 'Order ID',
     hello: 'Hello',
     qty: 'Qty',
+    orderedItemsTitle: 'Ordered Items',
+    itemsCount: (n: number, q: number) => `${n} item${n === 1 ? '' : 's'} · ${q} pcs`,
     progressTitle: 'Order Progress',
     stepOf: (step: number, total: number) => `Step ${step} of ${total}`,
     expectedArrival: 'Expected Arrival',
@@ -110,6 +112,8 @@ const COPY = {
     orderId: 'অর্ডার আইডি',
     hello: 'হ্যালো',
     qty: 'পরিমাণ',
+    orderedItemsTitle: 'অর্ডারকৃত পণ্যসমূহ',
+    itemsCount: (n: number, q: number) => `${n}টি পণ্য · মোট ${q} পিস`,
     progressTitle: 'অর্ডারের অগ্রগতি',
     stepOf: (step: number, total: number) => `ধাপ ${step} / ${total}`,
     expectedArrival: 'সম্ভাব্য পৌঁছানোর তারিখ',
@@ -530,67 +534,142 @@ export const PublicTrackingPortal: React.FC<PublicTrackingPortalProps> = ({ toke
                   </div>
                 </div>
 
-                {/* Product Summary Card */}
-                <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-4 sm:p-5 shadow-xs">
-                  <div className="flex items-start gap-3.5">
-                    {safeProductImg ? (
-                      <img
-                        src={safeProductImg}
-                        alt={record.productName || 'Ordered product'}
-                        className="w-20 h-20 rounded-xl object-cover border border-slate-200 dark:border-slate-700 shrink-0 bg-slate-100 dark:bg-slate-800"
-                        onError={(e) => {
-                          e.currentTarget.style.display = 'none';
-                        }}
-                      />
-                    ) : (
-                      <div className="w-20 h-20 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 flex items-center justify-center text-slate-400 shrink-0">
-                        <Package className="w-7 h-7" />
-                      </div>
-                    )}
+                {/* Product Summary Card (Multi-Item + Legacy Fallback) */}
+                <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 p-4 sm:p-5 shadow-xs space-y-3">
+                  <div className="flex items-center justify-between gap-2">
+                    <h3 className="text-xs font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400">
+                      {c.orderedItemsTitle}
+                    </h3>
+                    <span
+                      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold border ${
+                        status === 'Delivered'
+                          ? 'bg-emerald-50 text-emerald-800 border-emerald-200 dark:bg-emerald-950/50 dark:text-emerald-300 dark:border-emerald-800'
+                          : status === 'Cancelled' || status === 'Refunded'
+                          ? 'bg-rose-50 text-rose-800 border-rose-200 dark:bg-rose-950/50 dark:text-rose-300 dark:border-rose-800'
+                          : 'bg-amber-50 text-[#93741E] border-[#D4AF37]/40 dark:bg-[#D4AF37]/15 dark:text-[#E2C255] dark:border-[#D4AF37]/40'
+                      }`}
+                    >
+                      {stageLabel(status)}
+                    </span>
+                  </div>
 
-                    <div className="min-w-0 flex-1 space-y-2">
-                      <div className="flex flex-wrap items-start justify-between gap-2">
-                        <h2 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white leading-snug">
-                          {record.productName}
-                        </h2>
-                      </div>
+                  {Array.isArray(record.items) && record.items.length > 0 ? (
+                    <div className="space-y-2.5">
+                      {record.items.map((item, idx) => {
+                        const itemImg = sanitizePublicImageUrl(item.imageUrl, '');
+                        return (
+                          <div
+                            key={`${item.productName}-${idx}`}
+                            className="flex items-start gap-3 p-2.5 rounded-xl bg-slate-50 dark:bg-slate-950/50 border border-slate-100 dark:border-slate-800"
+                          >
+                            {itemImg ? (
+                              <img
+                                src={itemImg}
+                                alt={item.productName}
+                                className="w-14 h-14 rounded-lg object-cover border border-slate-200 dark:border-slate-700 shrink-0 bg-white dark:bg-slate-900"
+                                onError={(e) => {
+                                  e.currentTarget.style.display = 'none';
+                                }}
+                              />
+                            ) : (
+                              <div className="w-14 h-14 rounded-lg bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 flex items-center justify-center text-slate-400 shrink-0">
+                                <Package className="w-5 h-5" />
+                              </div>
+                            )}
 
-                      <div className="flex flex-wrap items-center gap-1.5 text-xs">
-                        <span className="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 font-semibold tabular-nums">
-                          {c.qty}: {record.qty || 1}
-                        </span>
-                        {record.variant && (
-                          <span className="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
-                            {record.variant}
-                          </span>
-                        )}
-                        {record.color && (
-                          <span className="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
-                            {record.color}
-                          </span>
-                        )}
-                        {record.model && (
-                          <span className="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-mono">
-                            {record.model}
-                          </span>
-                        )}
-                      </div>
+                            <div className="min-w-0 flex-1 space-y-1">
+                              <div className="flex items-start justify-between gap-2">
+                                <h2 className="text-xs sm:text-sm font-bold text-slate-900 dark:text-white leading-snug">
+                                  {item.productName}
+                                </h2>
+                                {typeof item.lineTotal === 'number' && item.lineTotal > 0 && (
+                                  <span className="font-mono text-xs font-bold text-slate-800 dark:text-slate-100 shrink-0 tabular-nums">
+                                    {formatBDT(item.lineTotal)}
+                                  </span>
+                                )}
+                              </div>
 
-                      <div>
-                        <span
-                          className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-xs font-semibold border ${
-                            status === 'Delivered'
-                              ? 'bg-emerald-50 text-emerald-800 border-emerald-200 dark:bg-emerald-950/50 dark:text-emerald-300 dark:border-emerald-800'
-                              : status === 'Cancelled' || status === 'Refunded'
-                              ? 'bg-rose-50 text-rose-800 border-rose-200 dark:bg-rose-950/50 dark:text-rose-300 dark:border-rose-800'
-                              : 'bg-amber-50 text-[#93741E] border-[#D4AF37]/40 dark:bg-[#D4AF37]/15 dark:text-[#E2C255] dark:border-[#D4AF37]/40'
-                          }`}
-                        >
-                          {stageLabel(status)}
-                        </span>
+                              <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                                <span className="px-1.5 py-0.5 rounded bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-slate-700 dark:text-slate-200 font-semibold tabular-nums">
+                                  {c.qty}: {item.qty || 1}
+                                  {typeof item.sellingUnitPrice === 'number' && item.sellingUnitPrice > 0
+                                    ? ` × ${formatBDT(item.sellingUnitPrice)}`
+                                    : ''}
+                                </span>
+                                {item.variant && (
+                                  <span className="px-1.5 py-0.5 rounded bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300">
+                                    {item.variant}
+                                  </span>
+                                )}
+                                {item.color && (
+                                  <span className="px-1.5 py-0.5 rounded bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300">
+                                    {item.color}
+                                  </span>
+                                )}
+                                {item.model && (
+                                  <span className="px-1.5 py-0.5 rounded bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 font-mono">
+                                    {item.model}
+                                  </span>
+                                )}
+                              </div>
+                            </div>
+                          </div>
+                        );
+                      })}
+                      <div className="text-[11px] font-medium text-slate-500 dark:text-slate-400 text-right tabular-nums">
+                        {c.itemsCount(
+                          record.items.length,
+                          record.totalQty || record.qty || record.items.reduce((s, it) => s + (it.qty || 1), 0)
+                        )}
                       </div>
                     </div>
-                  </div>
+                  ) : (
+                    <div className="flex items-start gap-3.5">
+                      {safeProductImg ? (
+                        <img
+                          src={safeProductImg}
+                          alt={record.productName || 'Ordered product'}
+                          className="w-20 h-20 rounded-xl object-cover border border-slate-200 dark:border-slate-700 shrink-0 bg-slate-100 dark:bg-slate-800"
+                          onError={(e) => {
+                            e.currentTarget.style.display = 'none';
+                          }}
+                        />
+                      ) : (
+                        <div className="w-20 h-20 rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 flex items-center justify-center text-slate-400 shrink-0">
+                          <Package className="w-7 h-7" />
+                        </div>
+                      )}
+
+                      <div className="min-w-0 flex-1 space-y-2">
+                        <div className="flex flex-wrap items-start justify-between gap-2">
+                          <h2 className="text-sm sm:text-base font-bold text-slate-900 dark:text-white leading-snug">
+                            {record.productName}
+                          </h2>
+                        </div>
+
+                        <div className="flex flex-wrap items-center gap-1.5 text-xs">
+                          <span className="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 font-semibold tabular-nums">
+                            {c.qty}: {record.qty || 1}
+                          </span>
+                          {record.variant && (
+                            <span className="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
+                              {record.variant}
+                            </span>
+                          )}
+                          {record.color && (
+                            <span className="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
+                              {record.color}
+                            </span>
+                          )}
+                          {record.model && (
+                            <span className="px-2 py-0.5 rounded-md bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 font-mono">
+                              {record.model}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
                 </div>
 
                 {/* Status Progress OR Dedicated Cancelled / Refunded Banner */}

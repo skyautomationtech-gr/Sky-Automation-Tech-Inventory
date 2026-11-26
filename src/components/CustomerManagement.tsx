@@ -33,7 +33,7 @@ import {
   localStore
 } from '../firebase/db';
 import { getPreOrdersByCustomer } from '../firebase/preOrderDb';
-import { formatBDT, normalizeBdPhone } from '../preOrders/constants';
+import { formatBDT, formatPreOrderProductLabel, normalizeBdPhone } from '../preOrders/constants';
 
 interface CustomerManagementProps {
   user: UserProfile | null;
@@ -1120,7 +1120,7 @@ export default function CustomerManagement({
                                   {onOpenPreOrder && <ExternalLink size={10} className="text-[#B89628]" />}
                                 </div>
                                 <div className="text-[10px] text-slate-500 truncate">
-                                  {po.productName} &bull; Qty {po.qty}
+                                  {formatPreOrderProductLabel(po)} &bull; Qty {po.totalQty ?? po.qty}
                                 </div>
                               </div>
                               <div className="text-right shrink-0">

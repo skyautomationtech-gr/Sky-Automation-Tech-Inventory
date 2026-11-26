@@ -18,6 +18,7 @@ import {
   PRE_ORDER_PAYMENT_METHODS,
   formatBDT,
   isPreOrderAdminRole,
+  normalizePreOrderItems,
 } from '../../preOrders/constants';
 import {
   calculatePreOrderFinancials,
@@ -451,8 +452,7 @@ export const RefundPaymentModal: React.FC<RefundPaymentModalProps> = ({
   const netPaid = useMemo(() => {
     if (!order) return 0;
     return calculatePreOrderFinancials({
-      qty: order.qty,
-      sellingUnitPrice: order.sellingUnitPrice,
+      items: normalizePreOrderItems(order),
       deliveryCharge: order.deliveryCharge,
       discount: order.discount,
       payments: [

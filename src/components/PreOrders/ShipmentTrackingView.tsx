@@ -23,9 +23,11 @@ import {
   UserProfile,
 } from '../../types';
 import {
+  formatPreOrderProductLabel,
   hasPermission,
   isPreOrderAdminRole,
   isPreOrderOverdue,
+  normalizePreOrderItems,
 } from '../../preOrders/constants';
 import {
   actorFromUser,
@@ -215,9 +217,14 @@ export const ShipmentTrackingView: React.FC<ShipmentTrackingViewProps> = ({
 
       if (searchTerm.trim()) {
         const q = searchTerm.trim().toLowerCase();
+        const itemsText = normalizePreOrderItems(o)
+          .flatMap((it) => [it.productName, it.sku, it.model, it.variant, it.color])
+          .filter(Boolean);
         const hay = [
           o.preOrderNumber,
           o.productName,
+          ...itemsText,
+          ...(o.searchKeywords || []),
           o.trackingNumber,
           o.supplierOrderRef,
           o.supplierName,
@@ -590,6 +597,9 @@ export const ShipmentTrackingView: React.FC<ShipmentTrackingViewProps> = ({
                         ord.stockReceived
                       );
                       const checked = selectedIds.has(ord.id);
+                      const orderItems = normalizePreOrderItems(ord);
+                      const totalQty =
+                        ord.totalQty ?? orderItems.reduce((s, it) => s + it.qty, 0);
                       return (
                         <div
                           key={ord.id}
@@ -616,12 +626,13 @@ export const ShipmentTrackingView: React.FC<ShipmentTrackingViewProps> = ({
                               </span>
                             </div>
                             <span className="text-[10px] font-mono font-semibold text-slate-500">
-                              Qty {ord.qty}
+                              {orderItems.length > 1 ? `${orderItems.length} items · ` : ''}
+                              Qty {totalQty}
                             </span>
                           </div>
 
                           <div className="text-xs font-semibold text-slate-800 dark:text-slate-200 line-clamp-2">
-                            {ord.productName}
+                            {formatPreOrderProductLabel(ord)}
                           </div>
 
                           <div className="text-[11px] text-slate-500 space-y-0.5">
@@ -729,10 +740,23 @@ export const ShipmentTrackingView: React.FC<ShipmentTrackingViewProps> = ({
                         {ord.preOrderNumber}
                       </td>
                       <td className="px-3.5 py-3">
-                        <div className="font-medium text-slate-900 dark:text-slate-100 max-w-[200px] truncate">
-                          {ord.productName}
-                        </div>
-                        <div className="text-[11px] text-slate-400">Qty {ord.qty}</div>
+                        {(() => {
+                          const orderItems = normalizePreOrderItems(ord);
+                          const totalQty =
+                            ord.totalQty ?? orderItems.reduce((s, it) => s + it.qty, 0);
+                          return (
+                            <>
+                              <div className="font-medium text-slate-900 dark:text-slate-100 max-w-[220px] truncate">
+                                {formatPreOrderProductLabel(ord)}
+                              </div>
+                              <div className="text-[11px] text-slate-400">
+                                {orderItems.length > 1
+                                  ? `${orderItems.length} items · Qty ${totalQty}`
+                                  : `Qty ${totalQty}`}
+                              </div>
+                            </>
+                          );
+                        })()}
                       </td>
                       <td className="px-3.5 py-3">{ord.supplierName || '—'}</td>
                       <td className="px-3.5 py-3">

@@ -251,10 +251,20 @@ export function calculatePerOrderSupplierSummary(input: {
   chinaUnitCost: number;
   preOrderId: string;
   supplierPayments: SupplierPaymentLike[];
+  items?: Array<{ qty: number; chinaUnitCost?: number }>;
 }): PerOrderSupplierSummary {
-  const safeQty = Math.max(0, Math.round(Number(input.qty) || 0));
-  const unitCostPaisa = Math.max(0, toPaisa(input.chinaUnitCost));
-  const chinaCostTotalPaisa = safeQty * unitCostPaisa;
+  let chinaCostTotalPaisa = 0;
+  if (Array.isArray(input.items) && input.items.length > 0) {
+    for (const item of input.items) {
+      const q = Math.max(0, Math.round(Number(item.qty) || 0));
+      const cp = Math.max(0, toPaisa(item.chinaUnitCost ?? input.chinaUnitCost));
+      chinaCostTotalPaisa += q * cp;
+    }
+  } else {
+    const safeQty = Math.max(0, Math.round(Number(input.qty) || 0));
+    const unitCostPaisa = Math.max(0, toPaisa(input.chinaUnitCost));
+    chinaCostTotalPaisa = safeQty * unitCostPaisa;
+  }
 
   const extractOrderAllocatedPaisa = (p: SupplierPaymentLike): number => {
     if (Array.isArray(p.allocations) && p.allocations.length > 0) {
@@ -289,6 +299,81 @@ export function calculatePerOrderSupplierSummary(input: {
 export function isCashDrawerMethod(method?: string | null): boolean {
   const m = String(method || '').trim().toLowerCase();
   return m === 'cash' || m === 'cash on delivery' || m === 'cod';
+}
+
+export interface ShippingAllocationInputItem {
+  itemId: string;
+  qty: number;
+  chinaUnitCost: number;
+}
+
+export interface ShippingAllocationResult {
+  itemId: string;
+  allocatedTotalShipping: number;
+  allocatedPerUnitShipping: number;
+}
+
+/**
+ * Integer-safe largest-remainder shipping allocation across order line items.
+ * Weighted by item value (qty * chinaUnitCost), falling back to qty when all weights are zero.
+ * Guarantee: sum(allocatedTotalShipping) === roundMoney(totalShippingCost) with zero drift.
+ */
+export function allocateShippingAcrossItems(
+  items: ShippingAllocationInputItem[],
+  totalShippingCost: number
+): Record<string, ShippingAllocationResult> {
+  const result: Record<string, ShippingAllocationResult> = {};
+  if (!Array.isArray(items) || items.length === 0) return result;
+
+  const poolPaisa = Math.max(0, toPaisa(totalShippingCost));
+  const rawWeights = items.map((item) => {
+    const q = Math.max(1, Math.round(Number(item.qty) || 1));
+    const c = Math.max(0, toPaisa(item.chinaUnitCost));
+    return q * c;
+  });
+  const useQtyFallback = rawWeights.reduce((a, b) => a + b, 0) <= 0;
+  const weights = items.map((item, idx) =>
+    useQtyFallback ? Math.max(1, Math.round(Number(item.qty) || 1)) : rawWeights[idx]
+  );
+  const totalWeight = weights.reduce((a, b) => a + b, 0);
+
+  if (totalWeight <= 0 || poolPaisa === 0) {
+    for (const item of items) {
+      result[item.itemId] = {
+        itemId: item.itemId,
+        allocatedTotalShipping: 0,
+        allocatedPerUnitShipping: 0,
+      };
+    }
+    return result;
+  }
+
+  const exactShares = weights.map((w) => (poolPaisa * w) / totalWeight);
+  const floors = exactShares.map((s) => Math.floor(s));
+  const remainders = exactShares.map((s, idx) => ({ idx, rem: s - floors[idx] }));
+  let remainingPaisa = poolPaisa - floors.reduce((a, b) => a + b, 0);
+
+  remainders.sort((a, b) => {
+    if (b.rem !== a.rem) return b.rem - a.rem;
+    return a.idx - b.idx;
+  });
+
+  for (let i = 0; i < remainingPaisa; i++) {
+    floors[remainders[i % remainders.length].idx] += 1;
+  }
+
+  items.forEach((item, idx) => {
+    const q = Math.max(1, Math.round(Number(item.qty) || 1));
+    const totalShipPaisa = floors[idx];
+    const perUnitShipPaisa = Math.round(totalShipPaisa / q);
+    result[item.itemId] = {
+      itemId: item.itemId,
+      allocatedTotalShipping: fromPaisa(totalShipPaisa),
+      allocatedPerUnitShipping: fromPaisa(perUnitShipPaisa),
+    };
+  });
+
+  return result;
 }
 
 export interface ReceiptLandedCostInput {
@@ -345,6 +430,90 @@ export function calculatePreOrderReceiptCost(input: ReceiptLandedCostInput): Rec
   };
 }
 
+export interface MultiItemReceiptLineInput {
+  itemId: string;
+  orderedQty: number;
+  receivedGoodQty: number;
+  damagedQty: number;
+  chinaUnitCost: number;
+}
+
+export interface MultiItemReceiptLineResult extends ReceiptLandedCostResult {
+  itemId: string;
+  allocatedOrderShippingTotal: number;
+}
+
+export interface MultiItemReceiptCostSummary {
+  totalShippingPool: number;
+  totalGoodQty: number;
+  totalDamagedQty: number;
+  totalGoodLandedCost: number;
+  totalDamagedCostLoss: number;
+  totalShippingPortion: number;
+  byItemId: Record<string, MultiItemReceiptLineResult>;
+}
+
+export function calculateMultiItemReceiptCosts(input: {
+  allItems: ShippingAllocationInputItem[];
+  receiptLines: MultiItemReceiptLineInput[];
+  actualShippingCost?: number;
+  estimatedShippingCost?: number;
+}): MultiItemReceiptCostSummary {
+  const actualShipPaisa = Math.max(0, toPaisa(input.actualShippingCost));
+  const estShipPaisa = Math.max(0, toPaisa(input.estimatedShippingCost));
+  const totalShippingPool = fromPaisa(actualShipPaisa > 0 ? actualShipPaisa : estShipPaisa);
+
+  const allocations = allocateShippingAcrossItems(input.allItems, totalShippingPool);
+  const byItemId: Record<string, MultiItemReceiptLineResult> = {};
+
+  let totalGoodQty = 0;
+  let totalDamagedQty = 0;
+  let totalGoodLandedPaisa = 0;
+  let totalDamagedLossPaisa = 0;
+  let totalShippingPortionPaisa = 0;
+
+  for (const line of input.receiptLines) {
+    const alloc = allocations[line.itemId]?.allocatedTotalShipping ?? 0;
+    const single = calculatePreOrderReceiptCost({
+      orderedQty: line.orderedQty,
+      receivedGoodQty: line.receivedGoodQty,
+      damagedQty: line.damagedQty,
+      chinaUnitCost: line.chinaUnitCost,
+      actualShippingCost: alloc,
+      estimatedShippingCost: alloc,
+    });
+    byItemId[line.itemId] = {
+      ...single,
+      itemId: line.itemId,
+      allocatedOrderShippingTotal: alloc,
+    };
+    totalGoodQty += Math.max(0, Math.round(Number(line.receivedGoodQty) || 0));
+    totalDamagedQty += Math.max(0, Math.round(Number(line.damagedQty) || 0));
+    totalGoodLandedPaisa += toPaisa(single.totalGoodLandedCost);
+    totalDamagedLossPaisa += toPaisa(single.damagedCostLoss);
+    totalShippingPortionPaisa += toPaisa(single.shippingCostPortion);
+  }
+
+  return {
+    totalShippingPool,
+    totalGoodQty,
+    totalDamagedQty,
+    totalGoodLandedCost: fromPaisa(totalGoodLandedPaisa),
+    totalDamagedCostLoss: fromPaisa(totalDamagedLossPaisa),
+    totalShippingPortion: fromPaisa(totalShippingPortionPaisa),
+    byItemId,
+  };
+}
+
+export interface SaleConversionItemBreakdown {
+  itemId: string;
+  qty: number;
+  sellingUnitPrice: number;
+  lineTotal: number;
+  unitCostPrice: number;
+  lineCogs: number;
+}
+
 export interface SaleConversionBreakdown {
   subtotal: number;
   deliveryCharge: number;
@@ -355,18 +524,108 @@ export interface SaleConversionBreakdown {
   unitCostPrice: number;
   totalCogs: number;
   recognizedProfit: number;
+  itemBreakdowns?: SaleConversionItemBreakdown[];
 }
 
 export function calculateSaleConversionBreakdown(input: {
+  items?: PreOrderItem[];
   qty: number;
   sellingUnitPrice: number;
   deliveryCharge?: number;
   discount?: number;
   verifiedNetPaid: number;
   unitLandedCost?: number;
+  unitLandedCostsByItemId?: Record<string, number>;
+  itemChinaCostsByItemId?: Record<string, number>;
   fallbackChinaUnitCost?: number;
   fallbackShippingCost?: number;
 }): SaleConversionBreakdown {
+  const hasItems = Array.isArray(input.items) && input.items.length > 0;
+  const fallbackShipTotal = Math.max(0, Number(input.fallbackShippingCost) || 0);
+
+  if (hasItems) {
+    const lineItems = input.items!;
+    const shippingAllocs = allocateShippingAcrossItems(
+      lineItems.map((it) => ({
+        itemId: it.itemId,
+        qty: Math.max(0, Math.round(Number(it.qty) || 0)),
+        chinaUnitCost:
+          input.itemChinaCostsByItemId?.[it.itemId] ??
+          it.chinaUnitCost ??
+          input.fallbackChinaUnitCost ??
+          0,
+      })),
+      fallbackShipTotal
+    );
+
+    let subtotalPaisa = 0;
+    let totalCogsPaisa = 0;
+    let totalQty = 0;
+    const itemBreakdowns: SaleConversionItemBreakdown[] = [];
+
+    for (const it of lineItems) {
+      const q = Math.max(0, Math.round(Number(it.qty) || 0));
+      const spPaisa = Math.max(0, toPaisa(it.sellingUnitPrice));
+      const lineTotalPaisa = q * spPaisa;
+      subtotalPaisa += lineTotalPaisa;
+      totalQty += q;
+
+      const explicitUnitLanded =
+        input.unitLandedCostsByItemId?.[it.itemId] ?? it.unitLandedCost ?? 0;
+      const explicitUnitLandedPaisa = Math.max(0, toPaisa(explicitUnitLanded));
+      const itemChinaPaisa = Math.max(
+        0,
+        toPaisa(
+          input.itemChinaCostsByItemId?.[it.itemId] ??
+            it.chinaUnitCost ??
+            input.fallbackChinaUnitCost ??
+            0
+        )
+      );
+      const itemShipPerUnitPaisa = Math.max(
+        0,
+        toPaisa(shippingAllocs[it.itemId]?.allocatedPerUnitShipping ?? 0)
+      );
+      const unitCostPaisa =
+        explicitUnitLandedPaisa > 0
+          ? explicitUnitLandedPaisa
+          : itemChinaPaisa + itemShipPerUnitPaisa;
+
+      const lineCogsPaisa = unitCostPaisa * q;
+      totalCogsPaisa += lineCogsPaisa;
+
+      itemBreakdowns.push({
+        itemId: it.itemId,
+        qty: q,
+        sellingUnitPrice: fromPaisa(spPaisa),
+        lineTotal: fromPaisa(lineTotalPaisa),
+        unitCostPrice: fromPaisa(unitCostPaisa),
+        lineCogs: fromPaisa(lineCogsPaisa),
+      });
+    }
+
+    const deliveryPaisa = Math.max(0, toPaisa(input.deliveryCharge));
+    const discountPaisa = Math.max(0, toPaisa(input.discount));
+    const totalAmountPaisa = Math.max(0, subtotalPaisa + deliveryPaisa - discountPaisa);
+    const paidPaisa = Math.min(totalAmountPaisa, Math.max(0, toPaisa(input.verifiedNetPaid)));
+    const remainingDuePaisa = Math.max(0, totalAmountPaisa - paidPaisa);
+    const profitPaisa = totalAmountPaisa - totalCogsPaisa;
+    const avgUnitCostPaisa = totalQty > 0 ? Math.round(totalCogsPaisa / totalQty) : 0;
+
+    return {
+      subtotal: fromPaisa(subtotalPaisa),
+      deliveryCharge: fromPaisa(deliveryPaisa),
+      discount: fromPaisa(discountPaisa),
+      totalAmount: fromPaisa(totalAmountPaisa),
+      advanceApplied: fromPaisa(paidPaisa),
+      remainingDue: fromPaisa(remainingDuePaisa),
+      unitCostPrice: fromPaisa(avgUnitCostPaisa),
+      totalCogs: fromPaisa(totalCogsPaisa),
+      recognizedProfit: fromPaisa(profitPaisa),
+      itemBreakdowns,
+    };
+  }
+
   const summary = calculatePreOrderFinancials({
     qty: input.qty,
     sellingUnitPrice: input.sellingUnitPrice,
@@ -399,5 +658,6 @@ export function calculateSaleConversionBreakdown(input: {
     recognizedProfit: fromPaisa(profitPaisa),
   };
 }
+
 
 

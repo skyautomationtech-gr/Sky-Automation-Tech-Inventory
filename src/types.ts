@@ -103,6 +103,7 @@ export interface AttendanceRecord {
 export interface ProductPreOrderReservation {
   preOrderId: string;
   preOrderNumber: string;
+  itemId?: string;
   variantId: string;
   qty: number;
   receivedAt: number;
@@ -823,17 +824,25 @@ export interface PreOrderItem {
   linkedVariantId?: string;
   productName: string;
   imageUrl?: string;
+  imageUrls?: string[];
   category?: string;
   sku?: string;
   model?: string;
   variant?: string;
   color?: string;
+  productUrl?: string;
+  productSpecs?: string;
   qty: number;
-  chinaUnitCost?: number;
+  chinaUnitCost?: number; // Transient form input only — NEVER persisted on preOrders/{id}; stored in preOrders/{id}/private/cost
   sellingUnitPrice: number;
   lineTotal: number;
   receivedQty?: number;
+  damagedQty?: number;
   deliveredQty?: number;
+  convertedQty?: number;
+  unitLandedCost?: number;
+  landedCostTotal?: number;
+  status?: 'pending' | 'received' | 'converted' | 'cancelled' | PreOrderStatus;
   notes?: string;
 }
 
@@ -959,9 +968,20 @@ export interface PreOrderShippingExpensesBreakdown {
   handlingReceiptUrl?: string;
 }
 
+export interface PreOrderPrivateItemCost {
+  itemId: string;
+  chinaUnitCost: number;
+  supplierUnitCost?: number;
+  lineChinaTotal?: number;
+  shippingAllocated?: number;
+  unitLandedCost?: number;
+  landedCostTotal?: number;
+}
+
 export interface PreOrderPrivateCost {
   preOrderId: string;
   chinaUnitCost: number;
+  itemCosts?: PreOrderPrivateItemCost[];
   shippingCost: number; // Estimated shipping cost
   actualShippingCost?: number; // Sum of shippingExpenses breakdown
   shippingExpenses?: PreOrderShippingExpensesBreakdown;
@@ -1156,6 +1176,19 @@ export interface PublicTrackingSupportContact {
   email?: string;
 }
 
+export interface PublicTrackingItem {
+  itemId: string;
+  productName: string;
+  productImageUrl?: string;
+  variant?: string;
+  color?: string;
+  model?: string;
+  qty: number;
+  sellingUnitPrice: number;
+  lineTotal: number;
+  receivedQty?: number;
+}
+
 /**
  * STRICT WHITELIST-ONLY schema stored at `publicTracking/{token}`.
  * Never store full customer name, phone, masked phone, address, email, customerId,
@@ -1174,6 +1207,7 @@ export interface PublicTrackingRecord {
   color?: string;
   model?: string;
   qty?: number;
+  items?: PublicTrackingItem[];
   status?: PreOrderStatus;
   statusHistory?: PublicTrackingTimelineItem[];
   shipmentEvents?: PublicTrackingShipmentEvent[];
@@ -1219,7 +1253,8 @@ export type PreOrderAuditAction =
   | 'CONVERTED_TO_SALE'
   | 'CANCEL_RECONCILED'
   | 'CUSTOMER_MESSAGE_PREPARED'
-  | 'STATS_REBUILT';
+  | 'STATS_REBUILT'
+  | 'LEGACY_ITEMS_MIGRATED';
 
 export interface PreOrderAuditEntry {
   id: string;
@@ -1284,11 +1319,28 @@ export interface PreOrderNotification {
   createdBy: string;
 }
 
+export interface PreOrderReceiptItemBreakdown {
+  itemId: string;
+  productId: string;
+  productName: string;
+  variantId: string;
+  variantLabel: string;
+  receivedQty: number;
+  damagedQty: number;
+  chinaUnitCost: number;
+  shippingCostPerUnit: number;
+  shippingCostPortion: number;
+  unitLandedCost: number;
+  totalGoodLandedCost: number;
+  damagedCostLoss: number;
+}
+
 export interface PreOrderReceipt {
   id: string;
   preOrderId: string;
   preOrderNumber: string;
   subBrand: 'SAT' | 'GZ' | 'RTX';
+  itemId?: string;
   receivedQty: number;
   damagedQty: number;
   productId: string;
@@ -1303,6 +1355,7 @@ export interface PreOrderReceipt {
   damagedCostLoss: number;
   damagedLossId?: string;
   damagedLossPending?: boolean;
+  itemsBreakdown?: PreOrderReceiptItemBreakdown[];
   note?: string;
   idempotencyKey: string;
   receivedBy: string;
@@ -1366,6 +1419,16 @@ export type CancelCustomerResolution = 'full_refund' | 'partial_refund' | 'no_re
 export type CancelSupplierResolution = 'receivable' | 'loss' | 'keep_stock' | 'none';
 export type CancelStockResolution = 'release_normal' | 'return_supplier' | 'none';
 
+export interface PreOrderCancellationItemSummary {
+  itemId: string;
+  productName: string;
+  linkedProductId?: string;
+  linkedVariantId?: string;
+  orderedQty: number;
+  receivedQty: number;
+  releasedOrReturnedQty: number;
+}
+
 export interface PreOrderCancellationSummary {
   reason: string;
   customerResolution: CancelCustomerResolution;
@@ -1380,6 +1443,7 @@ export interface PreOrderCancellationSummary {
   supplierLossId?: string;
   stockResolution: CancelStockResolution;
   releasedOrReturnedQty: number;
+  itemSummaries?: PreOrderCancellationItemSummary[];
   cancelledBy: string;
   cancelledByName: string;
   cancelledAt: number;

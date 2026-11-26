@@ -6,7 +6,7 @@ import {
   PreOrderSettings,
   PreOrderStatus,
 } from '../types';
-import { formatBDT, normalizeBdPhone } from './constants';
+import { formatBDT, formatPreOrderProductLabel, normalizeBdPhone } from './constants';
 import { buildPublicTrackingUrl } from './tracking';
 
 export const DEFAULT_PRE_ORDER_MESSAGE_TEMPLATES: PreOrderMessageTemplatesMap = {
@@ -100,16 +100,17 @@ export function renderPreOrderTemplate(
   order: Pick<
     PreOrder,
     'customerName' | 'preOrderNumber' | 'status' | 'dueAmount' | 'trackingToken' | 'estimatedDeliveryDate'
-  >,
+  > & { productName?: string; items?: PreOrder['items'] },
   companySettings?: CompanySettings | null
 ): string {
   const link = order.trackingToken
-    ? buildPublicTrackingUrl(order.trackingToken, companySettings?.publicAppUrl)
+    ? buildPublicTrackingUrl(companySettings?.publicAppUrl, order.trackingToken) || 'N/A'
     : 'N/A';
 
   const replacements: Record<string, string> = {
     '{name}': order.customerName || 'Customer',
     '{orderNo}': order.preOrderNumber || '',
+    '{productName}': formatPreOrderProductLabel(order),
     '{status}': order.status || '',
     '{due}': formatBDT(order.dueAmount || 0),
     '{link}': link,

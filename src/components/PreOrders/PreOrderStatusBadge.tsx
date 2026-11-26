@@ -37,6 +37,21 @@ export const OverdueTag: React.FC<{ className?: string }> = ({ className = '' })
   </span>
 );
 
+export const PartiallyReceivedTag: React.FC<{
+  receivedQty?: number;
+  totalQty?: number;
+  className?: string;
+}> = ({ receivedQty, totalQty, className = '' }) => (
+  <span
+    className={`inline-flex items-center px-1.5 py-0.5 rounded text-[10px] font-semibold bg-amber-100 text-amber-800 border border-amber-200 dark:bg-amber-950/50 dark:text-amber-300 dark:border-amber-800 whitespace-nowrap shrink-0 ${className}`}
+  >
+    Partially Received
+    {typeof receivedQty === 'number' && typeof totalQty === 'number'
+      ? ` (${receivedQty}/${totalQty})`
+      : ''}
+  </span>
+);
+
 export const SubBrandBadge: React.FC<{
   subBrand: 'SAT' | 'GZ' | 'RTX' | string;
   className?: string;

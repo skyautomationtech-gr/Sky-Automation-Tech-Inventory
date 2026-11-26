@@ -29,8 +29,10 @@ import {
 } from '../../types';
 import {
   PRE_ORDER_STATUSES,
+  formatPreOrderProductLabel,
   hasPermission,
   isPreOrderAdminRole,
+  normalizePreOrderItems,
 } from '../../preOrders/constants';
 import {
   buildPublicTrackingUrl,
@@ -602,7 +604,9 @@ export const CustomerTrackingLinksView: React.FC<CustomerTrackingLinksViewProps>
                           {order.customerPhone}
                         </div>
                         <div className="text-[11px] text-slate-600 dark:text-slate-300 mt-0.5 line-clamp-1">
-                          {order.productName} &times;{order.qty}
+                          {formatPreOrderProductLabel(order)} &times;
+                          {order.totalQty ??
+                            normalizePreOrderItems(order).reduce((s, it) => s + it.qty, 0)}
                         </div>
                       </td>
 

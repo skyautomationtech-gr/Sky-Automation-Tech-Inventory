@@ -1,10 +1,15 @@
 import {
+  PreOrder,
+  PreOrderItem,
   PreOrderPermissionKey,
+  PreOrderPrivateCost,
   PreOrderStatus,
   RolePermissionSet,
   RolePermissionsMap,
   UserProfile,
 } from '../types';
+
+export const MAX_PRE_ORDER_ITEMS = 50;
 
 export const PRE_ORDER_STATUSES: readonly PreOrderStatus[] = [
   'Advance Received',
@@ -640,3 +645,206 @@ export const PRE_ORDER_NAV_ITEMS: readonly PreOrderNavItemMeta[] = [
 export function isPreOrderTab(tab: string): tab is PreOrderTabId {
   return PRE_ORDER_NAV_ITEMS.some((item) => item.id === tab);
 }
+
+const round2 = (n: number): number => Math.round((Number(n) || 0) * 100) / 100;
+
+/**
+ * Strips sensitive private fields (like chinaUnitCost) before writing items to public/root preOrders/{id}.
+ */
+export function sanitizePreOrderItemsForDoc(items: PreOrderItem[]): PreOrderItem[] {
+  return (items || []).slice(0, MAX_PRE_ORDER_ITEMS).map((item, idx) => {
+    const qty = Math.max(1, Math.round(Number(item.qty) || 1));
+    const sellingUnitPrice = Math.max(0, round2(Number(item.sellingUnitPrice) || 0));
+    const lineTotal = round2(qty * sellingUnitPrice);
+    const cleaned: PreOrderItem = {
+      itemId: (item.itemId || `item-${idx + 1}`).trim(),
+      productName: (item.productName || '').trim(),
+      qty,
+      sellingUnitPrice,
+      lineTotal,
+    };
+    if (item.linkedProductId) cleaned.linkedProductId = item.linkedProductId;
+    if (item.linkedVariantId) cleaned.linkedVariantId = item.linkedVariantId;
+    if (item.imageUrl) cleaned.imageUrl = item.imageUrl;
+    if (item.category) cleaned.category = item.category;
+    if (item.sku) cleaned.sku = item.sku;
+    if (item.model) cleaned.model = item.model;
+    if (item.variant) cleaned.variant = item.variant;
+    if (item.color) cleaned.color = item.color;
+    if (typeof item.receivedQty === 'number' && Number.isFinite(item.receivedQty)) {
+      cleaned.receivedQty = Math.max(0, Math.round(item.receivedQty));
+    }
+    if (typeof item.damagedQty === 'number' && Number.isFinite(item.damagedQty)) {
+      cleaned.damagedQty = Math.max(0, Math.round(item.damagedQty));
+    }
+    if (typeof item.deliveredQty === 'number' && Number.isFinite(item.deliveredQty)) {
+      cleaned.deliveredQty = Math.max(0, Math.round(item.deliveredQty));
+    }
+    if (typeof item.convertedQty === 'number' && Number.isFinite(item.convertedQty)) {
+      cleaned.convertedQty = Math.max(0, Math.round(item.convertedQty));
+    }
+    if (typeof item.unitLandedCost === 'number' && Number.isFinite(item.unitLandedCost)) {
+      cleaned.unitLandedCost = round2(Math.max(0, item.unitLandedCost));
+    }
+    if (typeof item.landedCostTotal === 'number' && Number.isFinite(item.landedCostTotal)) {
+      cleaned.landedCostTotal = round2(Math.max(0, item.landedCostTotal));
+    }
+    if (item.status) cleaned.status = item.status;
+    if (item.notes) cleaned.notes = item.notes;
+    return cleaned;
+  });
+}
+
+/**
+ * Backward-compatible read normalizer: wraps legacy single-product pre-orders into items[0]
+ * and strips any accidental root chinaUnitCost field.
+ */
+export function normalizePreOrderItems(order?: Partial<PreOrder> | null): PreOrderItem[] {
+  if (!order) return [];
+  if (Array.isArray(order.items) && order.items.length > 0) {
+    return sanitizePreOrderItemsForDoc(order.items);
+  }
+  const qty = Math.max(1, Math.round(Number(order.qty) || 1));
+  const sellingUnitPrice = Math.max(0, round2(Number(order.sellingUnitPrice) || 0));
+  const legacyItem: PreOrderItem = {
+    itemId: 'item-1',
+    productName: (order.productName || 'Pre-Order Item').trim(),
+    qty,
+    sellingUnitPrice,
+    lineTotal: round2(qty * sellingUnitPrice),
+  };
+  if (order.linkedProductId) legacyItem.linkedProductId = order.linkedProductId;
+  if (order.linkedVariantId) legacyItem.linkedVariantId = order.linkedVariantId;
+  if (order.productImage) legacyItem.imageUrl = order.productImage;
+  if (order.category) legacyItem.category = order.category;
+  if (order.sku) legacyItem.sku = order.sku;
+  if (order.model) legacyItem.model = order.model;
+  if (order.variant) legacyItem.variant = order.variant;
+  if (order.color) legacyItem.color = order.color;
+  if (typeof order.stockReceivedQty === 'number' && Number.isFinite(order.stockReceivedQty)) {
+    legacyItem.receivedQty = Math.max(0, Math.round(order.stockReceivedQty));
+  }
+  if (typeof order.damagedQty === 'number' && Number.isFinite(order.damagedQty)) {
+    legacyItem.damagedQty = Math.max(0, Math.round(order.damagedQty));
+  }
+  if (typeof order.unitLandedCost === 'number' && Number.isFinite(order.unitLandedCost)) {
+    legacyItem.unitLandedCost = round2(Math.max(0, order.unitLandedCost));
+  }
+  if (typeof order.landedCostTotal === 'number' && Number.isFinite(order.landedCostTotal)) {
+    legacyItem.landedCostTotal = round2(Math.max(0, order.landedCostTotal));
+  }
+  return [legacyItem];
+}
+
+/**
+ * Generates deduplicated lowercase search tokens from all line items for pagination/search filtering.
+ */
+export function buildPreOrderSearchKeywords(
+  items: PreOrderItem[],
+  ...extraStrings: Array<string | undefined | null>
+): string[] {
+  const tokens = new Set<string>();
+  const addToken = (raw?: string | null) => {
+    const clean = (raw || '').trim().toLowerCase();
+    if (!clean) return;
+    tokens.add(clean);
+    clean
+      .split(/[\s,/\\|()-]+/)
+      .map((part) => part.trim())
+      .filter((part) => part.length >= 2)
+      .forEach((part) => tokens.add(part));
+  };
+  for (const item of items || []) {
+    addToken(item.productName);
+    addToken(item.sku);
+    addToken(item.model);
+    addToken(item.variant);
+    addToken(item.color);
+    addToken(item.category);
+  }
+  for (const extra of extraStrings) {
+    addToken(extra);
+  }
+  return Array.from(tokens).slice(0, 120);
+}
+
+/**
+ * Derives legacy single-product mirror fields from the primary item + aggregate totals
+ * so old filters, counters, and exports stay backward-compatible.
+ */
+export function summarizePreOrderItemsLegacyFields(items: PreOrderItem[]) {
+  const sanitized = sanitizePreOrderItemsForDoc(items);
+  const first = sanitized[0];
+  const totalQty = sanitized.reduce((sum, item) => sum + (Number(item.qty) || 0), 0);
+  const itemCount = sanitized.length;
+  return {
+    items: sanitized,
+    itemCount,
+    totalQty,
+    searchKeywords: buildPreOrderSearchKeywords(sanitized),
+    productName: first?.productName || 'Pre-Order Item',
+    category: first?.category || '',
+    sku: first?.sku || '',
+    model: first?.model || '',
+    variant: first?.variant || '',
+    color: first?.color || '',
+    productImage: first?.imageUrl || '',
+    linkedProductId: first?.linkedProductId || '',
+    linkedVariantId: first?.linkedVariantId || '',
+    qty: totalQty || 1,
+    sellingUnitPrice: first?.sellingUnitPrice || 0,
+  };
+}
+
+/**
+ * Human-friendly label: "Product A" or "Product A + 2 more"
+ */
+export function formatPreOrderProductLabel(order?: Partial<PreOrder> | null): string {
+  const items = normalizePreOrderItems(order);
+  if (items.length === 0) return order?.productName || 'Pre-Order Item';
+  if (items.length === 1) return items[0].productName;
+  return `${items[0].productName} + ${items.length - 1} more`;
+}
+
+/**
+ * True when some (but not all) ordered units across all line items have been received/damaged.
+ */
+export function isPreOrderPartiallyReceived(order?: Partial<PreOrder> | null): boolean {
+  if (!order) return false;
+  if (order.status === 'Cancelled' || order.status === 'Refunded') return false;
+  const items = normalizePreOrderItems(order);
+  if (items.length === 0) return false;
+  const totalOrdered = items.reduce((s, i) => s + (Number(i.qty) || 0), 0);
+  const totalAccounted = items.reduce(
+    (s, i) => s + (Number(i.receivedQty) || 0) + (Number(i.damagedQty) || 0),
+    0
+  );
+  return totalAccounted > 0 && totalAccounted < totalOrdered;
+}
+
+/**
+ * Builds a map of itemId -> { chinaUnitCost, supplierUnitCost } using privateCost.itemCosts
+ * with clean fallback to privateCost.chinaUnitCost for legacy orders.
+ */
+export function computeItemCostMap(
+  order?: Partial<PreOrder> | null,
+  privateCost?: Partial<PreOrderPrivateCost> | null
+): Record<string, { chinaUnitCost: number; supplierUnitCost?: number }> {
+  const items = normalizePreOrderItems(order);
+  const map: Record<string, { chinaUnitCost: number; supplierUnitCost?: number }> = {};
+  const fallbackChina = Math.max(0, Number(privateCost?.chinaUnitCost) || 0);
+  const fallbackSupplier =
+    privateCost?.supplierUnitCost != null ? Math.max(0, Number(privateCost.supplierUnitCost) || 0) : undefined;
+  const explicitById = new Map(
+    (privateCost?.itemCosts || []).map((ic) => [ic.itemId, ic])
+  );
+  for (const item of items) {
+    const found = explicitById.get(item.itemId);
+    map[item.itemId] = {
+      chinaUnitCost: found ? Math.max(0, Number(found.chinaUnitCost) || 0) : fallbackChina,
+      supplierUnitCost: found?.supplierUnitCost ?? fallbackSupplier,
+    };
+  }
+  return map;
+}
+

@@ -21,6 +21,7 @@ import {
   isValidHttpsUrl,
   renderTrackingShareMessage,
 } from '../../preOrders/tracking';
+import { formatPreOrderProductLabel } from '../../preOrders/constants';
 import { Button, Modal, Textarea, useToast } from '../../design-system';
 
 export interface TrackingLinkShareModalProps {
@@ -202,7 +203,7 @@ export const TrackingLinkShareModal: React.FC<TrackingLinkShareModalProps> = ({
                     {order.preOrderNumber}
                   </div>
                   <div className="text-[11px] text-slate-500 truncate max-w-[200px]">
-                    {order.productName}
+                    {formatPreOrderProductLabel(order)}
                   </div>
                 </div>
                 <Button

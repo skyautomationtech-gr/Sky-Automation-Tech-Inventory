@@ -4,6 +4,10 @@ service cloud.firestore {
     // ==========================================
     // CORE AUTH & ROLE / PERMISSION HELPERS
     // ==========================================
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
     function isSignedIn() {
       return request.auth != null;
     }
@@ -74,6 +78,102 @@ service cloud.firestore {
                    ])))
         )
       );
+    }
+
+    // ==========================================
+    // PRE-ORDER VALIDATION BLUEPRINTS
+    // ==========================================
+    function hasForbiddenCostFields(data) {
+      return data.keys().hasAny([
+        'chinaUnitCost', 'shippingCost', 'expectedProfit', 'internalNotes', 'supplierUnitCost',
+        'actualShippingCost', 'internationalFreight', 'customsDuty', 'localTransport', 'handlingOther', 'shippingExpenses'
+      ]);
+    }
+
+    function hasValidPreOrderBase(data) {
+      return data.preOrderNumber is string &&
+        data.preOrderNumber.size() > 0 &&
+        data.preOrderNumber.size() <= 40 &&
+        data.subBrand in ['SAT', 'GZ', 'RTX'] &&
+        data.customerName is string &&
+        data.customerName.size() > 0 &&
+        data.customerName.size() <= 200 &&
+        data.customerPhone is string &&
+        data.customerPhone.size() > 0 &&
+        data.customerPhone.size() <= 30 &&
+        data.qty is number &&
+        data.qty > 0 &&
+        data.totalAmount is number &&
+        data.totalAmount >= 0 &&
+        !hasForbiddenCostFields(data) &&
+        (!('searchKeywords' in data) || (
+          data.searchKeywords is list &&
+          data.searchKeywords.size() <= 250
+        ));
+    }
+
+    function hasValidPreOrderItemsArray(data) {
+      return data.items is list &&
+        data.items.size() >= 1 &&
+        data.items.size() <= 50 &&
+        data.items[0] is map &&
+        data.itemCount is number &&
+        data.itemCount == data.items.size() &&
+        data.totalQty is number &&
+        data.totalQty > 0;
+    }
+
+    function isValidPreOrderCreate(data) {
+      return hasValidPreOrderBase(data) &&
+        hasValidPreOrderItemsArray(data) &&
+        data.subtotal is number &&
+        data.subtotal >= 0 &&
+        data.deliveryCharge is number &&
+        data.deliveryCharge >= 0 &&
+        data.discount is number &&
+        data.discount >= 0;
+    }
+
+    function isValidPreOrderUpdate(data) {
+      return hasValidPreOrderBase(data) &&
+        (!('items' in data) || (
+          data.items is list &&
+          data.items.size() >= 1 &&
+          data.items.size() <= 50 &&
+          data.items[0] is map
+        )) &&
+        (!('itemCount' in data) || (data.itemCount is number && data.itemCount >= 1 && data.itemCount <= 50)) &&
+        (!('totalQty' in data) || (data.totalQty is number && data.totalQty > 0));
+    }
+
+    function isAdminLegacyItemsMigration() {
+      return isAdmin() &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'items', 'itemCount', 'totalQty', 'searchKeywords', 'updatedAt', 'updatedBy'
+        ]) &&
+        hasValidPreOrderItemsArray(request.resource.data) &&
+        request.resource.data.totalQty == resource.data.qty &&
+        request.resource.data.totalAmount == resource.data.totalAmount &&
+        request.resource.data.subtotal == resource.data.subtotal;
+    }
+
+    function isReceiptItemsProgressUpdate() {
+      return (hasPreOrderPerm('preOrderReceiveStock') || isAdmin()) &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'items', 'linkedProductId', 'linkedVariantId',
+          'stockReceivedQty', 'damagedQty', 'stockReceived', 'stockReceivedAt',
+          'unitLandedCost', 'landedCostTotal', 'status', 'updatedAt', 'updatedBy'
+        ]);
+    }
+
+    function isConvertItemsProgressUpdate() {
+      return (hasPreOrderPerm('preOrderConvertSale') || isAdmin()) &&
+        resource.data.get('convertedSaleId', '') == '' &&
+        request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'items', 'convertedOrderId', 'convertedSaleId', 'convertedInvoiceId',
+          'convertedInvoiceNumber', 'convertedAt', 'status',
+          'unitLandedCost', 'landedCostTotal', 'updatedAt', 'updatedBy'
+        ]);
     }
 
     // ==========================================
@@ -230,75 +330,80 @@ service cloud.firestore {
       // Restricted fields (chinaUnitCost, expectedProfit, internalNotes, supplierUnitCost, shippingCost, shippingExpenses breakdown)
       // MUST live in preOrders/{id}/private/cost so unauthorized roles cannot read them.
       allow create: if hasPreOrderPerm('preOrderCreate') &&
-        request.resource.data.preOrderNumber is string &&
-        request.resource.data.qty is number &&
-        request.resource.data.qty > 0 &&
-        !request.resource.data.keys().hasAny([
-          'chinaUnitCost', 'shippingCost', 'expectedProfit', 'internalNotes', 'supplierUnitCost',
-          'actualShippingCost', 'internationalFreight', 'customsDuty', 'localTransport', 'handlingOther', 'shippingExpenses'
-        ]);
+        isValidId(preOrderId) &&
+        isValidPreOrderCreate(request.resource.data);
 
-      allow update: if (
-          hasPreOrderPerm('preOrderEdit') ||
-          hasPreOrderPerm('preOrderUpdateStatus') ||
-          hasPreOrderPerm('preOrderCollectPayment') ||
-          hasPreOrderPerm('preOrderVerifyPayment') ||
-          hasPreOrderPerm('preOrderRefund') ||
-          hasPreOrderPerm('preOrderReceiveStock') ||
-          hasPreOrderPerm('preOrderConvertSale') ||
-          hasPreOrderPerm('preOrderManageTracking')
-        ) &&
-        !request.resource.data.keys().hasAny([
-          'chinaUnitCost', 'shippingCost', 'expectedProfit', 'internalNotes', 'supplierUnitCost',
-          'actualShippingCost', 'internationalFreight', 'customsDuty', 'localTransport', 'handlingOther', 'shippingExpenses'
-        ]) &&
-        request.resource.data.preOrderNumber == resource.data.preOrderNumber &&
-        request.resource.data.createdBy == resource.data.createdBy &&
-        request.resource.data.createdAt == resource.data.createdAt &&
-        (
-          !(resource.data.status in ['Delivered', 'Cancelled', 'Refunded']) ||
-          (resource.data.status == 'Cancelled' &&
-            request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-              'status', 'advancePaid', 'pendingAmount', 'refundedAmount', 'dueAmount',
-              'paymentCount', 'paymentState', 'isCancelled', 'cancellation', 'receivedQty',
-              'updatedAt', 'updatedBy', 'updatedByName',
-              'lastStatusChangeAt', 'lastStatusNote'
-            ])) ||
-          ((hasPreOrderPerm('preOrderManageTracking') || isAdmin()) &&
-            request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-              'trackingToken', 'trackingTokenId', 'trackingEnabled',
-              'trackingCreatedAt', 'trackingCreatedBy', 'trackingLastRegeneratedAt',
-              'trackingHistory', 'showCourierTrackingToCustomer',
-              'updatedAt', 'updatedBy'
-            ]))
-        ) &&
-        // Lock converted Sale/Invoice financial fields (price, qty, subtotal, discount, delivery, total, convertedSaleId)
-        (
-          resource.data.get('convertedSaleId', '') == '' ||
+      allow update: if isValidId(preOrderId) &&
+        isValidPreOrderUpdate(request.resource.data) && (
+          isAdminLegacyItemsMigration() ||
           (
-            request.resource.data.get('convertedSaleId', '') == resource.data.get('convertedSaleId', '') &&
-            !request.resource.data.diff(resource.data).affectedKeys().hasAny([
-              'qty', 'sellingUnitPrice', 'subtotal', 'deliveryCharge', 'discount', 'totalAmount',
-              'cancellation', 'isCancelled'
-            ])
-          )
-        ) &&
-        (
-          request.resource.data.status == resource.data.status ||
-          (
-            (request.resource.data.status != 'Delivered' || request.resource.data.dueAmount <= 0 || isAdmin()) &&
-            (request.resource.data.status != 'Cancelled' || resource.data.get('advancePaid', 0) <= 0 || isAdmin())
-          )
-        ) &&
-        (
-          isAdmin() ||
-          !(
-            (resource.data.get('paymentCount', 0) > 0 ||
-             resource.data.get('advancePaid', 0) > 0 ||
-             resource.data.get('pendingAmount', 0) > 0) &&
-            request.resource.data.diff(resource.data).affectedKeys().hasAny([
-              'qty', 'sellingUnitPrice', 'subtotal', 'deliveryCharge', 'discount', 'totalAmount'
-            ])
+            (
+              hasPreOrderPerm('preOrderEdit') ||
+              hasPreOrderPerm('preOrderUpdateStatus') ||
+              hasPreOrderPerm('preOrderCollectPayment') ||
+              hasPreOrderPerm('preOrderVerifyPayment') ||
+              hasPreOrderPerm('preOrderRefund') ||
+              hasPreOrderPerm('preOrderReceiveStock') ||
+              hasPreOrderPerm('preOrderConvertSale') ||
+              hasPreOrderPerm('preOrderManageTracking')
+            ) &&
+            request.resource.data.preOrderNumber == resource.data.preOrderNumber &&
+            request.resource.data.createdBy == resource.data.createdBy &&
+            request.resource.data.createdAt == resource.data.createdAt &&
+            (
+              !(resource.data.status in ['Delivered', 'Cancelled', 'Refunded']) ||
+              (resource.data.status == 'Cancelled' &&
+                request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                  'status', 'advancePaid', 'pendingAmount', 'refundedAmount', 'dueAmount',
+                  'paymentCount', 'paymentState', 'isCancelled', 'cancellation', 'receivedQty',
+                  'updatedAt', 'updatedBy', 'updatedByName',
+                  'lastStatusChangeAt', 'lastStatusNote'
+                ])) ||
+              ((hasPreOrderPerm('preOrderManageTracking') || isAdmin()) &&
+                request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+                  'trackingToken', 'trackingTokenId', 'trackingEnabled',
+                  'trackingCreatedAt', 'trackingCreatedBy', 'trackingLastRegeneratedAt',
+                  'trackingHistory', 'showCourierTrackingToCustomer',
+                  'updatedAt', 'updatedBy'
+                ]))
+            ) &&
+            // Lock converted Sale/Invoice financial fields & items list after conversion
+            (
+              resource.data.get('convertedSaleId', '') == '' ||
+              (
+                request.resource.data.get('convertedSaleId', '') == resource.data.get('convertedSaleId', '') &&
+                !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+                  'qty', 'sellingUnitPrice', 'subtotal', 'deliveryCharge', 'discount', 'totalAmount',
+                  'cancellation', 'isCancelled', 'items', 'itemCount', 'totalQty'
+                ])
+              )
+            ) &&
+            (
+              request.resource.data.status == resource.data.status ||
+              (
+                (request.resource.data.status != 'Delivered' || request.resource.data.dueAmount <= 0 || isAdmin()) &&
+                (request.resource.data.status != 'Cancelled' || resource.data.get('advancePaid', 0) <= 0 || isAdmin())
+              )
+            ) &&
+            (
+              isAdmin() ||
+              !(
+                (resource.data.get('paymentCount', 0) > 0 ||
+                 resource.data.get('advancePaid', 0) > 0 ||
+                 resource.data.get('pendingAmount', 0) > 0) &&
+                (
+                  request.resource.data.diff(resource.data).affectedKeys().hasAny([
+                    'qty', 'sellingUnitPrice', 'subtotal', 'deliveryCharge', 'discount', 'totalAmount',
+                    'itemCount', 'totalQty'
+                  ]) ||
+                  (
+                    request.resource.data.diff(resource.data).affectedKeys().hasAny(['items']) &&
+                    !isReceiptItemsProgressUpdate() &&
+                    !isConvertItemsProgressUpdate()
+                  )
+                )
+              )
+            )
           )
         );
 
@@ -307,16 +412,21 @@ service cloud.firestore {
       // Restricted Cost / Profit / Shipping Expense Breakdown / Internal Notes Subdocument
       match /private/cost {
         allow read: if hasPreOrderPerm('preOrderSupplier') || hasPreOrderPerm('preOrderViewProfit');
-        allow create: if hasPreOrderPerm('preOrderCreate') || hasPreOrderPerm('preOrderSupplier') || hasPreOrderPerm('preOrderViewProfit');
+        allow create: if (hasPreOrderPerm('preOrderCreate') || hasPreOrderPerm('preOrderSupplier') || hasPreOrderPerm('preOrderViewProfit')) &&
+          (!('itemCosts' in request.resource.data) ||
+            (request.resource.data.itemCosts is list && request.resource.data.itemCosts.size() <= 50));
         allow update: if (hasPreOrderPerm('preOrderSupplier') || hasPreOrderPerm('preOrderViewProfit')) &&
-          (hasPreOrderPerm('preOrderEdit') || hasPreOrderPerm('preOrderManageTracking') || hasPreOrderPerm('preOrderSupplier') || isAdmin());
+          (hasPreOrderPerm('preOrderEdit') || hasPreOrderPerm('preOrderManageTracking') || hasPreOrderPerm('preOrderSupplier') || isAdmin()) &&
+          (!('itemCosts' in request.resource.data) ||
+            (request.resource.data.itemCosts is list && request.resource.data.itemCosts.size() <= 50));
         allow delete: if false;
       }
 
       // Append-Only Payments Ledger (only pending -> verified/rejected allowed on update; cannot self-verify)
       match /payments/{paymentId} {
         allow read: if hasPreOrderPerm('preOrderView');
-        allow create: if request.resource.data.amount is number &&
+        allow create: if isValidId(paymentId) &&
+          request.resource.data.amount is number &&
           request.resource.data.amount > 0 &&
           request.resource.data.idempotencyKey is string &&
           request.resource.data.idempotencyKey.size() > 0 &&
@@ -336,7 +446,8 @@ service cloud.firestore {
                 isAdmin())))
           );
 
-        allow update: if hasPreOrderPerm('preOrderVerifyPayment') &&
+        allow update: if isValidId(paymentId) &&
+          hasPreOrderPerm('preOrderVerifyPayment') &&
           resource.data.status == 'pending' &&
           request.resource.data.status in ['verified', 'rejected'] &&
           request.auth.uid != resource.data.recordedBy &&
@@ -353,29 +464,29 @@ service cloud.firestore {
       // Append-Only Status History
       match /statusHistory/{historyId} {
         allow read: if hasPreOrderPerm('preOrderView');
-        allow create: if hasPreOrderPerm('preOrderCreate') || hasPreOrderPerm('preOrderUpdateStatus');
+        allow create: if isValidId(historyId) && (hasPreOrderPerm('preOrderCreate') || hasPreOrderPerm('preOrderUpdateStatus'));
         allow update, delete: if false;
       }
 
       // Shipment Details Subdocument (logistics only — cost/expense fields forbidden)
       match /shipment/{docId} {
         allow read: if hasPreOrderPerm('preOrderView');
-        allow create, update: if (hasPreOrderPerm('preOrderManageTracking') || hasPreOrderPerm('preOrderUpdateStatus')) &&
-          !request.resource.data.keys().hasAny([
-            'chinaUnitCost', 'shippingCost', 'expectedProfit', 'internalNotes', 'supplierUnitCost',
-            'actualShippingCost', 'internationalFreight', 'customsDuty', 'localTransport', 'handlingOther', 'shippingExpenses'
-          ]);
+        allow create, update: if isValidId(docId) &&
+          (hasPreOrderPerm('preOrderManageTracking') || hasPreOrderPerm('preOrderUpdateStatus')) &&
+          !hasForbiddenCostFields(request.resource.data);
         allow delete: if false;
       }
 
       // Shipment Documents Subcollection (Admin-only soft delete, no hard delete)
       match /shipmentDocs/{docId} {
         allow read: if hasPreOrderPerm('preOrderView');
-        allow create: if hasPreOrderPerm('preOrderManageTracking') &&
+        allow create: if isValidId(docId) &&
+          hasPreOrderPerm('preOrderManageTracking') &&
           request.resource.data.fileUrl is string &&
           request.resource.data.fileName is string &&
           request.resource.data.get('isDeleted', false) == false;
-        allow update: if isAdmin() &&
+        allow update: if isValidId(docId) &&
+          isAdmin() &&
           request.resource.data.diff(resource.data).affectedKeys().hasOnly([
             'isDeleted', 'deletedBy', 'deletedByName', 'deletedAt', 'deleteReason'
           ]) &&
@@ -386,8 +497,7 @@ service cloud.firestore {
       // Append-Only Shipment Events Log
       match /shipmentEvents/{eventId} {
         allow read: if hasPreOrderPerm('preOrderView');
-        allow create: if eventId.size() <= 128 &&
-          eventId.matches('^[a-zA-Z0-9_\\-]+$') &&
+        allow create: if isValidId(eventId) &&
           request.resource.data.id == eventId &&
           request.resource.data.preOrderId == preOrderId &&
           request.resource.data.staffId is string &&
@@ -427,10 +537,17 @@ service cloud.firestore {
       // Append-Only Warehouse Stock Receipts (damagedQty > 0 restricted to Admin/Super Admin)
       match /receipts/{receiptId} {
         allow read: if hasPreOrderPerm('preOrderView');
-        allow create: if (hasPreOrderPerm('preOrderReceiveStock') || isAdmin()) &&
+        allow create: if isValidId(receiptId) &&
+          (hasPreOrderPerm('preOrderReceiveStock') || isAdmin()) &&
           request.resource.data.receivedQty is number &&
           request.resource.data.receivedQty >= 0 &&
-          (request.resource.data.get('damagedQty', 0) == 0 || isAdmin());
+          request.resource.data.get('damagedQty', 0) >= 0 &&
+          (request.resource.data.get('damagedQty', 0) == 0 || isAdmin()) &&
+          (!('itemsBreakdown' in request.resource.data) || (
+            request.resource.data.itemsBreakdown is list &&
+            request.resource.data.itemsBreakdown.size() >= 1 &&
+            request.resource.data.itemsBreakdown.size() <= 50
+          ));
         allow update, delete: if false;
       }
     }
@@ -438,7 +555,7 @@ service cloud.firestore {
     // Append-Only Pre-Order Supplier Payments (Strictly restricted to preOrderSupplier or Admin)
     match /preOrderSupplierPayments/{paymentId} {
       allow read: if hasPreOrderPerm('preOrderSupplier') || isAdmin();
-      allow create: if (
+      allow create: if isValidId(paymentId) && (
           (request.resource.data.get('type', 'payment') == 'reversal' &&
             isAdmin() &&
             request.resource.data.reversesPaymentId is string &&
@@ -462,7 +579,13 @@ service cloud.firestore {
     match /publicTracking/{token} {
       allow get: if resource != null && resource.data.enabled == true;
       allow list: if false;
-      allow create, update, delete: if isSignedIn() &&
+      allow create, update: if isSignedIn() &&
+        isValidId(token) &&
+        (hasPreOrderPerm('preOrderManageTracking') || isSuperAdmin()) &&
+        (!('items' in request.resource.data) ||
+          (request.resource.data.items is list && request.resource.data.items.size() <= 50));
+      allow delete: if isSignedIn() &&
+        isValidId(token) &&
         (hasPreOrderPerm('preOrderManageTracking') || isSuperAdmin());
     }
 

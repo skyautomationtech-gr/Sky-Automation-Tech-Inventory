@@ -21,6 +21,7 @@ import {
   roundMoney,
   toPaisa,
 } from './calculations';
+import { computeItemCostMap, normalizePreOrderItems } from './constants';
 
 export interface PostingActorContext {
   actorId: string;
@@ -730,10 +731,125 @@ export function analyzePreOrderIntegrity(input: IntegrityAnalysisInput): PreOrde
       }
     }
 
-    // 4. Unconverted & uncancelled received stock must have active reservation on linkedProductId
+    // 0. Multi-item consistency checks
+    const items = normalizePreOrderItems(po);
+    const itemsQtySum = items.reduce((s, it) => s + Math.max(0, Math.round(Number(it.qty) || 0)), 0);
+    const itemsSubtotalPaisa = items.reduce(
+      (s, it) => s + Math.max(0, Math.round(Number(it.qty) || 0)) * Math.max(0, toPaisa(it.sellingUnitPrice)),
+      0
+    );
+    const expectedTotalQty = Number(po.totalQty ?? po.qty ?? 0);
+    if (itemsQtySum !== expectedTotalQty) {
+      issues.push({
+        preOrderId: po.id,
+        preOrderNumber: po.preOrderNumber,
+        severity: 'error',
+        code: 'ITEMS_QTY_MISMATCH',
+        message: 'Sum of line-item quantities differs from totalQty/qty on pre-order.',
+        expected: itemsQtySum,
+        actual: expectedTotalQty,
+      });
+    }
+    if (Math.abs(itemsSubtotalPaisa - toPaisa(po.subtotal)) > 1) {
+      issues.push({
+        preOrderId: po.id,
+        preOrderNumber: po.preOrderNumber,
+        severity: 'error',
+        code: 'ITEMS_SUBTOTAL_MISMATCH',
+        message: 'Sum of lineTotal across items differs from cached pre-order subtotal.',
+        expected: fromPaisa(itemsSubtotalPaisa),
+        actual: po.subtotal,
+      });
+    }
+    for (const it of items) {
+      const expectedLinePaisa =
+        Math.max(0, Math.round(Number(it.qty) || 0)) * Math.max(0, toPaisa(it.sellingUnitPrice));
+      if (Math.abs(expectedLinePaisa - toPaisa(it.lineTotal)) > 1) {
+        issues.push({
+          preOrderId: po.id,
+          preOrderNumber: po.preOrderNumber,
+          severity: 'error',
+          code: 'ITEM_LINETOTAL_MISMATCH',
+          message: `Item "${it.productName}" lineTotal differs from qty * sellingUnitPrice.`,
+          expected: fromPaisa(expectedLinePaisa),
+          actual: it.lineTotal,
+        });
+      }
+      const accounted = Math.max(0, Number(it.receivedQty || 0)) + Math.max(0, Number(it.damagedQty || 0));
+      if (accounted > Math.max(0, Number(it.qty || 0))) {
+        issues.push({
+          preOrderId: po.id,
+          preOrderNumber: po.preOrderNumber,
+          severity: 'error',
+          code: 'ITEM_OVER_RECEIVED',
+          message: `Item "${it.productName}" received + damaged qty (${accounted}) exceeds ordered qty (${it.qty}).`,
+          expected: `<= ${it.qty}`,
+          actual: accounted,
+        });
+      }
+    }
+
+    // 4. Unconverted & uncancelled received stock must have active reservation on linked product(s)
     const receivedGoodQty = receipts.reduce((s, r) => s + (Number(r.receivedQty) || 0), 0);
     if (!saleId && !po.isCancelled && po.status !== 'Cancelled' && po.status !== 'Refunded' && receivedGoodQty > 0) {
-      if (!po.linkedProductId) {
+      const receivedItemsWithQty = items.filter((it) => Math.max(0, Number(it.receivedQty || 0)) > 0);
+      if (receivedItemsWithQty.length > 0) {
+        const expectedByProd = new Map<string, number>();
+        for (const it of receivedItemsWithQty) {
+          if (!it.linkedProductId) {
+            issues.push({
+              preOrderId: po.id,
+              preOrderNumber: po.preOrderNumber,
+              severity: 'error',
+              code: 'MISSING_LINKED_PRODUCT',
+              message: `Received stock exists for "${it.productName}" but linkedProductId is missing.`,
+            });
+            continue;
+          }
+          expectedByProd.set(
+            it.linkedProductId,
+            (expectedByProd.get(it.linkedProductId) || 0) + Math.max(0, Number(it.receivedQty || 0))
+          );
+        }
+        expectedByProd.forEach((expQty, prodId) => {
+          const prod = productsById.get(prodId);
+          if (!prod) {
+            issues.push({
+              preOrderId: po.id,
+              preOrderNumber: po.preOrderNumber,
+              severity: 'error',
+              code: 'MISSING_PRODUCT_DOC',
+              message: `Linked product ${prodId} not found.`,
+            });
+          } else {
+            const actualResQty = (prod.reservedForPreOrders || [])
+              .filter((r) => r.preOrderId === po.id)
+              .reduce((s, r) => s + Math.max(0, Number(r.qty) || 0), 0);
+            if (actualResQty !== expQty) {
+              issues.push({
+                preOrderId: po.id,
+                preOrderNumber: po.preOrderNumber,
+                severity: 'warning',
+                code: 'RESERVATION_MISMATCH',
+                message: `Product reservation on ${prod.name} for ${po.preOrderNumber} does not match received qty.`,
+                expected: expQty,
+                actual: actualResQty,
+              });
+            }
+            if ((Number(prod.totalStock) || 0) < (Number(prod.reservedQty) || 0)) {
+              issues.push({
+                preOrderId: po.id,
+                preOrderNumber: po.preOrderNumber,
+                severity: 'error',
+                code: 'RESERVED_EXCEEDS_STOCK',
+                message: `Product ${prod.name} reservedQty (${prod.reservedQty}) exceeds totalStock (${prod.totalStock}).`,
+                expected: `<= ${prod.totalStock}`,
+                actual: prod.reservedQty,
+              });
+            }
+          }
+        });
+      } else if (!po.linkedProductId) {
         issues.push({
           preOrderId: po.id,
           preOrderNumber: po.preOrderNumber,
@@ -781,9 +897,14 @@ export function analyzePreOrderIntegrity(input: IntegrityAnalysisInput): PreOrde
 
     // 5. Cancelled pre-order check: unresolved customer advance or supplier money
     if ((po.status === 'Cancelled' || po.status === 'Refunded') && !po.cancellation) {
+      const costMap = computeItemCostMap(po, priv);
       const supSummary = calculatePerOrderSupplierSummary({
-        qty: po.qty,
+        qty: po.totalQty || po.qty,
         chinaUnitCost: priv?.chinaUnitCost || 0,
+        items: items.map((it) => ({
+          qty: it.qty,
+          chinaUnitCost: costMap[it.itemId]?.chinaUnitCost ?? priv?.chinaUnitCost ?? 0,
+        })),
         preOrderId: po.id,
         supplierPayments: input.supplierPayments || [],
       });
@@ -851,8 +972,10 @@ export function analyzePreOrderIntegrity(input: IntegrityAnalysisInput): PreOrde
 }
 
 function calculatePerOrderSummaryForAudit(po: PreOrder, payments: PreOrderPayment[]) {
+  const items = normalizePreOrderItems(po);
   return calculatePreOrderFinancials({
-    qty: po.qty,
+    items,
+    qty: po.totalQty ?? po.qty,
     sellingUnitPrice: po.sellingUnitPrice,
     deliveryCharge: po.deliveryCharge,
     discount: po.discount,

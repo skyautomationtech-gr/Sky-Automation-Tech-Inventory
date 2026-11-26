@@ -46,6 +46,7 @@ import {
   PreOrder,
   PreOrderAuditAction,
   PreOrderAuditEntry,
+  PreOrderCancellationItemSummary,
   PreOrderCancellationSummary,
   PreOrderConversionLock,
   PreOrderCustomsStatus,
@@ -58,7 +59,9 @@ import {
   PreOrderPaymentStatus,
   PreOrderPaymentType,
   PreOrderPrivateCost,
+  PreOrderPrivateItemCost,
   PreOrderReceipt,
+  PreOrderReceiptItemBreakdown,
   PreOrderSettings,
   PreOrderShipment,
   PreOrderShipmentDoc,
@@ -83,6 +86,7 @@ import {
 } from '../types';
 import {
   calculateActualShippingCost,
+  calculateMultiItemReceiptCosts,
   calculatePerOrderSupplierSummary,
   calculatePreOrderFinancials,
   calculatePreOrderReceiptCost,
@@ -114,15 +118,22 @@ import {
   getSupplierPaymentPostingId,
 } from '../preOrders/accounting';
 import {
+  MAX_PRE_ORDER_ITEMS,
   PRE_ORDER_EDIT_LOCKED_STATUSES,
   PRE_ORDER_FORWARD_FLOW,
   PRE_ORDER_LOCKED_PART6_STATUS,
+  buildPreOrderSearchKeywords,
+  computeItemCostMap,
+  formatPreOrderProductLabel,
   getTodayIsoDate,
   isPreOrderAdminRole,
   isPreOrderOverdue,
   isValidBdPhone,
   mergeWithDefaultRolePermissions,
   normalizeBdPhone,
+  normalizePreOrderItems,
+  sanitizePreOrderItemsForDoc,
+  summarizePreOrderItemsLegacyFields,
 } from '../preOrders/constants';
 import {
   DEFAULT_TRACKING_AUTO_EXPIRY_DAYS,
@@ -182,6 +193,16 @@ export function maskPhoneNumber(phone?: string): string {
   const cleaned = phone.trim();
   if (cleaned.length <= 5) return '***';
   return `${cleaned.slice(0, 3)}****${cleaned.slice(-3)}`;
+}
+
+function withNormalizedPreOrderItems(po: PreOrder): PreOrder {
+  const items = normalizePreOrderItems(po);
+  return {
+    ...po,
+    items,
+    itemCount: po.itemCount ?? items.length,
+    totalQty: po.totalQty ?? items.reduce((s, it) => s + (Number(it.qty) || 0), 0),
+  };
 }
 
 // ==========================================
@@ -531,55 +552,97 @@ export async function createPreOrder(
     throw new Error('Customer delivery address is required.');
   }
 
-  const items: PreOrderItem[] = Array.isArray(input.items) && input.items.length > 0
-    ? input.items.map((it, idx) => ({
-        itemId: it.itemId || `item-${idx + 1}`,
-        linkedProductId: it.linkedProductId || '',
-        linkedVariantId: it.linkedVariantId || '',
-        productName: it.productName?.trim() || 'Pre-Order Item',
-        imageUrl: it.imageUrl || '',
-        category: it.category?.trim() || '',
-        sku: it.sku?.trim() || '',
-        model: it.model?.trim() || '',
-        variant: it.variant?.trim() || '',
-        color: it.color?.trim() || '',
-        qty: Math.max(1, Math.round(Number(it.qty) || 1)),
-        chinaUnitCost: Number(it.chinaUnitCost || 0),
-        sellingUnitPrice: Number(it.sellingUnitPrice || 0),
-        lineTotal: Math.max(1, Math.round(Number(it.qty) || 1)) * Number(it.sellingUnitPrice || 0),
-        receivedQty: 0,
-        deliveredQty: 0,
-      }))
-    : [{
-        itemId: 'item-1',
-        linkedProductId: input.linkedProductId || '',
-        linkedVariantId: input.linkedVariantId || '',
-        productName: input.productName?.trim() || 'Pre-Order Item',
-        imageUrl: input.productImage || '',
-        category: input.category?.trim() || '',
-        sku: input.sku?.trim() || '',
-        model: input.model?.trim() || '',
-        variant: input.variant?.trim() || '',
-        color: input.color?.trim() || '',
-        qty: Math.max(1, Math.round(Number(input.qty || input.qty === 0 ? input.qty : 1) || 1)),
-        chinaUnitCost: Number(input.chinaUnitCost || 0),
-        sellingUnitPrice: Number(input.sellingUnitPrice || 0),
-        lineTotal: Math.max(1, Math.round(Number(input.qty || 1) || 1)) * Number(input.sellingUnitPrice || 0),
-        receivedQty: 0,
-        deliveredQty: 0,
-      }];
+  const rawInputItems: Array<PreOrderItem & { chinaUnitCost?: number }> =
+    Array.isArray(input.items) && input.items.length > 0
+      ? input.items.map((it, idx) => {
+          const itemQty = Math.round(Number(it.qty) || 0);
+          const itemPrice = roundMoney(Number(it.sellingUnitPrice) || 0);
+          const itemChina = roundMoney(Number(it.chinaUnitCost ?? input.chinaUnitCost ?? 0) || 0);
+          return {
+            itemId: it.itemId?.trim() || `item-${idx + 1}`,
+            linkedProductId: it.linkedProductId?.trim() || '',
+            linkedVariantId: it.linkedVariantId?.trim() || '',
+            productName: it.productName?.trim() || '',
+            imageUrl: it.imageUrl || '',
+            imageUrls: Array.isArray(it.imageUrls) ? it.imageUrls.filter(Boolean) : it.imageUrl ? [it.imageUrl] : [],
+            category: it.category?.trim() || '',
+            sku: it.sku?.trim() || '',
+            model: it.model?.trim() || '',
+            variant: it.variant?.trim() || '',
+            color: it.color?.trim() || '',
+            productUrl: it.productUrl?.trim() || '',
+            productSpecs: it.productSpecs?.trim() || '',
+            notes: it.notes?.trim() || '',
+            qty: itemQty,
+            chinaUnitCost: itemChina,
+            sellingUnitPrice: itemPrice,
+            lineTotal: roundMoney(itemQty * itemPrice),
+            receivedQty: 0,
+            deliveredQty: 0,
+            damagedQty: 0,
+            convertedQty: 0,
+            status: 'pending',
+          };
+        })
+      : [
+          {
+            itemId: 'item-1',
+            linkedProductId: input.linkedProductId?.trim() || '',
+            linkedVariantId: input.linkedVariantId?.trim() || '',
+            productName: input.productName?.trim() || '',
+            imageUrl: input.productImage || '',
+            imageUrls: input.productImage ? [input.productImage] : [],
+            category: input.category?.trim() || '',
+            sku: input.sku?.trim() || '',
+            model: input.model?.trim() || '',
+            variant: input.variant?.trim() || '',
+            color: input.color?.trim() || '',
+            productUrl: input.productUrl?.trim() || '',
+            productSpecs: input.productSpecs?.trim() || '',
+            qty: Math.round(Number(input.qty) || 0),
+            chinaUnitCost: roundMoney(Number(input.chinaUnitCost) || 0),
+            sellingUnitPrice: roundMoney(Number(input.sellingUnitPrice) || 0),
+            lineTotal: roundMoney((Math.round(Number(input.qty) || 0)) * roundMoney(Number(input.sellingUnitPrice) || 0)),
+            receivedQty: 0,
+            deliveredQty: 0,
+            damagedQty: 0,
+            convertedQty: 0,
+            status: 'pending',
+          },
+        ];
 
+  if (rawInputItems.length === 0) {
+    throw new Error('Add at least 1 product item to the pre-order.');
+  }
+  if (rawInputItems.length > MAX_PRE_ORDER_ITEMS) {
+    throw new Error(`Maximum ${MAX_PRE_ORDER_ITEMS} line items allowed per pre-order.`);
+  }
+  for (let i = 0; i < rawInputItems.length; i++) {
+    const line = rawInputItems[i];
+    if (!line.productName) {
+      throw new Error(`Item #${i + 1}: Product name is required.`);
+    }
+    if (line.qty < 1) {
+      throw new Error(`Item #${i + 1} (${line.productName}): Quantity must be at least 1.`);
+    }
+    if (line.sellingUnitPrice <= 0) {
+      throw new Error(`Item #${i + 1} (${line.productName}): Selling price must be greater than zero.`);
+    }
+    if ((line.chinaUnitCost || 0) < 0) {
+      throw new Error(`Item #${i + 1} (${line.productName}): China purchase price cannot be negative.`);
+    }
+  }
+
+  // Strictly strip chinaUnitCost before saving onto preOrders/{id}
+  const items = sanitizePreOrderItemsForDoc(rawInputItems);
+  const legacySummary = summarizePreOrderItemsLegacyFields(items);
   const itemCount = items.length;
-  const totalQty = items.reduce((s, it) => s + it.qty, 0);
-  const searchKeywords = Array.from(new Set(
-    items.flatMap((it) => [
-      ...(it.productName ? [it.productName.toLowerCase()] : []),
-      ...(it.sku ? [it.sku.toLowerCase()] : []),
-      ...(it.model ? [it.model.toLowerCase()] : []),
-      ...(it.color ? [it.color.toLowerCase()] : []),
-      ...(it.variant ? [it.variant.toLowerCase()] : []),
-    ])
-  ));
+  const totalQty = legacySummary.totalQty;
+  const searchKeywords = buildPreOrderSearchKeywords(
+    items,
+    input.supplierName,
+    input.supplierOrderRef
+  );
 
   if (totalQty < 1) {
     throw new Error('Total quantity must be at least 1.');
@@ -611,7 +674,7 @@ export async function createPreOrder(
   const initialPaymentStatus = shouldAutoVerify ? 'verified' : 'pending';
 
   const calc = calculatePreOrderFinancials({
-    items,
+    items: rawInputItems,
     deliveryCharge,
     discount,
     shippingCost,
@@ -753,6 +816,7 @@ export async function createPreOrder(
     txn.set(preOrderCounterRef, { count: nextPoCount, updatedAt: now }, { merge: true });
 
     // 4. WRITE PRE-ORDER + ISOLATED PRIVATE COST + LEDGER + HISTORY + AUDIT
+    const primaryItem = items[0];
     const preOrderDoc: PreOrder = {
       id: preOrderId,
       preOrderNumber: createdNumber,
@@ -768,19 +832,19 @@ export async function createPreOrder(
       itemCount,
       totalQty,
       searchKeywords,
-      productName: items[0]?.productName || 'Pre-Order Item',
-      category: items[0]?.category || '',
-      sku: items[0]?.sku || '',
-      model: items[0]?.model || '',
-      variant: items[0]?.variant || '',
-      color: items[0]?.color || '',
-      productUrl: input.productUrl?.trim() || '',
-      productSpecs: input.productSpecs?.trim() || '',
-      productImage: items[0]?.imageUrl || '',
-      linkedProductId: items[0]?.linkedProductId || '',
-      linkedVariantId: items[0]?.linkedVariantId || '',
+      productName: legacySummary.productName,
+      category: legacySummary.category,
+      sku: legacySummary.sku,
+      model: legacySummary.model,
+      variant: legacySummary.variant,
+      color: legacySummary.color,
+      productUrl: primaryItem?.productUrl || input.productUrl?.trim() || '',
+      productSpecs: primaryItem?.productSpecs || input.productSpecs?.trim() || '',
+      productImage: legacySummary.productImage,
+      linkedProductId: legacySummary.linkedProductId,
+      linkedVariantId: legacySummary.linkedVariantId,
       qty: totalQty,
-      sellingUnitPrice: items[0]?.sellingUnitPrice || 0,
+      sellingUnitPrice: legacySummary.sellingUnitPrice,
       subtotal: calc.subtotal,
       deliveryCharge: calc.deliveryCharge,
       discount: calc.discount,
@@ -826,12 +890,28 @@ export async function createPreOrder(
       updatedBy: actor.id,
     };
 
-    const primaryChinaUnitCost = Number(input.chinaUnitCost ?? items[0]?.chinaUnitCost ?? 0);
+    const itemCosts: PreOrderPrivateItemCost[] = rawInputItems.map((it) => {
+      const unitChina = roundMoney(it.chinaUnitCost ?? input.chinaUnitCost ?? 0);
+      return {
+        itemId: it.itemId,
+        chinaUnitCost: unitChina,
+        supplierUnitCost: unitChina,
+        lineChinaTotal: roundMoney(unitChina * it.qty),
+      };
+    });
+    const totalChinaPaisa = rawInputItems.reduce(
+      (s, it) => s + Math.round(toPaisa(it.chinaUnitCost ?? 0) * it.qty),
+      0
+    );
+    const weightedChinaUnitCost =
+      totalQty > 0 ? roundMoney(fromPaisa(totalChinaPaisa) / totalQty) : roundMoney(input.chinaUnitCost ?? 0);
+
     const privateCostDoc: PreOrderPrivateCost = {
       preOrderId,
-      chinaUnitCost: roundMoney(primaryChinaUnitCost),
+      chinaUnitCost: weightedChinaUnitCost,
       shippingCost: roundMoney(shippingCost),
-      supplierUnitCost: roundMoney(input.supplierUnitCost ?? primaryChinaUnitCost),
+      supplierUnitCost: roundMoney(input.supplierUnitCost ?? weightedChinaUnitCost),
+      itemCosts,
       expectedProfit: calc.expectedProfit,
       internalNotes: input.internalNotes?.trim() || '',
       supplierOrderRef: input.supplierOrderRef?.trim() || '',
@@ -858,13 +938,15 @@ export async function createPreOrder(
       preOrderId,
       preOrderNumber: createdNumber,
       action: 'PREORDER_CREATED',
-      summary: `Created pre-order ${createdNumber} (${startStatus}) for ${preOrderDoc.customerName} (${preOrderDoc.productName} x${preOrderDoc.qty})`,
+      summary: `Created pre-order ${createdNumber} (${startStatus}) for ${preOrderDoc.customerName} (${formatPreOrderProductLabel(preOrderDoc)} · ${totalQty} pcs)`,
       metadata: {
         totalAmount: preOrderDoc.totalAmount,
         initialAdvance: initialAdvanceAmount,
         initialPaymentStatus: initialAdvanceAmount > 0 ? initialPaymentStatus : 'none',
         customerCode: resolvedCustomerCode,
         startStatus,
+        itemCount,
+        totalQty,
       },
       userId: actor.id,
       userName: actor.name,
@@ -945,7 +1027,7 @@ export async function createPreOrder(
         category: 'event',
         severity: notifMeta.severity,
         title: `New Pre-Order · ${createdNumber}`,
-        message: `${preOrderDoc.customerName} ordered ${preOrderDoc.productName} x${preOrderDoc.qty} (${startStatus}).`,
+        message: `${preOrderDoc.customerName} ordered ${formatPreOrderProductLabel(preOrderDoc)} (${totalQty} pcs, ${startStatus}).`,
         targetTab: notifMeta.targetTab,
         forRoles: ['superadmin', 'admin', 'manager', 'staff'],
         readBy: [],
@@ -1055,6 +1137,7 @@ function matchesClientSideFilters(order: PreOrder, opts: QueryPreOrdersOptions):
   if (opts.searchTerm?.trim()) {
     const q = opts.searchTerm.trim().toLowerCase();
     const normPhoneQ = normalizeBdPhone(opts.searchTerm);
+    const orderItems = normalizePreOrderItems(order);
     const haystack = [
       order.preOrderNumber,
       order.customerName,
@@ -1064,6 +1147,8 @@ function matchesClientSideFilters(order: PreOrder, opts: QueryPreOrdersOptions):
       order.sku,
       order.supplierOrderRef,
       order.supplierName,
+      ...(Array.isArray(order.searchKeywords) ? order.searchKeywords : []),
+      ...orderItems.flatMap((it) => [it.productName, it.sku, it.model, it.variant, it.color]),
     ]
       .filter(Boolean)
       .join(' ')
@@ -1100,7 +1185,7 @@ export async function queryPreOrdersPage(
           limit(pageSize)
         );
         const snap = await getDocs(prefixQ);
-        const docs = snap.docs.map((d) => ({ ...(d.data() as PreOrder), id: d.id }));
+        const docs = snap.docs.map((d) => withNormalizedPreOrderItems({ ...(d.data() as PreOrder), id: d.id }));
         const filtered = docs.filter((o) => matchesClientSideFilters(o, options));
         return { items: filtered, lastDoc: null, hasMore: false };
       }
@@ -1112,7 +1197,7 @@ export async function queryPreOrdersPage(
           limit(pageSize)
         );
         const snap = await getDocs(phoneQ);
-        const docs = snap.docs.map((d) => ({ ...(d.data() as PreOrder), id: d.id }));
+        const docs = snap.docs.map((d) => withNormalizedPreOrderItems({ ...(d.data() as PreOrder), id: d.id }));
         const filtered = docs.filter((o) => matchesClientSideFilters(o, options));
         return { items: filtered, lastDoc: null, hasMore: false };
       }
@@ -1156,7 +1241,7 @@ export async function queryPreOrdersPage(
     const snap = await getDocs(q);
     const hasMore = snap.docs.length > pageSize;
     const slicedDocs = hasMore ? snap.docs.slice(0, pageSize) : snap.docs;
-    const rawItems = slicedDocs.map((d) => ({ ...(d.data() as PreOrder), id: d.id }));
+    const rawItems = slicedDocs.map((d) => withNormalizedPreOrderItems({ ...(d.data() as PreOrder), id: d.id }));
     const filtered = rawItems.filter((o) => matchesClientSideFilters(o, options));
     const lastDoc = slicedDocs.length > 0 ? slicedDocs[slicedDocs.length - 1] : null;
     return { items: filtered, lastDoc, hasMore };
@@ -1176,7 +1261,7 @@ export async function queryPreOrdersPage(
     const fallbackSnap = await getDocs(query(collection(db, 'preOrders'), ...fallbackConstraints));
     const hasMore = fallbackSnap.docs.length > pageSize;
     const slicedDocs = hasMore ? fallbackSnap.docs.slice(0, pageSize) : fallbackSnap.docs;
-    const rawItems = slicedDocs.map((d) => ({ ...(d.data() as PreOrder), id: d.id }));
+    const rawItems = slicedDocs.map((d) => withNormalizedPreOrderItems({ ...(d.data() as PreOrder), id: d.id }));
     const filtered = rawItems.filter((o) => matchesClientSideFilters(o, options));
     const lastDoc = slicedDocs.length > 0 ? slicedDocs[slicedDocs.length - 1] : null;
 
@@ -1226,7 +1311,7 @@ export async function getPreOrders(
 
   const q = query(collection(db, 'preOrders'), ...constraints);
   const snap = await getDocs(q);
-  const items = snap.docs.map((d) => ({ ...(d.data() as PreOrder), id: d.id }));
+  const items = snap.docs.map((d) => withNormalizedPreOrderItems({ ...(d.data() as PreOrder), id: d.id }));
   const lastDoc = snap.docs.length > 0 ? snap.docs[snap.docs.length - 1] : null;
   return {
     items,
@@ -1239,7 +1324,7 @@ export async function getPreOrderById(preOrderId: string): Promise<PreOrder | nu
   if (!auth?.currentUser) return null;
   const snap = await getDoc(doc(db, 'preOrders', preOrderId));
   if (!snap.exists()) return null;
-  return { ...(snap.data() as PreOrder), id: snap.id };
+  return withNormalizedPreOrderItems({ ...(snap.data() as PreOrder), id: snap.id });
 }
 
 export async function getPreOrderPrivateCost(
@@ -1304,6 +1389,7 @@ export type UpdatePreOrderInput = Partial<
     | 'customerWhatsapp'
     | 'customerAddress'
     | 'salesChannel'
+    | 'items'
     | 'productName'
     | 'category'
     | 'sku'
@@ -1348,12 +1434,122 @@ export async function updatePreOrder(
     ]);
     if (!snap.exists()) throw new Error('Pre-order not found.');
 
-    const current = { ...(snap.data() as PreOrder), id: snap.id };
+    const current = withNormalizedPreOrderItems({ ...(snap.data() as PreOrder), id: snap.id });
     if (PRE_ORDER_EDIT_LOCKED_STATUSES.includes(current.status)) {
       throw new Error(`Pre-orders with status "${current.status}" are locked from editing.`);
     }
 
     const isConverted = Boolean(current.convertedSaleId || current.convertedOrderId);
+    const currentItems = normalizePreOrderItems(current);
+    const currentById = new Map(currentItems.map((it) => [it.itemId, it]));
+
+    let resolvedItems: PreOrderItem[];
+    if (Array.isArray(updates.items)) {
+      if (updates.items.length === 0) {
+        throw new Error('At least 1 item is required on a pre-order.');
+      }
+      if (updates.items.length > MAX_PRE_ORDER_ITEMS) {
+        throw new Error(`Maximum ${MAX_PRE_ORDER_ITEMS} line items allowed per pre-order.`);
+      }
+      resolvedItems = updates.items.map((it, idx) => {
+        const itemId = it.itemId?.trim() || `item-${idx + 1}`;
+        const existingItem = currentById.get(itemId);
+        const itemQty = Math.round(Number(it.qty) || 0);
+        const itemPrice = roundMoney(Number(it.sellingUnitPrice) || 0);
+        const prevReceived = Math.max(0, Number(existingItem?.receivedQty ?? it.receivedQty ?? 0));
+        const prevDamaged = Math.max(0, Number(existingItem?.damagedQty ?? it.damagedQty ?? 0));
+        if (!it.productName?.trim()) {
+          throw new Error(`Item #${idx + 1}: Product name is required.`);
+        }
+        if (itemQty < 1) {
+          throw new Error(`Item #${idx + 1} (${it.productName}): Quantity must be at least 1.`);
+        }
+        if (itemQty < prevReceived + prevDamaged) {
+          throw new Error(
+            `Item "${it.productName}" already has ${prevReceived + prevDamaged} received/damaged units; quantity cannot be lowered below that.`
+          );
+        }
+        if (itemPrice <= 0) {
+          throw new Error(`Item #${idx + 1} (${it.productName}): Selling price must be greater than zero.`);
+        }
+        return {
+          ...existingItem,
+          ...it,
+          itemId,
+          productName: it.productName.trim(),
+          category: it.category?.trim() || '',
+          sku: it.sku?.trim() || '',
+          model: it.model?.trim() || '',
+          variant: it.variant?.trim() || '',
+          color: it.color?.trim() || '',
+          imageUrl: it.imageUrl || existingItem?.imageUrl || '',
+          linkedProductId: it.linkedProductId?.trim() || existingItem?.linkedProductId || '',
+          linkedVariantId: it.linkedVariantId?.trim() || existingItem?.linkedVariantId || '',
+          qty: itemQty,
+          sellingUnitPrice: itemPrice,
+          lineTotal: roundMoney(itemQty * itemPrice),
+          receivedQty: prevReceived,
+          deliveredQty: Math.max(0, Number(existingItem?.deliveredQty ?? it.deliveredQty ?? 0)),
+          damagedQty: prevDamaged,
+          convertedQty: existingItem?.convertedQty ?? it.convertedQty ?? 0,
+          ...(existingItem?.unitLandedCost !== undefined ? { unitLandedCost: existingItem.unitLandedCost } : {}),
+          ...(existingItem?.landedCostTotal !== undefined ? { landedCostTotal: existingItem.landedCostTotal } : {}),
+        };
+      });
+
+      // Prevent removing an item that already has received stock
+      const updatedIds = new Set(resolvedItems.map((it) => it.itemId));
+      for (const oldIt of currentItems) {
+        if (!updatedIds.has(oldIt.itemId) && ((oldIt.receivedQty || 0) > 0 || (oldIt.damagedQty || 0) > 0)) {
+          throw new Error(
+            `Cannot remove "${oldIt.productName}" because stock has already been received for it.`
+          );
+        }
+      }
+    } else {
+      // Legacy single-field patch merges cleanly onto items[0]
+      const first = currentItems[0];
+      const nextQty = updates.qty !== undefined ? Math.round(Number(updates.qty)) : first.qty;
+      const nextPrice =
+        updates.sellingUnitPrice !== undefined
+          ? roundMoney(Number(updates.sellingUnitPrice))
+          : first.sellingUnitPrice;
+      if (nextQty < 1) throw new Error('Quantity must be at least 1.');
+      if (nextPrice <= 0) throw new Error('Selling unit price must be greater than zero.');
+      resolvedItems = [
+        {
+          ...first,
+          productName: updates.productName?.trim() || first.productName,
+          category: updates.category !== undefined ? updates.category : first.category,
+          sku: updates.sku !== undefined ? updates.sku : first.sku,
+          model: updates.model !== undefined ? updates.model : first.model,
+          variant: updates.variant !== undefined ? updates.variant : first.variant,
+          color: updates.color !== undefined ? updates.color : first.color,
+          imageUrl: updates.productImage !== undefined ? updates.productImage : first.imageUrl,
+          linkedProductId:
+            updates.linkedProductId !== undefined ? updates.linkedProductId : first.linkedProductId,
+          linkedVariantId:
+            updates.linkedVariantId !== undefined ? updates.linkedVariantId : first.linkedVariantId,
+          qty: nextQty,
+          sellingUnitPrice: nextPrice,
+          lineTotal: roundMoney(nextQty * nextPrice),
+        },
+        ...currentItems.slice(1),
+      ];
+    }
+
+    const sanitizedItems = sanitizePreOrderItemsForDoc(resolvedItems);
+    const itemsFinancialChanged =
+      sanitizedItems.length !== currentItems.length ||
+      sanitizedItems.some((it, idx) => {
+        const prev = currentItems[idx];
+        return (
+          !prev ||
+          prev.itemId !== it.itemId ||
+          Number(prev.qty) !== Number(it.qty) ||
+          toPaisa(prev.sellingUnitPrice) !== toPaisa(it.sellingUnitPrice)
+        );
+      });
 
     const hasAnyPayment =
       activePayments.length > 0 ||
@@ -1362,9 +1558,7 @@ export async function updatePreOrder(
       Number(current.pendingAmount || 0) > 0;
 
     const financialFieldChanged =
-      (updates.qty !== undefined && Number(updates.qty) !== Number(current.qty)) ||
-      (updates.sellingUnitPrice !== undefined &&
-        toPaisa(updates.sellingUnitPrice) !== toPaisa(current.sellingUnitPrice)) ||
+      itemsFinancialChanged ||
       (updates.deliveryCharge !== undefined &&
         toPaisa(updates.deliveryCharge) !== toPaisa(current.deliveryCharge)) ||
       (updates.discount !== undefined &&
@@ -1372,28 +1566,16 @@ export async function updatePreOrder(
 
     if (isConverted && financialFieldChanged) {
       throw new Error(
-        'Quantity, unit price, delivery charge, and discount are locked after conversion to a Sales Order & Invoice.'
+        'Items, quantities, unit prices, delivery charge, and discount are locked after conversion to a Sales Order & Invoice.'
       );
     }
 
-    if (hasAnyPayment && !isAdminRole(actor.role)) {
-      if (
-        (updates.qty !== undefined && Number(updates.qty) !== Number(current.qty)) ||
-        (updates.sellingUnitPrice !== undefined &&
-          toPaisa(updates.sellingUnitPrice) !== toPaisa(current.sellingUnitPrice))
-      ) {
-        throw new Error(
-          'Quantity, selling price, and order totals can only be edited by an Admin or Super Admin after a payment exists.'
-        );
-      }
-      if (financialFieldChanged) {
-        throw new Error(
-          'Pricing and order totals cannot be modified after a payment exists unless performed by Admin or Super Admin.'
-        );
-      }
+    if (hasAnyPayment && !isAdminRole(actor.role) && financialFieldChanged) {
+      throw new Error(
+        'Items, quantities, pricing, and order totals cannot be modified after a payment exists unless performed by Admin or Super Admin.'
+      );
     }
 
-    // Validate contact, product & date updates
     let nextPhone = current.customerPhone;
     if (updates.customerPhone !== undefined) {
       const normalized = normalizeBdPhone(updates.customerPhone);
@@ -1403,13 +1585,6 @@ export async function updatePreOrder(
       nextPhone = normalized;
     }
 
-    const qty = updates.qty !== undefined ? Math.round(Number(updates.qty)) : current.qty;
-    if (qty < 1) throw new Error('Quantity must be at least 1.');
-
-    const sellingUnitPrice =
-      updates.sellingUnitPrice !== undefined
-        ? Number(updates.sellingUnitPrice)
-        : current.sellingUnitPrice;
     const deliveryCharge =
       updates.deliveryCharge !== undefined
         ? Number(updates.deliveryCharge)
@@ -1417,8 +1592,8 @@ export async function updatePreOrder(
     const discount =
       updates.discount !== undefined ? Number(updates.discount) : current.discount;
 
-    if (sellingUnitPrice < 0 || deliveryCharge < 0 || discount < 0) {
-      throw new Error('Prices, delivery charges, and discounts cannot be negative.');
+    if (deliveryCharge < 0 || discount < 0) {
+      throw new Error('Delivery charges and discounts cannot be negative.');
     }
 
     const nextOrderDate = updates.orderDate ?? current.orderDate ?? getTodayIsoDate();
@@ -1428,8 +1603,7 @@ export async function updatePreOrder(
     }
 
     const calc = calculatePreOrderFinancials({
-      qty,
-      sellingUnitPrice,
+      items: sanitizedItems,
       deliveryCharge,
       discount,
       payments:
@@ -1452,11 +1626,31 @@ export async function updatePreOrder(
       current.status
     );
 
+    const legacySummary = summarizePreOrderItemsLegacyFields(sanitizedItems);
+    const searchKeywords = buildPreOrderSearchKeywords(
+      sanitizedItems,
+      updates.supplierName ?? current.supplierName,
+      updates.supplierOrderRef ?? current.supplierOrderRef
+    );
+
     const nextDoc: Partial<PreOrder> = {
       ...updates,
       customerPhone: nextPhone,
-      qty: calc.qty,
-      sellingUnitPrice: roundMoney(sellingUnitPrice),
+      items: sanitizedItems,
+      itemCount: legacySummary.itemCount,
+      totalQty: legacySummary.totalQty,
+      searchKeywords,
+      productName: legacySummary.productName,
+      category: legacySummary.category,
+      sku: legacySummary.sku,
+      model: legacySummary.model,
+      variant: legacySummary.variant,
+      color: legacySummary.color,
+      productImage: legacySummary.productImage,
+      linkedProductId: legacySummary.linkedProductId,
+      linkedVariantId: legacySummary.linkedVariantId,
+      qty: legacySummary.totalQty,
+      sellingUnitPrice: legacySummary.sellingUnitPrice,
       subtotal: calc.subtotal,
       deliveryCharge: calc.deliveryCharge,
       discount: calc.discount,
@@ -1471,7 +1665,6 @@ export async function updatePreOrder(
       updatedBy: actor.id,
     };
 
-    // Compute exact before/after field diff for audit trail
     const beforeDiff: Record<string, any> = {};
     const afterDiff: Record<string, any> = {};
     const trackableKeys: Array<keyof PreOrder> = [
@@ -1480,6 +1673,8 @@ export async function updatePreOrder(
       'customerPhone',
       'customerWhatsapp',
       'customerAddress',
+      'itemCount',
+      'totalQty',
       'productName',
       'category',
       'sku',
@@ -1510,6 +1705,10 @@ export async function updatePreOrder(
         beforeDiff[k] = oldVal;
         afterDiff[k] = newVal;
       }
+    }
+    if (updates.items !== undefined && itemsFinancialChanged) {
+      beforeDiff.itemsSummary = currentItems.map((i) => `${i.productName} x${i.qty} @${i.sellingUnitPrice}`);
+      afterDiff.itemsSummary = sanitizedItems.map((i) => `${i.productName} x${i.qty} @${i.sellingUnitPrice}`);
     }
 
     txn.update(preOrderRef, sanitizeData(nextDoc));
@@ -1553,7 +1752,7 @@ export async function updatePreOrderPrivateCost(
   updates: Partial<
     Pick<
       PreOrderPrivateCost,
-      'chinaUnitCost' | 'shippingCost' | 'supplierUnitCost' | 'internalNotes' | 'supplierOrderRef'
+      'chinaUnitCost' | 'shippingCost' | 'supplierUnitCost' | 'itemCosts' | 'internalNotes' | 'supplierOrderRef'
     >
   >,
   actor: PreOrderActor
@@ -1570,31 +1769,86 @@ export async function updatePreOrderPrivateCost(
     ]);
     if (!orderSnap.exists()) throw new Error('Pre-order not found.');
 
-    const order = orderSnap.data() as PreOrder;
+    const order = withNormalizedPreOrderItems({ ...(orderSnap.data() as PreOrder), id: orderSnap.id });
     if (PRE_ORDER_EDIT_LOCKED_STATUSES.includes(order.status)) {
       throw new Error(`Pre-orders with status "${order.status}" are locked from editing.`);
     }
 
+    const orderItems = normalizePreOrderItems(order);
     const existingCost: Partial<PreOrderPrivateCost> = costSnap.exists() ? costSnap.data() : {};
 
-    const chinaUnitCost = roundMoney(
-      updates.chinaUnitCost !== undefined
-        ? updates.chinaUnitCost
-        : existingCost.chinaUnitCost || 0
-    );
     const shippingCost = roundMoney(
       updates.shippingCost !== undefined
         ? updates.shippingCost
         : existingCost.shippingCost || 0
     );
-
-    if (chinaUnitCost < 0 || shippingCost < 0) {
-      throw new Error('China purchase price and shipping cost cannot be negative.');
+    if (shippingCost < 0) {
+      throw new Error('Shipping cost cannot be negative.');
     }
 
+    let resolvedItemCosts: PreOrderPrivateItemCost[];
+    if (Array.isArray(updates.itemCosts)) {
+      const reqMap = new Map(updates.itemCosts.map((c) => [c.itemId, c]));
+      resolvedItemCosts = orderItems.map((it) => {
+        const match = reqMap.get(it.itemId);
+        const chinaUnit = roundMoney(match?.chinaUnitCost ?? updates.chinaUnitCost ?? existingCost.chinaUnitCost ?? 0);
+        if (chinaUnit < 0) {
+          throw new Error(`China purchase price for "${it.productName}" cannot be negative.`);
+        }
+        return {
+          itemId: it.itemId,
+          chinaUnitCost: chinaUnit,
+          supplierUnitCost: roundMoney(match?.supplierUnitCost ?? chinaUnit),
+          lineChinaTotal: roundMoney(chinaUnit * it.qty),
+        };
+      });
+    } else if (updates.chinaUnitCost !== undefined) {
+      const uniformChina = roundMoney(updates.chinaUnitCost);
+      if (uniformChina < 0) {
+        throw new Error('China purchase price cannot be negative.');
+      }
+      resolvedItemCosts = orderItems.map((it) => ({
+        itemId: it.itemId,
+        chinaUnitCost: uniformChina,
+        supplierUnitCost: roundMoney(updates.supplierUnitCost ?? uniformChina),
+        lineChinaTotal: roundMoney(uniformChina * it.qty),
+      }));
+    } else if (Array.isArray(existingCost.itemCosts) && existingCost.itemCosts.length > 0) {
+      const existingMap = computeItemCostMap(order, existingCost as PreOrderPrivateCost);
+      resolvedItemCosts = orderItems.map((it) => {
+        const unit = roundMoney(existingMap[it.itemId]?.chinaUnitCost ?? existingCost.chinaUnitCost ?? 0);
+        return {
+          itemId: it.itemId,
+          chinaUnitCost: unit,
+          supplierUnitCost: unit,
+          lineChinaTotal: roundMoney(unit * it.qty),
+        };
+      });
+    } else {
+      const fallbackChina = roundMoney(existingCost.chinaUnitCost || 0);
+      resolvedItemCosts = orderItems.map((it) => ({
+        itemId: it.itemId,
+        chinaUnitCost: fallbackChina,
+        supplierUnitCost: fallbackChina,
+        lineChinaTotal: roundMoney(fallbackChina * it.qty),
+      }));
+    }
+
+    const totalOrderQty = orderItems.reduce((s, it) => s + (Number(it.qty) || 0), 0);
+    const totalChinaCostPaisa = resolvedItemCosts.reduce((s, ic) => s + toPaisa(ic.lineChinaTotal), 0);
+    const chinaUnitCost =
+      totalOrderQty > 0
+        ? roundMoney(fromPaisa(totalChinaCostPaisa) / totalOrderQty)
+        : roundMoney(updates.chinaUnitCost ?? existingCost.chinaUnitCost ?? 0);
+
+    const itemChinaMap = Object.fromEntries(
+      resolvedItemCosts.map((ic) => [ic.itemId, ic.chinaUnitCost])
+    );
     const calc = calculatePreOrderFinancials({
-      qty: order.qty,
-      sellingUnitPrice: order.sellingUnitPrice,
+      items: orderItems.map((it) => ({
+        ...it,
+        chinaUnitCost: itemChinaMap[it.itemId] ?? chinaUnitCost,
+      })),
       deliveryCharge: order.deliveryCharge,
       discount: order.discount,
       chinaUnitCost,
@@ -1610,6 +1864,7 @@ export async function updatePreOrderPrivateCost(
           ? updates.supplierUnitCost
           : existingCost.supplierUnitCost ?? chinaUnitCost
       ),
+      itemCosts: resolvedItemCosts,
       expectedProfit: calc.expectedProfit,
       internalNotes:
         updates.internalNotes !== undefined
@@ -1657,6 +1912,102 @@ export async function updatePreOrderPrivateCost(
   });
 }
 
+export interface MigrateLegacyPreOrdersResult {
+  scanned: number;
+  migrated: number;
+  skipped: number;
+  errors: string[];
+}
+
+/**
+ * Idempotent Admin migration helper: converts legacy single-product preOrders into
+ * multi-item documents (`items[]`, `itemCount`, `totalQty`, `searchKeywords`) while
+ * stripping any leaked `chinaUnitCost` from `preOrders/{id}` and preserving financials/statuses.
+ */
+export async function migrateLegacyPreOrdersToItems(
+  actor: PreOrderActor
+): Promise<MigrateLegacyPreOrdersResult> {
+  if (!isPreOrderAdminRole(actor.role)) {
+    throw new Error('Only Admin or Super Admin can run the legacy pre-order migration.');
+  }
+
+  const now = Date.now();
+  const snap = await getDocs(query(collection(db, 'preOrders'), orderBy('createdAt', 'desc'), limit(500)));
+  let scanned = 0;
+  let migrated = 0;
+  let skipped = 0;
+  const errors: string[] = [];
+
+  for (const d of snap.docs) {
+    scanned++;
+    const raw = { ...(d.data() as PreOrder), id: d.id };
+    const hasValidItems = Array.isArray(raw.items) && raw.items.length > 0;
+    const hasMeta =
+      typeof raw.itemCount === 'number' &&
+      typeof raw.totalQty === 'number' &&
+      Array.isArray(raw.searchKeywords);
+    const hasLeakedCost =
+      hasValidItems && raw.items!.some((it) => it && 'chinaUnitCost' in it && (it as any).chinaUnitCost !== undefined);
+
+    if (hasValidItems && hasMeta && !hasLeakedCost) {
+      skipped++;
+      continue;
+    }
+
+    try {
+      const normalized = normalizePreOrderItems(raw);
+      const sanitizedItems = sanitizePreOrderItemsForDoc(normalized);
+      const summary = summarizePreOrderItemsLegacyFields(sanitizedItems);
+      const searchKeywords = buildPreOrderSearchKeywords(
+        sanitizedItems,
+        raw.supplierName,
+        raw.supplierOrderRef
+      );
+
+      const batch = writeBatch(db);
+      batch.update(
+        doc(db, 'preOrders', d.id),
+        sanitizeData({
+          items: sanitizedItems,
+          itemCount: summary.itemCount,
+          totalQty: summary.totalQty,
+          searchKeywords,
+          updatedAt: now,
+          updatedBy: actor.id,
+        })
+      );
+
+      const auditRef = doc(db, 'preOrderAudit', generateId('AUD'));
+      batch.set(
+        auditRef,
+        sanitizeData({
+          id: auditRef.id,
+          preOrderId: d.id,
+          preOrderNumber: raw.preOrderNumber || d.id,
+          action: 'LEGACY_ITEMS_MIGRATED' as PreOrderAuditAction,
+          summary: `Migrated ${raw.preOrderNumber || d.id} to multi-item format (${summary.itemCount} line(s), ${summary.totalQty} pcs)`,
+          metadata: {
+            itemCount: summary.itemCount,
+            totalQty: summary.totalQty,
+            strippedLeakedCost: hasLeakedCost,
+          },
+          userId: actor.id,
+          userName: actor.name,
+          userRole: actor.role,
+          timestamp: now,
+        })
+      );
+
+      await batch.commit();
+      migrated++;
+    } catch (err: any) {
+      errors.push(`${raw.preOrderNumber || d.id}: ${err?.message || 'Migration failed'}`);
+    }
+  }
+
+  return { scanned, migrated, skipped, errors };
+}
+
 // ==========================================
 // PAYMENTS LEDGER (APPEND-ONLY + VERIFY + REVERSAL + REFUND + RECALC)
 // ==========================================
@@ -1680,8 +2031,7 @@ function buildDerivedOrderFinancialPatch(
   now: number
 ) {
   const calc = calculatePreOrderFinancials({
-    qty: order.qty,
-    sellingUnitPrice: order.sellingUnitPrice,
+    items: normalizePreOrderItems(order),
     deliveryCharge: order.deliveryCharge,
     discount: order.discount,
     payments: ledger,
@@ -1794,8 +2144,7 @@ export async function collectPreOrderPayment(
     }
 
     const currentCalc = calculatePreOrderFinancials({
-      qty: order.qty,
-      sellingUnitPrice: order.sellingUnitPrice,
+      items: normalizePreOrderItems(order),
       deliveryCharge: order.deliveryCharge,
       discount: order.discount,
       payments: existingLedger,
@@ -2272,16 +2621,15 @@ export async function reversePreOrderPayment(
     const nextLedger = [...existingLedger, reversalDoc];
 
     // Guard: reversing a collection cannot leave verifiedCollected < verifiedRefunded
+    const revItems = normalizePreOrderItems(order);
     const beforeCalc = calculatePreOrderFinancials({
-      qty: order.qty,
-      sellingUnitPrice: order.sellingUnitPrice,
+      items: revItems,
       deliveryCharge: order.deliveryCharge,
       discount: order.discount,
       payments: existingLedger,
     });
     const rawAfterCalc = calculatePreOrderFinancials({
-      qty: order.qty,
-      sellingUnitPrice: order.sellingUnitPrice,
+      items: revItems,
       deliveryCharge: order.deliveryCharge,
       discount: order.discount,
       payments: nextLedger,
@@ -2424,8 +2772,7 @@ export async function refundPreOrderPayment(
     }
 
     const currentCalc = calculatePreOrderFinancials({
-      qty: order.qty,
-      sellingUnitPrice: order.sellingUnitPrice,
+      items: normalizePreOrderItems(order),
       deliveryCharge: order.deliveryCharge,
       discount: order.discount,
       payments: existingLedger,
@@ -2903,7 +3250,15 @@ export async function queryPreOrderDueList(
     if (options.searchTerm?.trim()) {
       const q = options.searchTerm.trim().toLowerCase();
       const normPhone = normalizeBdPhone(options.searchTerm);
-      const haystack = [o.preOrderNumber, o.customerName, o.customerPhone, o.productName]
+      const oItems = normalizePreOrderItems(o);
+      const haystack = [
+        o.preOrderNumber,
+        o.customerName,
+        o.customerPhone,
+        o.productName,
+        ...(Array.isArray(o.searchKeywords) ? o.searchKeywords : []),
+        ...oItems.flatMap((it) => [it.productName, it.sku, it.model, it.color]),
+      ]
         .filter(Boolean)
         .join(' ')
         .toLowerCase();
@@ -2923,7 +3278,7 @@ export async function queryPreOrderDueList(
     const hasMore = snap.docs.length > pageSize;
     const sliced = hasMore ? snap.docs.slice(0, pageSize) : snap.docs;
     const items = sliced
-      .map((d) => ({ ...(d.data() as PreOrder), id: d.id }))
+      .map((d) => withNormalizedPreOrderItems({ ...(d.data() as PreOrder), id: d.id }))
       .filter(filterDueRow)
       .sort((a, b) => a.createdAt - b.createdAt); // Oldest first
 
@@ -2946,7 +3301,7 @@ export async function queryPreOrderDueList(
     const hasMore = snap.docs.length > pageSize;
     const sliced = hasMore ? snap.docs.slice(0, pageSize) : snap.docs;
     const items = sliced
-      .map((d) => ({ ...(d.data() as PreOrder), id: d.id }))
+      .map((d) => withNormalizedPreOrderItems({ ...(d.data() as PreOrder), id: d.id }))
       .filter(filterDueRow);
 
     return {
@@ -3088,14 +3443,13 @@ export async function transitionPreOrderStatus(
       txn.get(doc(db, 'preOrderStats', 'summary')),
     ]);
 
-    const order = prelimOrder;
+    const order = withNormalizedPreOrderItems(prelimOrder);
     if (order.status === toStatus) {
       throw new Error(`Pre-order is already in "${toStatus}" status.`);
     }
 
     const calc = calculatePreOrderFinancials({
-      qty: order.qty,
-      sellingUnitPrice: order.sellingUnitPrice,
+      items: normalizePreOrderItems(order),
       deliveryCharge: order.deliveryCharge,
       discount: order.discount,
       payments: ledger,
@@ -3269,7 +3623,7 @@ export async function transitionPreOrderStatus(
         category: 'event',
         severity: stMeta.severity,
         title: `${toStatus} · ${order.preOrderNumber}`,
-        message: `${order.productName} for ${order.customerName} moved from ${order.status} to ${toStatus}.${
+        message: `${formatPreOrderProductLabel(order)} for ${order.customerName} moved from ${order.status} to ${toStatus}.${
           noteTrimmed ? ` Note: ${noteTrimmed}` : ''
         }`,
         targetTab: stMeta.targetTab,
@@ -3895,7 +4249,7 @@ export async function queryShipmentTrackingOrders(options: {
     limit(pageSize)
   );
   const snap = await getDocs(q);
-  const rows = snap.docs.map((d) => ({ ...(d.data() as PreOrder), id: d.id }));
+  const rows = snap.docs.map((d) => withNormalizedPreOrderItems({ ...(d.data() as PreOrder), id: d.id }));
   if (options.allowedSubBrands && options.allowedSubBrands.length > 0 && options.allowedSubBrands.length < 3) {
     return rows.filter((r) => options.allowedSubBrands!.includes(r.subBrand));
   }
@@ -5010,7 +5364,7 @@ export async function getPreOrdersBySupplier(
       limit(limitCount)
     );
     const snap = await getDocs(q);
-    return snap.docs.map((d) => ({ ...(d.data() as PreOrder), id: d.id }));
+    return snap.docs.map((d) => withNormalizedPreOrderItems({ ...(d.data() as PreOrder), id: d.id }));
   } catch (err: any) {
     if (err?.code === 'permission-denied') return [];
     if (err?.code === 'failed-precondition') {
@@ -5021,7 +5375,7 @@ export async function getPreOrdersBySupplier(
       );
       const snap = await getDocs(qFallback);
       return snap.docs
-        .map((d) => ({ ...(d.data() as PreOrder), id: d.id }))
+        .map((d) => withNormalizedPreOrderItems({ ...(d.data() as PreOrder), id: d.id }))
         .sort((a, b) => b.createdAt - a.createdAt);
     }
     throw err;
@@ -5169,8 +5523,26 @@ export function subscribeToAccountingPostings(
   }
 }
 
-export interface ReceivePreOrderStockInput {
+export interface ReceivePreOrderItemInput {
+  itemId: string;
   receivedQty: number;
+  damagedQty?: number;
+  productId?: string;
+  variantId?: string;
+  newProductDetails?: {
+    name?: string;
+    sku?: string;
+    category?: string;
+    brand?: string;
+    color?: string;
+    model?: string;
+    reorderThreshold?: number;
+  };
+}
+
+export interface ReceivePreOrderStockInput {
+  items?: ReceivePreOrderItemInput[];
+  receivedQty?: number;
   damagedQty?: number;
   productId?: string; // Existing product ID if linking
   variantId?: string; // Existing variant ID if linking
@@ -5202,23 +5574,43 @@ export async function receivePreOrderStock(
   input: ReceivePreOrderStockInput,
   actor: PreOrderActor
 ): Promise<ReceivePreOrderStockResult> {
-  const goodQty = Math.round(Number(input.receivedQty) || 0);
-  const damagedQty = Math.round(Number(input.damagedQty) || 0);
-  if (goodQty < 0 || damagedQty < 0 || goodQty + damagedQty <= 0) {
-    throw new Error('Enter at least 1 good or damaged unit to receive.');
-  }
   if (!input.idempotencyKey?.trim()) {
     throw new Error('Idempotency key is required to receive stock safely.');
   }
-  if (damagedQty > 0 && !isPreOrderAdminRole(actor.role)) {
-    throw new Error('Logging damaged/missing pre-order units to Company Losses requires Admin or Super Admin approval.');
+
+  const hasMultiItems = Array.isArray(input.items) && input.items.length > 0;
+  let totalInputGood = 0;
+  let totalInputDamaged = 0;
+
+  if (hasMultiItems) {
+    for (const line of input.items!) {
+      const g = Math.round(Number(line.receivedQty) || 0);
+      const d = Math.round(Number(line.damagedQty) || 0);
+      if (g < 0 || d < 0) {
+        throw new Error('Received and damaged quantities cannot be negative.');
+      }
+      totalInputGood += g;
+      totalInputDamaged += d;
+    }
+  } else {
+    totalInputGood = Math.round(Number(input.receivedQty) || 0);
+    totalInputDamaged = Math.round(Number(input.damagedQty) || 0);
+  }
+
+  if (totalInputGood < 0 || totalInputDamaged < 0 || totalInputGood + totalInputDamaged <= 0) {
+    throw new Error('Enter at least 1 good or damaged unit to receive.');
+  }
+  if (totalInputDamaged > 0 && !isPreOrderAdminRole(actor.role)) {
+    throw new Error(
+      'Logging damaged/missing pre-order units to Company Losses requires Admin or Super Admin approval.'
+    );
   }
 
   const now = Date.now();
   const safeKey = sanitizeIdFragment(input.idempotencyKey.trim());
   const receiptId = `RCPT_${safeKey}`;
 
-  // Fetch existing products list upfront if we might generate a new unique barcode
+  // Fetch existing products list upfront if we might generate new unique barcodes
   const existingProducts = await getProducts(true).catch(() => [] as Product[]);
 
   const preOrderRef = doc(db, 'preOrders', preOrderId);
@@ -5232,16 +5624,48 @@ export async function receivePreOrderStock(
   await runTransaction(db, async (txn) => {
     const preSnap = await txn.get(preOrderRef);
     if (!preSnap.exists()) throw new Error('Pre-order not found.');
-    const prelimOrder = { ...(preSnap.data() as PreOrder), id: preSnap.id };
+    const prelimOrder = withNormalizedPreOrderItems({ ...(preSnap.data() as PreOrder), id: preSnap.id });
+    const orderItems = normalizePreOrderItems(prelimOrder);
 
-    const targetProductId = (input.productId || prelimOrder.linkedProductId || '').trim();
-    const productRef = targetProductId ? doc(db, 'products', targetProductId) : null;
+    const requestedLines: ReceivePreOrderItemInput[] = hasMultiItems
+      ? input.items!
+          .map((l) => ({
+            ...l,
+            receivedQty: Math.round(Number(l.receivedQty) || 0),
+            damagedQty: Math.round(Number(l.damagedQty) || 0),
+          }))
+          .filter((l) => l.receivedQty + (l.damagedQty || 0) > 0)
+      : [
+          {
+            itemId: orderItems[0]?.itemId || 'item-1',
+            receivedQty: totalInputGood,
+            damagedQty: totalInputDamaged,
+            productId: input.productId,
+            variantId: input.variantId,
+            newProductDetails: input.newProductDetails,
+          },
+        ];
 
-    const [receiptSnap, costSnap, productSnap, statsSnap] = await Promise.all([
+    if (requestedLines.length === 0) {
+      throw new Error('Enter at least 1 good or damaged unit to receive.');
+    }
+
+    const uniqueProductIds = Array.from(
+      new Set(
+        requestedLines
+          .map((line) => {
+            const matchItem = orderItems.find((it) => it.itemId === line.itemId);
+            return (line.productId || matchItem?.linkedProductId || '').trim();
+          })
+          .filter(Boolean)
+      )
+    );
+
+    const [receiptSnap, costSnap, statsSnap, ...productSnaps] = await Promise.all([
       txn.get(receiptRef),
       txn.get(costRef),
-      productRef ? txn.get(productRef) : Promise.resolve(null),
       txn.get(doc(db, 'preOrderStats', 'summary')),
+      ...uniqueProductIds.map((pid) => txn.get(doc(db, 'products', pid))),
     ]);
 
     if (receiptSnap.exists()) {
@@ -5275,294 +5699,455 @@ export async function receivePreOrderStock(
       );
     }
 
-    const prevGood = Math.max(0, Number(prelimOrder.stockReceivedQty) || 0);
-    const prevDamaged = Math.max(0, Number(prelimOrder.damagedQty) || 0);
-    const remainingToReceive = Math.max(0, prelimOrder.qty - (prevGood + prevDamaged));
-    if (goodQty + damagedQty > remainingToReceive) {
-      throw new Error(
-        `Cannot receive ${goodQty + damagedQty} units. Only ${remainingToReceive} unit(s) remain unreceived for ${prelimOrder.preOrderNumber}.`
-      );
+    // Validate remaining capacity per requested item
+    const orderItemMap = new Map(orderItems.map((it) => [it.itemId, { ...it }]));
+    for (const line of requestedLines) {
+      const item = orderItemMap.get(line.itemId);
+      if (!item) {
+        throw new Error(`Pre-order item "${line.itemId}" not found on ${prelimOrder.preOrderNumber}.`);
+      }
+      const prevGoodItem = Math.max(0, Number(item.receivedQty) || 0);
+      const prevDmgItem = Math.max(0, Number(item.damagedQty) || 0);
+      const itemRemaining = Math.max(0, item.qty - (prevGoodItem + prevDmgItem));
+      const reqTotal = line.receivedQty + (line.damagedQty || 0);
+      if (reqTotal > itemRemaining) {
+        throw new Error(
+          `Cannot receive ${reqTotal} unit(s) for "${item.productName}". Only ${itemRemaining} unit(s) remain unreceived.`
+        );
+      }
     }
 
     const privCost = costSnap.exists() ? (costSnap.data() as PreOrderPrivateCost) : null;
     const actualShip =
       calculateActualShippingCost(privCost?.shippingExpenses) ||
       Number(privCost?.actualShippingCost || 0);
+    const itemCostMap = computeItemCostMap(prelimOrder, privCost);
 
-    const landed = calculatePreOrderReceiptCost({
-      orderedQty: prelimOrder.qty,
-      receivedGoodQty: goodQty,
-      damagedQty,
-      chinaUnitCost: privCost?.chinaUnitCost || 0,
+    const multiCost = calculateMultiItemReceiptCosts({
+      allItems: orderItems.map((it) => ({
+        itemId: it.itemId,
+        qty: it.qty,
+        chinaUnitCost: itemCostMap[it.itemId]?.chinaUnitCost ?? privCost?.chinaUnitCost ?? 0,
+      })),
+      receiptLines: requestedLines.map((l) => {
+        const orderItem = orderItemMap.get(l.itemId)!;
+        return {
+          itemId: l.itemId,
+          orderedQty: orderItem.qty,
+          receivedGoodQty: l.receivedQty,
+          damagedQty: l.damagedQty || 0,
+          chinaUnitCost: itemCostMap[l.itemId]?.chinaUnitCost ?? privCost?.chinaUnitCost ?? 0,
+        };
+      }),
       actualShippingCost: actualShip,
       estimatedShippingCost: privCost?.shippingCost || 0,
     });
 
-    // Resolve or create Product + Variant with reservation
-    let resolvedProductId = '';
-    let resolvedVariantId = '';
-    let resolvedProductName = prelimOrder.productName;
-    let resolvedVariantLabel = `${prelimOrder.color || 'Standard'} / ${prelimOrder.model || 'Standard'}`;
-    let createdNewProduct = false;
-    let resolvedProductStatus: 'approved' | 'pending_review' | 'rejected' = 'approved';
-
-    const reservationEntry: ProductPreOrderReservation = {
-      preOrderId,
-      preOrderNumber: prelimOrder.preOrderNumber,
-      variantId: '',
-      qty: goodQty,
-      receivedAt: now,
-    };
-
-    if (productSnap && productSnap.exists()) {
-      const prodData = productSnap.data() as Product;
-      resolvedProductId = productSnap.id;
-      resolvedProductName = prodData.name;
-      resolvedProductStatus = prodData.status || 'approved';
-
-      const targetVarId = (input.variantId || prelimOrder.linkedVariantId || '').trim();
-      const variants: Variant[] = Array.isArray(prodData.variants) ? [...prodData.variants] : [];
-      let matchedIdx = variants.findIndex((v) => v.id === targetVarId);
-      if (matchedIdx === -1 && variants.length > 0) {
-        matchedIdx = 0;
-      }
-
-      if (matchedIdx === -1) {
-        resolvedVariantId = 'v-1';
-        reservationEntry.variantId = resolvedVariantId;
-        variants.push({
-          id: resolvedVariantId,
-          color: prelimOrder.color || input.newProductDetails?.color || 'Standard',
-          model: prelimOrder.model || input.newProductDetails?.model || 'Standard',
-          stock: goodQty,
-          reservedQty: goodQty,
-          reservedForPreOrders: goodQty > 0 ? [reservationEntry] : [],
-          barcodeValue: getUniqueBarcodeValue(prodData.subBrand || prelimOrder.subBrand, existingProducts),
+    // Build in-memory product state map so multiple lines targeting the SAME product update cleanly without overwriting sibling variants
+    const productStateMap = new Map<
+      string,
+      { prodData: Product; variants: Variant[]; touched: boolean }
+    >();
+    uniqueProductIds.forEach((pid, idx) => {
+      const pSnap = productSnaps[idx];
+      if (pSnap && pSnap.exists()) {
+        const prodData = pSnap.data() as Product;
+        productStateMap.set(pid, {
+          prodData,
+          variants: Array.isArray(prodData.variants) ? [...prodData.variants] : [],
+          touched: false,
         });
-        resolvedVariantLabel = `${variants[0].color} / ${variants[0].model}`;
-      } else {
-        const targetVar = variants[matchedIdx];
-        resolvedVariantId = targetVar.id;
-        resolvedVariantLabel = `${targetVar.color} / ${targetVar.model}`;
-        reservationEntry.variantId = resolvedVariantId;
+      }
+    });
 
-        const beforeVarStock = Number(targetVar.stock) || 0;
-        const afterVarStock = beforeVarStock + goodQty;
-        const prevVarRes = Math.max(0, Number(targetVar.reservedQty) || 0);
-        const existingVarReservations = Array.isArray(targetVar.reservedForPreOrders)
-          ? [...targetVar.reservedForPreOrders]
-          : [];
+    const usedBarcodes = new Set<string>();
+    const isSuperAdminActor = actor.role === 'superadmin' || actor.role === 'super_admin';
 
-        if (goodQty > 0) {
-          const existingPoIdx = existingVarReservations.findIndex((r) => r.preOrderId === preOrderId);
-          if (existingPoIdx >= 0) {
-            existingVarReservations[existingPoIdx] = {
-              ...existingVarReservations[existingPoIdx],
-              qty: existingVarReservations[existingPoIdx].qty + goodQty,
-              receivedAt: now,
+    let primaryProductId = '';
+    let primaryVariantId = '';
+    let primaryProductName = prelimOrder.productName;
+    let primaryVariantLabel = '';
+    let createdAnyNewProduct = false;
+    let primaryProductStatus: 'approved' | 'pending_review' | 'rejected' = 'approved';
+    let firstDamagedLossId = '';
+
+    const itemsBreakdown: PreOrderReceiptItemBreakdown[] = [];
+
+    for (let idx = 0; idx < requestedLines.length; idx++) {
+      const line = requestedLines[idx];
+      const item = orderItemMap.get(line.itemId)!;
+      const lineCost = multiCost.byItemId[line.itemId];
+      const lineGoodQty = line.receivedQty;
+      const lineDamagedQty = line.damagedQty || 0;
+
+      const requestedProdId = (line.productId || item.linkedProductId || '').trim();
+      const targetProdState = requestedProdId ? productStateMap.get(requestedProdId) : undefined;
+
+      let resolvedProductId = '';
+      let resolvedVariantId = '';
+      let resolvedProductName = item.productName;
+      let resolvedVariantLabel = `${item.color || 'Standard'} / ${item.model || 'Standard'}`;
+      let resolvedProductStatus: 'approved' | 'pending_review' | 'rejected' = 'approved';
+
+      const reservationEntry: ProductPreOrderReservation = {
+        preOrderId,
+        preOrderNumber: prelimOrder.preOrderNumber,
+        itemId: item.itemId,
+        variantId: '',
+        qty: lineGoodQty,
+        receivedAt: now,
+      };
+
+      if (targetProdState) {
+        resolvedProductId = requestedProdId;
+        resolvedProductName = targetProdState.prodData.name;
+        resolvedProductStatus = targetProdState.prodData.status || 'approved';
+        targetProdState.touched = true;
+
+        const targetVarId = (line.variantId || item.linkedVariantId || '').trim();
+        let matchedIdx = targetProdState.variants.findIndex((v) => v.id === targetVarId);
+        if (matchedIdx === -1 && targetProdState.variants.length > 0) {
+          // Try color/model match if variantId wasn't explicitly set
+          const byAttrIdx = targetProdState.variants.findIndex(
+            (v) =>
+              (item.color && v.color?.toLowerCase() === item.color.toLowerCase()) &&
+              (item.model ? v.model?.toLowerCase() === item.model.toLowerCase() : true)
+          );
+          matchedIdx = byAttrIdx >= 0 ? byAttrIdx : 0;
+        }
+
+        if (matchedIdx === -1) {
+          resolvedVariantId = 'v-1';
+          reservationEntry.variantId = resolvedVariantId;
+          const varBarcode = getUniqueBarcodeValue(
+            targetProdState.prodData.subBrand || prelimOrder.subBrand,
+            existingProducts,
+            usedBarcodes
+          );
+          usedBarcodes.add(varBarcode);
+          targetProdState.variants.push({
+            id: resolvedVariantId,
+            color: item.color || line.newProductDetails?.color || 'Standard',
+            model: item.model || line.newProductDetails?.model || 'Standard',
+            stock: lineGoodQty,
+            reservedQty: lineGoodQty,
+            reservedForPreOrders: lineGoodQty > 0 ? [reservationEntry] : [],
+            barcodeValue: varBarcode,
+          });
+          resolvedVariantLabel = `${targetProdState.variants[0].color} / ${targetProdState.variants[0].model}`;
+          if (lineGoodQty > 0) {
+            const stockLogRef = doc(collection(db, 'stockLogs'));
+            txn.set(
+              stockLogRef,
+              sanitizeData({
+                productId: resolvedProductId,
+                productName: resolvedProductName,
+                type: 'in',
+                qty: lineGoodQty,
+                reason: 'Pre-Order Receive',
+                userId: actor.id,
+                userName: actor.name,
+                timestamp: now,
+                beforeQty: 0,
+                afterQty: lineGoodQty,
+                refNo: prelimOrder.preOrderNumber,
+                supplierName: prelimOrder.supplierName || '',
+                preOrderId,
+                variantId: resolvedVariantId,
+                purchasePrice: lineCost.unitLandedCost,
+              } as Omit<StockLog, 'id'>)
+            );
+          }
+        } else {
+          const targetVar = targetProdState.variants[matchedIdx];
+          resolvedVariantId = targetVar.id;
+          resolvedVariantLabel = `${targetVar.color} / ${targetVar.model}`;
+          reservationEntry.variantId = resolvedVariantId;
+
+          const beforeVarStock = Number(targetVar.stock) || 0;
+          const afterVarStock = beforeVarStock + lineGoodQty;
+          const prevVarRes = Math.max(0, Number(targetVar.reservedQty) || 0);
+          const existingVarReservations = Array.isArray(targetVar.reservedForPreOrders)
+            ? [...targetVar.reservedForPreOrders]
+            : [];
+
+          if (lineGoodQty > 0) {
+            const existingPoIdx = existingVarReservations.findIndex(
+              (r) => r.preOrderId === preOrderId && (!r.itemId || r.itemId === item.itemId)
+            );
+            if (existingPoIdx >= 0) {
+              existingVarReservations[existingPoIdx] = {
+                ...existingVarReservations[existingPoIdx],
+                itemId: item.itemId,
+                qty: existingVarReservations[existingPoIdx].qty + lineGoodQty,
+                receivedAt: now,
+              };
+            } else {
+              existingVarReservations.push(reservationEntry);
+            }
+          }
+
+          targetProdState.variants[matchedIdx] = {
+            ...targetVar,
+            stock: afterVarStock,
+            reservedQty: prevVarRes + lineGoodQty,
+            reservedForPreOrders: existingVarReservations,
+          };
+
+          if (lineGoodQty > 0) {
+            const stockLogRef = doc(collection(db, 'stockLogs'));
+            const stockLog: Omit<StockLog, 'id'> = {
+              productId: resolvedProductId,
+              productName: resolvedProductName,
+              type: 'in',
+              qty: lineGoodQty,
+              reason: 'Pre-Order Receive',
+              userId: actor.id,
+              userName: actor.name,
+              timestamp: now,
+              beforeQty: beforeVarStock,
+              afterQty: afterVarStock,
+              refNo: prelimOrder.preOrderNumber,
+              supplierName: prelimOrder.supplierName || '',
+              preOrderId,
+              variantId: resolvedVariantId,
+              purchasePrice: lineCost.unitLandedCost,
             };
-          } else {
-            existingVarReservations.push(reservationEntry);
+            txn.set(stockLogRef, sanitizeData(stockLog));
           }
         }
+      } else {
+        // Auto-create new Product using existing SKU/CODE128 barcode & approval rule
+        createdAnyNewProduct = true;
+        const newProdRef = doc(collection(db, 'products'));
+        resolvedProductId = newProdRef.id;
+        resolvedVariantId = 'v-1';
+        reservationEntry.variantId = resolvedVariantId;
+        resolvedProductStatus = isSuperAdminActor ? 'approved' : 'pending_review';
 
-        variants[matchedIdx] = {
-          ...targetVar,
-          stock: afterVarStock,
-          reservedQty: prevVarRes + goodQty,
-          reservedForPreOrders: existingVarReservations,
+        const productName = line.newProductDetails?.name?.trim() || item.productName;
+        const color = line.newProductDetails?.color?.trim() || item.color || 'Standard';
+        const model = line.newProductDetails?.model?.trim() || item.model || 'Standard';
+        const category = line.newProductDetails?.category?.trim() || item.category || 'Pre-Order';
+        const brand = line.newProductDetails?.brand?.trim() || prelimOrder.supplierName || 'Pre-Order Import';
+        const sku =
+          line.newProductDetails?.sku?.trim() ||
+          item.sku?.trim() ||
+          `${prelimOrder.subBrand}-${prelimOrder.preOrderNumber}-${idx + 1}`;
+
+        const prodBarcode = getUniqueBarcodeValue(prelimOrder.subBrand || 'PRD', existingProducts, usedBarcodes);
+        usedBarcodes.add(prodBarcode);
+        const varBarcode = getUniqueBarcodeValue(prelimOrder.subBrand || 'PRD', existingProducts, usedBarcodes);
+        usedBarcodes.add(varBarcode);
+
+        resolvedProductName = productName;
+        resolvedVariantLabel = `${color} / ${model}`;
+
+        const variantDoc: Variant = {
+          id: resolvedVariantId,
+          color,
+          model,
+          stock: lineGoodQty,
+          reservedQty: lineGoodQty,
+          reservedForPreOrders: lineGoodQty > 0 ? [reservationEntry] : [],
+          barcodeValue: varBarcode,
         };
 
-        if (goodQty > 0) {
+        const itemImages =
+          Array.isArray(item.imageUrls) && item.imageUrls.length > 0
+            ? item.imageUrls
+            : item.imageUrl
+            ? [item.imageUrl]
+            : [];
+
+        const newProductPayload: Omit<Product, 'id'> = {
+          name: productName,
+          sku,
+          description: item.productSpecs || prelimOrder.productSpecs || `Imported via Pre-Order ${prelimOrder.preOrderNumber}`,
+          category,
+          mainCategory: category,
+          brand,
+          subBrand: prelimOrder.subBrand,
+          costPrice: lineCost.unitLandedCost,
+          sellingPrice: item.sellingUnitPrice,
+          reorderThreshold: Number(line.newProductDetails?.reorderThreshold ?? 5),
+          images: itemImages,
+          imageUrls: itemImages,
+          variants: [variantDoc],
+          totalStock: lineGoodQty,
+          reservedQty: lineGoodQty,
+          reservedForPreOrders: lineGoodQty > 0 ? [reservationEntry] : [],
+          archived: false,
+          createdAt: now,
+          barcodeValue: prodBarcode,
+          status: resolvedProductStatus,
+          stockStatus: 'out_of_stock',
+          createdById: actor.id,
+          createdBy: actor.name,
+          submittedBy: {
+            uid: actor.id,
+            name: actor.name,
+            role: actor.role,
+          },
+          submittedAt: now,
+          editHistory: [
+            {
+              id: `eh-${now}-${idx}`,
+              editedByUid: actor.id,
+              editedByName: actor.name,
+              editedByRole: actor.role,
+              editedAt: now,
+              action: 'created',
+              note: `Created via Pre-Order ${prelimOrder.preOrderNumber}`,
+              changes: [],
+            },
+          ],
+        };
+
+        txn.set(newProdRef, sanitizeData(newProductPayload));
+
+        if (lineGoodQty > 0) {
           const stockLogRef = doc(collection(db, 'stockLogs'));
-          const stockLog: Omit<StockLog, 'id'> = {
-            productId: resolvedProductId,
-            productName: resolvedProductName,
-            type: 'in',
-            qty: goodQty,
-            reason: 'Pre-Order Receive',
-            userId: actor.id,
-            userName: actor.name,
-            timestamp: now,
-            beforeQty: beforeVarStock,
-            afterQty: afterVarStock,
-            refNo: prelimOrder.preOrderNumber,
-            supplierName: prelimOrder.supplierName || '',
-            preOrderId,
-            variantId: resolvedVariantId,
-            purchasePrice: landed.unitLandedCost,
-          };
-          txn.set(stockLogRef, sanitizeData(stockLog));
+          txn.set(
+            stockLogRef,
+            sanitizeData({
+              productId: resolvedProductId,
+              productName,
+              type: 'in',
+              qty: lineGoodQty,
+              reason: 'Pre-Order Receive',
+              userId: actor.id,
+              userName: actor.name,
+              timestamp: now,
+              beforeQty: 0,
+              afterQty: lineGoodQty,
+              refNo: prelimOrder.preOrderNumber,
+              supplierName: prelimOrder.supplierName || '',
+              preOrderId,
+              variantId: resolvedVariantId,
+              purchasePrice: lineCost.unitLandedCost,
+            } as Omit<StockLog, 'id'>)
+          );
         }
       }
 
-      const prodTotalStock = variants.reduce((s, v) => s + (Number(v.stock) || 0), 0);
-      const prodTotalReserved = variants.reduce((s, v) => s + Math.max(0, Number(v.reservedQty) || 0), 0);
-      const nextProdReservations = variants.flatMap((v) => v.reservedForPreOrders || []);
+      if (lineDamagedQty > 0 && lineCost.damagedCostLoss > 0) {
+        const lossRef = doc(collection(db, 'companyLosses'));
+        if (!firstDamagedLossId) firstDamagedLossId = lossRef.id;
+        const lossDoc: Omit<CompanyLoss, 'id'> = {
+          title: `Damaged Pre-Order Stock (${prelimOrder.preOrderNumber}) - ${resolvedProductName}`,
+          reason: 'Product Damage',
+          amount: lineCost.damagedCostLoss,
+          date: getTodayIsoDate(),
+          subBrand: prelimOrder.subBrand,
+          note: `Damaged qty: ${lineDamagedQty} × ৳${lineCost.unitLandedCost.toLocaleString()} landed cost${
+            input.note?.trim() ? ` | ${input.note.trim()}` : ''
+          }`,
+          recordedBy: actor.name,
+          createdAt: now,
+        };
+        txn.set(lossRef, sanitizeData(lossDoc));
+      }
+
+      // Update PreOrderItem line progress
+      const prevGoodItem = Math.max(0, Number(item.receivedQty) || 0);
+      const prevDmgItem = Math.max(0, Number(item.damagedQty) || 0);
+      const nextGoodItem = prevGoodItem + lineGoodQty;
+      const nextDmgItem = prevDmgItem + lineDamagedQty;
+      const itemAccounted = nextGoodItem + nextDmgItem >= item.qty;
+
+      item.receivedQty = nextGoodItem;
+      item.damagedQty = nextDmgItem;
+      item.linkedProductId = resolvedProductId;
+      item.linkedVariantId = resolvedVariantId;
+      item.unitLandedCost = lineCost.unitLandedCost;
+      item.landedCostTotal = roundMoney(lineCost.unitLandedCost * nextGoodItem);
+      item.status = itemAccounted ? 'received' : 'pending';
+      orderItemMap.set(item.itemId, item);
+
+      itemsBreakdown.push({
+        itemId: item.itemId,
+        productName: resolvedProductName,
+        receivedQty: lineGoodQty,
+        damagedQty: lineDamagedQty,
+        productId: resolvedProductId,
+        variantId: resolvedVariantId,
+        variantLabel: resolvedVariantLabel,
+        chinaUnitCost: lineCost.chinaUnitCost,
+        shippingCostPerUnit: lineCost.shippingCostPerUnit,
+        shippingCostPortion: lineCost.shippingCostPortion,
+        unitLandedCost: lineCost.unitLandedCost,
+        totalGoodLandedCost: lineCost.totalGoodLandedCost,
+        damagedCostLoss: lineCost.damagedCostLoss,
+      });
+
+      if (idx === 0) {
+        primaryProductId = resolvedProductId;
+        primaryVariantId = resolvedVariantId;
+        primaryProductName = resolvedProductName;
+        primaryVariantLabel = resolvedVariantLabel;
+        primaryProductStatus = resolvedProductStatus;
+      }
+    }
+
+    // Flush mutated existing products (each touched product updated once)
+    for (const [pid, state] of productStateMap.entries()) {
+      if (!state.touched) continue;
+      const prodTotalStock = state.variants.reduce((s, v) => s + (Number(v.stock) || 0), 0);
+      const prodTotalReserved = state.variants.reduce((s, v) => s + Math.max(0, Number(v.reservedQty) || 0), 0);
+      const nextProdReservations = state.variants.flatMap((v) => v.reservedForPreOrders || []);
       const nextStockStatus = computeAvailableStockStatus(
         prodTotalStock,
         prodTotalReserved,
-        prodData.reorderThreshold
+        state.prodData.reorderThreshold
       );
-
+      const matchedLineBreakdown = itemsBreakdown.find((b) => b.productId === pid);
       const productPatch: Partial<Product> = {
-        variants,
+        variants: state.variants,
         totalStock: prodTotalStock,
         reservedQty: prodTotalReserved,
         reservedForPreOrders: nextProdReservations,
         stockStatus: nextStockStatus,
-        ...(landed.unitLandedCost > 0 ? { costPrice: landed.unitLandedCost } : {}),
+        ...(matchedLineBreakdown && matchedLineBreakdown.unitLandedCost > 0
+          ? { costPrice: matchedLineBreakdown.unitLandedCost }
+          : {}),
       };
-      txn.update(productRef!, sanitizeData(productPatch));
-    } else {
-      // Auto-create new Product using existing SKU/CODE128 barcode & approval rule
-      createdNewProduct = true;
-      const newProdRef = doc(collection(db, 'products'));
-      resolvedProductId = newProdRef.id;
-      resolvedVariantId = 'v-1';
-      reservationEntry.variantId = resolvedVariantId;
-
-      const isSuperAdminActor = actor.role === 'superadmin' || actor.role === 'super_admin';
-      resolvedProductStatus = isSuperAdminActor ? 'approved' : 'pending_review';
-
-      const productName = input.newProductDetails?.name?.trim() || prelimOrder.productName;
-      const color = input.newProductDetails?.color?.trim() || prelimOrder.color || 'Standard';
-      const model = input.newProductDetails?.model?.trim() || prelimOrder.model || 'Standard';
-      const category = input.newProductDetails?.category?.trim() || prelimOrder.category || 'Pre-Order';
-      const brand = input.newProductDetails?.brand?.trim() || prelimOrder.supplierName || 'Pre-Order Import';
-      const sku =
-        input.newProductDetails?.sku?.trim() ||
-        prelimOrder.sku?.trim() ||
-        `${prelimOrder.subBrand}-${prelimOrder.preOrderNumber}`;
-
-      const prodBarcode = getUniqueBarcodeValue(prelimOrder.subBrand || 'PRD', existingProducts);
-      const varBarcode = getUniqueBarcodeValue(
-        prelimOrder.subBrand || 'PRD',
-        existingProducts,
-        new Set([prodBarcode])
-      );
-
-      resolvedProductName = productName;
-      resolvedVariantLabel = `${color} / ${model}`;
-
-      const variantDoc: Variant = {
-        id: resolvedVariantId,
-        color,
-        model,
-        stock: goodQty,
-        reservedQty: goodQty,
-        reservedForPreOrders: goodQty > 0 ? [reservationEntry] : [],
-        barcodeValue: varBarcode,
-      };
-
-      const newProductPayload: Omit<Product, 'id'> = {
-        name: productName,
-        sku,
-        description: prelimOrder.productSpecs || `Imported via Pre-Order ${prelimOrder.preOrderNumber}`,
-        category,
-        mainCategory: category,
-        brand,
-        subBrand: prelimOrder.subBrand,
-        costPrice: landed.unitLandedCost,
-        sellingPrice: prelimOrder.sellingUnitPrice,
-        reorderThreshold: Number(input.newProductDetails?.reorderThreshold ?? 5),
-        images: prelimOrder.productImage ? [prelimOrder.productImage] : [],
-        imageUrls: prelimOrder.productImage ? [prelimOrder.productImage] : [],
-        variants: [variantDoc],
-        totalStock: goodQty,
-        reservedQty: goodQty,
-        reservedForPreOrders: goodQty > 0 ? [reservationEntry] : [],
-        archived: false,
-        createdAt: now,
-        barcodeValue: prodBarcode,
-        status: resolvedProductStatus,
-        stockStatus: 'out_of_stock', // All newly received stock is reserved for this pre-order (available = 0)
-        createdById: actor.id,
-        createdBy: actor.name,
-        submittedBy: {
-          uid: actor.id,
-          name: actor.name,
-          role: actor.role,
-        },
-        submittedAt: now,
-        editHistory: [
-          {
-            id: `eh-${now}`,
-            editedByUid: actor.id,
-            editedByName: actor.name,
-            editedByRole: actor.role,
-            editedAt: now,
-            action: 'created',
-            note: `Created via Pre-Order ${prelimOrder.preOrderNumber}`,
-            changes: [],
-          },
-        ],
-      };
-
-      txn.set(newProdRef, sanitizeData(newProductPayload));
-
-      if (goodQty > 0) {
-        const stockLogRef = doc(collection(db, 'stockLogs'));
-        const stockLog: Omit<StockLog, 'id'> = {
-          productId: resolvedProductId,
-          productName,
-          type: 'in',
-          qty: goodQty,
-          reason: 'Pre-Order Receive',
-          userId: actor.id,
-          userName: actor.name,
-          timestamp: now,
-          beforeQty: 0,
-          afterQty: goodQty,
-          refNo: prelimOrder.preOrderNumber,
-          supplierName: prelimOrder.supplierName || '',
-          preOrderId,
-          variantId: resolvedVariantId,
-          purchasePrice: landed.unitLandedCost,
-        };
-        txn.set(stockLogRef, sanitizeData(stockLog));
-      }
+      txn.update(doc(db, 'products', pid), sanitizeData(productPatch));
     }
 
-    // Write damaged goods loss to companyLosses (at landed cost) if damagedQty > 0
-    let damagedLossId = '';
-    if (damagedQty > 0 && landed.damagedCostLoss > 0) {
-      const lossRef = doc(collection(db, 'companyLosses'));
-      damagedLossId = lossRef.id;
-      const lossDoc: Omit<CompanyLoss, 'id'> = {
-        title: `Damaged Pre-Order Stock (${prelimOrder.preOrderNumber}) - ${resolvedProductName}`,
-        reason: 'Product Damage',
-        amount: landed.damagedCostLoss,
-        date: getTodayIsoDate(),
-        subBrand: prelimOrder.subBrand,
-        note: `Damaged qty: ${damagedQty} × ৳${landed.unitLandedCost.toLocaleString()} landed cost${
-          input.note?.trim() ? ` | ${input.note.trim()}` : ''
-        }`,
-        recordedBy: actor.name,
-        createdAt: now,
-      };
-      txn.set(lossRef, sanitizeData(lossDoc));
-    }
+    const totalGoodUnits = multiCost.totalGoodQty;
+    const totalDamagedUnits = multiCost.totalDamagedQty;
+    const avgUnitLandedCost =
+      totalGoodUnits + totalDamagedUnits > 0
+        ? roundMoney(
+            (multiCost.totalGoodLandedCost + multiCost.totalDamagedCostLoss) /
+              (totalGoodUnits + totalDamagedUnits)
+          )
+        : itemsBreakdown[0]?.unitLandedCost || 0;
 
     const receiptDoc: PreOrderReceipt = {
       id: receiptId,
       preOrderId,
       preOrderNumber: prelimOrder.preOrderNumber,
       subBrand: prelimOrder.subBrand,
-      receivedQty: goodQty,
-      damagedQty,
-      productId: resolvedProductId,
-      productName: resolvedProductName,
-      variantId: resolvedVariantId,
-      variantLabel: resolvedVariantLabel,
-      chinaUnitCost: landed.chinaUnitCost,
-      shippingCostPerUnit: landed.shippingCostPerUnit,
-      shippingCostPortion: landed.shippingCostPortion,
-      unitLandedCost: landed.unitLandedCost,
-      totalGoodLandedCost: landed.totalGoodLandedCost,
-      damagedCostLoss: landed.damagedCostLoss,
-      ...(damagedLossId ? { damagedLossId } : {}),
+      receivedQty: totalGoodUnits,
+      damagedQty: totalDamagedUnits,
+      productId: primaryProductId,
+      productName:
+        itemsBreakdown.length > 1
+          ? `${primaryProductName} (+${itemsBreakdown.length - 1} more)`
+          : primaryProductName,
+      variantId: primaryVariantId,
+      variantLabel: primaryVariantLabel,
+      chinaUnitCost: itemsBreakdown[0]?.chinaUnitCost || privCost?.chinaUnitCost || 0,
+      shippingCostPerUnit: itemsBreakdown[0]?.shippingCostPerUnit || 0,
+      shippingCostPortion: multiCost.totalShippingPortion,
+      unitLandedCost: avgUnitLandedCost,
+      totalGoodLandedCost: multiCost.totalGoodLandedCost,
+      damagedCostLoss: multiCost.totalDamagedCostLoss,
+      ...(firstDamagedLossId ? { damagedLossId: firstDamagedLossId } : {}),
       damagedLossPending: false,
+      itemsBreakdown,
       note: input.note?.trim() || '',
       idempotencyKey: input.idempotencyKey.trim(),
       receivedBy: actor.id,
@@ -5577,16 +6162,27 @@ export async function receivePreOrderStock(
       preOrderNumber: prelimOrder.preOrderNumber,
       subBrand: prelimOrder.subBrand,
       receiptId,
-      goodLandedCost: landed.totalGoodLandedCost,
-      damagedLossCost: landed.damagedCostLoss,
-      note: `Received ${goodQty} good, ${damagedQty} damaged on ${prelimOrder.preOrderNumber}`,
+      goodLandedCost: multiCost.totalGoodLandedCost,
+      damagedLossCost: multiCost.totalDamagedCostLoss,
+      note: `Received ${totalGoodUnits} good, ${totalDamagedUnits} damaged across ${itemsBreakdown.length} line(s) on ${prelimOrder.preOrderNumber}`,
       actor: { actorId: actor.id, actorName: actor.name, timestamp: now },
     });
     txn.set(doc(db, 'accountingPostings', receiptPosting.id), sanitizeData(receiptPosting));
 
-    const newTotalGood = prevGood + goodQty;
-    const newTotalDamaged = prevDamaged + damagedQty;
-    const isFullyAccountedFor = newTotalGood + newTotalDamaged >= prelimOrder.qty;
+    const updatedOrderItems = sanitizePreOrderItemsForDoc(
+      orderItems.map((it) => orderItemMap.get(it.itemId) || it)
+    );
+    const newTotalGood = updatedOrderItems.reduce((s, it) => s + Math.max(0, Number(it.receivedQty) || 0), 0);
+    const newTotalDamaged = updatedOrderItems.reduce((s, it) => s + Math.max(0, Number(it.damagedQty) || 0), 0);
+    const totalLandedAllGood = roundMoney(
+      updatedOrderItems.reduce((s, it) => s + roundMoney(it.landedCostTotal || 0), 0)
+    );
+    const weightedReceivedLanded =
+      newTotalGood > 0 ? roundMoney(totalLandedAllGood / newTotalGood) : avgUnitLandedCost;
+
+    const isFullyAccountedFor = updatedOrderItems.every(
+      (it) => (Number(it.receivedQty) || 0) + (Number(it.damagedQty) || 0) >= it.qty
+    );
     const shouldMoveToReceivedStatus =
       isFullyAccountedFor &&
       !['Received in Stock', 'Ready for Delivery', 'Out for Delivery', 'Delivered'].includes(
@@ -5597,15 +6193,17 @@ export async function receivePreOrderStock(
       ? 'Received in Stock'
       : prelimOrder.status;
 
+    const legacySummary = summarizePreOrderItemsLegacyFields(updatedOrderItems);
     const poPatch: Partial<PreOrder> = {
-      linkedProductId: resolvedProductId,
-      linkedVariantId: resolvedVariantId,
+      items: updatedOrderItems,
+      linkedProductId: legacySummary.linkedProductId || primaryProductId,
+      linkedVariantId: legacySummary.linkedVariantId || primaryVariantId,
       stockReceivedQty: newTotalGood,
       damagedQty: newTotalDamaged,
       stockReceived: isFullyAccountedFor,
       stockReceivedAt: prelimOrder.stockReceivedAt || now,
-      unitLandedCost: landed.unitLandedCost,
-      landedCostTotal: roundMoney(landed.unitLandedCost * newTotalGood),
+      unitLandedCost: weightedReceivedLanded,
+      landedCostTotal: totalLandedAllGood,
       status: nextStatus,
       updatedAt: now,
       updatedBy: actor.id,
@@ -5620,8 +6218,8 @@ export async function receivePreOrderStock(
         toStatus: 'Received in Stock',
         note: `Stock received into warehouse (${newTotalGood} good${
           newTotalDamaged > 0 ? `, ${newTotalDamaged} damaged` : ''
-        } @ ৳${landed.unitLandedCost.toLocaleString()}/unit)`,
-        publicMessage: `Your item has arrived in our Dhaka warehouse and passed inspection.`,
+        } across ${updatedOrderItems.length} item(s))`,
+        publicMessage: `Your item(s) arrived in our Dhaka warehouse and passed inspection.`,
         notifyCustomer: true,
         changedBy: actor.id,
         changedByName: actor.name,
@@ -5637,18 +6235,19 @@ export async function receivePreOrderStock(
         preOrderId,
         preOrderNumber: prelimOrder.preOrderNumber,
         action: 'STOCK_RECEIVED' as PreOrderAuditAction,
-        summary: `Received ${goodQty} good + ${damagedQty} damaged unit(s) for ${prelimOrder.preOrderNumber} -> ${resolvedProductName} (৳${landed.unitLandedCost.toLocaleString()}/unit)`,
+        summary: `Received ${totalGoodUnits} good + ${totalDamagedUnits} damaged unit(s) across ${itemsBreakdown.length} line(s) for ${prelimOrder.preOrderNumber}`,
         metadata: {
           receiptId,
-          productId: resolvedProductId,
-          variantId: resolvedVariantId,
-          createdNewProduct,
-          productStatus: resolvedProductStatus,
-          goodQty,
-          damagedQty,
-          unitLandedCost: landed.unitLandedCost,
-          totalGoodLandedCost: landed.totalGoodLandedCost,
-          damagedCostLoss: landed.damagedCostLoss,
+          productId: primaryProductId,
+          variantId: primaryVariantId,
+          createdNewProduct: createdAnyNewProduct,
+          productStatus: primaryProductStatus,
+          goodQty: totalGoodUnits,
+          damagedQty: totalDamagedUnits,
+          unitLandedCost: avgUnitLandedCost,
+          totalGoodLandedCost: multiCost.totalGoodLandedCost,
+          damagedCostLoss: multiCost.totalDamagedCostLoss,
+          itemsBreakdown,
         },
         userId: actor.id,
         userName: actor.name,
@@ -5676,7 +6275,7 @@ export async function receivePreOrderStock(
         category: 'event',
         severity: 'info',
         title: `Stock Received · ${prelimOrder.preOrderNumber}`,
-        message: `Received ${goodQty} good${damagedQty > 0 ? `, ${damagedQty} damaged` : ''} unit(s) of ${resolvedProductName}. Status: ${nextStatus}.`,
+        message: `Received ${totalGoodUnits} good${totalDamagedUnits > 0 ? `, ${totalDamagedUnits} damaged` : ''} unit(s) for ${formatPreOrderProductLabel(updatedReceiveOrder)}. Status: ${nextStatus}.`,
         targetTab: 'preorder_list',
         forRoles: ['superadmin', 'admin', 'manager', 'staff'],
         readBy: [],
@@ -5692,10 +6291,10 @@ export async function receivePreOrderStock(
     result = {
       receipt: receiptDoc,
       order: updatedReceiveOrder,
-      productId: resolvedProductId,
-      variantId: resolvedVariantId,
-      createdNewProduct,
-      productStatus: resolvedProductStatus,
+      productId: primaryProductId,
+      variantId: primaryVariantId,
+      createdNewProduct: createdAnyNewProduct,
+      productStatus: primaryProductStatus,
     };
   });
 
@@ -5747,7 +6346,8 @@ export async function convertPreOrderToSale(
   await runTransaction(db, async (txn) => {
     const preSnap = await txn.get(preOrderRef);
     if (!preSnap.exists()) throw new Error('Pre-order not found.');
-    const po = { ...(preSnap.data() as PreOrder), id: preSnap.id };
+    const po = withNormalizedPreOrderItems({ ...(preSnap.data() as PreOrder), id: preSnap.id });
+    const orderItems = normalizePreOrderItems(po);
 
     const convLockSnap = await txn.get(convLockRef);
 
@@ -5780,94 +6380,179 @@ export async function convertPreOrderToSale(
       throw new Error(`Cannot convert a ${po.status} pre-order.`);
     }
 
-    const receivedGoodQty = Math.max(0, Number(po.stockReceivedQty) || 0);
-    if (!po.stockReceived && receivedGoodQty <= 0) {
-      throw new Error('Stock must be received in BD warehouse before converting to Sale & Invoice.');
-    }
-    if (!po.linkedProductId) {
-      throw new Error('Linked product missing. Receive stock first before converting.');
+    // Require all items to be received/accounted for before conversion so delivery/discount/advance apply cleanly once
+    const unreceivedItems = orderItems.filter((it) => {
+      const rec = Number(it.receivedQty ?? (orderItems.length === 1 ? po.stockReceivedQty : 0)) || 0;
+      const dmg = Number(it.damagedQty ?? (orderItems.length === 1 ? po.damagedQty : 0)) || 0;
+      return rec + dmg < it.qty;
+    });
+    if (unreceivedItems.length > 0 && !po.stockReceived) {
+      throw new Error(
+        `Receive all items before converting to Sale & Invoice (${unreceivedItems.map((i) => i.productName).join(', ')} still pending receipt).`
+      );
     }
 
-    const sellQty = receivedGoodQty > 0 ? receivedGoodQty : po.qty;
-    const productRef = doc(db, 'products', po.linkedProductId);
+    const convertibleItems = orderItems
+      .map((it) => {
+        const sellQty = Math.max(
+          0,
+          Number(it.receivedQty ?? (orderItems.length === 1 ? po.stockReceivedQty || po.qty : 0)) || 0
+        );
+        const productId = (it.linkedProductId || (orderItems.length === 1 ? po.linkedProductId : '') || '').trim();
+        const variantId = (it.linkedVariantId || (orderItems.length === 1 ? po.linkedVariantId : '') || '').trim();
+        return { item: it, sellQty, productId, variantId };
+      })
+      .filter((entry) => entry.sellQty > 0);
+
+    if (convertibleItems.length === 0) {
+      throw new Error('Stock must be received in BD warehouse before converting to Sale & Invoice.');
+    }
+
+    const missingProductLink = convertibleItems.find((e) => !e.productId);
+    if (missingProductLink) {
+      throw new Error(
+        `Linked warehouse product missing for "${missingProductLink.item.productName}". Receive stock first before converting.`
+      );
+    }
+
+    const uniqueProductIds = Array.from(new Set(convertibleItems.map((e) => e.productId)));
     const customerRef = po.customerId ? doc(db, 'customers', po.customerId) : null;
 
     // ALL REMAINING READS FIRST
-    const [costSnap, productSnap, ledger, companySettingsSnap, countersSnap, custSnap, statsSnap] =
+    const [costSnap, ledger, companySettingsSnap, countersSnap, custSnap, statsSnap, ...productSnaps] =
       await Promise.all([
         txn.get(costRef),
-        txn.get(productRef),
         loadAndLockOrderLedgerInTxn(txn, preOrderId),
         txn.get(companySettingsRef),
         txn.get(countersRef),
         customerRef ? txn.get(customerRef) : Promise.resolve(null),
         txn.get(doc(db, 'preOrderStats', 'summary')),
+        ...uniqueProductIds.map((pid) => txn.get(doc(db, 'products', pid))),
       ]);
 
-    if (!productSnap.exists()) {
-      throw new Error('Linked warehouse product document was not found.');
-    }
+    const productStateMap = new Map<string, { prodData: Product; variants: Variant[] }>();
+    uniqueProductIds.forEach((pid, idx) => {
+      const snap = productSnaps[idx];
+      if (!snap || !snap.exists()) {
+        throw new Error(`Linked warehouse product document (${pid}) was not found.`);
+      }
+      const prodData = snap.data() as Product;
+      productStateMap.set(pid, {
+        prodData,
+        variants: Array.isArray(prodData.variants) ? [...prodData.variants] : [],
+      });
+    });
 
     const privCost = costSnap.exists() ? (costSnap.data() as PreOrderPrivateCost) : null;
     const calc = calculatePreOrderFinancials({
-      qty: po.qty,
-      sellingUnitPrice: po.sellingUnitPrice,
+      items: orderItems,
       deliveryCharge: po.deliveryCharge,
       discount: po.discount,
       payments: ledger,
     });
 
+    const unitLandedCostsByItemId: Record<string, number> = {};
+    convertibleItems.forEach(({ item }) => {
+      const fallbackLanded = orderItems.length === 1 ? po.unitLandedCost : undefined;
+      const uCost = item.unitLandedCost ?? fallbackLanded;
+      if (uCost !== undefined && uCost > 0) {
+        unitLandedCostsByItemId[item.itemId] = uCost;
+      }
+    });
+
+    const costMapObj = computeItemCostMap(po, privCost);
+    const itemChinaCostsByItemId = Object.fromEntries(
+      Object.entries(costMapObj).map(([k, v]) => [k, v.chinaUnitCost])
+    );
     const conversionCalc = calculateSaleConversionBreakdown({
-      qty: sellQty,
+      items: convertibleItems.map((e) => ({ ...e.item, qty: e.sellQty })),
+      qty: convertibleItems.reduce((s, e) => s + e.sellQty, 0),
       sellingUnitPrice: po.sellingUnitPrice,
       deliveryCharge: po.deliveryCharge,
       discount: po.discount,
       verifiedNetPaid: calc.verifiedNetPaid,
-      unitLandedCost: po.unitLandedCost,
+      unitLandedCostsByItemId,
+      itemChinaCostsByItemId,
       fallbackChinaUnitCost: privCost?.chinaUnitCost || 0,
       fallbackShippingCost:
         calculateActualShippingCost(privCost?.shippingExpenses) || privCost?.shippingCost || 0,
     });
 
-    const prodData = productSnap.data() as Product;
-    const variants: Variant[] = Array.isArray(prodData.variants) ? [...prodData.variants] : [];
-    let targetVarIdx = variants.findIndex((v) => v.id === (po.linkedVariantId || ''));
-    if (targetVarIdx === -1 && variants.length > 0) targetVarIdx = 0;
-    if (targetVarIdx === -1) {
-      throw new Error('Linked product has no variants to deduct stock from.');
-    }
+    // Deduct stock + clear reservations per convertible item using productStateMap
+    const orderItemsForSale: OrderItem[] = [];
+    const pendingSaleLogs: Array<Omit<StockLog, 'id'>> = [];
 
-    const targetVar = variants[targetVarIdx];
-    const beforeVarStock = Number(targetVar.stock) || 0;
-    if (beforeVarStock < sellQty) {
-      throw new Error(
-        `Insufficient warehouse stock on ${prodData.name} (${beforeVarStock} on hand, need ${sellQty}).`
+    for (let idx = 0; idx < convertibleItems.length; idx++) {
+      const { item, sellQty, productId, variantId } = convertibleItems[idx];
+      const lineBreakdown = conversionCalc.itemBreakdowns?.[idx];
+      const prodState = productStateMap.get(productId)!;
+
+      let targetVarIdx = prodState.variants.findIndex((v) => v.id === variantId);
+      if (targetVarIdx === -1 && prodState.variants.length > 0) {
+        targetVarIdx = 0;
+      }
+      if (targetVarIdx === -1) {
+        throw new Error(`Linked product "${prodState.prodData.name}" has no variants to deduct stock from.`);
+      }
+
+      const targetVar = prodState.variants[targetVarIdx];
+      const beforeVarStock = Number(targetVar.stock) || 0;
+      if (beforeVarStock < sellQty) {
+        throw new Error(
+          `Insufficient warehouse stock on ${prodState.prodData.name} (${beforeVarStock} on hand, need ${sellQty}).`
+        );
+      }
+
+      const afterVarStock = beforeVarStock - sellQty;
+      const beforeVarReserved = Math.max(0, Number(targetVar.reservedQty) || 0);
+      const releaseQty = Math.min(beforeVarReserved, sellQty);
+      const afterVarReserved = Math.max(0, beforeVarReserved - releaseQty);
+      const nextVarReservations = (targetVar.reservedForPreOrders || []).filter(
+        (r) => !(r.preOrderId === preOrderId && (!r.itemId || r.itemId === item.itemId))
       );
+
+      prodState.variants[targetVarIdx] = {
+        ...targetVar,
+        stock: afterVarStock,
+        reservedQty: afterVarReserved,
+        reservedForPreOrders: nextVarReservations,
+      };
+
+      const variantLabel = [
+        targetVar.color || item.color || 'Standard',
+        targetVar.model || item.model || 'Standard',
+        item.variant || '',
+      ]
+        .filter(Boolean)
+        .join(' / ');
+
+      orderItemsForSale.push({
+        productId: prodState.prodData.id || productId,
+        variantId: targetVar.id,
+        productName: item.productName,
+        variantLabel,
+        qty: sellQty,
+        unitPrice: item.sellingUnitPrice,
+        costPrice: lineBreakdown ? lineBreakdown.unitCostPrice : conversionCalc.unitCostPrice,
+      });
+
+      pendingSaleLogs.push({
+        productId: prodState.prodData.id || productId,
+        productName: prodState.prodData.name || item.productName,
+        type: 'sale',
+        qty: -sellQty,
+        reason: `Pre-Order Sale (${po.preOrderNumber})`,
+        userId: actor.id,
+        userName: actor.name,
+        timestamp: now,
+        beforeQty: beforeVarStock,
+        afterQty: afterVarStock,
+        orderId: '', // Filled once orderId is allocated below
+        preOrderId,
+        variantId: targetVar.id,
+        refNo: '', // Filled once invoiceNumber is allocated below
+      });
     }
-
-    const afterVarStock = beforeVarStock - sellQty;
-    const beforeVarReserved = Math.max(0, Number(targetVar.reservedQty) || 0);
-    const releaseQty = Math.min(beforeVarReserved, sellQty);
-    const afterVarReserved = Math.max(0, beforeVarReserved - releaseQty);
-    const nextVarReservations = (targetVar.reservedForPreOrders || []).filter(
-      (r) => r.preOrderId !== preOrderId
-    );
-
-    variants[targetVarIdx] = {
-      ...targetVar,
-      stock: afterVarStock,
-      reservedQty: afterVarReserved,
-      reservedForPreOrders: nextVarReservations,
-    };
-
-    const nextTotalStock = variants.reduce((s, v) => s + (Number(v.stock) || 0), 0);
-    const nextReservedTotal = variants.reduce((s, v) => s + Math.max(0, Number(v.reservedQty) || 0), 0);
-    const nextProdReservations = variants.flatMap((v) => v.reservedForPreOrders || []);
-    const nextStockStatus = computeAvailableStockStatus(
-      nextTotalStock,
-      nextReservedTotal,
-      prodData.reorderThreshold
-    );
 
     // Allocate sequential Invoice Number using existing invoiceCounters pattern
     const prefixes =
@@ -5908,7 +6593,6 @@ export async function convertPreOrderToSale(
     const invoiceId = `INV-${now}-${Math.random().toString(36).substring(2, 9)}`;
     const invoiceRef = doc(db, 'invoices', invoiceId);
 
-    // Determine representative advance method for Order display (cash already posted via accountingPostings!)
     const verifiedCollections = ledger.filter(
       (p) => p.status === 'verified' && p.type !== 'refund' && p.type !== 'reversal'
     );
@@ -5927,16 +6611,6 @@ export async function convertPreOrderToSale(
         : conversionCalc.advanceApplied > 0
         ? 'Partial'
         : 'Due';
-
-    const orderItem: OrderItem = {
-      productId: prodData.id || po.linkedProductId,
-      variantId: targetVar.id,
-      productName: po.productName,
-      variantLabel: `${targetVar.color || po.color || 'Standard'} / ${targetVar.model || po.model || 'Standard'}`,
-      qty: sellQty,
-      unitPrice: po.sellingUnitPrice,
-      costPrice: conversionCalc.unitCostPrice,
-    };
 
     const initialPaymentHistory: OrderPaymentHistory[] =
       conversionCalc.advanceApplied > 0
@@ -5974,7 +6648,7 @@ export async function convertPreOrderToSale(
       customerPhone: po.customerPhone,
       subBrand: po.subBrand,
       salesChannel: resolvedChannel,
-      items: [orderItem],
+      items: orderItemsForSale,
       discountAmount: conversionCalc.discount,
       shippingCharge: conversionCalc.deliveryCharge,
       totalAmount: conversionCalc.totalAmount,
@@ -6016,7 +6690,7 @@ export async function convertPreOrderToSale(
       customerId: custCode,
       customerName: po.customerName,
       customerPhone: po.customerPhone,
-      items: [orderItem],
+      items: orderItemsForSale,
       discountAmount: conversionCalc.discount,
       shippingCharge: conversionCalc.deliveryCharge,
       totalAmount: conversionCalc.totalAmount,
@@ -6036,35 +6710,38 @@ export async function convertPreOrderToSale(
     // ALL WRITES START HERE
     txn.set(countersRef, { satCounter, gzCounter, rtxCounter }, { merge: true });
 
-    txn.update(
-      productRef,
-      sanitizeData({
-        variants,
-        totalStock: nextTotalStock,
-        reservedQty: nextReservedTotal,
-        reservedForPreOrders: nextProdReservations,
-        stockStatus: nextStockStatus,
-      })
-    );
+    for (const [pid, prodState] of productStateMap.entries()) {
+      const nextTotalStock = prodState.variants.reduce((s, v) => s + (Number(v.stock) || 0), 0);
+      const nextReservedTotal = prodState.variants.reduce((s, v) => s + Math.max(0, Number(v.reservedQty) || 0), 0);
+      const nextProdReservations = prodState.variants.flatMap((v) => v.reservedForPreOrders || []);
+      const nextStockStatus = computeAvailableStockStatus(
+        nextTotalStock,
+        nextReservedTotal,
+        prodState.prodData.reorderThreshold
+      );
+      txn.update(
+        doc(db, 'products', pid),
+        sanitizeData({
+          variants: prodState.variants,
+          totalStock: nextTotalStock,
+          reservedQty: nextReservedTotal,
+          reservedForPreOrders: nextProdReservations,
+          stockStatus: nextStockStatus,
+        })
+      );
+    }
 
-    const stockLogRef = doc(collection(db, 'stockLogs'));
-    const saleStockLog: Omit<StockLog, 'id'> = {
-      productId: prodData.id || po.linkedProductId,
-      productName: prodData.name || po.productName,
-      type: 'sale',
-      qty: -sellQty,
-      reason: `Pre-Order Sale (${po.preOrderNumber})`,
-      userId: actor.id,
-      userName: actor.name,
-      timestamp: now,
-      beforeQty: beforeVarStock,
-      afterQty: afterVarStock,
-      orderId,
-      preOrderId,
-      variantId: targetVar.id,
-      refNo: invoiceNumber,
-    };
-    txn.set(stockLogRef, sanitizeData(saleStockLog));
+    for (const logItem of pendingSaleLogs) {
+      const stockLogRef = doc(collection(db, 'stockLogs'));
+      txn.set(
+        stockLogRef,
+        sanitizeData({
+          ...logItem,
+          orderId,
+          refNo: invoiceNumber,
+        })
+      );
+    }
 
     const ordPayload = sanitizeData(newOrderDoc);
     delete ordPayload.id;
@@ -6103,14 +6780,30 @@ export async function convertPreOrderToSale(
       advanceApplied: conversionCalc.advanceApplied,
       totalSaleAmount: conversionCalc.totalAmount,
       totalLandedCogs: conversionCalc.totalCogs,
-      note: `Converted ${po.preOrderNumber} -> ${invoiceNumber} (Sales ৳${conversionCalc.totalAmount}, COGS ৳${conversionCalc.totalCogs})`,
+      note: `Converted ${po.preOrderNumber} -> ${invoiceNumber} (${orderItemsForSale.length} item(s), Sales ৳${conversionCalc.totalAmount}, COGS ৳${conversionCalc.totalCogs})`,
       actor: { actorId: actor.id, actorName: actor.name, timestamp: now },
     });
     txn.set(doc(db, 'accountingPostings', convertPosting.id), sanitizeData(convertPosting));
 
+    const updatedConvertedItems = sanitizePreOrderItemsForDoc(
+      orderItems.map((it) => {
+        const matched = convertibleItems.find((c) => c.item.itemId === it.itemId);
+        const brkIdx = convertibleItems.findIndex((c) => c.item.itemId === it.itemId);
+        const brk = brkIdx >= 0 ? conversionCalc.itemBreakdowns[brkIdx] : undefined;
+        return {
+          ...it,
+          convertedQty: matched ? matched.sellQty : 0,
+          unitLandedCost: brk ? brk.unitCostPrice : it.unitLandedCost,
+          landedCostTotal: brk ? brk.lineCogs : it.landedCostTotal,
+          status: matched ? 'converted' : it.status || 'pending',
+        };
+      })
+    );
+
     const nextStatus: PreOrderStatus =
       po.status === 'Received in Stock' ? 'Ready for Delivery' : po.status;
     const poPatch: Partial<PreOrder> = {
+      items: updatedConvertedItems,
       convertedOrderId: orderId,
       convertedSaleId: orderId,
       convertedInvoiceId: invoiceId,
@@ -6130,7 +6823,7 @@ export async function convertPreOrderToSale(
         preOrderId,
         fromStatus: po.status,
         toStatus: nextStatus,
-        note: `Converted to Sales Order & Invoice ${invoiceNumber}`,
+        note: `Converted to Sales Order & Invoice ${invoiceNumber} (${orderItemsForSale.length} line(s))`,
         publicMessage: `Your order has been billed (${invoiceNumber}) and is ready for dispatch.`,
         notifyCustomer: true,
         changedBy: actor.id,
@@ -6147,11 +6840,12 @@ export async function convertPreOrderToSale(
         preOrderId,
         preOrderNumber: po.preOrderNumber,
         action: 'CONVERTED_TO_SALE' as PreOrderAuditAction,
-        summary: `Converted ${po.preOrderNumber} to Sales Order ${orderId} & Invoice ${invoiceNumber} (Advance applied: ৳${conversionCalc.advanceApplied.toLocaleString()}, Due: ৳${conversionCalc.remainingDue.toLocaleString()})`,
+        summary: `Converted ${po.preOrderNumber} (${orderItemsForSale.length} item(s)) to Sales Order ${orderId} & Invoice ${invoiceNumber} (Advance applied: ৳${conversionCalc.advanceApplied.toLocaleString()}, Due: ৳${conversionCalc.remainingDue.toLocaleString()})`,
         metadata: {
           orderId,
           invoiceId,
           invoiceNumber,
+          itemCount: orderItemsForSale.length,
           totalAmount: conversionCalc.totalAmount,
           advanceApplied: conversionCalc.advanceApplied,
           remainingDue: conversionCalc.remainingDue,
@@ -6185,7 +6879,7 @@ export async function convertPreOrderToSale(
         category: 'event',
         severity: 'info',
         title: `Converted to Invoice ${invoiceNumber}`,
-        message: `${po.preOrderNumber} for ${po.customerName} converted to Sales Order & Invoice ${invoiceNumber} (Due: ৳${conversionCalc.remainingDue.toLocaleString()}).`,
+        message: `${po.preOrderNumber} (${formatPreOrderProductLabel(po)}) for ${po.customerName} converted to Sales Order & Invoice ${invoiceNumber} (Due: ৳${conversionCalc.remainingDue.toLocaleString()}).`,
         targetTab: 'preorder_list',
         forRoles: ['superadmin', 'admin', 'manager', 'staff'],
         readBy: [],
@@ -6272,7 +6966,8 @@ export async function cancelAndReconcilePreOrder(
   await runTransaction(db, async (txn) => {
     const preSnap = await txn.get(preOrderRef);
     if (!preSnap.exists()) throw new Error('Pre-order not found.');
-    const po = { ...(preSnap.data() as PreOrder), id: preSnap.id };
+    const po = withNormalizedPreOrderItems({ ...(preSnap.data() as PreOrder), id: preSnap.id });
+    const poItems = normalizePreOrderItems(po);
 
     if (po.convertedSaleId || po.convertedOrderId) {
       throw new Error(
@@ -6287,18 +6982,36 @@ export async function cancelAndReconcilePreOrder(
       return;
     }
 
-    const productRef = po.linkedProductId ? doc(db, 'products', po.linkedProductId) : null;
-    const [costSnap, productSnap, ledger, statsSnap] = await Promise.all([
+    const cancelProductIds = Array.from(
+      new Set([
+        ...poItems.map((it) => (it.linkedProductId || '').trim()).filter(Boolean),
+        ...(po.linkedProductId ? [po.linkedProductId.trim()] : []),
+      ])
+    );
+
+    const [costSnap, ledger, statsSnap, ...cancelProdSnaps] = await Promise.all([
       txn.get(costRef),
-      productRef ? txn.get(productRef) : Promise.resolve(null),
       loadAndLockOrderLedgerInTxn(txn, preOrderId),
       txn.get(doc(db, 'preOrderStats', 'summary')),
+      ...cancelProductIds.map((pid) => txn.get(doc(db, 'products', pid))),
     ]);
 
+    const cancelProductMap = new Map<string, { prodData: Product; variants: Variant[] }>();
+    cancelProductIds.forEach((pid, idx) => {
+      const pSnap = cancelProdSnaps[idx];
+      if (pSnap && pSnap.exists()) {
+        const prodData = pSnap.data() as Product;
+        cancelProductMap.set(pid, {
+          prodData,
+          variants: Array.isArray(prodData.variants) ? [...prodData.variants] : [],
+        });
+      }
+    });
+
     const privCost = costSnap.exists() ? (costSnap.data() as PreOrderPrivateCost) : null;
+    const itemCostMap = computeItemCostMap(po, privCost);
     const calc = calculatePreOrderFinancials({
-      qty: po.qty,
-      sellingUnitPrice: po.sellingUnitPrice,
+      items: poItems,
       deliveryCharge: po.deliveryCharge,
       discount: po.discount,
       payments: ledger,
@@ -6306,7 +7019,11 @@ export async function cancelAndReconcilePreOrder(
 
     const verifiedNetPaid = calc.verifiedNetPaid;
     const supSummary = calculatePerOrderSupplierSummary({
-      qty: po.qty,
+      qty: po.totalQty || po.qty,
+      items: poItems.map((it) => ({
+        qty: it.qty,
+        chinaUnitCost: itemCostMap[it.itemId]?.chinaUnitCost ?? privCost?.chinaUnitCost ?? 0,
+      })),
       chinaUnitCost: privCost?.chinaUnitCost || 0,
       preOrderId,
       supplierPayments,
@@ -6315,8 +7032,25 @@ export async function cancelAndReconcilePreOrder(
       calculateActualShippingCost(privCost?.shippingExpenses) ||
       Number(privCost?.actualShippingCost || 0);
     const totalSupplierAndShipPaid = roundMoney(supSummary.paidToSupplier + actualShip);
-    const goodReceivedQty = Math.max(0, Number(po.stockReceivedQty) || 0);
-    const unitLanded = roundMoney(po.unitLandedCost || (privCost?.chinaUnitCost || 0));
+
+    const perItemReceived = poItems.map((it) => {
+      const itemGood = Math.max(
+        0,
+        Number(it.receivedQty ?? (poItems.length === 1 ? po.stockReceivedQty : 0)) || 0
+      );
+      const itemLanded = roundMoney(
+        it.unitLandedCost ||
+          po.unitLandedCost ||
+          itemCostMap[it.itemId]?.chinaUnitCost ||
+          privCost?.chinaUnitCost ||
+          0
+      );
+      return { item: it, itemGood, itemLanded };
+    });
+    const goodReceivedQty = perItemReceived.reduce((s, r) => s + r.itemGood, 0);
+    const goodValue = roundMoney(
+      perItemReceived.reduce((s, r) => s + roundMoney(r.itemGood * r.itemLanded), 0)
+    );
 
     // ---- 1. Customer Money Validation ----
     let refundAmount = 0;
@@ -6377,7 +7111,7 @@ export async function cancelAndReconcilePreOrder(
     // ---- 2. Supplier Money Validation ----
     const unreceivedTransitMoney = Math.max(
       0,
-      fromPaisa(toPaisa(totalSupplierAndShipPaid) - toPaisa(goodReceivedQty * unitLanded))
+      fromPaisa(toPaisa(totalSupplierAndShipPaid) - toPaisa(goodValue))
     );
     const settledSupplierAmt =
       input.supplierResolution === 'none' || input.supplierResolution === 'keep_stock'
@@ -6449,6 +7183,7 @@ export async function cancelAndReconcilePreOrder(
       txn.set(doc(db, 'accountingPostings', chargePosting.id), sanitizeData(chargePosting));
     }
 
+    const poProductLabel = formatPreOrderProductLabel(po);
     let supplierReceivableId = '';
     let supplierLossId = '';
     if (settledSupplierAmt > 0 && input.supplierResolution === 'receivable') {
@@ -6461,7 +7196,7 @@ export async function cancelAndReconcilePreOrder(
         paidDate: getTodayIsoDate(),
         status: 'Pending',
         recoveredAmount: 0,
-        notes: `Cancelled Pre-Order ${po.preOrderNumber} (${po.productName}): ${input.reason.trim()}`,
+        notes: `Cancelled Pre-Order ${po.preOrderNumber} (${poProductLabel}): ${input.reason.trim()}`,
         createdAt: now,
       };
       txn.set(recRef, sanitizeData(recDoc));
@@ -6480,7 +7215,7 @@ export async function cancelAndReconcilePreOrder(
       const lossRef = doc(collection(db, 'companyLosses'));
       supplierLossId = lossRef.id;
       const lossDoc: Omit<CompanyLoss, 'id'> = {
-        title: `Cancelled Pre-Order Loss (${po.preOrderNumber}) - ${po.productName}`,
+        title: `Cancelled Pre-Order Loss (${po.preOrderNumber}) - ${poProductLabel}`,
         reason: 'Pre-Order Cancellation Loss',
         amount: settledSupplierAmt,
         date: getTodayIsoDate(),
@@ -6504,33 +7239,48 @@ export async function cancelAndReconcilePreOrder(
     }
 
     let returnedToSupplierQty = Number(po.stockReturnedToSupplierQty || 0);
-    if (goodReceivedQty > 0 && productRef && productSnap && productSnap.exists()) {
-      const prodData = productSnap.data() as Product;
-      const variants: Variant[] = Array.isArray(prodData.variants) ? [...prodData.variants] : [];
-      const goodValue = roundMoney(goodReceivedQty * unitLanded);
+    if (goodReceivedQty > 0 && cancelProductMap.size > 0) {
+      for (const { item, itemGood } of perItemReceived) {
+        if (itemGood <= 0) continue;
+        const pid = (item.linkedProductId || (poItems.length === 1 ? po.linkedProductId : '') || '').trim();
+        const vid = (item.linkedVariantId || (poItems.length === 1 ? po.linkedVariantId : '') || '').trim();
+        const state = pid ? cancelProductMap.get(pid) : undefined;
+        if (!state) continue;
 
-      const updatedVariants = variants.map((v) => {
-        const hasPoRes = (v.reservedForPreOrders || []).some((r) => r.preOrderId === preOrderId);
-        if (!hasPoRes && v.id !== po.linkedVariantId) return v;
+        let targetIdx = state.variants.findIndex(
+          (v) =>
+            (v.reservedForPreOrders || []).some(
+              (r) => r.preOrderId === preOrderId && (!r.itemId || r.itemId === item.itemId)
+            ) || v.id === vid
+        );
+        if (targetIdx === -1 && state.variants.length > 0 && poItems.length === 1) {
+          targetIdx = 0;
+        }
+        if (targetIdx === -1) continue;
 
-        const beforeStock = Number(v.stock) || 0;
-        const beforeRes = Math.max(0, Number(v.reservedQty) || 0);
-        const resEntry = (v.reservedForPreOrders || []).find((r) => r.preOrderId === preOrderId);
-        const qtyToClear = resEntry?.qty || Math.min(beforeRes, goodReceivedQty);
+        const targetVar = state.variants[targetIdx];
+        const beforeStock = Number(targetVar.stock) || 0;
+        const beforeRes = Math.max(0, Number(targetVar.reservedQty) || 0);
+        const resEntry = (targetVar.reservedForPreOrders || []).find(
+          (r) => r.preOrderId === preOrderId && (!r.itemId || r.itemId === item.itemId)
+        );
+        const qtyToClear = resEntry?.qty || Math.min(beforeRes, itemGood);
+        const nextVarReservations = (targetVar.reservedForPreOrders || []).filter(
+          (r) => !(r.preOrderId === preOrderId && (!r.itemId || r.itemId === item.itemId))
+        );
 
         if (resolvedStockRes === 'release_normal') {
-          return {
-            ...v,
+          state.variants[targetIdx] = {
+            ...targetVar,
             reservedQty: Math.max(0, beforeRes - qtyToClear),
-            reservedForPreOrders: (v.reservedForPreOrders || []).filter((r) => r.preOrderId !== preOrderId),
+            reservedForPreOrders: nextVarReservations,
           };
         } else {
-          // return_supplier
           const afterStock = Math.max(0, beforeStock - qtyToClear);
           const logRef = doc(collection(db, 'stockLogs'));
           const returnLog: Omit<StockLog, 'id'> = {
-            productId: prodData.id || po.linkedProductId!,
-            productName: prodData.name,
+            productId: state.prodData.id || pid,
+            productName: state.prodData.name || item.productName,
             type: 'out',
             qty: -qtyToClear,
             reason: `Pre-Order Return to Supplier (${po.preOrderNumber})`,
@@ -6542,40 +7292,42 @@ export async function cancelAndReconcilePreOrder(
             refNo: po.preOrderNumber,
             supplierName: po.supplierName || '',
             preOrderId,
-            variantId: v.id,
+            variantId: targetVar.id,
           };
           txn.set(logRef, sanitizeData(returnLog));
 
-          return {
-            ...v,
+          state.variants[targetIdx] = {
+            ...targetVar,
             stock: afterStock,
             reservedQty: Math.max(0, beforeRes - qtyToClear),
-            reservedForPreOrders: (v.reservedForPreOrders || []).filter((r) => r.preOrderId !== preOrderId),
+            reservedForPreOrders: nextVarReservations,
           };
         }
-      });
+      }
 
-      const nextTotalStock = updatedVariants.reduce((s, v) => s + (Number(v.stock) || 0), 0);
-      const nextTotalReserved = updatedVariants.reduce((s, v) => s + Math.max(0, Number(v.reservedQty) || 0), 0);
-      const nextProdRes = updatedVariants.flatMap((v) => v.reservedForPreOrders || []);
-      const nextStockStatus = computeAvailableStockStatus(
-        nextTotalStock,
-        nextTotalReserved,
-        prodData.reorderThreshold
-      );
+      for (const [pid, state] of cancelProductMap.entries()) {
+        const nextTotalStock = state.variants.reduce((s, v) => s + (Number(v.stock) || 0), 0);
+        const nextTotalReserved = state.variants.reduce((s, v) => s + Math.max(0, Number(v.reservedQty) || 0), 0);
+        const nextProdRes = state.variants.flatMap((v) => v.reservedForPreOrders || []);
+        const nextStockStatus = computeAvailableStockStatus(
+          nextTotalStock,
+          nextTotalReserved,
+          state.prodData.reorderThreshold
+        );
 
-      txn.update(
-        productRef,
-        sanitizeData({
-          variants: updatedVariants,
-          totalStock: nextTotalStock,
-          reservedQty: nextTotalReserved,
-          reservedForPreOrders: nextProdRes,
-          stockStatus: nextStockStatus,
-        })
-      );
+        txn.update(
+          doc(db, 'products', pid),
+          sanitizeData({
+            variants: state.variants,
+            totalStock: nextTotalStock,
+            reservedQty: nextTotalReserved,
+            reservedForPreOrders: nextProdRes,
+            stockStatus: nextStockStatus,
+          })
+        );
+      }
 
-      if (resolvedStockRes === 'release_normal') {
+      if (resolvedStockRes === 'release_normal' && goodValue > 0) {
         const releasePosting = buildStockReleasedPosting({
           preOrderId,
           preOrderNumber: po.preOrderNumber,
@@ -6587,31 +7339,41 @@ export async function cancelAndReconcilePreOrder(
         txn.set(doc(db, 'accountingPostings', releasePosting.id), sanitizeData(releasePosting));
       } else if (resolvedStockRes === 'return_supplier') {
         returnedToSupplierQty += goodReceivedQty;
-        const retRecRef = doc(collection(db, 'otherReceivables'));
-        const retRecDoc: Omit<OtherReceivable, 'id'> = {
-          borrowerName: po.supplierName || `Supplier Return (${po.preOrderNumber})`,
-          type: 'Supplier Advance',
-          amount: goodValue,
-          paidDate: getTodayIsoDate(),
-          status: 'Pending',
-          recoveredAmount: 0,
-          notes: `Returned ${goodReceivedQty} unit(s) of ${po.productName} from cancelled ${po.preOrderNumber}`,
-          createdAt: now,
-        };
-        txn.set(retRecRef, sanitizeData(retRecDoc));
+        if (goodValue > 0) {
+          const retRecRef = doc(collection(db, 'otherReceivables'));
+          const retRecDoc: Omit<OtherReceivable, 'id'> = {
+            borrowerName: po.supplierName || `Supplier Return (${po.preOrderNumber})`,
+            type: 'Supplier Advance',
+            amount: goodValue,
+            paidDate: getTodayIsoDate(),
+            status: 'Pending',
+            recoveredAmount: 0,
+            notes: `Returned ${goodReceivedQty} unit(s) of ${poProductLabel} from cancelled ${po.preOrderNumber}`,
+            createdAt: now,
+          };
+          txn.set(retRecRef, sanitizeData(retRecDoc));
 
-        const retPosting = buildStockReturnedSupplierPosting({
-          preOrderId,
-          preOrderNumber: po.preOrderNumber,
-          subBrand: po.subBrand,
-          receivableId: retRecRef.id,
-          returnedValue: goodValue,
-          note: `Returned ${goodReceivedQty} unit(s) to supplier for credit/refund`,
-          actor: { actorId: actor.id, actorName: actor.name, timestamp: now },
-        });
-        txn.set(doc(db, 'accountingPostings', retPosting.id), sanitizeData(retPosting));
+          const retPosting = buildStockReturnedSupplierPosting({
+            preOrderId,
+            preOrderNumber: po.preOrderNumber,
+            subBrand: po.subBrand,
+            receivableId: retRecRef.id,
+            returnedValue: goodValue,
+            note: `Returned ${goodReceivedQty} unit(s) to supplier for credit/refund`,
+            actor: { actorId: actor.id, actorName: actor.name, timestamp: now },
+          });
+          txn.set(doc(db, 'accountingPostings', retPosting.id), sanitizeData(retPosting));
+        }
       }
     }
+
+    const itemSummaries: PreOrderCancellationItemSummary[] = perItemReceived.map(({ item, itemGood }) => ({
+      itemId: item.itemId,
+      productName: item.productName,
+      orderedQty: item.qty,
+      receivedQty: itemGood,
+      releasedOrReturnedQty: itemGood,
+    }));
 
     const cancellationSummary: PreOrderCancellationSummary = {
       reason: input.reason.trim(),
@@ -6627,6 +7389,7 @@ export async function cancelAndReconcilePreOrder(
       ...(supplierLossId ? { supplierLossId } : {}),
       stockResolution: resolvedStockRes,
       releasedOrReturnedQty: goodReceivedQty,
+      itemSummaries,
       cancelledBy: actor.id,
       cancelledByName: actor.name,
       cancelledAt: now,
@@ -6645,8 +7408,17 @@ export async function cancelAndReconcilePreOrder(
             nextStatus
           );
 
+    const updatedCancelledItems = sanitizePreOrderItemsForDoc(
+      poItems.map((it) => ({
+        ...it,
+        ...(resolvedStockRes === 'return_supplier' ? { receivedQty: 0 } : {}),
+        status: 'cancelled',
+      }))
+    );
+
     const poPatch: Partial<PreOrder> = {
       ...derivedFin,
+      items: updatedCancelledItems,
       paymentState,
       status: nextStatus,
       isCancelled: true,
@@ -6759,10 +7531,12 @@ export async function runPreOrderIntegrityCheck(): Promise<PreOrderIntegrityRepo
     getPreOrderSupplierPayments(undefined, 300),
   ]);
 
-  const preOrders: PreOrder[] = preOrdersSnap.docs.map((d) => ({
-    ...(d.data() as PreOrder),
-    id: d.id,
-  }));
+  const preOrders: PreOrder[] = preOrdersSnap.docs.map((d) =>
+    withNormalizedPreOrderItems({
+      ...(d.data() as PreOrder),
+      id: d.id,
+    })
+  );
 
   const paymentsByPreOrder: Record<string, PreOrderPayment[]> = {};
   const privateCostsByPreOrder: Record<string, PreOrderPrivateCost | null> = {};
@@ -7149,7 +7923,9 @@ export async function loadPreOrderDashboardData(options: {
       getPreOrderSettings(),
     ]);
 
-  let orders: PreOrder[] = ordersSnap.docs.map((d) => ({ ...(d.data() as PreOrder), id: d.id }));
+  let orders: PreOrder[] = ordersSnap.docs.map((d) =>
+    withNormalizedPreOrderItems({ ...(d.data() as PreOrder), id: d.id })
+  );
   if (
     options.allowedSubBrands &&
     options.allowedSubBrands.length > 0 &&
@@ -7284,7 +8060,9 @@ export async function loadPreOrderReportsDataset(options: {
     getPreOrderAuditLogs(undefined, 400).catch(() => [] as PreOrderAuditEntry[]),
   ]);
 
-  let preOrders = ordersSnap.docs.map((d) => ({ ...(d.data() as PreOrder), id: d.id }));
+  let preOrders = ordersSnap.docs.map((d) =>
+    withNormalizedPreOrderItems({ ...(d.data() as PreOrder), id: d.id })
+  );
   if (
     options.allowedSubBrands &&
     options.allowedSubBrands.length > 0 &&
@@ -7337,7 +8115,9 @@ export async function getPreOrdersByCustomer(
     tasks.push(
       getDocs(query(collection(db, 'preOrders'), where('customerId', '==', customerId), limit(50)))
         .then((snap) => {
-          snap.forEach((d) => results.set(d.id, { ...(d.data() as PreOrder), id: d.id }));
+          snap.forEach((d) =>
+            results.set(d.id, withNormalizedPreOrderItems({ ...(d.data() as PreOrder), id: d.id }))
+          );
         })
         .catch(() => {})
     );
@@ -7346,7 +8126,9 @@ export async function getPreOrdersByCustomer(
     tasks.push(
       getDocs(query(collection(db, 'preOrders'), where('customerPhone', '==', normPhone), limit(50)))
         .then((snap) => {
-          snap.forEach((d) => results.set(d.id, { ...(d.data() as PreOrder), id: d.id }));
+          snap.forEach((d) =>
+            results.set(d.id, withNormalizedPreOrderItems({ ...(d.data() as PreOrder), id: d.id }))
+          );
         })
         .catch(() => {})
     );
@@ -7365,7 +8147,9 @@ export async function searchPreOrdersForCommandPalette(
     const snap = await getDocs(
       query(collection(db, 'preOrders'), orderBy('updatedAt', 'desc'), limit(limitCount))
     );
-    const items = snap.docs.map((d) => ({ ...(d.data() as PreOrder), id: d.id }));
+    const items = snap.docs.map((d) =>
+      withNormalizedPreOrderItems({ ...(d.data() as PreOrder), id: d.id })
+    );
     if (allowedSubBrands && allowedSubBrands.length > 0 && allowedSubBrands.length < 3) {
       return items.filter((o) => allowedSubBrands.includes(o.subBrand));
     }

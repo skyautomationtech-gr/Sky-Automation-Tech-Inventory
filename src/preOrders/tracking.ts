@@ -4,13 +4,14 @@ import {
   PreOrderPayment,
   PreOrderShipmentEvent,
   PreOrderStatusHistory,
+  PublicTrackingItem,
   PublicTrackingPaymentItem,
   PublicTrackingRecord,
   PublicTrackingShipmentEvent,
   PublicTrackingTimelineItem,
 } from '../types';
 import { BRAND_LOGOS, BRAND_NAMES, getSubBrandCompanyInfo } from '../utils/brandLogos';
-import { formatBDT, normalizeBdPhone } from './constants';
+import { formatBDT, formatPreOrderProductLabel, normalizeBdPhone, normalizePreOrderItems } from './constants';
 
 export const DEFAULT_PUBLIC_APP_URL = 'https://sat-erp.vercel.app';
 export const DEFAULT_TRACKING_AUTO_EXPIRY_DAYS = 90;
@@ -129,18 +130,19 @@ export function renderTrackingShareMessage(
   order: Pick<
     PreOrder,
     'customerName' | 'preOrderNumber' | 'productName' | 'subBrand' | 'status' | 'totalAmount' | 'advancePaid' | 'dueAmount'
-  >,
+  > & { items?: PreOrder['items'] },
   trackingUrl: string,
   companySettings?: CompanySettings | null
 ): string {
   const brandInfo = getSubBrandCompanyInfo(order.subBrand || 'SAT', companySettings);
   const firstName = extractCustomerFirstName(order.customerName);
+  const productLabel = formatPreOrderProductLabel(order);
   const replacements: Record<string, string> = {
     '{customerName}': order.customerName || firstName,
     '{firstName}': firstName,
     '{orderId}': order.preOrderNumber || '',
     '{preOrderNo}': order.preOrderNumber || '',
-    '{productName}': order.productName || '',
+    '{productName}': productLabel,
     '{brandName}': brandInfo.companyName || BRAND_NAMES[order.subBrand] || 'Sky Automation Tech',
     '{status}': order.status || '',
     '{trackingUrl}': trackingUrl,
@@ -280,9 +282,32 @@ export function buildWhitelistedPublicTrackingDoc(
     ...sanitizedPostConversion,
   ].sort((a, b) => b.date - a.date);
 
+  const lineItems = normalizePreOrderItems(order);
+  const whitelistedItems: PublicTrackingItem[] = lineItems.map((it) => {
+    const safeImg = sanitizePublicImageUrl(it.imageUrl, '');
+    return {
+      itemId: it.itemId,
+      productName: String(it.productName || 'Pre-Order Item'),
+      ...(safeImg ? { productImageUrl: safeImg } : {}),
+      ...(it.variant?.trim() ? { variant: it.variant.trim() } : {}),
+      ...(it.color?.trim() ? { color: it.color.trim() } : {}),
+      ...(it.model?.trim() ? { model: it.model.trim() } : {}),
+      qty: Math.max(1, Math.round(Number(it.qty) || 1)),
+      sellingUnitPrice: Number(it.sellingUnitPrice || 0),
+      lineTotal: Number(it.lineTotal || 0),
+      ...(typeof it.receivedQty === 'number' && it.receivedQty > 0
+        ? { receivedQty: Math.round(it.receivedQty) }
+        : {}),
+    };
+  });
+
+  const primaryItem = lineItems[0];
   const defaultBrandLogo = BRAND_LOGOS[subBrand] || '/sat_logo.jpg';
   const brandLogoUrl = sanitizePublicImageUrl(brandInfo.logoUrl, defaultBrandLogo);
-  const productImageUrl = sanitizePublicImageUrl(order.productImage, '');
+  const productImageUrl = sanitizePublicImageUrl(order.productImage || primaryItem?.imageUrl, '');
+  const totalQty =
+    lineItems.reduce((sum, it) => sum + Math.max(1, Math.round(Number(it.qty) || 1)), 0) ||
+    Number(order.qty || 1);
 
   const showCourier = Boolean(
     order.showCourierTrackingToCustomer ?? companySettings?.defaultShowCourierTracking ?? false
@@ -294,12 +319,13 @@ export function buildWhitelistedPublicTrackingDoc(
     subBrand,
     brandName: String(brandInfo.companyName || BRAND_NAMES[subBrand] || 'Sky Automation Tech'),
     brandLogoUrl,
-    productName: String(order.productName || ''),
+    productName: formatPreOrderProductLabel(order),
     ...(productImageUrl ? { productImageUrl } : {}),
     ...(order.variant?.trim() ? { variant: order.variant.trim() } : {}),
     ...(order.color?.trim() ? { color: order.color.trim() } : {}),
     ...(order.model?.trim() ? { model: order.model.trim() } : {}),
-    qty: Number(order.qty || 1),
+    qty: totalQty,
+    items: whitelistedItems,
     status: order.status,
     statusHistory: sanitizedStatusHistory,
     shipmentEvents: sanitizedShipmentEvents,

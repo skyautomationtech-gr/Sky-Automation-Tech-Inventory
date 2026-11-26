@@ -13,8 +13,11 @@ import {
 import {
   PRE_ORDER_NOT_OVERDUE_STATUSES,
   PRE_ORDER_STATUSES,
+  computeItemCostMap,
+  formatPreOrderProductLabel,
   getTodayIsoDate,
   isPreOrderOverdue,
+  normalizePreOrderItems,
 } from './constants';
 import { calculatePerOrderSupplierSummary, fromPaisa, roundMoney, toPaisa } from './calculations';
 
@@ -124,9 +127,15 @@ export function computePreOrderStatsFromData(params: {
     // Optional private-cost supplier payable calculation (Admin rebuild only)
     const priv = params.privateCostsByOrder?.[po.id];
     if (priv && po.status !== 'Cancelled' && po.status !== 'Refunded') {
+      const items = normalizePreOrderItems(po);
+      const costMap = computeItemCostMap(po, priv);
       const supSum = calculatePerOrderSupplierSummary({
-        qty: po.qty,
+        qty: po.totalQty || po.qty,
         chinaUnitCost: priv.chinaUnitCost || 0,
+        items: items.map((it) => ({
+          qty: it.qty,
+          chinaUnitCost: costMap[it.itemId]?.chinaUnitCost ?? priv.chinaUnitCost ?? 0,
+        })),
         preOrderId: po.id,
         supplierPayments: params.supplierPayments || [],
       });
@@ -331,6 +340,7 @@ export function evaluateTimeBasedReminderCandidates(
     if (!po) continue;
     const isTerminal = po.status === 'Delivered' || po.status === 'Cancelled' || po.status === 'Refunded';
     if (isTerminal) continue;
+    const productLabel = formatPreOrderProductLabel(po);
 
     // 1 & 2 & 3. Arrival soon, arrival today, shipment delay
     if (po.estimatedDeliveryDate && !po.stockReceived && !PRE_ORDER_NOT_OVERDUE_STATUSES.includes(po.status)) {
@@ -348,7 +358,7 @@ export function evaluateTimeBasedReminderCandidates(
           category: 'reminder',
           severity: 'warning',
           title: `Expected Arrival Today · ${po.preOrderNumber}`,
-          message: `${po.productName} for ${po.customerName} is scheduled to arrive today (${po.estimatedDeliveryDate}).`,
+          message: `${productLabel} for ${po.customerName} is scheduled to arrive today (${po.estimatedDeliveryDate}).`,
           targetTab: 'preorder_tracking',
           forRoles: ['superadmin', 'admin', 'manager', 'staff'],
           readBy: [],
@@ -377,7 +387,7 @@ export function evaluateTimeBasedReminderCandidates(
           category: 'reminder',
           severity: 'info',
           title: `Arrival in ${daysUntilArrival} day(s) · ${po.preOrderNumber}`,
-          message: `${po.productName} for ${po.customerName} is expected on ${po.estimatedDeliveryDate}.`,
+          message: `${productLabel} for ${po.customerName} is expected on ${po.estimatedDeliveryDate}.`,
           targetTab: 'preorder_tracking',
           forRoles: ['superadmin', 'admin', 'manager', 'staff'],
           readBy: [],
@@ -402,7 +412,7 @@ export function evaluateTimeBasedReminderCandidates(
           category: 'reminder',
           severity: 'urgent',
           title: `Shipment Delayed (${daysLate}d late) · ${po.preOrderNumber}`,
-          message: `${po.productName} (${po.status}) missed ETA ${po.estimatedDeliveryDate}. Notify customer or update ETA.`,
+          message: `${productLabel} (${po.status}) missed ETA ${po.estimatedDeliveryDate}. Notify customer or update ETA.`,
           targetTab: 'preorder_tracking',
           forRoles: ['superadmin', 'admin', 'manager', 'staff'],
           readBy: [],
@@ -473,7 +483,7 @@ export function evaluateTimeBasedReminderCandidates(
         category: 'reminder',
         severity: 'warning',
         title: `Ready for Delivery Waiting (${daysAtReady}d) · ${po.preOrderNumber}`,
-        message: `${po.productName} for ${po.customerName} has been Ready for Delivery for ${daysAtReady} day(s).`,
+        message: `${productLabel} for ${po.customerName} has been Ready for Delivery for ${daysAtReady} day(s).`,
         targetTab: 'preorder_list',
         forRoles: ['superadmin', 'admin', 'manager', 'staff'],
         readBy: [],
