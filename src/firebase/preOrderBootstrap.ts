@@ -78,15 +78,25 @@ export async function getPreOrderStatsSummary(options?: { forceRefresh?: boolean
     }
     const base = createEmptyPreOrderStats();
     const raw = snap.data() as Partial<PreOrderStats>;
+    const mergedBrandStats: PreOrderStats['subBrandStats'] = {
+      ...base.subBrandStats,
+    };
+    if (raw.subBrandStats && typeof raw.subBrandStats === 'object') {
+      Object.entries(raw.subBrandStats).forEach(([k, v]) => {
+        if (!v) return;
+        mergedBrandStats[k] = {
+          count: Number(v.count || 0),
+          totalAmount: Number(v.totalAmount || 0),
+          advancePaid: Number(v.advancePaid || 0),
+          dueAmount: Number(v.dueAmount || 0),
+        };
+      });
+    }
     const normalized: PreOrderStats = {
       ...base,
       ...raw,
       statusCounts: { ...base.statusCounts, ...(raw.statusCounts || {}) },
-      subBrandStats: {
-        SAT: { ...base.subBrandStats.SAT, ...(raw.subBrandStats?.SAT || {}) },
-        GZ: { ...base.subBrandStats.GZ, ...(raw.subBrandStats?.GZ || {}) },
-        RTX: { ...base.subBrandStats.RTX, ...(raw.subBrandStats?.RTX || {}) },
-      },
+      subBrandStats: mergedBrandStats,
     };
     statsSummaryMemory = { data: normalized, ts: Date.now() };
     return normalized;

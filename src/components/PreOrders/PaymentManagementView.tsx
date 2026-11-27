@@ -31,9 +31,14 @@ import {
   PreOrderPaymentType,
   Product,
   RolePermissionsMap,
+  SubBrand,
   Supplier,
   UserProfile,
 } from '../../types';
+import {
+  getSellingSubBrands,
+  getUserAllowedSubBrandIds,
+} from '../../utils/subBrands';
 import {
   PRE_ORDER_PAYMENT_METHODS,
   formatBDT,
@@ -111,13 +116,20 @@ function buildWhatsAppHref(rawPhone: string): string {
   return `https://wa.me/${digits}`;
 }
 
-export const PaymentManagementView: React.FC<PaymentManagementViewProps> = ({
+export interface PaymentManagementViewPropsExtended extends PaymentManagementViewProps {
+  subBrands?: SubBrand[];
+  globalBrandFilter?: string;
+}
+
+export const PaymentManagementView: React.FC<PaymentManagementViewPropsExtended> = ({
   user,
   rolePermissions,
   categories,
   brands,
   products,
   companySettings,
+  subBrands,
+  globalBrandFilter,
   onNavigate,
 }) => {
   const toast = useToast();
@@ -128,16 +140,36 @@ export const PaymentManagementView: React.FC<PaymentManagementViewProps> = ({
   const isAdmin = isPreOrderAdminRole(user.role);
   const isSuperAdmin = isPreOrderSuperAdmin(user);
 
-  const allowedSubBrands = useMemo<Array<'SAT' | 'GZ' | 'RTX'>>(() => {
-    const isSuper = isPreOrderSuperAdmin(user);
-    if (isSuper || !user.subBrandAccess || user.subBrandAccess.length === 0) {
-      return ['SAT', 'GZ', 'RTX'];
+  const sellingSubBrands = useMemo(
+    () => getSellingSubBrands(subBrands, { includeInactive: true, companySettings }),
+    [subBrands, companySettings]
+  );
+
+  const allowedSubBrands = useMemo<string[] | undefined>(() => {
+    if (isAdmin) return undefined;
+    const ids = getUserAllowedSubBrandIds(user, subBrands, {
+      includeInactive: true,
+      companySettings,
+    });
+    return ids.length > 0 ? ids : sellingSubBrands.map((sb) => sb.shortCode);
+  }, [isAdmin, user, subBrands, companySettings, sellingSubBrands]);
+
+  const brandFilterOptions = useMemo(() => {
+    const visible = isAdmin
+      ? sellingSubBrands
+      : sellingSubBrands.filter((sb) => !allowedSubBrands || allowedSubBrands.includes(sb.shortCode));
+    const opts = [
+      { value: 'ALL', label: 'All Sub-Brands' },
+      ...visible.map((sb) => ({
+        value: sb.shortCode,
+        label: sb.active ? `${sb.shortCode} — ${sb.name}` : `${sb.shortCode} — ${sb.name} (Inactive)`,
+      })),
+    ];
+    if (isAdmin) {
+      opts.push({ value: 'LEGACY_SAT', label: 'Legacy (SAT)' });
     }
-    const valid = user.subBrandAccess.filter(
-      (b): b is 'SAT' | 'GZ' | 'RTX' => b === 'SAT' || b === 'GZ' || b === 'RTX'
-    );
-    return valid.length > 0 ? valid : ['SAT'];
-  }, [user]);
+    return opts;
+  }, [isAdmin, sellingSubBrands, allowedSubBrands]);
 
   const [activeTab, setActiveTab] = useState<PaymentPageTab>('ledger');
 
@@ -157,7 +189,9 @@ export const PaymentManagementView: React.FC<PaymentManagementViewProps> = ({
   const [statusFilter, setStatusFilter] = useState<'ALL' | PreOrderPaymentStatus>('ALL');
   const [typeFilter, setTypeFilter] = useState<'ALL' | PreOrderPaymentType>('ALL');
   const [methodFilter, setMethodFilter] = useState<'ALL' | PreOrderPaymentMethod>('ALL');
-  const [subBrandFilter, setSubBrandFilter] = useState<'ALL' | 'SAT' | 'GZ' | 'RTX'>('ALL');
+  const [subBrandFilter, setSubBrandFilter] = useState<string>(() =>
+    globalBrandFilter && globalBrandFilter !== 'ALL' ? globalBrandFilter : 'ALL'
+  );
   const [dateFrom, setDateFrom] = useState('');
   const [dateTo, setDateTo] = useState('');
 
@@ -204,6 +238,12 @@ export const PaymentManagementView: React.FC<PaymentManagementViewProps> = ({
       .then((list) => setSuppliers(list))
       .catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (globalBrandFilter) {
+      setSubBrandFilter(globalBrandFilter);
+    }
+  }, [globalBrandFilter]);
 
   useEffect(() => {
     const t = setTimeout(() => setDebouncedSearch(searchInput.trim()), 280);
@@ -533,12 +573,9 @@ export const PaymentManagementView: React.FC<PaymentManagementViewProps> = ({
 
           <div className="lg:col-span-2">
             <Select
-              options={[
-                { value: 'ALL', label: 'All Sub-Brands' },
-                ...allowedSubBrands.map((b) => ({ value: b, label: b })),
-              ]}
+              options={brandFilterOptions}
               value={subBrandFilter}
-              onChange={(val) => setSubBrandFilter(val as 'ALL' | 'SAT' | 'GZ' | 'RTX')}
+              onChange={(val) => setSubBrandFilter(String(val))}
               searchable={false}
             />
           </div>
@@ -703,7 +740,7 @@ export const PaymentManagementView: React.FC<PaymentManagementViewProps> = ({
                             >
                               {p.preOrderNumber}
                             </button>
-                            {p.subBrand && <SubBrandBadge subBrand={p.subBrand} />}
+                            {p.subBrand && <SubBrandBadge subBrand={p.subBrand} subBrands={subBrands} />}
                           </div>
                         </td>
                         <td className="px-4 py-3 whitespace-nowrap">
@@ -977,7 +1014,7 @@ export const PaymentManagementView: React.FC<PaymentManagementViewProps> = ({
                           <span className="font-mono font-bold text-[#93741E] dark:text-[#E2C255]">
                             {ord.preOrderNumber}
                           </span>
-                          <SubBrandBadge subBrand={ord.subBrand} />
+                          <SubBrandBadge subBrand={ord.subBrand} subBrands={subBrands} />
                         </div>
                       </td>
                       <td className="px-4 py-3 whitespace-nowrap font-mono text-slate-500">
@@ -1089,6 +1126,7 @@ export const PaymentManagementView: React.FC<PaymentManagementViewProps> = ({
         products={products}
         suppliers={suppliers}
         companySettings={companySettings}
+        subBrands={subBrands}
         onNavigate={onNavigate}
         onUpdated={refreshAll}
       />
@@ -1228,6 +1266,7 @@ export const PaymentManagementView: React.FC<PaymentManagementViewProps> = ({
         order={receiptData?.order || null}
         payment={receiptData?.payment || null}
         companySettings={companySettings}
+        subBrands={subBrands}
       />
     </div>
   );

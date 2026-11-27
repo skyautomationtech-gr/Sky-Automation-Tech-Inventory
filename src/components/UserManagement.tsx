@@ -4,7 +4,14 @@ import { getApps, initializeApp } from 'firebase/app';
 import { createUserWithEmailAndPassword, getAuth } from 'firebase/auth';
 import { deleteDoc, doc } from 'firebase/firestore';
 import { db, firebaseConfig } from '../firebase/config';
-import { RolePermissionSet, RolePermissionsMap, UserProfile, UserRole } from '../types';
+import { RolePermissionSet, RolePermissionsMap, SubBrand, UserProfile, UserRole } from '../types';
+import {
+  formatBrandBadgeMeta,
+  getSellingSubBrands,
+  isLegacySatCode,
+  normalizeSubBrandCode,
+} from '../utils/subBrands';
+import { getSubBrands, migrateUsersSatAccess } from '../firebase/subBrandsRegistry';
 import { 
   getAllUsers, 
   subscribeToUsers,
@@ -82,6 +89,7 @@ interface UserManagementProps {
   onRolePermissionsUpdated?: (updated: RolePermissionsMap) => void;
   initialTab?: 'registry' | 'pending' | 'permissions';
   onTabChange?: (tab: 'registry' | 'pending' | 'permissions') => void;
+  subBrands?: SubBrand[];
 }
 
 export default function UserManagement({
@@ -90,9 +98,14 @@ export default function UserManagement({
   onRolePermissionsUpdated,
   initialTab,
   onTabChange,
+  subBrands: externalSubBrands,
 }: UserManagementProps) {
   const [users, setUsers] = useState<UserProfile[]>([]);
+  const [registrySubBrands, setRegistrySubBrands] = useState<SubBrand[]>(() =>
+    getSellingSubBrands(externalSubBrands, { includeInactive: false })
+  );
   const [loading, setLoading] = useState(false);
+  const [cleaningSatAccess, setCleaningSatAccess] = useState(false);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
 
@@ -135,9 +148,21 @@ export default function UserManagement({
   const [photoFile, setPhotoFile] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
 
+  const activeSellingBrands = React.useMemo(
+    () => getSellingSubBrands(externalSubBrands?.length ? externalSubBrands : registrySubBrands, { includeInactive: false }),
+    [externalSubBrands, registrySubBrands]
+  );
+  const allSellingBrandIds = React.useMemo(
+    () => activeSellingBrands.map((b) => b.shortCode),
+    [activeSellingBrands]
+  );
+
   // Form states - Role & Access
   const [selectedRole, setSelectedRole] = useState<UserRole>('staff');
-  const [brandAccess, setBrandAccess] = useState<string[]>(['SAT', 'GZ', 'RTX']);
+  const [brandAccess, setBrandAccess] = useState<string[]>(() => {
+    const initial = getSellingSubBrands(externalSubBrands, { includeInactive: false }).map((b) => b.shortCode);
+    return initial.length > 0 ? initial : ['GZ', 'RTX'];
+  });
   const [permissionOverrides, setPermissionOverrides] = useState<Record<string, boolean>>({});
 
   // Form states - Employment Info
@@ -174,8 +199,15 @@ export default function UserManagement({
       setLoading(false);
     });
     getRolePermissions().then((perms) => setRolePermsMatrix(perms)).catch(() => {});
+    getSubBrands().then((list) => setRegistrySubBrands(list)).catch(() => {});
     return () => unsub();
   }, []);
+
+  useEffect(() => {
+    if (externalSubBrands && externalSubBrands.length > 0) {
+      setRegistrySubBrands(externalSubBrands);
+    }
+  }, [externalSubBrands]);
 
   useEffect(() => {
     if (externalRolePermissions) {
@@ -408,13 +440,18 @@ export default function UserManagement({
 
       const employeeId = await getNextEmployeeId();
 
+      const effectiveNewUserBrands =
+        selectedRole === 'admin'
+          ? allSellingBrandIds
+          : brandAccess.filter((b) => !isLegacySatCode(b));
+
       await createUserProfile(newUid, {
         id: newUid,
         email: cleanEmail,
         name: fullName.trim(),
         role: selectedRole,
         active: isActiveAccount,
-        subBrandAccess: brandAccess,
+        subBrandAccess: effectiveNewUserBrands.length > 0 ? effectiveNewUserBrands : allSellingBrandIds,
         permissionOverrides: permissionOverrides,
         phone: phoneNumber.trim(),
         photoUrl: photoUrl || undefined,
@@ -455,7 +492,7 @@ export default function UserManagement({
       setPhotoFile(null);
       setPhotoPreview(null);
       setSelectedRole('staff');
-      setBrandAccess(['SAT', 'GZ', 'RTX']);
+      setBrandAccess(allSellingBrandIds.length > 0 ? allSellingBrandIds : ['GZ', 'RTX']);
       setPermissionOverrides({});
       setDesignation('');
       setJoiningDate('');
@@ -485,8 +522,17 @@ export default function UserManagement({
     setLoading(true);
     try {
       const employeeId = await getNextEmployeeId();
-      const finalBrands = targetUser.requestedSubBrandAccess || targetUser.subBrandAccess || ['SAT'];
+      const rawBrands = targetUser.requestedSubBrandAccess || targetUser.subBrandAccess || [];
+      const cleanedBrands = rawBrands
+        .map((b) => normalizeSubBrandCode(b))
+        .filter((b) => Boolean(b) && !isLegacySatCode(b));
       const finalRole = targetUser.requestedRole || targetUser.role || 'staff';
+      const finalBrands =
+        finalRole === 'admin' || cleanedBrands.length === 0
+          ? allSellingBrandIds.length > 0
+            ? allSellingBrandIds
+            : ['GZ']
+          : Array.from(new Set(cleanedBrands));
 
       await updateUserProfile(targetUser.id, {
         status: 'approved',
@@ -574,7 +620,12 @@ export default function UserManagement({
     }
     setEditingUserId(targetUser.id);
     setEditRole(targetUser.role || 'staff');
-    setEditBrandAccess(targetUser.subBrandAccess || ['SAT']);
+    const cleaned = (targetUser.subBrandAccess || [])
+      .map((b) => normalizeSubBrandCode(b))
+      .filter((b) => Boolean(b) && !isLegacySatCode(b));
+    setEditBrandAccess(
+      cleaned.length > 0 ? cleaned : allSellingBrandIds.length > 0 ? allSellingBrandIds : ['GZ']
+    );
   };
 
   const handleUpdateUserRoleAndAccess = async (targetUserId: string) => {
@@ -588,9 +639,13 @@ export default function UserManagement({
     setSuccess('');
     setLoading(true);
     try {
+      const finalEditBrands =
+        editRole === 'admin' || editRole === 'superadmin'
+          ? allSellingBrandIds
+          : editBrandAccess.filter((b) => !isLegacySatCode(b));
       await updateUserProfile(targetUserId, {
         role: editRole,
-        subBrandAccess: editBrandAccess
+        subBrandAccess: finalEditBrands.length > 0 ? finalEditBrands : allSellingBrandIds,
       });
       setSuccess('Operator authority and access scope updated.');
       setEditingUserId(null);
@@ -599,6 +654,36 @@ export default function UserManagement({
       setError(err.message || 'Failed to update operator profile.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const usersWithLegacySatCount = React.useMemo(
+    () =>
+      users.filter(
+        (u) =>
+          (u.subBrandAccess || []).some((b) => isLegacySatCode(b)) ||
+          (u.requestedSubBrandAccess || []).some((b) => isLegacySatCode(b))
+      ).length,
+    [users]
+  );
+
+  const handleCleanSatUserAccess = async () => {
+    if (!isSuperAdmin) return;
+    setCleaningSatAccess(true);
+    setError('');
+    setSuccess('');
+    try {
+      const res = await migrateUsersSatAccess();
+      setSuccess(
+        res.updatedCount > 0
+          ? `Cleaned legacy SAT access on ${res.updatedCount} of ${res.totalScanned} operator(s).`
+          : `All ${res.totalScanned} operator records are already clean of SAT access.`
+      );
+      await fetchUsersList();
+    } catch (err: any) {
+      setError(err?.message || 'Failed to clean SAT access from users.');
+    } finally {
+      setCleaningSatAccess(false);
     }
   };
 
@@ -670,6 +755,17 @@ export default function UserManagement({
 
         {/* Top Action Buttons */}
         <div className="flex items-center gap-2 shrink-0 flex-wrap">
+          {isSuperAdmin && usersWithLegacySatCount > 0 && (
+            <button
+              type="button"
+              onClick={handleCleanSatUserAccess}
+              disabled={cleaningSatAccess}
+              className="inline-flex items-center gap-1.5 bg-amber-50 hover:bg-amber-100 text-amber-800 font-bold text-xs py-1.5 px-3 rounded-lg border border-amber-200 transition cursor-pointer disabled:opacity-50"
+            >
+              <RefreshCw size={13} className={cleaningSatAccess ? 'animate-spin' : ''} />
+              <span>{cleaningSatAccess ? 'Cleaning...' : `Clean SAT Access (${usersWithLegacySatCount})`}</span>
+            </button>
+          )}
           {isSuperAdmin && (
             <button
               onClick={() => setShowRepairTool(!showRepairTool)}
@@ -960,28 +1056,35 @@ export default function UserManagement({
 
                   <div>
                     <label className="block text-[11px] font-bold uppercase tracking-wider text-slate-500 mb-1">
-                      Sub-Brand Access Scope
+                      Selling Sub-Brand Access Scope
                     </label>
-                    <div className="flex flex-wrap gap-1.5">
-                      {['SAT', 'GZ', 'RTX'].map((brand) => {
-                        const isSelected = brandAccess.includes(brand);
-                        return (
-                          <button
-                            type="button"
-                            key={brand}
-                            onClick={() => handleToggleBrandAccess(brand, false)}
-                            className={`py-1.5 px-2.5 rounded-lg text-xs font-bold border flex items-center gap-1.5 transition ${
-                              isSelected
-                                ? 'bg-teal-50 border-teal-400 text-teal-700 shadow-2xs'
-                                : 'bg-white border-slate-200 text-slate-400 hover:border-slate-300'
-                            }`}
-                          >
-                            {isSelected ? <Check size={12} /> : <div className="w-3" />}
-                            {brand === 'SAT' ? 'Sky Automation' : brand === 'GZ' ? 'GadgetZu' : 'RTX Gadget'}
-                          </button>
-                        );
-                      })}
-                    </div>
+                    {selectedRole === 'admin' ? (
+                      <div className="p-2.5 rounded-lg bg-amber-50 border border-amber-200 text-[11px] text-amber-800 font-semibold">
+                        Admins automatically receive access to all active &amp; future selling sub-brands ({allSellingBrandIds.join(', ')}).
+                      </div>
+                    ) : (
+                      <div className="flex flex-wrap gap-1.5">
+                        {activeSellingBrands.map((brand) => {
+                          const isSelected = brandAccess.includes(brand.shortCode);
+                          return (
+                            <button
+                              type="button"
+                              key={brand.shortCode}
+                              onClick={() => handleToggleBrandAccess(brand.shortCode, false)}
+                              className={`py-1.5 px-2.5 rounded-lg text-xs font-bold border flex items-center gap-1.5 transition cursor-pointer ${
+                                isSelected
+                                  ? 'bg-teal-50 border-teal-400 text-teal-700 shadow-2xs'
+                                  : 'bg-white border-slate-200 text-slate-400 hover:border-slate-300'
+                              }`}
+                            >
+                              {isSelected ? <Check size={12} /> : <div className="w-3" />}
+                              <span>{brand.name}</span>
+                              <span className="text-[10px] font-mono opacity-75">({brand.shortCode})</span>
+                            </button>
+                          );
+                        })}
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -1411,34 +1514,47 @@ export default function UserManagement({
                           {/* SubBrand Access Scope */}
                           <td className="py-2 px-3">
                             {isCurrentEditing ? (
-                              <div className="flex gap-1 flex-wrap">
-                                {['SAT', 'GZ', 'RTX'].map((brand) => (
-                                  <button
-                                    type="button"
-                                    key={brand}
-                                    onClick={() => handleToggleBrandAccess(brand, true)}
-                                    className={`py-0.5 px-1.5 rounded text-[10px] font-bold border transition ${
-                                      editBrandAccess.includes(brand)
-                                        ? 'bg-teal-50 border-teal-400 text-teal-700'
-                                        : 'bg-white border-slate-200 text-slate-400'
-                                    }`}
-                                  >
-                                    {brand}
-                                  </button>
-                                ))}
-                              </div>
+                              editRole === 'admin' || editRole === 'superadmin' ? (
+                                <span className="text-[10px] font-bold bg-amber-50 text-amber-800 border border-amber-200 py-0.5 px-2 rounded inline-block">
+                                  All Selling Brands (Auto)
+                                </span>
+                              ) : (
+                                <div className="flex gap-1 flex-wrap">
+                                  {activeSellingBrands.map((brand) => (
+                                    <button
+                                      type="button"
+                                      key={brand.shortCode}
+                                      onClick={() => handleToggleBrandAccess(brand.shortCode, true)}
+                                      className={`py-0.5 px-1.5 rounded text-[10px] font-bold border transition cursor-pointer ${
+                                        editBrandAccess.includes(brand.shortCode)
+                                          ? 'bg-teal-50 border-teal-400 text-teal-700'
+                                          : 'bg-white border-slate-200 text-slate-400'
+                                      }`}
+                                    >
+                                      {brand.shortCode}
+                                    </button>
+                                  ))}
+                                </div>
+                              )
                             ) : (
                               <div className="flex gap-1 flex-wrap">
-                                {u.subBrandAccess?.length === 3 ? (
-                                  <span className="text-[10px] font-bold bg-slate-100 text-slate-700 py-0.5 px-1.5 rounded border border-slate-200">
-                                    Global (All)
+                                {u.role === 'superadmin' || u.role === 'admin' ? (
+                                  <span className="text-[10px] font-bold bg-amber-50 text-amber-800 py-0.5 px-1.5 rounded border border-amber-200">
+                                    All Selling (Auto)
                                   </span>
                                 ) : u.subBrandAccess && u.subBrandAccess.length > 0 ? (
-                                  u.subBrandAccess.map((b) => (
-                                    <span key={b} className="text-[10px] font-mono font-bold bg-slate-50 text-slate-600 border border-slate-200 py-0.5 px-1.5 rounded">
-                                      {b}
-                                    </span>
-                                  ))
+                                  u.subBrandAccess.map((b) => {
+                                    const meta = formatBrandBadgeMeta(b, activeSellingBrands);
+                                    return (
+                                      <span
+                                        key={b}
+                                        style={meta.badgeStyle}
+                                        className="text-[10px] font-mono font-bold border py-0.5 px-1.5 rounded"
+                                      >
+                                        {meta.shortLabel}
+                                      </span>
+                                    );
+                                  })
                                 ) : (
                                   <span className="text-[10px] italic text-red-500 font-bold">None</span>
                                 )}

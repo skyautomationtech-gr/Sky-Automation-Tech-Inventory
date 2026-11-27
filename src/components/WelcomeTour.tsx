@@ -34,7 +34,7 @@ const TOUR_STEPS: TourStep[] = [
     tips: [
       'Click the collapse icon at the top of the sidebar to shrink to icon-only mode.',
       'Active tab is highlighted with an elegant SAT gold accent.',
-      'Access sub-brands (SAT, GadgetZu, RTX) directly from the sidebar overview.',
+      'Switch selling sub-brand scope (GadgetZu, RTX Gadget, or future brands) directly from the sidebar.',
     ],
   },
   {

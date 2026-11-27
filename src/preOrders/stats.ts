@@ -52,7 +52,6 @@ export function createEmptyPreOrderStats(): PreOrderStats {
     supplierPayableEstimate: 0,
     statusCounts,
     subBrandStats: {
-      SAT: { count: 0, totalAmount: 0, advancePaid: 0, dueAmount: 0 },
       GZ: { count: 0, totalAmount: 0, advancePaid: 0, dueAmount: 0 },
       RTX: { count: 0, totalAmount: 0, advancePaid: 0, dueAmount: 0 },
     },
@@ -116,7 +115,10 @@ export function computePreOrderStatsFromData(params: {
     totalDuePaisa += duePaisa;
     totalRefundedPaisa += refPaisa;
 
-    const sb = po.subBrand === 'GZ' || po.subBrand === 'RTX' ? po.subBrand : 'SAT';
+    const sb = (po.subBrand || 'SAT').trim().toUpperCase() || 'SAT';
+    if (!stats.subBrandStats[sb]) {
+      stats.subBrandStats[sb] = { count: 0, totalAmount: 0, advancePaid: 0, dueAmount: 0 };
+    }
     stats.subBrandStats[sb].count += 1;
     if (po.status !== 'Cancelled' && po.status !== 'Refunded') {
       stats.subBrandStats[sb].totalAmount = fromPaisa(toPaisa(stats.subBrandStats[sb].totalAmount) + totalPaisa);

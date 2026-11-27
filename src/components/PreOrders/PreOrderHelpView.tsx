@@ -38,7 +38,7 @@ export const PreOrderHelpView: React.FC = () => {
           {
             step: '9–11',
             title: 'Convert to Sale/Invoice → Ready → Out for Delivery → Delivered',
-            desc: 'Converting creates an official Invoice (SAT/GZ/RTX-INV), transfers verified advance so customers are never double-charged, and recognizes sales revenue & COGS.',
+            desc: 'Converting creates an official Invoice for the selling sub-brand (e.g., GZ-INV / RTX-INV), transfers verified advance so customers are never double-charged, and recognizes sales revenue & COGS.',
           },
         ]
       : [
@@ -60,7 +60,7 @@ export const PreOrderHelpView: React.FC = () => {
           {
             step: '৯–১১',
             title: 'ইনভয়েস কনভার্ট → ডেলিভারির জন্য প্রস্তুত → ডেলিভার্ড',
-            desc: 'কনভার্ট করলে অফিসিয়াল ইনভয়েস (SAT/GZ/RTX-INV) তৈরি হয়, ভেরিফায়েড অগ্রিম সমন্বয় হয় যাতে ডাবল চার্জ না পড়ে, এবং বিক্রয় আয় ও COGS হিসাব হয়।',
+            desc: 'কনভার্ট করলে সেলিং সাব-ব্র্যান্ডের অফিসিয়াল ইনভয়েস (যেমন: GZ-INV / RTX-INV) তৈরি হয়, ভেরিফায়েড অগ্রিম সমন্বয় হয় যাতে ডাবল চার্জ না পড়ে, এবং বিক্রয় আয় ও COGS হিসাব হয়।',
           },
         ];
 

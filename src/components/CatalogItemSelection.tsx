@@ -1,6 +1,6 @@
 import React, { useState, useMemo } from 'react';
-import { Product, OrderItem } from '../types';
-import { getBrandLogo } from '../utils/brandLogos';
+import { Product, OrderItem, SubBrand, CompanySettings } from '../types';
+import { formatBrandBadgeMeta } from '../utils/subBrands';
 import { 
   ShoppingCart, 
   Plus, 
@@ -26,13 +26,17 @@ interface CatalogItemSelectionProps {
   orderItems: OrderItem[];
   setOrderItems: React.Dispatch<React.SetStateAction<OrderItem[]>>;
   onNext: () => void;
+  subBrands?: SubBrand[];
+  companySettings?: CompanySettings | null;
 }
 
 export default function CatalogItemSelection({
   products,
   orderItems,
   setOrderItems,
-  onNext
+  onNext,
+  subBrands,
+  companySettings,
 }: CatalogItemSelectionProps) {
   // Local state for product selections: productId -> { color?, model?, variantId, qty }
   const [selections, setSelections] = useState<Record<string, { color?: string; model?: string; variantId: string; qty: number }>>({});
@@ -460,11 +464,17 @@ export default function CatalogItemSelection({
 
                     {/* Sub-brand / Brand Badge - 10-11px text, small padding */}
                     <div className="absolute top-1.5 left-1.5 flex flex-wrap gap-1 max-w-[85%]">
-                      {product.subBrand && (
-                        <span className="bg-slate-950/90 text-amber-400 text-[10px] font-bold px-1.5 py-0.5 rounded shadow-xs inline-flex items-center gap-0.5">
-                          {product.subBrand}
-                        </span>
-                      )}
+                      {product.subBrand && (() => {
+                        const badge = formatBrandBadgeMeta(product.subBrand, subBrands, companySettings);
+                        return (
+                          <span
+                            style={badge.badgeStyle}
+                            className="border text-[10px] font-bold px-1.5 py-0.5 rounded shadow-xs inline-flex items-center gap-0.5"
+                          >
+                            {badge.shortLabel}
+                          </span>
+                        );
+                      })()}
                       {activeReserved > 0 && (
                         <span className="bg-amber-500/95 text-slate-950 text-[9px] font-bold px-1.5 py-0.5 rounded shadow-xs">
                           Res: {activeReserved}
@@ -818,7 +828,7 @@ export default function CatalogItemSelection({
             <div className="sticky top-0 z-10 bg-white/95 backdrop-blur-md border-b border-slate-200 px-4 py-2.5 flex items-center justify-between">
               <div>
                 <span className="text-[10px] font-mono font-bold text-amber-600 uppercase">
-                  {detailModalProduct.subBrand || 'SAT'} • {detailModalProduct.brand || 'Product Details'}
+                  {formatBrandBadgeMeta(detailModalProduct.subBrand, subBrands, companySettings).shortLabel} • {detailModalProduct.brand || 'Product Details'}
                 </span>
                 <h2 className="text-[18px] font-bold text-slate-900 leading-tight">
                   {detailModalProduct.name}

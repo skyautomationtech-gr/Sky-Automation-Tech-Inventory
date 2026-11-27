@@ -1,4 +1,5 @@
 import React, { useState, useEffect } from 'react';
+import { resolveDefaultSellingSubBrand } from '../utils/subBrands';
 import { 
   X, 
   RefreshCw, 
@@ -80,8 +81,8 @@ export const ResellerSyncModal: React.FC<ResellerSyncModalProps> = ({
       name: 'Sky App Test Sync Product',
       sku: 'TEST-SKU-001',
       category: 'Test Category',
-      brand: 'SAT',
-      subBrand: 'SAT',
+      brand: 'Test Brand',
+      subBrand: resolveDefaultSellingSubBrand(),
       costPrice: 500,
       sellingPrice: 850,
       variants: [{ id: 'tv1', color: 'Black', model: 'Standard', stock: 10 }],

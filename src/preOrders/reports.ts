@@ -8,6 +8,7 @@ import {
   PreOrderSupplierPayment,
   Supplier,
 } from '../types';
+import { matchesGlobalBrandFilter } from '../utils/subBrands';
 import {
   PRE_ORDER_NOT_OVERDUE_STATUSES,
   PRE_ORDER_STATUSES,
@@ -33,12 +34,12 @@ export interface ReportFilterState {
   datePreset: ReportDatePreset;
   dateFrom: string; // YYYY-MM-DD
   dateTo: string; // YYYY-MM-DD
-  subBrand: 'ALL' | 'SAT' | 'GZ' | 'RTX';
+  subBrand: string;
   statuses: PreOrderStatus[];
   supplierId: string; // 'ALL' | id
   customerQuery: string;
   productQuery: string;
-  allowedSubBrands?: Array<'SAT' | 'GZ' | 'RTX'>;
+  allowedSubBrands?: string[];
 }
 
 export function resolveReportDateRange(
@@ -102,7 +103,7 @@ export function filterPreOrdersForReport(
     ) {
       return false;
     }
-    if (filters.subBrand && filters.subBrand !== 'ALL' && po.subBrand !== filters.subBrand) {
+    if (filters.subBrand && filters.subBrand !== 'ALL' && !matchesGlobalBrandFilter(po.subBrand, filters.subBrand)) {
       return false;
     }
     if (filters.statuses.length > 0 && !filters.statuses.includes(po.status)) {
@@ -347,7 +348,7 @@ export function buildPaymentCollectionReport(
     ) {
       return false;
     }
-    if (filters.subBrand && filters.subBrand !== 'ALL' && p.subBrand && p.subBrand !== filters.subBrand) {
+    if (filters.subBrand && filters.subBrand !== 'ALL' && p.subBrand && !matchesGlobalBrandFilter(p.subBrand, filters.subBrand)) {
       return false;
     }
     if (

@@ -10,8 +10,10 @@ import {
   CompanySettings,
   PreOrder,
   PreOrderPrivateCost,
+  SubBrand,
   UserProfile,
 } from '../../types';
+import { isLegacySatCode, resolveSubBrandMeta } from '../../utils/subBrands';
 import {
   computeItemCostMap,
   formatBDT,
@@ -45,6 +47,7 @@ export interface ConvertToSaleModalProps {
   privateCost?: PreOrderPrivateCost | null;
   user: UserProfile;
   companySettings?: CompanySettings | null;
+  subBrands?: SubBrand[];
   onSuccess: (res: ConvertPreOrderToSaleResult) => void;
 }
 
@@ -64,6 +67,7 @@ export const ConvertToSaleModal: React.FC<ConvertToSaleModalProps> = ({
   privateCost,
   user,
   companySettings,
+  subBrands,
   onSuccess,
 }) => {
   const toast = useToast();
@@ -159,17 +163,19 @@ export const ConvertToSaleModal: React.FC<ConvertToSaleModalProps> = ({
 
   if (!order) return null;
 
-  const prefixMap: Record<string, string> = {
-    SAT: companySettings?.prefixes?.sat || 'SAT-INV',
-    GZ: companySettings?.prefixes?.gz || 'GZ-INV',
-    RTX: companySettings?.prefixes?.rtx || 'RTX-INV',
-  };
-  const invSeries = prefixMap[order.subBrand] || `${order.subBrand}-INV`;
+  const resolvedBrand = resolveSubBrandMeta(order.subBrand, subBrands, companySettings);
+  const legacyKey = (order.subBrand || '').trim().toLowerCase();
+  const invSeries =
+    resolvedBrand?.invoicePrefix ||
+    companySettings?.prefixes?.[order.subBrand] ||
+    (companySettings?.prefixes as Record<string, string> | undefined)?.[legacyKey] ||
+    `${order.subBrand || 'INV'}-INV`;
+  const blockedLegacySat = isLegacySatCode(order.subBrand);
   const blockedPendingReceipt = unreceivedItems.length > 0 && !order.stockReceived;
 
   const handleConfirm = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (submitting || blockedPendingReceipt) return;
+    if (submitting || blockedPendingReceipt || blockedLegacySat) return;
     setErrorMsg('');
     setSubmitting(true);
     try {
@@ -233,6 +239,18 @@ export const ConvertToSaleModal: React.FC<ConvertToSaleModalProps> = ({
         </div>
       ) : (
         <form onSubmit={handleConfirm} className="space-y-4">
+          {blockedLegacySat && (
+            <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/30 border border-rose-200 dark:border-rose-800 text-xs text-rose-800 dark:text-rose-200 flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-rose-600" />
+              <div>
+                <div className="font-bold">Legacy SAT Brand Must Be Reassigned</div>
+                <p className="mt-0.5">
+                  Sky Automation Tech (SAT) is the parent importer company and does not issue customer invoices. Edit this Pre-Order and select an active selling sub-brand before converting to a sale.
+                </p>
+              </div>
+            </div>
+          )}
+
           {blockedPendingReceipt && (
             <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 text-xs text-amber-800 dark:text-amber-200 flex items-start gap-2">
               <AlertCircle className="w-4 h-4 shrink-0 mt-0.5 text-amber-600" />
@@ -418,7 +436,7 @@ export const ConvertToSaleModal: React.FC<ConvertToSaleModalProps> = ({
               type="submit"
               variant="primary"
               isLoading={submitting}
-              disabled={blockedPendingReceipt || convertibleLines.length === 0}
+              disabled={blockedPendingReceipt || blockedLegacySat || convertibleLines.length === 0}
               rightIcon={<ArrowRight className="w-4 h-4" />}
               leftIcon={<Receipt className="w-4 h-4" />}
             >

@@ -21,7 +21,7 @@ import {
   MessageCircle,
   ExternalLink
 } from 'lucide-react';
-import { Customer, Order, PreOrder, UserProfile } from '../types';
+import { CompanySettings, Customer, Order, PreOrder, SubBrand, UserProfile } from '../types';
 import { 
   getCustomers, 
   addCustomer, 
@@ -32,6 +32,14 @@ import {
 } from '../firebase/db';
 import { getPreOrdersByCustomer } from '../firebase/preOrderDb';
 import { formatBDT, formatPreOrderProductLabel, normalizeBdPhone } from '../preOrders/constants';
+import {
+  formatBrandBadgeMeta,
+  getSellingSubBrands,
+  getUserAllowedSubBrandIds,
+  isLegacySatCode,
+  matchesGlobalBrandFilter,
+  normalizeSubBrandCode,
+} from '../utils/subBrands';
 
 interface CustomerManagementProps {
   user: UserProfile | null;
@@ -39,6 +47,9 @@ interface CustomerManagementProps {
   initialCustomerId?: string | null;
   clearInitialCustomerId?: () => void;
   onOpenPreOrder?: (preOrderId: string) => void;
+  subBrands?: SubBrand[];
+  globalBrandFilter?: string;
+  companySettings?: CompanySettings | null;
 }
 
 export default function CustomerManagement({ 
@@ -46,7 +57,10 @@ export default function CustomerManagement({
   requireCheckIn,
   initialCustomerId,
   clearInitialCustomerId,
-  onOpenPreOrder
+  onOpenPreOrder,
+  subBrands,
+  globalBrandFilter = 'ALL',
+  companySettings
 }: CustomerManagementProps) {
   // Initialize immediately from cache to prevent layout jumps
   const [customers, setCustomers] = useState<Customer[]>(() => localStore.get<Customer[]>('customers') || []);
@@ -88,10 +102,42 @@ export default function CustomerManagement({
   const [formNotes, setFormNotes] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  const isSuperAdmin = user?.role === 'superadmin';
+  const isSuperAdmin = user?.role === 'superadmin' || (user?.role as string) === 'super_admin';
+  const isAdminOrSuper = isSuperAdmin || user?.role === 'admin';
   const hasManageOrders = isSuperAdmin || 
     (user?.permissionOverrides?.manageOrders === true) || 
     (user?.permissionOverrides?.manageOrders !== false && user?.role === 'admin');
+
+  const activeSellingSubBrands = useMemo(
+    () => getSellingSubBrands(subBrands, { includeInactive: false, companySettings }),
+    [subBrands, companySettings]
+  );
+  const allSellingSubBrands = useMemo(
+    () => getSellingSubBrands(subBrands, { includeInactive: true, companySettings }),
+    [subBrands, companySettings]
+  );
+  const allowedBrandIds = useMemo(
+    () => getUserAllowedSubBrandIds(user, subBrands, { includeInactive: true, companySettings }),
+    [user, subBrands, companySettings]
+  );
+  const activeAllowedBrands = useMemo(
+    () => activeSellingSubBrands.filter((sb) => allowedBrandIds.includes(sb.shortCode)),
+    [activeSellingSubBrands, allowedBrandIds]
+  );
+  const filterBrandOptions = useMemo(
+    () => (isAdminOrSuper ? allSellingSubBrands : allSellingSubBrands.filter((sb) => allowedBrandIds.includes(sb.shortCode))),
+    [isAdminOrSuper, allSellingSubBrands, allowedBrandIds]
+  );
+
+  const getCustomerBrands = (c: Customer): string[] => {
+    const raw = [
+      ...(Array.isArray(c.brandIds) ? c.brandIds : []),
+      ...(c.subBrand ? [c.subBrand] : []),
+    ]
+      .map((b) => normalizeSubBrandCode(b))
+      .filter(Boolean);
+    return Array.from(new Set(raw));
+  };
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedSearch(searchQuery), 250);
@@ -212,11 +258,14 @@ export default function CustomerManagement({
 
     setSubmitting(true);
     try {
+      const cleanBrand = normalizeSubBrandCode(formSubBrand);
+      const safeBrand = cleanBrand && !isLegacySatCode(cleanBrand) ? cleanBrand : undefined;
       const payload = {
         name: formName.trim(),
         phone: formPhone.trim(),
         address: formAddress.trim() || undefined,
-        subBrand: formSubBrand || undefined,
+        subBrand: safeBrand,
+        brandIds: safeBrand ? [safeBrand] : [],
         notes: formNotes.trim() || undefined,
         totalOrders: 0,
         lifetimeValue: 0,
@@ -266,11 +315,19 @@ export default function CustomerManagement({
 
     setSubmitting(true);
     try {
+      const cleanBrand = normalizeSubBrandCode(formSubBrand);
+      const existingBrandIds = Array.isArray(selectedCustomer.brandIds)
+        ? selectedCustomer.brandIds.map((b) => normalizeSubBrandCode(b)).filter(Boolean)
+        : [];
+      const nextBrandIds = cleanBrand
+        ? Array.from(new Set([...existingBrandIds.filter((b) => !isLegacySatCode(b)), cleanBrand]))
+        : existingBrandIds;
       const payload: Partial<Customer> = {
         name: formName.trim(),
         phone: formPhone.trim(),
         address: formAddress.trim() || '',
-        subBrand: formSubBrand || '',
+        subBrand: cleanBrand || '',
+        brandIds: nextBrandIds,
         notes: formNotes.trim() || ''
       };
 
@@ -340,19 +397,33 @@ export default function CustomerManagement({
   // Filtering
   const filteredCustomers = useMemo(() => {
     return customers.filter(customer => {
-      // 1. Sub-brand access restriction filter
-      if (!isSuperAdmin && user?.subBrandAccess) {
-        if (customer.subBrand && !user.subBrandAccess.includes(customer.subBrand)) {
+      const brands = getCustomerBrands(customer);
+
+      // 1. Sub-brand access restriction filter (admins/superadmins see all)
+      if (!isAdminOrSuper) {
+        if (brands.length > 0 && !brands.some((b) => allowedBrandIds.includes(b))) {
           return false;
         }
       }
 
-      // 2. Specific Brand filter in UI
-      if (selectedSubBrandFilter && customer.subBrand !== selectedSubBrandFilter) {
-        return false;
+      // 2. Global Brand Filter
+      if (globalBrandFilter && globalBrandFilter !== 'ALL') {
+        if (brands.length === 0) return false;
+        if (!brands.some((b) => matchesGlobalBrandFilter(b, globalBrandFilter))) {
+          return false;
+        }
       }
 
-      // 3. Search query (debounced)
+      // 3. Specific Brand filter in UI
+      if (selectedSubBrandFilter) {
+        if (selectedSubBrandFilter === 'LEGACY_SAT') {
+          if (!brands.some(isLegacySatCode)) return false;
+        } else if (!brands.includes(selectedSubBrandFilter)) {
+          return false;
+        }
+      }
+
+      // 4. Search query (debounced)
       const query = debouncedSearch.toLowerCase().trim();
       if (!query) return true;
       const matchSearch = 
@@ -363,7 +434,7 @@ export default function CustomerManagement({
       
       return matchSearch;
     });
-  }, [customers, debouncedSearch, selectedSubBrandFilter, isSuperAdmin, user]);
+  }, [customers, debouncedSearch, selectedSubBrandFilter, globalBrandFilter, isAdminOrSuper, allowedBrandIds]);
 
   // Sorting
   const sortedCustomers = useMemo(() => {
@@ -525,10 +596,11 @@ export default function CustomerManagement({
           onChange={(e) => setSelectedSubBrandFilter(e.target.value)}
           className="bg-white border border-slate-200 rounded-lg py-1 px-2.5 text-xs text-slate-700 focus:outline-hidden focus:border-amber-400 w-full sm:w-auto shrink-0 cursor-pointer"
         >
-          <option value="">All Sub-brands</option>
-          {(isSuperAdmin ? ['SAT', 'GZ', 'RTX'] : user?.subBrandAccess || []).map(brand => (
-            <option key={brand} value={brand}>{brand === 'SAT' ? 'Sky Auto (SAT)' : brand === 'GZ' ? 'GadgetZu (GZ)' : 'RTX (RTX)'}</option>
+          <option value="">All Selling Sub-brands</option>
+          {filterBrandOptions.map(sb => (
+            <option key={sb.shortCode} value={sb.shortCode}>{sb.name} ({sb.shortCode}){!sb.active ? ' (Inactive)' : ''}</option>
           ))}
+          {isAdminOrSuper && <option value="LEGACY_SAT">Legacy (SAT)</option>}
         </select>
       </div>
 
@@ -571,15 +643,18 @@ export default function CustomerManagement({
                           <span className="text-[10px] text-amber-700 font-bold font-mono">
                             {customer.customerId || `CUS-${customer.id.substring(0, 6).toUpperCase()}`}
                           </span>
-                          {customer.subBrand && (
-                            <span className={`text-[9px] font-mono font-bold uppercase px-1.5 py-0.2 rounded border ${
-                              customer.subBrand === 'SAT' ? 'bg-amber-50 text-amber-800 border-amber-200' :
-                              customer.subBrand === 'GZ' ? 'bg-teal-50 text-teal-800 border-teal-200' :
-                              'bg-orange-50 text-orange-800 border-orange-200'
-                            }`}>
-                              {customer.subBrand}
-                            </span>
-                          )}
+                          {getCustomerBrands(customer).map((code) => {
+                            const meta = formatBrandBadgeMeta(code, subBrands, companySettings);
+                            return (
+                              <span
+                                key={code}
+                                style={meta.badgeStyle}
+                                className="text-[9px] font-mono font-bold uppercase px-1.5 py-0.2 rounded border"
+                              >
+                                {meta.shortLabel}
+                              </span>
+                            );
+                          })}
                         </div>
                       </div>
                     </div>
@@ -761,14 +836,21 @@ export default function CustomerManagement({
 
                       {/* Sub-brand */}
                       <td className="py-2 px-2 text-center overflow-hidden">
-                        {customer.subBrand ? (
-                          <span className={`inline-block text-[10px] font-mono font-bold uppercase px-1.5 py-0.5 rounded border ${
-                            customer.subBrand === 'SAT' ? 'bg-amber-50 text-amber-800 border-amber-200' :
-                            customer.subBrand === 'GZ' ? 'bg-teal-50 text-teal-800 border-teal-200' :
-                            'bg-orange-50 text-orange-800 border-orange-200'
-                          }`}>
-                            {customer.subBrand}
-                          </span>
+                        {getCustomerBrands(customer).length > 0 ? (
+                          <div className="flex flex-wrap items-center justify-center gap-1">
+                            {getCustomerBrands(customer).map((code) => {
+                              const meta = formatBrandBadgeMeta(code, subBrands, companySettings);
+                              return (
+                                <span
+                                  key={code}
+                                  style={meta.badgeStyle}
+                                  className="inline-block text-[10px] font-mono font-bold uppercase px-1.5 py-0.5 rounded border"
+                                >
+                                  {meta.shortLabel}
+                                </span>
+                              );
+                            })}
+                          </div>
                         ) : (
                           <span className="text-slate-400 font-mono text-[10px]">All</span>
                         )}
@@ -895,11 +977,18 @@ export default function CustomerManagement({
                     <span className="text-[10px] text-amber-400 font-mono font-bold">
                       {selectedCustomer.customerId || `ID: ${selectedCustomer.id.substring(0, 8).toUpperCase()}`}
                     </span>
-                    {selectedCustomer.subBrand && (
-                      <span className="text-[9px] font-mono font-bold bg-slate-800 text-slate-300 px-1.5 py-0.5 rounded border border-slate-700">
-                        {selectedCustomer.subBrand}
-                      </span>
-                    )}
+                    {getCustomerBrands(selectedCustomer).map((code) => {
+                      const meta = formatBrandBadgeMeta(code, subBrands, companySettings);
+                      return (
+                        <span
+                          key={code}
+                          style={meta.badgeStyle}
+                          className="text-[9px] font-mono font-bold px-1.5 py-0.5 rounded border"
+                        >
+                          {meta.shortLabel}
+                        </span>
+                      );
+                    })}
                   </div>
                 </div>
               </div>
@@ -982,10 +1071,13 @@ export default function CustomerManagement({
                       onChange={(e) => setFormSubBrand(e.target.value)}
                       className="w-full bg-slate-50 border border-slate-200 rounded-lg py-1 px-2.5 text-xs text-slate-700 focus:outline-hidden"
                     >
-                      <option value="">No specific brand (All)</option>
-                      <option value="SAT">Sky Auto (SAT)</option>
-                      <option value="GZ">GadgetZu (GZ)</option>
-                      <option value="RTX">RTX Gadget (RTX)</option>
+                      <option value="">No specific brand (All Selling Brands)</option>
+                      {isLegacySatCode(formSubBrand) && (
+                        <option value={formSubBrand} disabled>Legacy (SAT) — Reassign to a selling sub-brand</option>
+                      )}
+                      {activeAllowedBrands.map((sb) => (
+                        <option key={sb.shortCode} value={sb.shortCode}>{sb.name} ({sb.shortCode})</option>
+                      ))}
                     </select>
                   </div>
 
@@ -1185,7 +1277,14 @@ export default function CustomerManagement({
                               <div className="min-w-0 pr-2">
                                 <div className="font-mono font-bold text-slate-900 text-xs flex items-center gap-1.5">
                                   <span>{po.preOrderNumber}</span>
-                                  <span className="text-[10px] px-1 rounded bg-slate-900 text-[#D4AF37]">{po.subBrand}</span>
+                                  {(() => {
+                                    const meta = formatBrandBadgeMeta(po.subBrand, subBrands, companySettings);
+                                    return (
+                                      <span style={meta.badgeStyle} className="text-[10px] px-1.5 py-0.2 rounded border font-bold">
+                                        {meta.shortLabel}
+                                      </span>
+                                    );
+                                  })()}
                                   {onOpenPreOrder && <ExternalLink size={10} className="text-[#B89628]" />}
                                 </div>
                                 <div className="text-[10px] text-slate-500 truncate">
@@ -1275,10 +1374,10 @@ export default function CustomerManagement({
                   onChange={(e) => setFormSubBrand(e.target.value)}
                   className="w-full bg-slate-50 border border-slate-200 rounded-lg py-1.5 px-3 text-xs text-slate-700 focus:outline-hidden cursor-pointer"
                 >
-                  <option value="">General Client (All Brands)</option>
-                  <option value="SAT">Sky Auto (SAT)</option>
-                  <option value="GZ">GadgetZu (GZ)</option>
-                  <option value="RTX">RTX Gadget (RTX)</option>
+                  <option value="">General Client (All Selling Brands)</option>
+                  {activeAllowedBrands.map((sb) => (
+                    <option key={sb.shortCode} value={sb.shortCode}>{sb.name} ({sb.shortCode})</option>
+                  ))}
                 </select>
               </div>
 

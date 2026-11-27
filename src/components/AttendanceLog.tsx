@@ -9,6 +9,7 @@ import {
   checkInOnBehalf,
   checkOutOnBehalf
 } from '../firebase/db';
+import { formatBrandBadgeMeta, isLegacySatCode } from '../utils/subBrands';
 import { 
   Clock, 
   Filter, 
@@ -381,7 +382,10 @@ export default function AttendanceLog({ user }: AttendanceLogProps) {
                       <div className="min-w-0">
                         <h4 className="font-bold text-slate-900 text-xs truncate" title={u.name}>{u.name}</h4>
                         <p className="text-[9px] text-slate-500 uppercase tracking-wider truncate font-mono">
-                          {u.role} &bull; {u.subBrandAccess?.join(', ') || 'All'}
+                          {u.role} &bull;{' '}
+                          {u.role === 'superadmin' || u.role === 'admin'
+                            ? 'All Selling'
+                            : (u.subBrandAccess || []).filter((b) => !isLegacySatCode(b)).join(', ') || 'All Selling'}
                         </p>
                       </div>
                     </div>
@@ -553,7 +557,10 @@ export default function AttendanceLog({ user }: AttendanceLogProps) {
 
                     {/* Role & Brand */}
                     <td className="px-3.5 py-2.5 font-medium text-slate-500">
-                      <span className="capitalize">{log.role}</span> &bull; <span className="font-mono font-bold text-slate-700">{log.subBrand || 'SAT'}</span>
+                      <span className="capitalize">{log.role}</span> &bull;{' '}
+                      <span className="font-mono font-bold text-slate-700">
+                        {log.subBrand ? formatBrandBadgeMeta(log.subBrand).shortLabel : 'Parent HQ'}
+                      </span>
                     </td>
 
                     {/* Date */}

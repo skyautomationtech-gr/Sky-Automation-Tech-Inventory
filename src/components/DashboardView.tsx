@@ -18,7 +18,7 @@ import {
   ChevronRight,
 } from 'lucide-react';
 import { collection, onSnapshot, query } from 'firebase/firestore';
-import type { Product, UserProfile, Order, Customer, Invoice } from '../types';
+import type { Product, UserProfile, Order, Customer, Invoice, SubBrand } from '../types';
 import {
   checkInUser,
   checkOutUser,
@@ -31,6 +31,14 @@ import {
 } from '../firebase/db';
 import { auth, db } from '../firebase/config';
 import { perfTrackListener } from '../utils/perfLogger';
+import {
+  formatBrandBadgeMeta,
+  getSellingSubBrands,
+  getUserAllowedSubBrandIds,
+  isLegacySatCode,
+  matchesGlobalBrandFilter,
+  normalizeSubBrandCode,
+} from '../utils/subBrands';
 
 const DashboardSalesTrendChart = lazy(() =>
   import('./DashboardCharts').then((m) => ({ default: m.DashboardSalesTrendChart }))
@@ -44,6 +52,8 @@ interface DashboardViewProps {
   user: UserProfile | null;
   onNavigateToTab: (tab: string, subAction?: string, initialId?: string | null) => void;
   onUserUpdate: () => void;
+  subBrands?: SubBrand[];
+  globalBrandFilter?: string;
 }
 
 export default function DashboardView({
@@ -51,6 +61,8 @@ export default function DashboardView({
   user,
   onNavigateToTab,
   onUserUpdate,
+  subBrands = [],
+  globalBrandFilter = 'ALL',
 }: DashboardViewProps) {
   const isAdminOrSuperAdmin = user?.role === 'admin' || user?.role === 'superadmin';
 
@@ -216,7 +228,8 @@ export default function DashboardView({
     if (!user || processingAttendance || isCheckedIn) return;
     setProcessingAttendance(true);
     try {
-      await checkInUser(user.id, user.name, user.role, user.subBrandAccess?.[0] || 'Unknown');
+      const defaultBrand = getUserAllowedSubBrandIds(user, subBrands)[0] || 'GZ';
+      await checkInUser(user.id, user.name, user.role, defaultBrand);
       await onUserUpdate();
     } catch (err) {
       console.error(err);
@@ -241,9 +254,30 @@ export default function DashboardView({
   };
 
   const isCheckedIn = user?.currentSessionStatus === 'checked_in';
+
+  const sellingBrandsList = useMemo(
+    () => getSellingSubBrands(subBrands, { includeInactive: false }),
+    [subBrands]
+  );
+
+  const scopeBadgeMeta = useMemo(() => {
+    if (!globalBrandFilter || globalBrandFilter === 'ALL') return null;
+    if (globalBrandFilter === 'LEGACY_SAT') return formatBrandBadgeMeta('SAT', subBrands);
+    return formatBrandBadgeMeta(globalBrandFilter, subBrands);
+  }, [globalBrandFilter, subBrands]);
   
   const dashboardMetrics = useMemo(() => {
-    const approvedProducts = products.filter(
+    const scopedProducts = products.filter((p) =>
+      matchesGlobalBrandFilter(p.subBrand, globalBrandFilter)
+    );
+    const scopedOrders = allOrders.filter((o) =>
+      matchesGlobalBrandFilter(o.subBrand, globalBrandFilter)
+    );
+    const scopedInvoices = allInvoices.filter((inv) =>
+      matchesGlobalBrandFilter(inv.subBrand, globalBrandFilter)
+    );
+
+    const approvedProducts = scopedProducts.filter(
       (product) => product.status === 'approved' && !product.archived
     );
 
@@ -278,13 +312,13 @@ export default function DashboardView({
     startOfThisMonth.setHours(0, 0, 0, 0);
     const monthStartMs = startOfThisMonth.getTime();
 
-    const todayOrders = allOrders.filter(
+    const todayOrders = scopedOrders.filter(
       (o) => isSameDay(o.createdAt, today) && o.status !== 'Returned/Cancelled'
     );
     const todaySales = todayOrders.reduce((sum, o) => sum + o.totalAmount, 0);
     const todayOrdersCount = todayOrders.length;
 
-    const yesterdayOrders = allOrders.filter(
+    const yesterdayOrders = scopedOrders.filter(
       (o) => isSameDay(o.createdAt, yesterday) && o.status !== 'Returned/Cancelled'
     );
     const yesterdaySales = yesterdayOrders.reduce((sum, o) => sum + o.totalAmount, 0);
@@ -296,7 +330,7 @@ export default function DashboardView({
       vsYesterdayPercent = 100;
     }
 
-    const dueOrders = allOrders.filter(
+    const dueOrders = scopedOrders.filter(
       (o) =>
         (o.paymentStatus === 'Due' || o.paymentStatus === 'Partial') &&
         o.status !== 'Returned/Cancelled' &&
@@ -304,7 +338,7 @@ export default function DashboardView({
     );
     const totalDue = dueOrders.reduce((sum, o) => sum + o.amountDue, 0);
 
-    const activeOrders = allOrders.filter((o) => o.status !== 'Returned/Cancelled');
+    const activeOrders = scopedOrders.filter((o) => o.status !== 'Returned/Cancelled');
     const activePaidSum = activeOrders.reduce((sum, o) => sum + o.amountPaid, 0);
     const activeDueSum = activeOrders.reduce((sum, o) => sum + o.amountDue, 0);
     const collectionRate =
@@ -312,7 +346,7 @@ export default function DashboardView({
         ? Math.round((activePaidSum / (activePaidSum + activeDueSum)) * 100)
         : 100;
 
-    const pendingProductsCount = products.filter(
+    const pendingProductsCount = scopedProducts.filter(
       (p) => p.status === 'pending_review' && !p.archived
     ).length;
     const pendingUsersCount = allUsers.filter((u) => u.status === 'pending_approval').length;
@@ -321,22 +355,46 @@ export default function DashboardView({
       string,
       { id: string; name: string; shortName: string; qty: number; revenue: number }
     >();
-    const monthOrders = allOrders.filter(
+    const monthOrders = scopedOrders.filter(
       (o) => o.createdAt >= monthStartMs && o.status !== 'Returned/Cancelled'
     );
 
-    const subBrandSales = {
-      SAT: { revenue: 0, orders: 0 },
-      GZ: { revenue: 0, orders: 0 },
-      RTX: { revenue: 0, orders: 0 },
-    };
+    const subBrandSales: Record<string, { code: string; name: string; accentColor: string; revenue: number; orders: number; isLegacySat?: boolean }> = {};
+    sellingBrandsList.forEach((sb) => {
+      subBrandSales[sb.shortCode] = {
+        code: sb.shortCode,
+        name: sb.name,
+        accentColor: sb.accentColor,
+        revenue: 0,
+        orders: 0,
+      };
+    });
+
+    let consolidatedMonthlyRevenue = 0;
+    let legacySatRevenue = 0;
+    let legacySatOrders = 0;
 
     monthOrders.forEach((order) => {
-      const sub = (order.subBrand || 'SAT') as keyof typeof subBrandSales;
-      if (subBrandSales[sub]) {
-        subBrandSales[sub].revenue += order.totalAmount;
-        subBrandSales[sub].orders++;
+      consolidatedMonthlyRevenue += order.totalAmount;
+      const rawCode = normalizeSubBrandCode(order.subBrand);
+      if (!rawCode || isLegacySatCode(rawCode)) {
+        legacySatRevenue += order.totalAmount;
+        legacySatOrders++;
+      } else {
+        if (!subBrandSales[rawCode]) {
+          const meta = formatBrandBadgeMeta(rawCode, subBrands);
+          subBrandSales[rawCode] = {
+            code: meta.shortLabel,
+            name: meta.label,
+            accentColor: meta.accentColor,
+            revenue: 0,
+            orders: 0,
+          };
+        }
+        subBrandSales[rawCode].revenue += order.totalAmount;
+        subBrandSales[rawCode].orders++;
       }
+
       order.items.forEach((item) => {
         const pName = item.productName || 'Unknown Product';
         const existing = salesMap.get(item.productId);
@@ -355,6 +413,18 @@ export default function DashboardView({
       });
     });
 
+    const subBrandSalesRows = Object.values(subBrandSales);
+    if (legacySatOrders > 0 || legacySatRevenue > 0 || globalBrandFilter === 'LEGACY_SAT') {
+      subBrandSalesRows.push({
+        code: 'Legacy (SAT)',
+        name: 'Legacy (SAT)',
+        accentColor: '#64748B',
+        revenue: legacySatRevenue,
+        orders: legacySatOrders,
+        isLegacySat: true,
+      });
+    }
+
     const topSellingProducts = Array.from(salesMap.values())
       .sort((a, b) => b.qty - a.qty)
       .slice(0, 5);
@@ -367,7 +437,7 @@ export default function DashboardView({
       d.setDate(d.getDate() - i);
       d.setHours(0, 0, 0, 0);
 
-      const dayOrders = allOrders.filter((o) => {
+      const dayOrders = scopedOrders.filter((o) => {
         const orderDate = new Date(o.createdAt);
         return (
           orderDate.getFullYear() === d.getFullYear() &&
@@ -394,10 +464,10 @@ export default function DashboardView({
     });
     const categoryStockData = Object.entries(catMap).map(([name, value]) => ({ name, value }));
 
-    const recentOrders = [...allOrders]
+    const recentOrders = [...scopedOrders]
       .sort((a, b) => b.createdAt - a.createdAt)
       .slice(0, 5);
-    const recentInvoices = [...allInvoices]
+    const recentInvoices = [...scopedInvoices]
       .sort((a, b) => b.generatedAt - a.generatedAt)
       .slice(0, 5);
 
@@ -413,14 +483,15 @@ export default function DashboardView({
       pendingProductsCount,
       pendingUsersCount,
       topSellingProducts,
-      subBrandSales,
+      consolidatedMonthlyRevenue,
+      subBrandSalesRows,
       activeStaff,
       weeklySalesTrend,
       categoryStockData,
       recentOrders,
       recentInvoices,
     };
-  }, [products, allOrders, allInvoices, allUsers]);
+  }, [products, allOrders, allInvoices, allUsers, globalBrandFilter, sellingBrandsList, subBrands]);
 
   const {
     totalStockUnits,
@@ -434,7 +505,8 @@ export default function DashboardView({
     pendingProductsCount,
     pendingUsersCount,
     topSellingProducts,
-    subBrandSales,
+    consolidatedMonthlyRevenue,
+    subBrandSalesRows,
     activeStaff,
     weeklySalesTrend,
     categoryStockData,
@@ -443,27 +515,15 @@ export default function DashboardView({
   } = dashboardMetrics;
 
   const getSubBrandBadge = (subBrand: string) => {
-    switch (subBrand?.toUpperCase()) {
-      case 'GZ':
-      case 'GADGETZU':
-        return (
-          <span className="px-2 py-0.5 bg-teal-500/10 text-teal-600 dark:text-teal-400 text-xs font-bold rounded border border-teal-500/20">
-            GadgetZu
-          </span>
-        );
-      case 'RTX':
-        return (
-          <span className="px-2 py-0.5 bg-orange-500/10 text-orange-600 dark:text-orange-400 text-xs font-bold rounded border border-orange-500/20">
-            RTX Gadget
-          </span>
-        );
-      default:
-        return (
-          <span className="px-2 py-0.5 bg-gold-500/10 text-gold-700 dark:text-gold-400 text-xs font-bold rounded border border-gold-500/20">
-            Sky Auto
-          </span>
-        );
-    }
+    const meta = formatBrandBadgeMeta(subBrand, subBrands);
+    return (
+      <span
+        style={meta.badgeStyle}
+        className="px-2 py-0.5 text-xs font-bold rounded border inline-flex items-center gap-1"
+      >
+        {meta.label}
+      </span>
+    );
   };
 
   if (loadingData) {
@@ -483,13 +543,25 @@ export default function DashboardView({
       {/* Dashboard Top Header Bar */}
       <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm">
         <div>
-          <div className="flex items-center gap-3">
+          <div className="flex flex-wrap items-center gap-3">
             <h1 className="text-2xl font-bold tracking-tight text-slate-900 dark:text-white">
               Sky Inventory Overview
             </h1>
             <span className="px-2.5 py-0.5 text-xs font-semibold rounded-full bg-gold-500/10 text-gold-700 dark:text-gold-400 border border-gold-500/20">
               Live Desktop Console
             </span>
+            {scopeBadgeMeta ? (
+              <span
+                style={scopeBadgeMeta.badgeStyle}
+                className="px-2.5 py-0.5 text-xs font-bold rounded-full border"
+              >
+                Scope: {scopeBadgeMeta.label}
+              </span>
+            ) : (
+              <span className="px-2.5 py-0.5 text-xs font-semibold rounded-full bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300 border border-slate-200 dark:border-slate-700">
+                All Selling Brands (Consolidated)
+              </span>
+            )}
           </div>
           <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
             Realtime sales breakdown, active inventory valuation, receivable tracking, and staff session operations.
@@ -695,22 +767,31 @@ export default function DashboardView({
             )}
           </div>
 
-          {/* Sub-brand revenue pills */}
-          <div className="pt-4 border-t border-slate-100 dark:border-slate-800 space-y-2">
-            <div className="text-xs font-semibold text-slate-500 dark:text-slate-400 mb-1">Sub-Brand Monthly Revenue</div>
-            <div className="grid grid-cols-3 gap-2">
-              <div className="bg-slate-50 dark:bg-slate-800/50 rounded-xl p-2 text-center border border-slate-200/50 dark:border-slate-800">
-                <span className="text-[10px] font-bold text-slate-400 block">SAT</span>
-                <span className="text-xs font-black text-slate-800 dark:text-slate-200 tabular-nums">৳{subBrandSales.SAT.revenue.toLocaleString()}</span>
-              </div>
-              <div className="bg-slate-50 dark:bg-slate-800/50 rounded-xl p-2 text-center border border-slate-200/50 dark:border-slate-800">
-                <span className="text-[10px] font-bold text-teal-500 block">GZ</span>
-                <span className="text-xs font-black text-slate-800 dark:text-slate-200 tabular-nums">৳{subBrandSales.GZ.revenue.toLocaleString()}</span>
-              </div>
-              <div className="bg-slate-50 dark:bg-slate-800/50 rounded-xl p-2 text-center border border-slate-200/50 dark:border-slate-800">
-                <span className="text-[10px] font-bold text-orange-500 block">RTX</span>
-                <span className="text-xs font-black text-slate-800 dark:text-slate-200 tabular-nums">৳{subBrandSales.RTX.revenue.toLocaleString()}</span>
-              </div>
+          {/* Sub-brand revenue breakdown + Consolidated Total */}
+          <div className="pt-4 border-t border-slate-100 dark:border-slate-800 space-y-2.5">
+            <div className="flex items-center justify-between text-xs">
+              <span className="font-semibold text-slate-500 dark:text-slate-400">Monthly Revenue Breakdown</span>
+              <span className="font-mono font-bold text-slate-900 dark:text-white">
+                Consolidated: ৳{consolidatedMonthlyRevenue.toLocaleString()}
+              </span>
+            </div>
+            <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
+              {subBrandSalesRows.map((row) => (
+                <div
+                  key={row.code}
+                  className="bg-slate-50 dark:bg-slate-800/50 rounded-xl p-2 text-center border border-slate-200/50 dark:border-slate-800"
+                >
+                  <span
+                    style={{ color: row.accentColor }}
+                    className="text-[10px] font-bold block truncate"
+                  >
+                    {row.code}
+                  </span>
+                  <span className="text-xs font-black text-slate-800 dark:text-slate-200 tabular-nums">
+                    ৳{row.revenue.toLocaleString()}
+                  </span>
+                </div>
+              ))}
             </div>
           </div>
         </div>

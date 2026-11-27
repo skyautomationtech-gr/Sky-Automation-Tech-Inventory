@@ -1,13 +1,17 @@
 import React, { useState, useEffect } from 'react';
 import { ShoppingBag, Search, AlertTriangle } from 'lucide-react';
-import { UserProfile, Order } from '../../types';
+import { UserProfile, Order, SubBrand } from '../../types';
 import { getOrders } from '../../firebase/db';
+import { matchesGlobalBrandFilter } from '../../utils/subBrands';
+import { SubBrandBadge } from '../PreOrders/PreOrderStatusBadge';
 
 interface LossMakingOrdersTabProps {
   user: UserProfile;
+  subBrands?: SubBrand[];
+  globalBrandFilter?: string;
 }
 
-export const LossMakingOrdersTab: React.FC<LossMakingOrdersTabProps> = ({ user }) => {
+export const LossMakingOrdersTab: React.FC<LossMakingOrdersTabProps> = ({ user, subBrands, globalBrandFilter }) => {
   const [orders, setOrders] = useState<Order[]>([]);
   const [searchTerm, setSearchTerm] = useState('');
 
@@ -39,6 +43,9 @@ export const LossMakingOrdersTab: React.FC<LossMakingOrdersTabProps> = ({ user }
   }).filter((item): item is NonNullable<typeof item> => item !== null && item.isLoss);
 
   const filtered = lossOrders.filter(item => {
+    if (globalBrandFilter && !matchesGlobalBrandFilter(item.order?.subBrand, globalBrandFilter)) {
+      return false;
+    }
     if (!searchTerm) return true;
     const q = searchTerm.toLowerCase();
     return (
@@ -48,7 +55,7 @@ export const LossMakingOrdersTab: React.FC<LossMakingOrdersTabProps> = ({ user }
     );
   });
 
-  const totalLoss = lossOrders.reduce((sum, item) => sum + Math.max(0, item.loss), 0);
+  const totalLoss = filtered.reduce((sum, item) => sum + Math.max(0, item.loss), 0);
 
   return (
     <div className="space-y-5">
@@ -82,7 +89,7 @@ export const LossMakingOrdersTab: React.FC<LossMakingOrdersTabProps> = ({ user }
           <div className="text-2xl font-black font-mono text-orange-700 mt-0.5">৳{totalLoss.toLocaleString()}</div>
         </div>
         <div className="text-xs font-bold text-orange-900 bg-orange-200/60 px-2.5 py-1 rounded-lg">
-          {lossOrders.length} টি লোকসানি অর্ডার
+          {filtered.length} টি লোকসানি অর্ডার
         </div>
       </div>
 
@@ -119,9 +126,7 @@ export const LossMakingOrdersTab: React.FC<LossMakingOrdersTabProps> = ({ user }
                       )}
                     </td>
                     <td className="px-4 py-3">
-                      <span className="px-2 py-0.5 rounded-md text-[11px] font-bold bg-slate-100 text-slate-700 border border-slate-200">
-                        {item.order?.subBrand || 'SAT'}
-                      </span>
+                      <SubBrandBadge subBrand={item.order?.subBrand} subBrands={subBrands} />
                     </td>
                     <td className="px-4 py-3 text-right font-mono font-medium text-slate-700">৳{(item.saleAmount || 0).toLocaleString()}</td>
                     <td className="px-4 py-3 text-right font-mono font-medium text-slate-700">৳{(item.costAmount || 0).toLocaleString()}</td>

@@ -155,7 +155,8 @@ export interface Product {
   subCategory?: string; // name/id of 3-level sub category
   childCategory?: string; // name/id of 3-level child category
   brand: string;
-  subBrand: 'SAT' | 'GZ' | 'RTX' | string; // Sky Automation Tech, GadgetZu, RTX Gadget
+  subBrand: string; // Selling Sub-Brand ID (e.g. 'GZ', 'RTX', or dynamic brand code; legacy 'SAT' supported read-only)
+  subBrandId?: string;
   costPrice: number;
   sellingPrice: number;
   discountPrice?: number;
@@ -236,14 +237,51 @@ export interface ProductModel {
   name: string;
 }
 
+export interface SubBrandSocialLinks {
+  facebook?: string;
+  instagram?: string;
+  tiktok?: string;
+  youtube?: string;
+}
+
+export interface SubBrand {
+  id: string; // Uppercase short code / Firestore doc ID, e.g. 'GZ', 'RTX', 'NOVA'
+  name: string;
+  shortCode: string;
+  invoicePrefix: string; // e.g. 'GZ-INV'
+  skuPrefix?: string; // e.g. 'GZ'
+  logoUrl?: string;
+  accentColor: string; // Hex color ONLY (#RRGGBB) for html2canvas/PDF safety
+  phone?: string;
+  whatsapp?: string;
+  email?: string;
+  address?: string;
+  website?: string;
+  socialLinks?: SubBrandSocialLinks;
+  tagline?: string;
+  invoiceTerms?: string;
+  invoiceFooterNote?: string;
+  warrantyPolicyText?: string;
+  active: boolean;
+  isSellingBrand: boolean; // Always true for selling sub-brands; false for parent
+  sortOrder?: number;
+  createdAt: number;
+  updatedAt: number;
+}
+
 export interface SubBrandDetails {
   companyName?: string;
   address?: string;
   phone?: string;
   whatsapp?: string;
   email?: string;
+  website?: string;
+  socialLinks?: SubBrandSocialLinks;
   logoUrl?: string;
+  accentColor?: string;
   invoiceTerms?: string;
+  invoiceFooterNote?: string;
+  warrantyPolicyText?: string;
   tagline?: string;
 }
 
@@ -254,6 +292,12 @@ export interface TrackingShareTemplates {
 
 export interface CompanySettings {
   companyName: string;
+  legalName?: string;
+  isParent?: boolean; // true for Sky Automation Tech (importer / parent company)
+  isSellingBrand?: boolean; // false for Sky Automation Tech
+  parentCreditLine?: string; // e.g. "A concern of Sky Automation Tech"
+  showParentCreditLine?: boolean;
+  subBrandsSeeded?: boolean;
   logoUrl?: string;
   address?: string;
   phone?: string;
@@ -265,16 +309,8 @@ export interface CompanySettings {
     bankInfo?: string;
     whatsappContact?: string;
   };
-  prefixes: {
-    SAT: string; // default: SAT-INV
-    GZ: string;  // default: GZ-INV
-    RTX: string; // default: RTX-INV
-  };
-  subBrandDetails?: {
-    SAT?: SubBrandDetails;
-    GZ?: SubBrandDetails;
-    RTX?: SubBrandDetails;
-  };
+  prefixes: Record<string, string>;
+  subBrandDetails?: Record<string, SubBrandDetails>;
   subBrands?: string[];
   onboarded: boolean;
 
@@ -333,7 +369,7 @@ export interface Supplier {
   notes?: string;
   logoUrl?: string;
   documentUrls?: string[];
-  subBrand?: 'SAT' | 'GZ' | 'RTX' | 'ALL' | '';
+  subBrand?: string;
   // Optional China / Pre-Order Supplier metadata
   isChinaSupplier?: boolean;
   whatsapp?: string;
@@ -371,6 +407,7 @@ export interface AppNotification {
   targetScreen?: string; // 'products' | 'orders' | 'due_payments' | 'users' | 'suppliers'
   targetId?: string;
   subAction?: string;
+  subBrand?: string;
   targetUserId?: string;
   forRoles?: string[];
   rejectionReason?: string;
@@ -388,6 +425,7 @@ export interface Customer {
   whatsapp?: string;
   address?: string;
   subBrand?: string;
+  brandIds?: string[]; // Global customer record tagged with every selling brand they bought/ordered from
   notes?: string;
   totalOrders: number;
   lifetimeValue: number;
@@ -431,7 +469,8 @@ export interface Order {
   customerId: string;
   customerName: string;
   customerPhone: string;
-  subBrand: 'SAT' | 'GZ' | 'RTX';
+  subBrand: string;
+  subBrandId?: string;
   salesChannel: SalesChannel;
   items: OrderItem[];
   discountAmount?: number;
@@ -461,7 +500,8 @@ export interface Invoice {
   id: string;
   orderId: string;
   invoiceNumber: string;
-  subBrand: 'SAT' | 'GZ' | 'RTX';
+  subBrand: string;
+  subBrandId?: string;
   subBrandPrefix: string;
   customerId?: string;
   customerName: string;
@@ -527,7 +567,8 @@ export interface Expense {
   supplierName?: string; // Supplier / Vendor Name (Optional)
   reference?: string; // Reference / Transaction ID
   invoiceNo?: string; // Invoice / Reference No (Optional)
-  subBrand?: 'SAT' | 'GZ' | 'RTX' | 'ALL' | '';
+  subBrand?: string;
+  subBrandId?: string;
   notes?: string;
   receiptUrl?: string;
   createdBy?: string;
@@ -557,7 +598,8 @@ export interface Income {
   invoiceNo?: string;
   reference?: string; // Reference / Transaction ID
   notes?: string;
-  subBrand?: 'SAT' | 'GZ' | 'RTX' | 'ALL' | '';
+  subBrand?: string;
+  subBrandId?: string;
   addedBy: string;
   createdAt: number;
   source: 'manual' | 'order_sale';
@@ -588,6 +630,7 @@ export interface InvestmentEntry {
   date: string;
   note?: string;
   subBrand?: string;
+  subBrandId?: string;
   createdBy?: string;
   createdAt: number;
   isLocked?: boolean;
@@ -606,6 +649,7 @@ export interface CompanyPurchase {
   note?: string;
   createdAt: number;
   subBrand?: string;
+  subBrandId?: string;
 }
 
 export interface CompanyLoss {
@@ -618,6 +662,7 @@ export interface CompanyLoss {
   recordedBy?: string;
   createdAt: number;
   subBrand?: string;
+  subBrandId?: string;
 }
 
 export interface CashBalanceSettings {
@@ -673,6 +718,8 @@ export interface OtherReceivable {
   status: 'Pending' | 'Partially Recovered' | 'Recovered' | 'Written Off';
   recoveredAmount: number;
   notes?: string;
+  subBrand?: string;
+  subBrandId?: string;
   createdAt: number;
 }
 
@@ -685,6 +732,8 @@ export interface PaymentPlatformLedger {
   feePercentage?: number;
   lastUpdated: number;
   notes?: string;
+  subBrand?: string;
+  subBrandId?: string;
   createdAt: number;
 }
 
@@ -702,6 +751,8 @@ export interface ImportShippingCost {
   shipmentDate: string;
   status: 'In Transit' | 'Customs Cleared' | 'Received' | 'Paid';
   notes?: string;
+  subBrand?: string;
+  subBrandId?: string;
   createdAt: number;
 }
 
@@ -850,7 +901,8 @@ export interface PreOrderItem {
 export interface PreOrder {
   id: string;
   preOrderNumber: string; // e.g. "PO-0001"
-  subBrand: 'SAT' | 'GZ' | 'RTX';
+  subBrand: string;
+  subBrandId?: string;
   customerId?: string;
   customerCode?: string; // e.g. "CUS-0001"
   customerName: string;
@@ -998,7 +1050,8 @@ export interface PreOrderPayment {
   id: string;
   preOrderId: string;
   preOrderNumber: string;
-  subBrand?: 'SAT' | 'GZ' | 'RTX';
+  subBrand?: string;
+  subBrandId?: string;
   customerName?: string;
   customerPhone?: string;
   type: PreOrderPaymentType;
@@ -1224,9 +1277,13 @@ export interface PublicTrackingItem {
 export interface PublicTrackingRecord {
   enabled: boolean;
   preOrderNo?: string; // Shown as "Order ID"
-  subBrand?: 'SAT' | 'GZ' | 'RTX';
+  subBrand?: string;
   brandName?: string;
   brandLogoUrl?: string;
+  accentColor?: string;
+  parentCreditLine?: string;
+  showParentCreditLine?: boolean;
+  warrantyPolicyText?: string;
   productName?: string;
   productImageUrl?: string;
   variant?: string;
@@ -1327,7 +1384,7 @@ export interface PreOrderNotification {
   id: string;
   preOrderId: string;
   preOrderNumber: string;
-  subBrand?: 'SAT' | 'GZ' | 'RTX';
+  subBrand?: string;
   type: PreOrderNotificationType;
   category?: 'event' | 'reminder';
   severity?: 'info' | 'warning' | 'urgent';
@@ -1369,7 +1426,7 @@ export interface PreOrderReceipt {
   id: string;
   preOrderId: string;
   preOrderNumber: string;
-  subBrand: 'SAT' | 'GZ' | 'RTX';
+  subBrand: string;
   itemId?: string;
   receivedQty: number;
   damagedQty: number;
@@ -1411,7 +1468,8 @@ export interface AccountingPosting {
   id: string; // Deterministic ID: po_{preOrderId}_...
   preOrderId: string;
   preOrderNumber: string;
-  subBrand: 'SAT' | 'GZ' | 'RTX';
+  subBrand: string;
+  subBrandId?: string;
   type: AccountingPostingType;
   direction?: 'normal' | 'reversal';
   reversesPostingId?: string;
@@ -1529,7 +1587,7 @@ export interface PreOrderStats {
   customerAdvancesLiability: number;
   supplierPayableEstimate: number;
   statusCounts: Record<PreOrderStatus, number>;
-  subBrandStats: Record<'SAT' | 'GZ' | 'RTX', PreOrderStatsSubBrandBucket>;
+  subBrandStats: Record<string, PreOrderStatsSubBrandBucket>;
   lastUpdatedAt: number;
   lastRebuiltAt?: number;
   rebuiltBy?: string;
@@ -1580,7 +1638,7 @@ export interface PreOrderSettings {
 
 export interface PreOrderListFilterPreset {
   statuses?: PreOrderStatus[];
-  subBrand?: 'ALL' | 'SAT' | 'GZ' | 'RTX';
+  subBrand?: string;
   paymentState?: 'ALL' | PreOrderPaymentState;
   overdueOnly?: boolean;
   searchTerm?: string;

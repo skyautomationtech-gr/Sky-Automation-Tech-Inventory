@@ -6,6 +6,7 @@ import {
   Briefcase
 } from 'lucide-react';
 import { UserProfile } from '../types';
+import { formatBrandBadgeMeta, getUserAllowedSubBrandIds, isLegacySatCode } from '../utils/subBrands';
 import { 
   Button, Input, Textarea, ToggleSwitch, Select, SelectOption, 
   Card, Badge, useToast, ThemeToggle, DataTable 
@@ -387,11 +388,28 @@ export default function ProfileSettingsView({ user, onRefreshUser }: ProfileSett
                     <p className="text-sm font-black text-slate-700 dark:text-slate-200">{user.joiningDate || 'N/A'}</p>
                   </div>
                   <div className="bg-slate-50 dark:bg-slate-800/50 p-4 rounded-xl border border-slate-100 dark:border-slate-800/50">
-                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Brand Access</p>
-                    <div className="flex gap-1 mt-1">
-                      {user.subBrandAccess?.map(b => (
-                        <span key={b} className="text-[10px] font-mono font-bold bg-slate-200 dark:bg-slate-700 px-1.5 py-0.5 rounded">{b}</span>
-                      ))}
+                    <p className="text-[10px] font-bold text-slate-400 uppercase tracking-widest mb-1">Selling Brand Access</p>
+                    <div className="flex flex-wrap gap-1.5 mt-1">
+                      {user.role === 'superadmin' || user.role === 'admin' ? (
+                        <span className="text-[10px] font-bold bg-amber-100 text-amber-800 border border-amber-200 px-2 py-0.5 rounded">
+                          All Selling Sub-Brands (Auto)
+                        </span>
+                      ) : (
+                        getUserAllowedSubBrandIds(user)
+                          .filter((b) => !isLegacySatCode(b))
+                          .map((b) => {
+                            const meta = formatBrandBadgeMeta(b);
+                            return (
+                              <span
+                                key={b}
+                                style={meta.badgeStyle}
+                                className="text-[10px] font-mono font-bold px-2 py-0.5 rounded border"
+                              >
+                                {meta.label} ({meta.shortLabel})
+                              </span>
+                            );
+                          })
+                      )}
                     </div>
                   </div>
                 </div>

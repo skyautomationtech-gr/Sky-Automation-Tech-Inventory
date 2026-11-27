@@ -1,36 +1,43 @@
-import React, { useState, useEffect } from 'react';
-import { CompanySettings, UserProfile } from '../types';
-import { 
-  Building2, 
-  Tag, 
-  Receipt, 
-  Sliders, 
-  Bell, 
-  Eye, 
-  Save, 
-  Upload, 
-  RotateCcw, 
-  CheckCircle2, 
-  AlertCircle, 
-  Phone, 
-  Mail, 
-  MapPin, 
-  DollarSign, 
-  Smartphone, 
-  CreditCard, 
-  MessageSquare, 
-  Hash, 
-  FileText, 
-  Layers, 
+import React, { useState, useEffect, useMemo } from 'react';
+import { doc, getDoc } from 'firebase/firestore';
+import { CompanySettings, SubBrand, UserProfile } from '../types';
+import { db } from '../firebase/config';
+import {
+  Building2,
+  Tag,
+  Receipt,
+  Sliders,
+  Bell,
+  Eye,
+  Save,
+  Upload,
+  CheckCircle2,
+  AlertCircle,
+  Phone,
+  Mail,
+  MapPin,
+  Smartphone,
+  CreditCard,
+  MessageSquare,
+  Hash,
+  FileText,
   Sparkles,
   Download,
-  Info,
   ShieldCheck,
   Check,
   Calculator,
   Wallet,
   Briefcase,
-  Link2
+  Link2,
+  Plus,
+  Edit3,
+  Trash2,
+  Power,
+  Users,
+  RefreshCw,
+  X,
+  ArrowRight,
+  Info,
 } from 'lucide-react';
 import { getAccountingBaselineSettings, saveAccountingBaselineSettings } from '../firebase/db';
 import {
@@ -40,42 +47,151 @@ import {
   DEFAULT_TRACKING_SHARE_TEMPLATE_EN,
   isValidHttpsUrl,
 } from '../preOrders/tracking';
+import {
+  DEFAULT_PARENT_CREDIT_LINE,
+  PARENT_COMPANY_NAME,
+  SUB_BRAND_ACCENT_PALETTE,
+  getRegistrySubBrandsSync,
+  getSellingSubBrands,
+  isValidHexColor,
+  normalizeSubBrandCode,
+  sanitizeHexColor,
+} from '../utils/subBrands';
+import {
+  LegacySatReassignmentPreview,
+  applyHistoricalBrandReassignment,
+  countSubBrandReferences,
+  createSubBrand,
+  deleteUnusedSubBrand,
+  getLegacySatReassignmentPreview,
+  getSubBrands,
+  migrateUsersSatAccess,
+  subscribeSubBrandsChange,
+  toggleSubBrandActive,
+  updateSubBrand,
+} from '../firebase/subBrandsRegistry';
 
 interface CompanySettingsViewProps {
   user: UserProfile | null;
   companySettings: CompanySettings | null;
   onSave: (updatedSettings: Partial<CompanySettings>) => Promise<void>;
   requireCheckIn?: () => boolean;
+  subBrands?: SubBrand[];
+  onSubBrandsUpdated?: (list: SubBrand[]) => void;
 }
+
+interface SubBrandFormState {
+  mode: 'create' | 'edit';
+  originalId?: string;
+  name: string;
+  shortCode: string;
+  invoicePrefix: string;
+  skuPrefix: string;
+  logoUrl: string;
+  accentColor: string;
+  phone: string;
+  whatsapp: string;
+  email: string;
+  address: string;
+  website: string;
+  facebook: string;
+  instagram: string;
+  tiktok: string;
+  youtube: string;
+  tagline: string;
+  invoiceTerms: string;
+  invoiceFooterNote: string;
+  warrantyPolicyText: string;
+  active: boolean;
+}
+
+const EMPTY_SUB_BRAND_FORM: SubBrandFormState = {
+  mode: 'create',
+  name: '',
+  shortCode: '',
+  invoicePrefix: '',
+  skuPrefix: '',
+  logoUrl: '',
+  accentColor: '#0F766E',
+  phone: '01577351518',
+  whatsapp: '01577351518',
+  email: '',
+  address: 'House #12, Road #3, Block-A, Banasree, Dhaka',
+  website: '',
+  facebook: '',
+  instagram: '',
+  tiktok: '',
+  youtube: '',
+  tagline: '',
+  invoiceTerms: 'Goods once sold are non-refundable. Please verify items upon delivery.',
+  invoiceFooterNote: '',
+  warrantyPolicyText: 'Standard seller warranty applies as noted on your invoice.',
+  active: true,
+};
 
 export default function CompanySettingsView({
   user,
   companySettings,
   onSave,
-  requireCheckIn
+  requireCheckIn,
+  subBrands: propSubBrands,
+  onSubBrandsUpdated,
 }: CompanySettingsViewProps) {
   const isSuperAdmin = user?.role === 'superadmin';
-  const isPrivileged = isSuperAdmin || user?.role === 'admin';
 
   // Active Tab
-  const [activeTab, setActiveTab] = useState<'main' | 'subbrands' | 'invoice' | 'inventory' | 'integrations' | 'tracking' | 'preview' | 'accounting'>('main');
-  const [selectedSubBrand, setSelectedSubBrand] = useState<'SAT' | 'GZ' | 'RTX'>('SAT');
+  const [activeTab, setActiveTab] = useState<
+    'main' | 'subbrands' | 'invoice' | 'inventory' | 'integrations' | 'tracking' | 'preview' | 'accounting'
+  >('main');
+
+  // Dynamic Sub-Brands Registry State
+  const [subBrandsList, setSubBrandsList] = useState<SubBrand[]>(() =>
+    propSubBrands && propSubBrands.length > 0
+      ? propSubBrands
+      : getRegistrySubBrandsSync(companySettings)
+  );
+  const [countersByBrand, setCountersByBrand] = useState<Record<string, number>>({});
+  const [satCounterReadOnly, setSatCounterReadOnly] = useState<number>(0);
+  const [refCountsMap, setRefCountsMap] = useState<Record<string, number>>({});
+  const [previewBrandCode, setPreviewBrandCode] = useState<string>('GZ');
+
+  // Sub-Brand Modal State
+  const [brandModalOpen, setBrandModalOpen] = useState(false);
+  const [brandForm, setBrandForm] = useState<SubBrandFormState>(EMPTY_SUB_BRAND_FORM);
+  const [savingBrand, setSavingBrand] = useState(false);
+  const [brandModalError, setBrandModalError] = useState('');
+
+  // Legacy SAT Migration Tools State
+  const [runningUserMigration, setRunningUserMigration] = useState(false);
+  const [userMigrationSummary, setUserMigrationSummary] = useState<string | null>(null);
+  const [reassignModalOpen, setReassignModalOpen] = useState(false);
+  const [loadingReassignPreview, setLoadingReassignPreview] = useState(false);
+  const [reassignPreview, setReassignPreview] = useState<LegacySatReassignmentPreview | null>(null);
+  const [selectedProdIds, setSelectedProdIds] = useState<string[]>([]);
+  const [selectedOrderIds, setSelectedOrderIds] = useState<string[]>([]);
+  const [selectedInvoiceIds, setSelectedInvoiceIds] = useState<string[]>([]);
+  const [selectedPreOrderIds, setSelectedPreOrderIds] = useState<string[]>([]);
+  const [reassignTargetBrand, setReassignTargetBrand] = useState<string>('GZ');
+  const [applyingReassign, setApplyingReassign] = useState(false);
 
   // Accounting Baseline Form State
   const [baselineCash, setBaselineCash] = useState<number>(0);
   const [baselineInvestment, setBaselineInvestment] = useState<number>(0);
-  const [baselineCutoffDate, setBaselineCutoffDate] = useState<string>(new Date().toISOString().split('T')[0]);
+  const [baselineCutoffDate, setBaselineCutoffDate] = useState<string>(
+    new Date().toISOString().split('T')[0]
+  );
   const [baselineNote, setBaselineNote] = useState<string>('Accounting baseline initialized.');
   const [isSavingBaseline, setIsSavingBaseline] = useState(false);
 
-  // Form State
+  // Main Parent Company Form State
   const [companyName, setCompanyName] = useState('');
   const [tagline, setTagline] = useState('');
   const [address, setAddress] = useState('');
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
   const [logoUrl, setLogoUrl] = useState('');
-  const [currencySymbol, setCurrencySymbol] = useState('৳');
+  const [parentCreditLine, setParentCreditLine] = useState(DEFAULT_PARENT_CREDIT_LINE);
+  const [showParentCreditLine, setShowParentCreditLine] = useState(true);
 
   // Payment Methods
   const [bkashNagad, setBkashNagad] = useState('');
@@ -83,52 +199,14 @@ export default function CompanySettingsView({
   const [whatsappContact, setWhatsappContact] = useState('');
   const [invoiceTerms, setInvoiceTerms] = useState('');
 
-  // Prefixes
-  const [satPrefix, setSatPrefix] = useState('SAT-INV');
-  const [gzPrefix, setGzPrefix] = useState('GZ-INV');
-  const [rtxPrefix, setRtxPrefix] = useState('RTX-INV');
-
-  // Sub-brand Profiles
-  const [subBrands, setSubBrands] = useState({
-    SAT: {
-      companyName: 'Sky Automation Tech',
-      tagline: 'Smart solutions, better future',
-      address: 'House #12, Road #3, Block-A, Banasree, Dhaka',
-      phone: '01577351518',
-      whatsapp: '01577351518',
-      email: 'skyautomationtech@gmail.com',
-      logoUrl: '/sat_logo.jpg',
-      invoiceTerms: 'Goods once sold are non-refundable. Please verify items at delivery.'
-    },
-    GZ: {
-      companyName: 'GadgetZu',
-      tagline: 'Your trusted gadget shop',
-      address: 'House #12, Road #3, Block-A, Banasree, Dhaka',
-      phone: '01577351518',
-      whatsapp: '01577351518',
-      email: 'gadgetzu.bd@gmail.com',
-      logoUrl: '/gz_logo.jpg',
-      invoiceTerms: 'Goods once sold are non-refundable. Please verify items at delivery.'
-    },
-    RTX: {
-      companyName: 'RTX Gadget',
-      tagline: 'Next-gen gaming & tech accessories',
-      address: 'House #12, Road #3, Block-A, Banasree, Dhaka',
-      phone: '01577351518',
-      whatsapp: '01577351518',
-      email: 'rtxgadget.bd@gmail.com',
-      logoUrl: '/rtx_logo.jpg',
-      invoiceTerms: 'Goods once sold are non-refundable. Please verify items at delivery.'
-    }
-  });
+  // Dynamic Invoice Prefixes keyed by selling brand shortCode
+  const [brandPrefixes, setBrandPrefixes] = useState<Record<string, string>>({});
 
   // Thresholds & Extras
   const [lowStockThreshold, setLowStockThreshold] = useState(5);
   const [agingBucket1, setAgingBucket1] = useState(15);
   const [agingBucket2, setAgingBucket2] = useState(30);
   const [supplierTerms, setSupplierTerms] = useState('Standard payment terms: Net 15 days.');
-  const [deliveryDhaka, setDeliveryDhaka] = useState(60);
-  const [deliveryOutside, setDeliveryOutside] = useState(120);
 
   // EmailJS
   const [emailJsServiceId, setEmailJsServiceId] = useState('');
@@ -139,7 +217,9 @@ export default function CompanySettingsView({
   // Public Tracking Portal Settings
   const [publicAppUrl, setPublicAppUrl] = useState(DEFAULT_PUBLIC_APP_URL);
   const [trackingAutoExpiryEnabled, setTrackingAutoExpiryEnabled] = useState(true);
-  const [trackingAutoExpiryDays, setTrackingAutoExpiryDays] = useState(DEFAULT_TRACKING_AUTO_EXPIRY_DAYS);
+  const [trackingAutoExpiryDays, setTrackingAutoExpiryDays] = useState(
+    DEFAULT_TRACKING_AUTO_EXPIRY_DAYS
+  );
   const [defaultShowCourierTracking, setDefaultShowCourierTracking] = useState(false);
   const [trackingTemplateEn, setTrackingTemplateEn] = useState(DEFAULT_TRACKING_SHARE_TEMPLATE_EN);
   const [trackingTemplateBn, setTrackingTemplateBn] = useState(DEFAULT_TRACKING_SHARE_TEMPLATE_BN);
@@ -149,59 +229,104 @@ export default function CompanySettingsView({
   const [successMsg, setSuccessMsg] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
 
+  const sellingBrands = useMemo(
+    () => getSellingSubBrands(subBrandsList, { includeInactive: true, companySettings }),
+    [subBrandsList, companySettings]
+  );
+
+  const activeSellingBrands = useMemo(
+    () => getSellingSubBrands(subBrandsList, { includeInactive: false, companySettings }),
+    [subBrandsList, companySettings]
+  );
+
+  useEffect(() => {
+    if (propSubBrands && propSubBrands.length > 0) {
+      setSubBrandsList(propSubBrands);
+    }
+  }, [propSubBrands]);
+
+  useEffect(() => {
+    getSubBrands({ forceRefresh: false, companySettings })
+      .then((list) => {
+        if (list.length > 0) {
+          setSubBrandsList(list);
+          onSubBrandsUpdated?.(list);
+        }
+      })
+      .catch(() => {});
+
+    const unsub = subscribeSubBrandsChange((list) => {
+      setSubBrandsList(list);
+      onSubBrandsUpdated?.(list);
+    });
+    return () => unsub();
+  }, [companySettings]);
+
+  const loadCountersAndRefs = async (brands: SubBrand[]) => {
+    try {
+      const cSnap = await getDoc(doc(db, 'settings', 'invoiceCounters'));
+      if (cSnap.exists()) {
+        const d = cSnap.data();
+        const byBrand: Record<string, number> = { ...(d.countersByBrand || {}) };
+        if (byBrand.GZ === undefined && d.gzCounter !== undefined) byBrand.GZ = Number(d.gzCounter);
+        if (byBrand.RTX === undefined && d.rtxCounter !== undefined)
+          byBrand.RTX = Number(d.rtxCounter);
+        setCountersByBrand(byBrand);
+        setSatCounterReadOnly(Number(d.satCounter || 0));
+      }
+    } catch {}
+
+    const counts: Record<string, number> = {};
+    await Promise.all(
+      brands.map(async (b) => {
+        try {
+          const r = await countSubBrandReferences(b.shortCode);
+          counts[b.shortCode] = r.total;
+        } catch {
+          counts[b.shortCode] = 1; // keep delete conservative on transient error
+        }
+      })
+    );
+    setRefCountsMap(counts);
+  };
+
+  useEffect(() => {
+    if (sellingBrands.length > 0) {
+      void loadCountersAndRefs(sellingBrands);
+      if (!sellingBrands.some((b) => b.shortCode === previewBrandCode)) {
+        setPreviewBrandCode(activeSellingBrands[0]?.shortCode || sellingBrands[0].shortCode);
+      }
+      if (!activeSellingBrands.some((b) => b.shortCode === reassignTargetBrand)) {
+        setReassignTargetBrand(activeSellingBrands[0]?.shortCode || 'GZ');
+      }
+    }
+  }, [sellingBrands]);
+
   // Sync initial settings from prop
   useEffect(() => {
     if (companySettings) {
-      setCompanyName(companySettings.companyName || 'Sky Automation Tech');
+      setCompanyName(companySettings.companyName || PARENT_COMPANY_NAME);
       setTagline(companySettings.footerTagline || 'Smart solutions, better future');
       setAddress(companySettings.address || 'House #12, Road #3, Block-A, Banasree, Dhaka');
       setPhone(companySettings.phone || '01577351518');
       setEmail(companySettings.email || 'skyautomationtech@gmail.com');
       setLogoUrl(companySettings.logoUrl || '/sat_logo.jpg');
+      setParentCreditLine(companySettings.parentCreditLine || DEFAULT_PARENT_CREDIT_LINE);
+      setShowParentCreditLine(companySettings.showParentCreditLine ?? true);
 
-      setBkashNagad(companySettings.paymentMethodsInfo?.bkashNagad || companySettings.phone || '01577351518');
+      setBkashNagad(
+        companySettings.paymentMethodsInfo?.bkashNagad || companySettings.phone || '01577351518'
+      );
       setBankInfo(companySettings.paymentMethodsInfo?.bankInfo || 'DBBL - 105.***.***.18');
-      setWhatsappContact(companySettings.paymentMethodsInfo?.whatsappContact || companySettings.phone || '01577351518');
-      setInvoiceTerms(companySettings.invoiceTerms || 'Goods once sold are non-refundable. Please verify items at delivery.');
-
-      setSatPrefix(companySettings.prefixes?.SAT || 'SAT-INV');
-      setGzPrefix(companySettings.prefixes?.GZ || 'GZ-INV');
-      setRtxPrefix(companySettings.prefixes?.RTX || 'RTX-INV');
-
-      if (companySettings.subBrandDetails) {
-        setSubBrands({
-          SAT: {
-            companyName: companySettings.subBrandDetails.SAT?.companyName || 'Sky Automation Tech',
-            tagline: companySettings.subBrandDetails.SAT?.tagline || 'Smart solutions, better future',
-            address: companySettings.subBrandDetails.SAT?.address || 'House #12, Road #3, Block-A, Banasree, Dhaka',
-            phone: companySettings.subBrandDetails.SAT?.phone || '01577351518',
-            whatsapp: companySettings.subBrandDetails.SAT?.whatsapp || companySettings.subBrandDetails.SAT?.phone || '01577351518',
-            email: companySettings.subBrandDetails.SAT?.email || 'skyautomationtech@gmail.com',
-            logoUrl: companySettings.subBrandDetails.SAT?.logoUrl || '/sat_logo.jpg',
-            invoiceTerms: companySettings.subBrandDetails.SAT?.invoiceTerms || 'Goods once sold are non-refundable. Please verify items at delivery.'
-          },
-          GZ: {
-            companyName: companySettings.subBrandDetails.GZ?.companyName || 'GadgetZu',
-            tagline: companySettings.subBrandDetails.GZ?.tagline || 'Your trusted gadget shop',
-            address: companySettings.subBrandDetails.GZ?.address || 'House #12, Road #3, Block-A, Banasree, Dhaka',
-            phone: companySettings.subBrandDetails.GZ?.phone || '01577351518',
-            whatsapp: companySettings.subBrandDetails.GZ?.whatsapp || companySettings.subBrandDetails.GZ?.phone || '01577351518',
-            email: companySettings.subBrandDetails.GZ?.email || 'gadgetzu.bd@gmail.com',
-            logoUrl: companySettings.subBrandDetails.GZ?.logoUrl || '/gz_logo.jpg',
-            invoiceTerms: companySettings.subBrandDetails.GZ?.invoiceTerms || 'Goods once sold are non-refundable. Please verify items at delivery.'
-          },
-          RTX: {
-            companyName: companySettings.subBrandDetails.RTX?.companyName || 'RTX Gadget',
-            tagline: companySettings.subBrandDetails.RTX?.tagline || 'Next-gen gaming & tech accessories',
-            address: companySettings.subBrandDetails.RTX?.address || 'House #12, Road #3, Block-A, Banasree, Dhaka',
-            phone: companySettings.subBrandDetails.RTX?.phone || '01577351518',
-            whatsapp: companySettings.subBrandDetails.RTX?.whatsapp || companySettings.subBrandDetails.RTX?.phone || '01577351518',
-            email: companySettings.subBrandDetails.RTX?.email || 'rtxgadget.bd@gmail.com',
-            logoUrl: companySettings.subBrandDetails.RTX?.logoUrl || '/rtx_logo.jpg',
-            invoiceTerms: companySettings.subBrandDetails.RTX?.invoiceTerms || 'Goods once sold are non-refundable. Please verify items at delivery.'
-          }
-        });
-      }
+      setWhatsappContact(
+        companySettings.paymentMethodsInfo?.whatsappContact ||
+          companySettings.phone ||
+          '01577351518'
+      );
+      setInvoiceTerms(
+        companySettings.invoiceTerms ||
+          'Goods once sold are non-refundable. Please verify items at delivery.'
+      );
 
       setLowStockThreshold(companySettings.defaultReorderThreshold || 5);
       setAgingBucket1(companySettings.agingThresholds?.bucket1MaxDays || 15);
@@ -230,16 +355,43 @@ export default function CompanySettingsView({
     }
   }, [companySettings]);
 
+  // Keep dynamic prefix inputs initialized from subBrands & companySettings.prefixes
+  useEffect(() => {
+    setBrandPrefixes((prev) => {
+      const next: Record<string, string> = {};
+      sellingBrands.forEach((sb) => {
+        next[sb.shortCode] =
+          prev[sb.shortCode] ||
+          companySettings?.prefixes?.[sb.shortCode] ||
+          sb.invoicePrefix ||
+          `${sb.shortCode}-INV`;
+      });
+      return next;
+    });
+  }, [sellingBrands, companySettings]);
+
+  // Esc closes modals
+  useEffect(() => {
+    const onCloseAll = () => {
+      setBrandModalOpen(false);
+      setReassignModalOpen(false);
+    };
+    window.addEventListener('close-all-modals', onCloseAll);
+    return () => window.removeEventListener('close-all-modals', onCloseAll);
+  }, []);
+
   // Load Accounting Baseline Settings
   useEffect(() => {
-    getAccountingBaselineSettings().then(b => {
-      if (b) {
-        setBaselineCash(Number(b.baselineCash) || 0);
-        setBaselineInvestment(Number(b.baselineInvestment) || 39550);
-        setBaselineCutoffDate(b.cutoffDate || new Date().toISOString().split('T')[0]);
-        setBaselineNote(b.note || '');
-      }
-    }).catch(e => console.warn(e));
+    getAccountingBaselineSettings()
+      .then((b) => {
+        if (b) {
+          setBaselineCash(Number(b.baselineCash) || 0);
+          setBaselineInvestment(Number(b.baselineInvestment) || 39550);
+          setBaselineCutoffDate(b.cutoffDate || new Date().toISOString().split('T')[0]);
+          setBaselineNote(b.note || '');
+        }
+      })
+      .catch((e) => console.warn(e));
   }, []);
 
   const handleSaveAccountingBaselineOnly = async () => {
@@ -251,9 +403,15 @@ export default function CompanySettingsView({
         cutoffDate: baselineCutoffDate,
         cutoffTimestamp: new Date(baselineCutoffDate).getTime() || Date.now(),
         note: baselineNote.trim(),
-        updatedBy: user?.name || 'Admin'
+        updatedBy: user?.name || 'Admin',
       });
-      setSuccessMsg('অ্যাকাউন্টিং বেসলাইন সফলভাবে সেভ করা হয়েছে (ক্যাশ ৳' + Number(baselineCash).toLocaleString() + ', বিনিয়োগ ৳' + Number(baselineInvestment).toLocaleString() + ')');
+      setSuccessMsg(
+        'অ্যাকাউন্টিং বেসলাইন সফলভাবে সেভ করা হয়েছে (ক্যাশ ৳' +
+          Number(baselineCash).toLocaleString() +
+          ', বিনিয়োগ ৳' +
+          Number(baselineInvestment).toLocaleString() +
+          ')'
+      );
       setTimeout(() => setSuccessMsg(''), 4000);
     } catch (err: any) {
       setErrorMsg('বেসলাইন সেভ করতে সমস্যা হয়েছে: ' + (err?.message || 'Error'));
@@ -262,17 +420,14 @@ export default function CompanySettingsView({
     }
   };
 
-
-  // Handle Logo Upload for Main Brand
+  // Handle Logo Upload for Main Parent Company
   const handleMainLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
     if (file.size > 2 * 1024 * 1024) {
       setErrorMsg('Image file size must be less than 2MB.');
       return;
     }
-
     const reader = new FileReader();
     reader.onload = () => {
       if (typeof reader.result === 'string') {
@@ -284,44 +439,234 @@ export default function CompanySettingsView({
     reader.readAsDataURL(file);
   };
 
-  // Handle Logo Upload for Sub-brands
-  const handleSubBrandLogoUpload = (brandKey: 'SAT' | 'GZ' | 'RTX', e: React.ChangeEvent<HTMLInputElement>) => {
+  // Open Create Sub-Brand Modal
+  const openCreateBrandModal = () => {
+    setBrandModalError('');
+    setBrandForm({
+      ...EMPTY_SUB_BRAND_FORM,
+      address: address || EMPTY_SUB_BRAND_FORM.address,
+      phone: phone || EMPTY_SUB_BRAND_FORM.phone,
+      whatsapp: whatsappContact || phone || EMPTY_SUB_BRAND_FORM.whatsapp,
+      accentColor: SUB_BRAND_ACCENT_PALETTE[sellingBrands.length % SUB_BRAND_ACCENT_PALETTE.length].hex,
+    });
+    setBrandModalOpen(true);
+  };
+
+  // Open Edit Sub-Brand Modal
+  const openEditBrandModal = (brand: SubBrand) => {
+    setBrandModalError('');
+    setBrandForm({
+      mode: 'edit',
+      originalId: brand.shortCode,
+      name: brand.name || '',
+      shortCode: brand.shortCode,
+      invoicePrefix: brand.invoicePrefix || `${brand.shortCode}-INV`,
+      skuPrefix: brand.skuPrefix || brand.shortCode,
+      logoUrl: brand.logoUrl || '',
+      accentColor: sanitizeHexColor(brand.accentColor, '#0F766E'),
+      phone: brand.phone || '',
+      whatsapp: brand.whatsapp || '',
+      email: brand.email || '',
+      address: brand.address || '',
+      website: brand.website || '',
+      facebook: brand.socialLinks?.facebook || '',
+      instagram: brand.socialLinks?.instagram || '',
+      tiktok: brand.socialLinks?.tiktok || '',
+      youtube: brand.socialLinks?.youtube || '',
+      tagline: brand.tagline || '',
+      invoiceTerms: brand.invoiceTerms || '',
+      invoiceFooterNote: brand.invoiceFooterNote || '',
+      warrantyPolicyText: brand.warrantyPolicyText || '',
+      active: brand.active !== false,
+    });
+    setBrandModalOpen(true);
+  };
+
+  const handleModalLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     if (!file) return;
-
-    if (file.size > 2 * 1024 * 1024) {
-      setErrorMsg('Image file size must be less than 2MB.');
+    if (file.size > 1500 * 1024) {
+      setBrandModalError('Logo image must be under 1.5MB.');
       return;
     }
-
     const reader = new FileReader();
     reader.onload = () => {
       if (typeof reader.result === 'string') {
-        setSubBrands(prev => ({
-          ...prev,
-          [brandKey]: {
-            ...prev[brandKey],
-            logoUrl: reader.result as string
-          }
-        }));
-        setSuccessMsg(`${brandKey} sub-brand logo updated. Click "Save Settings" to apply.`);
-        setTimeout(() => setSuccessMsg(''), 3000);
+        setBrandForm((prev) => ({ ...prev, logoUrl: reader.result as string }));
       }
     };
     reader.readAsDataURL(file);
   };
 
-  const handleSubBrandFieldChange = (brandKey: 'SAT' | 'GZ' | 'RTX', field: string, value: string) => {
-    setSubBrands(prev => ({
-      ...prev,
-      [brandKey]: {
-        ...prev[brandKey],
-        [field]: value
+  const handleSaveSubBrandModal = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setBrandModalError('');
+    if (!isSuperAdmin) return;
+
+    const cleanAccent = sanitizeHexColor(brandForm.accentColor, '#0F766E');
+    if (!isValidHexColor(cleanAccent)) {
+      setBrandModalError('Accent color must be a valid 6-digit hex code (#RRGGBB).');
+      return;
+    }
+
+    setSavingBrand(true);
+    try {
+      const socialLinks = {
+        facebook: brandForm.facebook.trim() || undefined,
+        instagram: brandForm.instagram.trim() || undefined,
+        tiktok: brandForm.tiktok.trim() || undefined,
+        youtube: brandForm.youtube.trim() || undefined,
+      };
+
+      if (brandForm.mode === 'create') {
+        await createSubBrand({
+          name: brandForm.name,
+          shortCode: brandForm.shortCode,
+          invoicePrefix: brandForm.invoicePrefix,
+          skuPrefix: brandForm.skuPrefix || brandForm.shortCode,
+          logoUrl: brandForm.logoUrl,
+          accentColor: cleanAccent,
+          phone: brandForm.phone,
+          whatsapp: brandForm.whatsapp,
+          email: brandForm.email,
+          address: brandForm.address,
+          website: brandForm.website,
+          socialLinks,
+          tagline: brandForm.tagline,
+          invoiceTerms: brandForm.invoiceTerms,
+          invoiceFooterNote: brandForm.invoiceFooterNote,
+          warrantyPolicyText: brandForm.warrantyPolicyText,
+          active: brandForm.active,
+        });
+        setSuccessMsg(`Created selling sub-brand "${brandForm.name.trim()}" (${normalizeSubBrandCode(brandForm.shortCode)}).`);
+      } else if (brandForm.originalId) {
+        await updateSubBrand(brandForm.originalId, {
+          name: brandForm.name,
+          invoicePrefix: brandForm.invoicePrefix,
+          skuPrefix: brandForm.skuPrefix || brandForm.shortCode,
+          logoUrl: brandForm.logoUrl,
+          accentColor: cleanAccent,
+          phone: brandForm.phone,
+          whatsapp: brandForm.whatsapp,
+          email: brandForm.email,
+          address: brandForm.address,
+          website: brandForm.website,
+          socialLinks,
+          tagline: brandForm.tagline,
+          invoiceTerms: brandForm.invoiceTerms,
+          invoiceFooterNote: brandForm.invoiceFooterNote,
+          warrantyPolicyText: brandForm.warrantyPolicyText,
+          active: brandForm.active,
+        });
+        setSuccessMsg(`Updated selling sub-brand "${brandForm.name.trim()}".`);
       }
-    }));
+
+      const fresh = await getSubBrands({ forceRefresh: true, companySettings });
+      setSubBrandsList(fresh);
+      onSubBrandsUpdated?.(fresh);
+      setBrandModalOpen(false);
+      setTimeout(() => setSuccessMsg(''), 4000);
+    } catch (err: any) {
+      setBrandModalError(err?.message || 'Could not save sub-brand.');
+    } finally {
+      setSavingBrand(false);
+    }
   };
 
-  // Submit Save
+  const handleToggleBrandStatus = async (brand: SubBrand) => {
+    if (!isSuperAdmin) return;
+    setErrorMsg('');
+    try {
+      await toggleSubBrandActive(brand.shortCode, brand.active === false);
+      const fresh = await getSubBrands({ forceRefresh: true, companySettings });
+      setSubBrandsList(fresh);
+      onSubBrandsUpdated?.(fresh);
+      setSuccessMsg(
+        `${brand.name} is now ${brand.active === false ? 'Active' : 'Inactive'}.`
+      );
+      setTimeout(() => setSuccessMsg(''), 3000);
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Failed to update sub-brand status.');
+    }
+  };
+
+  const handleDeleteBrand = async (brand: SubBrand) => {
+    if (!isSuperAdmin) return;
+    setErrorMsg('');
+    try {
+      await deleteUnusedSubBrand(brand.shortCode);
+      const fresh = await getSubBrands({ forceRefresh: true, companySettings });
+      setSubBrandsList(fresh);
+      onSubBrandsUpdated?.(fresh);
+      setSuccessMsg(`Deleted unused sub-brand ${brand.name} (${brand.shortCode}).`);
+      setTimeout(() => setSuccessMsg(''), 3000);
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Cannot delete sub-brand.');
+    }
+  };
+
+  const handleRunUserSatCleanup = async () => {
+    if (!isSuperAdmin) return;
+    setRunningUserMigration(true);
+    setErrorMsg('');
+    setUserMigrationSummary(null);
+    try {
+      const res = await migrateUsersSatAccess();
+      setUserMigrationSummary(
+        `Scanned ${res.totalScanned} operator account(s); updated ${res.updatedCount} account(s) to remove SAT access and assign active selling sub-brands.`
+      );
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Failed to clean SAT from user access.');
+    } finally {
+      setRunningUserMigration(false);
+    }
+  };
+
+  const handleOpenReassignModal = async () => {
+    setReassignModalOpen(true);
+    setLoadingReassignPreview(true);
+    setErrorMsg('');
+    try {
+      const preview = await getLegacySatReassignmentPreview();
+      setReassignPreview(preview);
+      setSelectedProdIds(preview.products.map((p) => p.id));
+      setSelectedOrderIds(preview.orders.map((o) => o.id));
+      setSelectedInvoiceIds(preview.invoices.map((i) => i.id));
+      setSelectedPreOrderIds(preview.preOrders.map((po) => po.id));
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Failed to scan legacy SAT records.');
+    } finally {
+      setLoadingReassignPreview(false);
+    }
+  };
+
+  const handleConfirmReassignment = async () => {
+    if (!user || !reassignTargetBrand) return;
+    setApplyingReassign(true);
+    setErrorMsg('');
+    try {
+      const res = await applyHistoricalBrandReassignment({
+        productIds: selectedProdIds,
+        orderIds: selectedOrderIds,
+        invoiceIds: selectedInvoiceIds,
+        preOrderIds: selectedPreOrderIds,
+        targetSubBrandId: reassignTargetBrand,
+        actor: { id: user.id, name: user.name, role: user.role },
+      });
+      setReassignModalOpen(false);
+      setSuccessMsg(
+        `Reassigned tags to ${reassignTargetBrand} (Products: ${res.products}, Orders: ${res.orders}, Invoices: ${res.invoices}, Pre-Orders: ${res.preOrders}). Printed IDs, SKUs & barcodes preserved.`
+      );
+      void loadCountersAndRefs(sellingBrands);
+      setTimeout(() => setSuccessMsg(''), 5000);
+    } catch (err: any) {
+      setErrorMsg(err?.message || 'Failed to reassign records.');
+    } finally {
+      setApplyingReassign(false);
+    }
+  };
+
+  // Submit Save All Global Settings
   const handleSaveAll = async (e?: React.FormEvent) => {
     if (e) e.preventDefault();
     if (requireCheckIn && !requireCheckIn()) return;
@@ -332,9 +677,21 @@ export default function CompanySettingsView({
 
     const cleanPublicAppUrl = publicAppUrl.trim().replace(/\/+$/, '');
     if (cleanPublicAppUrl && !isValidHttpsUrl(cleanPublicAppUrl)) {
-      setErrorMsg('Public Tracking Base URL must be a valid https:// URL (e.g. https://sat-erp.vercel.app).');
+      setErrorMsg(
+        'Public Tracking Base URL must be a valid https:// URL (e.g. https://sat-erp.vercel.app).'
+      );
       setActiveTab('tracking');
       return;
+    }
+
+    // Validate no selling brand prefix starts with SAT-
+    for (const [code, prefix] of Object.entries(brandPrefixes)) {
+      const upper = String(prefix || '').trim().toUpperCase();
+      if (upper.startsWith('SAT-')) {
+        setErrorMsg(`Prefix for ${code} cannot start with SAT- (reserved for retired Parent Company invoices).`);
+        setActiveTab('invoice');
+        return;
+      }
     }
 
     setSaving(true);
@@ -342,44 +699,78 @@ export default function CompanySettingsView({
     setSuccessMsg('');
 
     try {
+      const nextPrefixes: Record<string, string> = {};
+      const nextSubBrandDetails: CompanySettings['subBrandDetails'] = {};
+
+      for (const sb of sellingBrands) {
+        const cleanPrefix = (brandPrefixes[sb.shortCode] || sb.invoicePrefix || `${sb.shortCode}-INV`)
+          .trim()
+          .toUpperCase()
+          .replace(/\s+/g, '-');
+        nextPrefixes[sb.shortCode] = cleanPrefix;
+        nextSubBrandDetails[sb.shortCode] = {
+          companyName: sb.name,
+          address: sb.address || address.trim(),
+          phone: sb.phone || phone.trim(),
+          whatsapp: sb.whatsapp || whatsappContact.trim(),
+          email: sb.email || email.trim(),
+          website: sb.website || '',
+          socialLinks: sb.socialLinks || {},
+          logoUrl: sb.logoUrl || '',
+          accentColor: sb.accentColor,
+          invoiceTerms: sb.invoiceTerms || invoiceTerms.trim(),
+          invoiceFooterNote: sb.invoiceFooterNote || '',
+          warrantyPolicyText: sb.warrantyPolicyText || '',
+          tagline: sb.tagline || '',
+        };
+
+        // Sync edited invoicePrefix back to /subBrands/{id} if changed
+        if (cleanPrefix && cleanPrefix !== sb.invoicePrefix) {
+          try {
+            await updateSubBrand(sb.shortCode, { invoicePrefix: cleanPrefix });
+          } catch {}
+        }
+      }
+
       const payload: Partial<CompanySettings> = {
-        companyName: companyName.trim(),
+        companyName: companyName.trim() || PARENT_COMPANY_NAME,
+        legalName: companyName.trim() || PARENT_COMPANY_NAME,
+        isParent: true,
+        isSellingBrand: false,
+        parentCreditLine: parentCreditLine.trim() || DEFAULT_PARENT_CREDIT_LINE,
+        showParentCreditLine,
         footerTagline: tagline.trim(),
         address: address.trim(),
         phone: phone.trim(),
         email: email.trim(),
-        logoUrl: logoUrl,
+        logoUrl,
         invoiceTerms: invoiceTerms.trim(),
         paymentMethodsInfo: {
           bkashNagad: bkashNagad.trim(),
           bankInfo: bankInfo.trim(),
-          whatsappContact: whatsappContact.trim()
+          whatsappContact: whatsappContact.trim(),
         },
-        prefixes: {
-          SAT: satPrefix.trim() || 'SAT-INV',
-          GZ: gzPrefix.trim() || 'GZ-INV',
-          RTX: rtxPrefix.trim() || 'RTX-INV'
-        },
-        subBrandDetails: {
-          SAT: subBrands.SAT,
-          GZ: subBrands.GZ,
-          RTX: subBrands.RTX
-        },
+        subBrands: activeSellingBrands.map((b) => b.shortCode),
+        prefixes: nextPrefixes,
+        subBrandDetails: nextSubBrandDetails,
         defaultReorderThreshold: Number(lowStockThreshold) || 5,
         agingThresholds: {
           bucket1MaxDays: Number(agingBucket1) || 15,
-          bucket2MaxDays: Number(agingBucket2) || 30
+          bucket2MaxDays: Number(agingBucket2) || 30,
         },
         supplierTermsNote: supplierTerms.trim(),
         emailJsConfig: {
           serviceId: emailJsServiceId.trim(),
           templateId: emailJsTemplateId.trim(),
           publicKey: emailJsPublicKey.trim(),
-          recipientEmail: emailJsRecipient.trim()
+          recipientEmail: emailJsRecipient.trim(),
         },
         publicAppUrl: cleanPublicAppUrl,
         trackingAutoExpiryEnabled,
-        trackingAutoExpiryDays: Math.max(1, Number(trackingAutoExpiryDays) || DEFAULT_TRACKING_AUTO_EXPIRY_DAYS),
+        trackingAutoExpiryDays: Math.max(
+          1,
+          Number(trackingAutoExpiryDays) || DEFAULT_TRACKING_AUTO_EXPIRY_DAYS
+        ),
         defaultShowCourierTracking,
         trackingShareTemplates: {
           en: trackingTemplateEn.trim() || DEFAULT_TRACKING_SHARE_TEMPLATE_EN,
@@ -402,13 +793,17 @@ export default function CompanySettingsView({
   const handleExportConfig = () => {
     const configData = {
       companyName,
+      isParent: true,
+      isSellingBrand: false,
+      parentCreditLine,
+      showParentCreditLine,
       tagline,
       address,
       phone,
       email,
       paymentMethodsInfo: { bkashNagad, bankInfo, whatsappContact },
-      prefixes: { SAT: satPrefix, GZ: gzPrefix, RTX: rtxPrefix },
-      subBrandDetails: subBrands,
+      prefixes: brandPrefixes,
+      sellingSubBrands: sellingBrands,
       thresholds: { lowStockThreshold, agingBucket1, agingBucket2, supplierTerms },
       publicTrackingPortal: {
         publicAppUrl,
@@ -417,7 +812,7 @@ export default function CompanySettingsView({
         defaultShowCourierTracking,
         trackingShareTemplates: { en: trackingTemplateEn, bn: trackingTemplateBn },
       },
-      exportedAt: new Date().toISOString()
+      exportedAt: new Date().toISOString(),
     };
 
     const blob = new Blob([JSON.stringify(configData, null, 2)], { type: 'application/json' });
@@ -429,26 +824,34 @@ export default function CompanySettingsView({
     URL.revokeObjectURL(url);
   };
 
+  const previewBrand = useMemo(
+    () =>
+      sellingBrands.find((b) => b.shortCode === previewBrandCode) ||
+      activeSellingBrands[0] ||
+      sellingBrands[0],
+    [sellingBrands, activeSellingBrands, previewBrandCode]
+  );
+
   return (
     <div className="w-full space-y-4 max-w-full">
       {/* Top Header Section */}
-      <div className="bg-white p-4 sm:p-5 rounded-2xl border border-slate-200/80 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
+      <div className="bg-white dark:bg-slate-900 p-4 sm:p-5 rounded-2xl border border-slate-200/80 dark:border-slate-800 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
           <div className="flex items-center gap-2">
-            <span className="text-[11px] font-mono font-bold text-amber-500 uppercase tracking-widest bg-amber-50 px-2 py-0.5 rounded-md border border-amber-200/60">
+            <span className="text-[11px] font-mono font-bold text-amber-500 uppercase tracking-widest bg-amber-50 dark:bg-amber-950/30 px-2 py-0.5 rounded-md border border-amber-200/60 dark:border-amber-800">
               Global Platform Configuration
             </span>
             <span className="text-[11px] font-mono font-bold bg-slate-900 text-amber-400 px-2 py-0.5 rounded-md">
-              Multi-Brand Core
+              Parent + {activeSellingBrands.length} Selling Brand{activeSellingBrands.length === 1 ? '' : 's'}
             </span>
           </div>
           <div className="flex items-center gap-3 mt-1.5">
-            <h1 className="text-xl sm:text-2xl font-black text-slate-900 tracking-tight">
-              Company Branding & Invoice Settings
+            <h1 className="text-xl sm:text-2xl font-black text-slate-900 dark:text-white tracking-tight">
+              Parent Company, Selling Sub-Brands &amp; Invoice Settings
             </h1>
           </div>
-          <p className="text-xs text-slate-500 mt-1">
-            Customize company details, invoice layout, payment method instructions, terms, and sub-brand profiles.
+          <p className="text-xs text-slate-500 dark:text-slate-400 mt-1">
+            Manage parent importer identity ({PARENT_COMPANY_NAME}), dynamic selling sub-brands, invoice prefixes, and tracking portals.
           </p>
         </div>
 
@@ -482,13 +885,13 @@ export default function CompanySettingsView({
       </div>
 
       {/* Auth Status Notification Banner */}
-      <div className="p-3 bg-emerald-50/70 border border-emerald-200 rounded-xl flex items-center justify-between text-xs text-emerald-800">
+      <div className="p-3 bg-emerald-50/70 dark:bg-emerald-950/20 border border-emerald-200 dark:border-emerald-800/60 rounded-xl flex items-center justify-between text-xs text-emerald-800 dark:text-emerald-300">
         <div className="flex items-center gap-2">
-          <ShieldCheck size={16} className="text-emerald-600 shrink-0" />
+          <ShieldCheck size={16} className="text-emerald-600 dark:text-emerald-400 shrink-0" />
           <span className="font-semibold">
-            {isSuperAdmin 
-              ? 'Super Admin Authorized: You have full permissions to modify company branding, print layouts, and invoice configurations.'
-              : 'Read-Only Mode: You are viewing platform settings. Contact Super Admin to request modifications.'}
+            {isSuperAdmin
+              ? 'Super Admin Authorized: You can configure parent company metadata, create or edit selling sub-brands, and run legacy brand migrations.'
+              : 'Read-Only Mode: Contact Super Admin to modify platform or sub-brand settings.'}
           </span>
         </div>
       </div>
@@ -497,13 +900,19 @@ export default function CompanySettingsView({
       {errorMsg && (
         <div className="p-3 bg-red-50 border border-red-200 text-red-700 rounded-xl text-xs flex items-center gap-2">
           <AlertCircle size={15} className="text-red-500 shrink-0" />
-          <span className="font-semibold">{errorMsg}</span>
+          <span className="font-semibold flex-1">{errorMsg}</span>
+          <button type="button" onClick={() => setErrorMsg('')} className="text-red-400 hover:text-red-600">
+            <X size={14} />
+          </button>
         </div>
       )}
       {successMsg && (
         <div className="p-3 bg-emerald-50 border border-emerald-200 text-emerald-800 rounded-xl text-xs flex items-center gap-2">
           <CheckCircle2 size={15} className="text-emerald-500 shrink-0" />
-          <span className="font-semibold">{successMsg}</span>
+          <span className="font-semibold flex-1">{successMsg}</span>
+          <button type="button" onClick={() => setSuccessMsg('')} className="text-emerald-500 hover:text-emerald-700">
+            <X size={14} />
+          </button>
         </div>
       )}
 
@@ -512,1284 +921,2147 @@ export default function CompanySettingsView({
         {/* Left Navigation Sidebar */}
         <div className="lg:col-span-3 bg-white dark:bg-slate-900 p-3 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs space-y-1.5 sticky top-4">
           <div className="px-3 py-2 border-b border-slate-100 dark:border-slate-800 mb-1">
-            <span className="text-[10px] font-mono font-bold text-amber-500 uppercase tracking-widest block">SETTINGS NAV</span>
-            <h3 className="text-xs font-bold text-slate-900 dark:text-slate-100">Configuration Modules</h3>
+            <span className="text-[10px] font-mono font-bold text-amber-500 uppercase tracking-widest block">
+              SETTINGS NAV
+            </span>
+            <h3 className="text-xs font-bold text-slate-900 dark:text-slate-100">
+              Configuration Modules
+            </h3>
           </div>
 
-          <button
-            type="button"
-            onClick={() => setActiveTab('main')}
-            className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer ${
-              activeTab === 'main'
-                ? 'bg-slate-900 dark:bg-slate-800 text-amber-400 shadow-2xs'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-50 dark:hover:bg-slate-800/50'
-            }`}
-          >
-            <div className="flex items-center gap-2">
-              <Building2 size={15} className={activeTab === 'main' ? 'text-amber-400' : 'text-slate-400'} />
-              <span>General & Logo</span>
-            </div>
-            <span className="text-[10px] font-mono opacity-60">01</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setActiveTab('subbrands')}
-            className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer ${
-              activeTab === 'subbrands'
-                ? 'bg-slate-900 dark:bg-slate-800 text-amber-400 shadow-2xs'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-50 dark:hover:bg-slate-800/50'
-            }`}
-          >
-            <div className="flex items-center gap-2">
-              <Tag size={15} className={activeTab === 'subbrands' ? 'text-amber-400' : 'text-slate-400'} />
-              <span>Sub-Brand Profiles</span>
-            </div>
-            <span className="text-[10px] font-mono opacity-60">02</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setActiveTab('invoice')}
-            className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer ${
-              activeTab === 'invoice'
-                ? 'bg-slate-900 dark:bg-slate-800 text-amber-400 shadow-2xs'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-50 dark:hover:bg-slate-800/50'
-            }`}
-          >
-            <div className="flex items-center gap-2">
-              <Receipt size={15} className={activeTab === 'invoice' ? 'text-amber-400' : 'text-slate-400'} />
-              <span>Invoice & Payment</span>
-            </div>
-            <span className="text-[10px] font-mono opacity-60">03</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setActiveTab('inventory')}
-            className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer ${
-              activeTab === 'inventory'
-                ? 'bg-slate-900 dark:bg-slate-800 text-amber-400 shadow-2xs'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-50 dark:hover:bg-slate-800/50'
-            }`}
-          >
-            <div className="flex items-center gap-2">
-              <Sliders size={15} className={activeTab === 'inventory' ? 'text-amber-400' : 'text-slate-400'} />
-              <span>Inventory Thresholds</span>
-            </div>
-            <span className="text-[10px] font-mono opacity-60">04</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setActiveTab('integrations')}
-            className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer ${
-              activeTab === 'integrations'
-                ? 'bg-slate-900 dark:bg-slate-800 text-amber-400 shadow-2xs'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-50 dark:hover:bg-slate-800/50'
-            }`}
-          >
-            <div className="flex items-center gap-2">
-              <Bell size={15} className={activeTab === 'integrations' ? 'text-amber-400' : 'text-slate-400'} />
-              <span>EmailJS Notifications</span>
-            </div>
-            <span className="text-[10px] font-mono opacity-60">05</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setActiveTab('tracking')}
-            className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer ${
-              activeTab === 'tracking'
-                ? 'bg-slate-900 dark:bg-slate-800 text-amber-400 shadow-2xs'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-50 dark:hover:bg-slate-800/50'
-            }`}
-          >
-            <div className="flex items-center gap-2">
-              <Link2 size={15} className={activeTab === 'tracking' ? 'text-amber-400' : 'text-slate-400'} />
-              <span>Public Tracking Portal</span>
-            </div>
-            <span className="text-[10px] font-mono opacity-60">06</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setActiveTab('accounting')}
-            className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer ${
-              activeTab === 'accounting'
-                ? 'bg-amber-500 text-slate-950 shadow-2xs'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-50 dark:hover:bg-slate-800/50'
-            }`}
-          >
-            <div className="flex items-center gap-2">
-              <Calculator size={15} className={activeTab === 'accounting' ? 'text-slate-950' : 'text-amber-500'} />
-              <span>Accounting Baseline</span>
-            </div>
-            <span className="text-[10px] font-mono opacity-60">07</span>
-          </button>
-
-          <button
-            type="button"
-            onClick={() => setActiveTab('preview')}
-            className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer ${
-              activeTab === 'preview'
-                ? 'bg-amber-100 dark:bg-amber-900/40 text-amber-900 dark:text-amber-300 font-mono shadow-2xs'
-                : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-50 dark:hover:bg-slate-800/50'
-            }`}
-          >
-            <div className="flex items-center gap-2">
-              <Eye size={15} className="text-amber-600 dark:text-amber-400" />
-              <span>Live Invoice Preview</span>
-            </div>
-            <span className="text-[10px] font-mono opacity-60">08</span>
-          </button>
+          {[
+            { id: 'main', label: 'Parent Company (HQ)', num: '01', icon: Building2 },
+            { id: 'subbrands', label: 'Selling Sub-Brands', num: '02', icon: Tag },
+            { id: 'invoice', label: 'Invoice & Payment', num: '03', icon: Receipt },
+            { id: 'inventory', label: 'Inventory Thresholds', num: '04', icon: Sliders },
+            { id: 'integrations', label: 'EmailJS Notifications', num: '05', icon: Bell },
+            { id: 'tracking', label: 'Public Tracking Portal', num: '06', icon: Link2 },
+            { id: 'accounting', label: 'Accounting Baseline', num: '07', icon: Calculator },
+            { id: 'preview', label: 'Live Invoice Preview', num: '08', icon: Eye },
+          ].map((item) => {
+            const Icon = item.icon;
+            const active = activeTab === item.id;
+            return (
+              <button
+                key={item.id}
+                type="button"
+                onClick={() => setActiveTab(item.id as any)}
+                className={`w-full flex items-center justify-between px-3 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer ${
+                  active
+                    ? item.id === 'accounting'
+                      ? 'bg-amber-500 text-slate-950 shadow-2xs'
+                      : 'bg-slate-900 dark:bg-slate-800 text-amber-400 shadow-2xs'
+                    : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white hover:bg-slate-50 dark:hover:bg-slate-800/50'
+                }`}
+              >
+                <div className="flex items-center gap-2">
+                  <Icon
+                    size={15}
+                    className={
+                      active
+                        ? item.id === 'accounting'
+                          ? 'text-slate-950'
+                          : 'text-amber-400'
+                        : 'text-slate-400'
+                    }
+                  />
+                  <span>{item.label}</span>
+                </div>
+                <span className="text-[10px] font-mono opacity-60">{item.num}</span>
+              </button>
+            );
+          })}
         </div>
 
         {/* Right Active Module Form Container */}
         <div className="lg:col-span-9 space-y-4 min-w-0">
-          <form onSubmit={(e) => { e.preventDefault(); handleSaveAll(); }}>
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              handleSaveAll();
+            }}
+          >
             {/* ========================================================================= */}
-            {/* PART 1: MAIN COMPANY & BRANDING */}
+            {/* PART 1: PARENT COMPANY PROFILE */}
             {/* ========================================================================= */}
             {activeTab === 'main' && (
               <div className="bg-white dark:bg-slate-900 p-5 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-xs space-y-5 animate-in fade-in duration-150">
-            <div className="border-b border-slate-100 pb-3">
-              <span className="text-[10px] font-mono font-bold text-amber-600 uppercase tracking-widest block">
-                SECTION 1
-              </span>
-              <h3 className="text-sm font-black text-slate-900 flex items-center gap-2 mt-0.5">
-                <Building2 size={16} className="text-amber-500" />
-                Main Company Profile & Visual Identity
-              </h3>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Primary corporate identity used across system headers, login screen, and main company documents.
-              </p>
-            </div>
+                <div className="border-b border-slate-100 dark:border-slate-800 pb-3 flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <span className="text-[10px] font-mono font-bold text-amber-600 uppercase tracking-widest block">
+                      SECTION 1 • PARENT / IMPORTER ENTITY
+                    </span>
+                    <h3 className="text-sm font-black text-slate-900 dark:text-white flex items-center gap-2 mt-0.5">
+                      <Building2 size={16} className="text-amber-500" />
+                      Parent / Importer Company Profile ({PARENT_COMPANY_NAME})
+                    </h3>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      Sky Automation Tech operates strictly as the parent importer and shared operations HQ.
+                    </p>
+                  </div>
+                  <span className="text-[11px] font-mono font-bold bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-300 px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-700">
+                    Non-Selling Parent (isParent = true)
+                  </span>
+                </div>
 
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1">
-                  Main Company Name *
-                </label>
-                <input
-                  type="text"
-                  disabled={!isSuperAdmin}
-                  value={companyName}
-                  onChange={(e) => setCompanyName(e.target.value)}
-                  placeholder="e.g. Sky Automation Tech"
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-900 font-bold focus:outline-hidden focus:border-amber-400 disabled:opacity-60"
-                  required
-                />
-              </div>
+                {/* Structural Rule Callout */}
+                <div className="p-3.5 bg-amber-50/80 dark:bg-amber-950/20 border border-amber-200 dark:border-amber-800/60 rounded-xl flex items-start gap-2.5 text-xs text-amber-900 dark:text-amber-200">
+                  <Info size={16} className="text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+                  <div className="space-y-1">
+                    <p className="font-bold">Parent Company Separation Rule Active</p>
+                    <p className="text-[11px] leading-relaxed opacity-90">
+                      <strong>Sky Automation Tech (SAT)</strong> does not sell directly to customers, hold customer accounts, or issue customer invoices. All sales, invoices, pre-orders, warranty claims, and loyalty records belong to an active selling sub-brand ({activeSellingBrands.map((b) => b.name).join(', ') || 'GadgetZu, RTX Gadget'}).
+                    </p>
+                  </div>
+                </div>
 
-              <div>
-                <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1">
-                  Corporate Tagline / Slogan
-                </label>
-                <input
-                  type="text"
-                  disabled={!isSuperAdmin}
-                  value={tagline}
-                  onChange={(e) => setTagline(e.target.value)}
-                  placeholder="e.g. Smart solutions, better future"
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 focus:outline-hidden focus:border-amber-400 disabled:opacity-60"
-                />
-              </div>
-            </div>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-400 mb-1">
+                      Parent Company Legal Name *
+                    </label>
+                    <input
+                      type="text"
+                      disabled={!isSuperAdmin}
+                      value={companyName}
+                      onChange={(e) => setCompanyName(e.target.value)}
+                      placeholder="e.g. Sky Automation Tech"
+                      className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl py-2 px-3 text-xs text-slate-900 dark:text-white font-bold focus:outline-hidden focus:border-amber-400 disabled:opacity-60"
+                      required
+                    />
+                  </div>
 
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1 flex items-center gap-1">
-                  <MapPin size={12} /> Main Headquarter Address
-                </label>
-                <input
-                  type="text"
-                  disabled={!isSuperAdmin}
-                  value={address}
-                  onChange={(e) => setAddress(e.target.value)}
-                  placeholder="House #12, Road #3, Block-A, Banasree, Dhaka"
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 focus:outline-hidden focus:border-amber-400 disabled:opacity-60"
-                />
-              </div>
+                  <div>
+                    <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-400 mb-1">
+                      Corporate Tagline / Slogan
+                    </label>
+                    <input
+                      type="text"
+                      disabled={!isSuperAdmin}
+                      value={tagline}
+                      onChange={(e) => setTagline(e.target.value)}
+                      placeholder="e.g. Smart solutions, better future"
+                      className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl py-2 px-3 text-xs text-slate-800 dark:text-slate-200 focus:outline-hidden focus:border-amber-400 disabled:opacity-60"
+                    />
+                  </div>
+                </div>
 
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1 flex items-center gap-1">
-                  <Phone size={12} /> Hotline / Official Phone
-                </label>
-                <input
-                  type="text"
-                  disabled={!isSuperAdmin}
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  placeholder="01577351518"
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 font-mono font-bold focus:outline-hidden focus:border-amber-400 disabled:opacity-60"
-                />
-              </div>
-
-              <div>
-                <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1 flex items-center gap-1">
-                  <Mail size={12} /> Official Support Email
-                </label>
-                <input
-                  type="email"
-                  disabled={!isSuperAdmin}
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="skyautomationtech@gmail.com"
-                  className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 focus:outline-hidden focus:border-amber-400 disabled:opacity-60"
-                />
-              </div>
-            </div>
-
-            {/* Clean Logo Image Card - No raw ugly base64 string */}
-            <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-3">
-              <label className="block text-xs font-bold uppercase tracking-wider text-slate-700">
-                Main Company Logo
-              </label>
-
-              <div className="flex flex-col sm:flex-row items-center gap-4 bg-white p-3.5 rounded-xl border border-slate-200">
-                <div className="w-20 h-20 bg-slate-950 rounded-xl p-2 flex items-center justify-center shrink-0 border border-slate-800 shadow-2xs">
-                  <img 
-                    src={logoUrl || "/sat_logo.jpg"} 
-                    alt="Logo Preview" 
-                    className="w-full h-full object-contain"
-                    onError={(e) => {
-                      e.currentTarget.onerror = null;
-                      e.currentTarget.src = "/sat_logo.jpg";
-                    }}
+                {/* Parent Credit Line Configuration */}
+                <div className="p-4 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 rounded-2xl space-y-3">
+                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+                    <div>
+                      <h4 className="text-xs font-bold text-slate-800 dark:text-slate-200 uppercase tracking-wider">
+                        Sub-Brand Invoice &amp; Tracking Credit Line
+                      </h4>
+                      <p className="text-[11px] text-slate-500">
+                        Optional footer/subtitle displayed on selling sub-brand invoices, payment receipts, and public tracking portal.
+                      </p>
+                    </div>
+                    <label className="inline-flex items-center gap-2 text-xs font-bold text-slate-700 dark:text-slate-200 cursor-pointer shrink-0">
+                      <input
+                        type="checkbox"
+                        disabled={!isSuperAdmin}
+                        checked={showParentCreditLine}
+                        onChange={(e) => setShowParentCreditLine(e.target.checked)}
+                        className="rounded border-slate-300 text-amber-500"
+                      />
+                      <span>Display on Receipts &amp; Tracking</span>
+                    </label>
+                  </div>
+                  <input
+                    type="text"
+                    disabled={!isSuperAdmin || !showParentCreditLine}
+                    value={parentCreditLine}
+                    onChange={(e) => setParentCreditLine(e.target.value)}
+                    placeholder={DEFAULT_PARENT_CREDIT_LINE}
+                    className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl py-2 px-3 text-xs text-slate-800 dark:text-slate-200 font-semibold focus:outline-hidden disabled:opacity-50"
                   />
                 </div>
 
-                <div className="flex-1 w-full space-y-2 text-xs">
-                  <div className="flex items-center gap-2 flex-wrap">
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1 flex items-center gap-1">
+                      <MapPin size={12} /> Headquarter Address
+                    </label>
+                    <input
+                      type="text"
+                      disabled={!isSuperAdmin}
+                      value={address}
+                      onChange={(e) => setAddress(e.target.value)}
+                      className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl py-2 px-3 text-xs text-slate-800 dark:text-slate-200 focus:outline-hidden disabled:opacity-60"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1 flex items-center gap-1">
+                      <Phone size={12} /> HQ Hotline Phone
+                    </label>
+                    <input
+                      type="text"
+                      disabled={!isSuperAdmin}
+                      value={phone}
+                      onChange={(e) => setPhone(e.target.value)}
+                      className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl py-2 px-3 text-xs text-slate-800 dark:text-slate-200 font-mono font-bold focus:outline-hidden disabled:opacity-60"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1 flex items-center gap-1">
+                      <Mail size={12} /> Official HQ Email
+                    </label>
+                    <input
+                      type="email"
+                      disabled={!isSuperAdmin}
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl py-2 px-3 text-xs text-slate-800 dark:text-slate-200 focus:outline-hidden disabled:opacity-60"
+                    />
+                  </div>
+                </div>
+
+                {/* Main HQ Logo Card */}
+                <div className="p-4 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 rounded-2xl space-y-3">
+                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300">
+                    Parent Company Logo
+                  </label>
+
+                  <div className="flex flex-col sm:flex-row items-center gap-4 bg-white dark:bg-slate-900 p-3.5 rounded-xl border border-slate-200 dark:border-slate-700">
+                    <div className="w-20 h-20 bg-slate-950 rounded-xl p-2 flex items-center justify-center shrink-0 border border-slate-800 shadow-2xs">
+                      <img
+                        src={logoUrl || '/sat_logo.jpg'}
+                        alt="Logo Preview"
+                        className="w-full h-full object-contain"
+                        onError={(e) => {
+                          e.currentTarget.onerror = null;
+                          e.currentTarget.src = '/sat_logo.jpg';
+                        }}
+                      />
+                    </div>
+
+                    <div className="flex-1 w-full space-y-2 text-xs">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        {isSuperAdmin && (
+                          <label className="cursor-pointer bg-slate-950 hover:bg-slate-900 text-amber-400 font-bold text-xs py-2 px-3.5 rounded-xl transition inline-flex items-center gap-1.5 shadow-2xs">
+                            <Upload size={13} />
+                            Upload New Logo
+                            <input
+                              type="file"
+                              accept="image/*"
+                              onChange={handleMainLogoUpload}
+                              className="hidden"
+                            />
+                          </label>
+                        )}
+                        {logoUrl && (
+                          <button
+                            type="button"
+                            onClick={() => setLogoUrl('/sat_logo.jpg')}
+                            className="text-xs text-slate-500 hover:text-red-500 font-semibold px-2 py-1 cursor-pointer"
+                          >
+                            Reset Default
+                          </button>
+                        )}
+                      </div>
+                      <p className="text-[11px] text-slate-400">
+                        Used in the ERP sidebar, login screen, and parent importer header.
+                      </p>
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ========================================================================= */}
+            {/* PART 2: DYNAMIC SELLING SUB-BRANDS REGISTRY */}
+            {/* ========================================================================= */}
+            {activeTab === 'subbrands' && (
+              <div className="space-y-5 animate-in fade-in duration-150">
+                <div className="bg-white dark:bg-slate-900 p-5 rounded-2xl border border-slate-200/80 dark:border-slate-800 shadow-xs space-y-5">
+                  <div className="border-b border-slate-100 dark:border-slate-800 pb-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div>
+                      <span className="text-[10px] font-mono font-bold text-amber-600 uppercase tracking-widest block">
+                        SECTION 2 • SELLING BRANDS REGISTRY
+                      </span>
+                      <h3 className="text-sm font-black text-slate-900 dark:text-white flex items-center gap-2 mt-0.5">
+                        <Tag size={16} className="text-amber-500" />
+                        Selling Sub-Brands Management
+                      </h3>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        Add unlimited selling sub-brands (e.g. GadgetZu, RTX Gadget, Nova Gear) without code changes. Immediately available in products, orders, invoices, pre-orders, customers &amp; staff permissions.
+                      </p>
+                    </div>
+
                     {isSuperAdmin && (
-                      <label className="cursor-pointer bg-slate-950 hover:bg-slate-900 text-amber-400 font-bold text-xs py-2 px-3.5 rounded-xl transition inline-flex items-center gap-1.5 shadow-2xs">
-                        <Upload size={13} />
-                        Upload New Logo
-                        <input 
-                          type="file" 
-                          accept="image/*" 
-                          onChange={handleMainLogoUpload} 
-                          className="hidden" 
-                        />
-                      </label>
-                    )}
-                    {logoUrl && (
                       <button
                         type="button"
-                        onClick={() => setLogoUrl('/sat_logo.jpg')}
-                        className="text-xs text-slate-500 hover:text-red-500 font-semibold px-2 py-1"
+                        onClick={openCreateBrandModal}
+                        className="inline-flex items-center gap-1.5 px-3.5 py-2 bg-slate-950 hover:bg-slate-900 text-amber-400 font-bold text-xs rounded-xl shadow-xs transition cursor-pointer shrink-0"
                       >
-                        Reset Default
+                        <Plus size={14} />
+                        <span>Add Sub-Brand</span>
                       </button>
                     )}
                   </div>
-                  <p className="text-[11px] text-slate-400">
-                    Recommended dimensions: 512x512 PNG/JPEG with transparent or dark background. Max file size: 2MB.
+
+                  {/* Sub-Brand Cards Grid */}
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {sellingBrands.map((brand) => {
+                      const currentCount = countersByBrand[brand.shortCode] ?? 0;
+                      const nextInvoicePreview = `${brand.invoicePrefix}-${String(currentCount + 1).padStart(4, '0')}`;
+                      const refCount = refCountsMap[brand.shortCode];
+                      const isOnlyActive =
+                        brand.active !== false && activeSellingBrands.length <= 1;
+                      const canDelete =
+                        refCount === 0 && !isOnlyActive && isSuperAdmin;
+
+                      return (
+                        <div
+                          key={brand.shortCode}
+                          className={`rounded-2xl border p-4 space-y-3 transition ${
+                            brand.active !== false
+                              ? 'bg-slate-50/70 dark:bg-slate-800/40 border-slate-200 dark:border-slate-700'
+                              : 'bg-slate-100/60 dark:bg-slate-900/40 border-slate-200/60 dark:border-slate-800 opacity-75'
+                          }`}
+                        >
+                          <div className="flex items-start justify-between gap-3">
+                            <div className="flex items-center gap-3 min-w-0">
+                              <div
+                                className="w-12 h-12 rounded-xl bg-slate-950 p-1.5 border flex items-center justify-center shrink-0"
+                                style={{ borderColor: brand.accentColor }}
+                              >
+                                {brand.logoUrl ? (
+                                  <img
+                                    src={brand.logoUrl}
+                                    alt={brand.name}
+                                    className="w-full h-full object-contain rounded-lg bg-white p-0.5"
+                                  />
+                                ) : (
+                                  <span
+                                    className="font-black text-sm"
+                                    style={{ color: brand.accentColor }}
+                                  >
+                                    {brand.shortCode.slice(0, 3)}
+                                  </span>
+                                )}
+                              </div>
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <h4 className="font-black text-sm text-slate-900 dark:text-white truncate">
+                                    {brand.name}
+                                  </h4>
+                                  <span
+                                    className="px-2 py-0.5 text-[10px] font-mono font-bold rounded border"
+                                    style={{
+                                      backgroundColor: `${brand.accentColor}1A`,
+                                      color: brand.accentColor,
+                                      borderColor: `${brand.accentColor}55`,
+                                    }}
+                                  >
+                                    {brand.shortCode}
+                                  </span>
+                                  <span
+                                    className={`px-1.5 py-0.5 text-[10px] font-bold rounded ${
+                                      brand.active !== false
+                                        ? 'bg-emerald-100 text-emerald-700'
+                                        : 'bg-slate-200 text-slate-600'
+                                    }`}
+                                  >
+                                    {brand.active !== false ? 'Active' : 'Inactive'}
+                                  </span>
+                                </div>
+                                <p className="text-[11px] text-slate-500 truncate mt-0.5">
+                                  {brand.tagline || 'Selling Sub-Brand'}
+                                </p>
+                              </div>
+                            </div>
+
+                            <div
+                              className="w-6 h-6 rounded-lg border border-slate-300 shrink-0"
+                              style={{ backgroundColor: brand.accentColor }}
+                              title={`Accent: ${brand.accentColor}`}
+                            />
+                          </div>
+
+                          <div className="grid grid-cols-2 gap-2 text-[11px] bg-white dark:bg-slate-900 p-2.5 rounded-xl border border-slate-200/70 dark:border-slate-700">
+                            <div>
+                              <span className="text-slate-400 block text-[10px]">Invoice Prefix</span>
+                              <span className="font-mono font-bold text-slate-800 dark:text-slate-200">
+                                {brand.invoicePrefix}
+                              </span>
+                            </div>
+                            <div>
+                              <span className="text-slate-400 block text-[10px]">Next Invoice #</span>
+                              <span className="font-mono font-bold text-slate-800 dark:text-slate-200">
+                                {nextInvoicePreview}
+                              </span>
+                            </div>
+                            <div>
+                              <span className="text-slate-400 block text-[10px]">SKU Prefix</span>
+                              <span className="font-mono font-semibold text-slate-700 dark:text-slate-300">
+                                {brand.skuPrefix || brand.shortCode}
+                              </span>
+                            </div>
+                            <div>
+                              <span className="text-slate-400 block text-[10px]">Phone / Support</span>
+                              <span className="font-mono font-semibold text-slate-700 dark:text-slate-300 truncate block">
+                                {brand.phone || '—'}
+                              </span>
+                            </div>
+                          </div>
+
+                          {isSuperAdmin && (
+                            <div className="flex items-center justify-between gap-2 pt-1">
+                              <span className="text-[10px] font-mono text-slate-400">
+                                {refCount === undefined
+                                  ? 'Checking links...'
+                                  : refCount === 0
+                                    ? '0 linked records'
+                                    : `${refCount}+ linked records`}
+                              </span>
+                              <div className="flex items-center gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => openEditBrandModal(brand)}
+                                  className="px-2.5 py-1.5 text-xs font-bold bg-white hover:bg-slate-100 text-slate-700 border border-slate-200 rounded-lg inline-flex items-center gap-1 cursor-pointer"
+                                >
+                                  <Edit3 size={12} />
+                                  <span>Edit</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={isOnlyActive}
+                                  onClick={() => handleToggleBrandStatus(brand)}
+                                  title={
+                                    isOnlyActive
+                                      ? 'At least one active selling brand is required'
+                                      : brand.active !== false
+                                        ? 'Deactivate sub-brand'
+                                        : 'Activate sub-brand'
+                                  }
+                                  className="px-2.5 py-1.5 text-xs font-bold bg-white hover:bg-amber-50 text-slate-700 border border-slate-200 rounded-lg inline-flex items-center gap-1 cursor-pointer disabled:opacity-40"
+                                >
+                                  <Power size={12} />
+                                  <span>{brand.active !== false ? 'Disable' : 'Enable'}</span>
+                                </button>
+                                <button
+                                  type="button"
+                                  disabled={!canDelete}
+                                  onClick={() => handleDeleteBrand(brand)}
+                                  title={
+                                    refCount && refCount > 0
+                                      ? `Cannot delete: ${refCount}+ linked records exist. Disable instead.`
+                                      : isOnlyActive
+                                        ? 'Cannot delete last active selling brand'
+                                        : 'Delete unused sub-brand'
+                                  }
+                                  className="p-1.5 text-rose-600 bg-rose-50 hover:bg-rose-100 border border-rose-200 rounded-lg cursor-pointer disabled:opacity-35 disabled:cursor-not-allowed"
+                                >
+                                  <Trash2 size={13} />
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+
+                {/* Legacy SAT Migration & Data Hygiene Panel */}
+                {isSuperAdmin && (
+                  <div className="bg-white dark:bg-slate-900 p-5 rounded-2xl border border-slate-200/80 dark:border-slate-800 shadow-xs space-y-4">
+                    <div>
+                      <span className="text-[10px] font-mono font-bold text-amber-600 uppercase tracking-widest block">
+                        LEGACY DATA TOOLS (ONE-TIME &amp; CLEANUP)
+                      </span>
+                      <h4 className="text-sm font-black text-slate-900 dark:text-white mt-0.5">
+                        SAT Access Cleanup &amp; Historical Record Tag Reassignment
+                      </h4>
+                      <p className="text-xs text-slate-500 mt-0.5">
+                        Existing invoice numbers, pre-order numbers, SKUs, barcodes, and historical counters are never overwritten.
+                      </p>
+                    </div>
+
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {/* Tool 1: Strip SAT from User Access */}
+                      <div className="p-4 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 rounded-xl space-y-2.5">
+                        <div className="flex items-center gap-2 text-xs font-bold text-slate-800 dark:text-slate-200">
+                          <Users size={15} className="text-amber-500" />
+                          <span>Clean &ldquo;SAT&rdquo; from User Permissions</span>
+                        </div>
+                        <p className="text-[11px] text-slate-500 leading-relaxed">
+                          Removes legacy <span className="font-mono font-bold">SAT</span> from <span className="font-mono">users.subBrandAccess</span> and ensures admins &amp; migrated staff have active selling sub-brands.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={handleRunUserSatCleanup}
+                          disabled={runningUserMigration}
+                          className="px-3.5 py-2 bg-slate-900 hover:bg-slate-800 text-amber-400 font-bold text-xs rounded-xl inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                        >
+                          <RefreshCw size={13} className={runningUserMigration ? 'animate-spin' : ''} />
+                          <span>{runningUserMigration ? 'Cleaning Users...' : 'Clean SAT from User Access'}</span>
+                        </button>
+                        {userMigrationSummary && (
+                          <p className="text-[11px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 rounded-lg p-2">
+                            {userMigrationSummary}
+                          </p>
+                        )}
+                      </div>
+
+                      {/* Tool 2: Historical Record Tag Reassignment */}
+                      <div className="p-4 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 rounded-xl space-y-2.5">
+                        <div className="flex items-center gap-2 text-xs font-bold text-slate-800 dark:text-slate-200">
+                          <ArrowRight size={15} className="text-teal-600" />
+                          <span>Reassign Legacy SAT / Unassigned Records</span>
+                        </div>
+                        <p className="text-[11px] text-slate-500 leading-relaxed">
+                          Inspect historical products, orders, invoices, or pre-orders still tagged <span className="font-mono font-bold">SAT</span> or unassigned, and optionally re-tag them to GadgetZu, RTX Gadget, or another selling brand.
+                        </p>
+                        <button
+                          type="button"
+                          onClick={handleOpenReassignModal}
+                          className="px-3.5 py-2 bg-teal-600 hover:bg-teal-700 text-white font-bold text-xs rounded-xl inline-flex items-center gap-1.5 cursor-pointer"
+                        >
+                          <Tag size={13} />
+                          <span>Review &amp; Reassign Legacy Records</span>
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ========================================================================= */}
+            {/* PART 3: INVOICE & PAYMENT SETUP */}
+            {/* ========================================================================= */}
+            {activeTab === 'invoice' && (
+              <div className="bg-white dark:bg-slate-900 p-5 rounded-2xl border border-slate-200/80 dark:border-slate-800 shadow-xs space-y-5 animate-in fade-in duration-150">
+                <div className="border-b border-slate-100 dark:border-slate-800 pb-3">
+                  <span className="text-[10px] font-mono font-bold text-amber-600 uppercase tracking-widest block">
+                    SECTION 3
+                  </span>
+                  <h3 className="text-sm font-black text-slate-900 dark:text-white flex items-center gap-2 mt-0.5">
+                    <Receipt size={16} className="text-amber-500" />
+                    Invoice Prefixes &amp; Payment Instructions
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Configure serial number prefixes per selling sub-brand, receiving accounts, and master invoice terms.
                   </p>
                 </div>
+
+                {/* Dynamic Selling Brand Serial Prefixes + Retired SAT Notice */}
+                <div className="p-4 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 rounded-2xl space-y-3">
+                  <h4 className="text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+                    <Hash size={13} className="text-amber-500" />
+                    Selling Sub-Brand Serial Prefixes
+                  </h4>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
+                    {sellingBrands.map((sb) => {
+                      const currentCount = countersByBrand[sb.shortCode] ?? 0;
+                      const currentPrefix =
+                        brandPrefixes[sb.shortCode] ?? sb.invoicePrefix ?? `${sb.shortCode}-INV`;
+                      return (
+                        <div key={sb.shortCode} className="bg-white dark:bg-slate-900 p-3 rounded-xl border border-slate-200 dark:border-slate-700 space-y-1.5">
+                          <div className="flex items-center justify-between gap-2">
+                            <label className="text-[11px] font-bold text-slate-700 dark:text-slate-200 truncate">
+                              {sb.name} ({sb.shortCode})
+                            </label>
+                            <span
+                              className="w-2.5 h-2.5 rounded-full shrink-0"
+                              style={{ backgroundColor: sb.accentColor }}
+                            />
+                          </div>
+                          <input
+                            type="text"
+                            disabled={!isSuperAdmin}
+                            value={currentPrefix}
+                            onChange={(e) =>
+                              setBrandPrefixes((prev) => ({
+                                ...prev,
+                                [sb.shortCode]: e.target.value,
+                              }))
+                            }
+                            placeholder={`${sb.shortCode}-INV`}
+                            style={{ color: sb.accentColor }}
+                            className="w-full bg-slate-50 dark:bg-slate-950 border border-slate-200 dark:border-slate-700 rounded-xl py-1.5 px-3 text-xs font-mono font-bold focus:outline-hidden disabled:opacity-60"
+                          />
+                          <div className="text-[10px] font-mono text-slate-400">
+                            Next: {currentPrefix}-{String(currentCount + 1).padStart(4, '0')}
+                          </div>
+                        </div>
+                      );
+                    })}
+
+                    {/* Retired SAT Historical Counter Reference */}
+                    <div className="bg-slate-100/80 dark:bg-slate-900/50 p-3 rounded-xl border border-dashed border-slate-300 dark:border-slate-700 space-y-1.5 opacity-85">
+                      <div className="flex items-center justify-between gap-2">
+                        <label className="text-[11px] font-bold text-slate-500">
+                          {PARENT_COMPANY_NAME} (SAT)
+                        </label>
+                        <span className="text-[9px] font-mono font-bold uppercase px-1.5 py-0.5 rounded bg-slate-200 text-slate-600">
+                          Retired
+                        </span>
+                      </div>
+                      <input
+                        type="text"
+                        disabled
+                        value="SAT-INV (Parent HQ — No Invoices)"
+                        className="w-full bg-slate-50 border border-slate-200 rounded-xl py-1.5 px-3 text-xs font-mono text-slate-400"
+                      />
+                      <div className="text-[10px] font-mono text-slate-400">
+                        Historical count preserved: {satCounterReadOnly}
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Payment Methods */}
+                <div className="p-4 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 rounded-2xl space-y-3">
+                  <h4 className="text-xs font-bold text-slate-700 dark:text-slate-300 uppercase tracking-wider flex items-center gap-1.5">
+                    <CreditCard size={13} className="text-amber-500" />
+                    Customer Payment Receiving Channels (Printed on Invoices)
+                  </h4>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1 flex items-center gap-1">
+                        <Smartphone size={12} className="text-pink-600" /> bKash / Nagad Number
+                      </label>
+                      <input
+                        type="text"
+                        disabled={!isSuperAdmin}
+                        value={bkashNagad}
+                        onChange={(e) => setBkashNagad(e.target.value)}
+                        placeholder="01577351518"
+                        className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl py-2 px-3 text-xs text-slate-800 dark:text-slate-200 font-bold focus:outline-hidden disabled:opacity-60"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1 flex items-center gap-1">
+                        <Building2 size={12} className="text-blue-600" /> Bank Account Info
+                      </label>
+                      <input
+                        type="text"
+                        disabled={!isSuperAdmin}
+                        value={bankInfo}
+                        onChange={(e) => setBankInfo(e.target.value)}
+                        placeholder="DBBL - 105.***.***.18"
+                        className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl py-2 px-3 text-xs text-slate-800 dark:text-slate-200 font-bold focus:outline-hidden disabled:opacity-60"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1 flex items-center gap-1">
+                        <MessageSquare size={12} className="text-emerald-600" /> WhatsApp Slip Submission
+                      </label>
+                      <input
+                        type="text"
+                        disabled={!isSuperAdmin}
+                        value={whatsappContact}
+                        onChange={(e) => setWhatsappContact(e.target.value)}
+                        placeholder="01577351518"
+                        className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl py-2 px-3 text-xs text-slate-800 dark:text-slate-200 font-bold focus:outline-hidden disabled:opacity-60"
+                      />
+                    </div>
+                  </div>
+                </div>
+
+                {/* Default Terms */}
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-400 mb-1 flex items-center gap-1">
+                    <FileText size={12} /> Default Master Invoice Policy / Terms &amp; Conditions
+                  </label>
+                  <textarea
+                    rows={3}
+                    disabled={!isSuperAdmin}
+                    value={invoiceTerms}
+                    onChange={(e) => setInvoiceTerms(e.target.value)}
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl py-2 px-3 text-xs text-slate-800 dark:text-slate-200 font-mono focus:outline-hidden focus:border-amber-400 disabled:opacity-60"
+                    placeholder="Goods once sold are non-refundable. Please verify items at delivery."
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* ========================================================================= */}
+            {/* PART 4: INVENTORY & AGING THRESHOLDS */}
+            {/* ========================================================================= */}
+            {activeTab === 'inventory' && (
+              <div className="bg-white dark:bg-slate-900 p-5 rounded-2xl border border-slate-200/80 dark:border-slate-800 shadow-xs space-y-5 animate-in fade-in duration-150">
+                <div className="border-b border-slate-100 dark:border-slate-800 pb-3">
+                  <span className="text-[10px] font-mono font-bold text-amber-600 uppercase tracking-widest block">
+                    SECTION 4
+                  </span>
+                  <h3 className="text-sm font-black text-slate-900 dark:text-white flex items-center gap-2 mt-0.5">
+                    <Sliders size={16} className="text-amber-500" />
+                    Inventory Reorder Levels &amp; Due Payment Aging
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Set automated low stock triggers, credit aging buckets, and standard vendor terms.
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                  <div className="p-3.5 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 rounded-xl space-y-1">
+                    <label className="block text-xs font-bold uppercase text-slate-600 dark:text-slate-300">
+                      Low Stock Alert Level (Qty)
+                    </label>
+                    <input
+                      type="number"
+                      disabled={!isSuperAdmin}
+                      value={lowStockThreshold}
+                      onChange={(e) => setLowStockThreshold(Number(e.target.value))}
+                      min={1}
+                      className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-xs font-mono font-bold text-slate-900 dark:text-white focus:outline-hidden"
+                    />
+                    <span className="text-[10px] text-slate-400 block">
+                      Products at or below this trigger alerts.
+                    </span>
+                  </div>
+
+                  <div className="p-3.5 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 rounded-xl space-y-1">
+                    <label className="block text-xs font-bold uppercase text-slate-600 dark:text-slate-300">
+                      Aging Warning Bucket 1
+                    </label>
+                    <input
+                      type="number"
+                      disabled={!isSuperAdmin}
+                      value={agingBucket1}
+                      onChange={(e) => setAgingBucket1(Number(e.target.value))}
+                      min={1}
+                      className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-xs font-mono font-bold text-amber-600 focus:outline-hidden"
+                    />
+                    <span className="text-[10px] text-slate-400 block">
+                      Days overdue for moderate warning.
+                    </span>
+                  </div>
+
+                  <div className="p-3.5 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 rounded-xl space-y-1">
+                    <label className="block text-xs font-bold uppercase text-slate-600 dark:text-slate-300">
+                      Aging Critical Bucket 2
+                    </label>
+                    <input
+                      type="number"
+                      disabled={!isSuperAdmin}
+                      value={agingBucket2}
+                      onChange={(e) => setAgingBucket2(Number(e.target.value))}
+                      min={1}
+                      className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg p-2 text-xs font-mono font-bold text-red-600 focus:outline-hidden"
+                    />
+                    <span className="text-[10px] text-slate-400 block">
+                      Days overdue for critical warning.
+                    </span>
+                  </div>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-400 mb-1">
+                    Default Supplier Payment Terms Note
+                  </label>
+                  <textarea
+                    rows={2}
+                    disabled={!isSuperAdmin}
+                    value={supplierTerms}
+                    onChange={(e) => setSupplierTerms(e.target.value)}
+                    placeholder="Standard payment terms: Net 15 days."
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-2.5 text-xs text-slate-800 dark:text-slate-200 focus:outline-hidden disabled:opacity-60"
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* ========================================================================= */}
+            {/* PART 5: INTEGRATIONS & EMAILJS */}
+            {/* ========================================================================= */}
+            {activeTab === 'integrations' && (
+              <div className="bg-white dark:bg-slate-900 p-5 rounded-2xl border border-slate-200/80 dark:border-slate-800 shadow-xs space-y-5 animate-in fade-in duration-150">
+                <div className="border-b border-slate-100 dark:border-slate-800 pb-3">
+                  <span className="text-[10px] font-mono font-bold text-amber-600 uppercase tracking-widest block">
+                    SECTION 5
+                  </span>
+                  <h3 className="text-sm font-black text-slate-900 dark:text-white flex items-center gap-2 mt-0.5">
+                    <Bell size={16} className="text-amber-500" />
+                    EmailJS Real-Time Notification Gateway
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Send automatic stock depletion alerts directly to your administrator inbox.
+                  </p>
+                </div>
+
+                <div className="p-4 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 rounded-2xl space-y-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
+                        EmailJS Service ID
+                      </label>
+                      <input
+                        type="text"
+                        disabled={!isSuperAdmin}
+                        value={emailJsServiceId}
+                        onChange={(e) => setEmailJsServiceId(e.target.value)}
+                        placeholder="e.g. service_xxxxxxx"
+                        className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-2 text-xs font-mono disabled:opacity-60"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
+                        EmailJS Template ID
+                      </label>
+                      <input
+                        type="text"
+                        disabled={!isSuperAdmin}
+                        value={emailJsTemplateId}
+                        onChange={(e) => setEmailJsTemplateId(e.target.value)}
+                        placeholder="e.g. template_xxxxxxx"
+                        className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-2 text-xs font-mono disabled:opacity-60"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
+                        EmailJS Public API Key
+                      </label>
+                      <input
+                        type="text"
+                        disabled={!isSuperAdmin}
+                        value={emailJsPublicKey}
+                        onChange={(e) => setEmailJsPublicKey(e.target.value)}
+                        placeholder="e.g. user_xxxxxxx"
+                        className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-2 text-xs font-mono disabled:opacity-60"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
+                        Admin Notification Recipient Email
+                      </label>
+                      <input
+                        type="email"
+                        disabled={!isSuperAdmin}
+                        value={emailJsRecipient}
+                        onChange={(e) => setEmailJsRecipient(e.target.value)}
+                        placeholder="skyautomationtech@gmail.com"
+                        className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-2 text-xs disabled:opacity-60"
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ========================================================================= */}
+            {/* PART 6: CUSTOMER PUBLIC TRACKING PORTAL SETTINGS */}
+            {/* ========================================================================= */}
+            {activeTab === 'tracking' && (
+              <div className="bg-white dark:bg-slate-900 p-5 rounded-2xl border border-slate-200/80 dark:border-slate-800 shadow-xs space-y-5 animate-in fade-in duration-150">
+                <div className="border-b border-slate-100 dark:border-slate-800 pb-3">
+                  <span className="text-[10px] font-mono font-bold text-amber-600 uppercase tracking-widest block">
+                    SECTION 6
+                  </span>
+                  <h3 className="text-sm font-black text-slate-900 dark:text-white flex items-center gap-2 mt-0.5">
+                    <Link2 size={16} className="text-amber-500" />
+                    Customer Public Tracking Portal Settings
+                  </h3>
+                  <p className="text-xs text-slate-500 mt-0.5">
+                    Configure your hosted domain URL, automatic link expiry rules, courier privacy default, and WhatsApp/SMS share templates.
+                  </p>
+                </div>
+
+                {/* Public Base URL */}
+                <div className="p-4 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 rounded-2xl space-y-2.5">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <label className="block text-xs font-bold uppercase tracking-wider text-slate-700 dark:text-slate-300">
+                      Public App Base URL (Vercel Hosted SPA) *
+                    </label>
+                    {publicAppUrl.trim() ? (
+                      isValidHttpsUrl(publicAppUrl) ? (
+                        <span className="text-[11px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md">
+                          Valid HTTPS Base URL
+                        </span>
+                      ) : (
+                        <span className="text-[11px] font-semibold text-rose-700 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded-md">
+                          Must start with https://
+                        </span>
+                      )
+                    ) : (
+                      <span className="text-[11px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-md">
+                        Unconfigured — Copy &amp; Share disabled
+                      </span>
+                    )}
+                  </div>
+                  <input
+                    type="url"
+                    disabled={!isSuperAdmin}
+                    value={publicAppUrl}
+                    onChange={(e) => setPublicAppUrl(e.target.value)}
+                    placeholder="https://sat-erp.vercel.app"
+                    className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl py-2 px-3 text-xs font-mono text-slate-900 dark:text-white focus:outline-hidden focus:border-amber-400 disabled:opacity-60"
+                  />
+                  <p className="text-[11px] text-slate-500">
+                    Sample generated URL:{' '}
+                    <span className="font-mono text-slate-700 dark:text-slate-300">
+                      {isValidHttpsUrl(publicAppUrl)
+                        ? `${publicAppUrl.trim().replace(/\/+$/, '')}/track/<256-bit-token>`
+                        : 'Enter a valid https:// URL above'}
+                    </span>
+                  </p>
+                </div>
+
+                {/* Auto-Expiry & Default Courier Visibility */}
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  <div className="p-4 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 rounded-2xl space-y-3">
+                    <label className="flex items-start gap-2.5 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        disabled={!isSuperAdmin}
+                        checked={trackingAutoExpiryEnabled}
+                        onChange={(e) => setTrackingAutoExpiryEnabled(e.target.checked)}
+                        className="mt-0.5 rounded border-slate-300 text-amber-500 focus:ring-amber-500"
+                      />
+                      <div>
+                        <span className="block text-xs font-bold text-slate-800 dark:text-slate-200">
+                          Auto-expire completed tracking links
+                        </span>
+                        <span className="block text-[11px] text-slate-500 mt-0.5">
+                          Automatically disable &amp; strip public tracking snapshots N days after Delivered, Cancelled, or Refunded.
+                        </span>
+                      </div>
+                    </label>
+
+                    <div>
+                      <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
+                        Auto-Expiry Days After Completion
+                      </label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={365}
+                        disabled={!isSuperAdmin || !trackingAutoExpiryEnabled}
+                        value={trackingAutoExpiryDays}
+                        onChange={(e) =>
+                          setTrackingAutoExpiryDays(Math.max(1, Number(e.target.value) || 90))
+                        }
+                        className="w-32 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl py-2 px-3 text-xs font-mono font-bold text-slate-900 dark:text-white disabled:opacity-50"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="p-4 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 rounded-2xl space-y-2.5">
+                    <label className="flex items-start gap-2.5 cursor-pointer select-none">
+                      <input
+                        type="checkbox"
+                        disabled={!isSuperAdmin}
+                        checked={defaultShowCourierTracking}
+                        onChange={(e) => setDefaultShowCourierTracking(e.target.checked)}
+                        className="mt-0.5 rounded border-slate-300 text-amber-500 focus:ring-amber-500"
+                      />
+                      <div>
+                        <span className="block text-xs font-bold text-slate-800 dark:text-slate-200">
+                          Show courier tracking to customers by default
+                        </span>
+                        <span className="block text-[11px] text-slate-500 mt-0.5">
+                          When unchecked (recommended default), courier name, tracking number, and carrier URL stay hidden until toggled per order.
+                        </span>
+                      </div>
+                    </label>
+                  </div>
+                </div>
+
+                {/* WhatsApp / SMS Share Message Templates */}
+                <div className="p-4 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 rounded-2xl space-y-4">
+                  <div>
+                    <h4 className="text-xs font-bold text-slate-800 dark:text-slate-200 uppercase tracking-wider">
+                      Share Message Templates (English &amp; বাংলা)
+                    </h4>
+                    <p className="text-[11px] text-slate-500 mt-1">
+                      Supported variables:{' '}
+                      <span className="font-mono text-slate-700 dark:text-slate-300">
+                        {'{firstName}'}, {'{orderId}'}, {'{productName}'}, {'{brandName}'}, {'{status}'}, {'{trackingUrl}'}, {'{totalAmount}'}, {'{dueAmount}'}
+                      </span>
+                    </p>
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                        English Template
+                      </label>
+                      {isSuperAdmin && (
+                        <button
+                          type="button"
+                          onClick={() => setTrackingTemplateEn(DEFAULT_TRACKING_SHARE_TEMPLATE_EN)}
+                          className="text-[11px] font-semibold text-amber-600 hover:underline cursor-pointer"
+                        >
+                          Reset Default
+                        </button>
+                      )}
+                    </div>
+                    <textarea
+                      rows={2}
+                      disabled={!isSuperAdmin}
+                      value={trackingTemplateEn}
+                      onChange={(e) => setTrackingTemplateEn(e.target.value)}
+                      className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-2.5 text-xs text-slate-800 dark:text-slate-200 focus:outline-hidden focus:border-amber-400 disabled:opacity-60"
+                    />
+                  </div>
+
+                  <div>
+                    <div className="flex items-center justify-between mb-1">
+                      <label className="text-xs font-semibold text-slate-700 dark:text-slate-300">
+                        বাংলা টেমপ্লেট (Bangla Template)
+                      </label>
+                      {isSuperAdmin && (
+                        <button
+                          type="button"
+                          onClick={() => setTrackingTemplateBn(DEFAULT_TRACKING_SHARE_TEMPLATE_BN)}
+                          className="text-[11px] font-semibold text-amber-600 hover:underline cursor-pointer"
+                        >
+                          Reset Default
+                        </button>
+                      )}
+                    </div>
+                    <textarea
+                      rows={2}
+                      disabled={!isSuperAdmin}
+                      value={trackingTemplateBn}
+                      onChange={(e) => setTrackingTemplateBn(e.target.value)}
+                      className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl p-2.5 text-xs text-slate-800 dark:text-slate-200 focus:outline-hidden focus:border-amber-400 disabled:opacity-60"
+                    />
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* ========================================================================= */}
+            {/* PART 7: ACCOUNTING BASELINE */}
+            {/* ========================================================================= */}
+            {activeTab === 'accounting' && (
+              <div className="bg-white dark:bg-slate-900 p-5 sm:p-6 rounded-2xl border border-slate-200/80 dark:border-slate-800 shadow-xs space-y-6 animate-in fade-in duration-150">
+                <div className="border-b border-slate-100 dark:border-slate-800 pb-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                  <div>
+                    <h3 className="text-base font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                      <Calculator size={18} className="text-amber-500" />
+                      অ্যাকাউন্টিং বেসলাইন সেটিংস (Accounting Baseline &amp; Cash Settings)
+                    </h3>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      হাতে নগদ ক্যাশ, প্রারম্ভিক বিনিয়োগ এবং কাট-অফ তারিখ কনফিগারেশন (Consolidated Books)
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <span className="text-[11px] font-mono font-bold bg-emerald-100 text-emerald-800 px-2.5 py-1 rounded-full">
+                      হাতে নগদ: ৳{Number(baselineCash).toLocaleString()}
+                    </span>
+                    <span className="text-[11px] font-mono font-bold bg-amber-100 text-amber-800 px-2.5 py-1 rounded-full">
+                      বিনিয়োগ: ৳{Number(baselineInvestment).toLocaleString()}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="p-4 bg-amber-50/70 border border-amber-200/80 rounded-2xl text-xs text-amber-900 space-y-1.5">
+                  <p className="font-bold flex items-center gap-1.5 text-amber-950">
+                    <ShieldCheck size={16} className="text-amber-600 shrink-0" />
+                    পূর্ববর্তী হিসাব বাদ দেওয়ার নিয়ম (Baseline Cutoff Rule)
+                  </p>
+                  <p className="text-[11px] leading-relaxed text-amber-800">
+                    কাট-অফ তারিখের পূর্ববর্তী কোনো পুরনো অর্ডার, খরচ বা লেনদেন নতুন ক্যাশ ও বিনিয়োগ হিসেবে অন্তর্ভুক্ত হবে না। নতুন সমস্ত দৈনন্দিন লাভ, খরচ ও ক্যাশ পরিবর্তন এই বেসলাইনের উপর ভিত্তি করে গণনা করা হবে।
+                  </p>
+                </div>
+
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                  <div className="space-y-1.5 bg-slate-50 dark:bg-slate-800/40 p-4 rounded-xl border border-slate-100 dark:border-slate-700">
+                    <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+                      <Wallet size={14} className="text-emerald-600" />
+                      বর্তমান হাতে নগদ ক্যাশ (Baseline Cash in Hand) *
+                    </label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-2.5 text-sm font-bold text-slate-400 font-mono">
+                        ৳
+                      </span>
+                      <input
+                        type="number"
+                        step="any"
+                        value={baselineCash}
+                        onChange={(e) => setBaselineCash(parseFloat(e.target.value) || 0)}
+                        disabled={!isSuperAdmin}
+                        className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl py-2 pl-7 pr-3 text-sm font-mono font-bold text-slate-900 dark:text-white focus:ring-2 focus:ring-amber-500 focus:outline-hidden disabled:bg-slate-100"
+                        placeholder="0"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5 bg-slate-50 dark:bg-slate-800/40 p-4 rounded-xl border border-slate-100 dark:border-slate-700">
+                    <label className="block text-xs font-bold text-slate-800 dark:text-slate-200 flex items-center gap-1.5">
+                      <Briefcase size={14} className="text-amber-600" />
+                      আমাদের মোট বিনিয়োগ (Total Investment Baseline) *
+                    </label>
+                    <div className="relative">
+                      <span className="absolute left-3 top-2.5 text-sm font-bold text-slate-400 font-mono">
+                        ৳
+                      </span>
+                      <input
+                        type="number"
+                        step="any"
+                        value={baselineInvestment}
+                        onChange={(e) => setBaselineInvestment(parseFloat(e.target.value) || 0)}
+                        disabled={!isSuperAdmin}
+                        className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl py-2 pl-7 pr-3 text-sm font-mono font-bold text-slate-900 dark:text-white focus:ring-2 focus:ring-amber-500 focus:outline-hidden disabled:bg-slate-100"
+                        placeholder="39550"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="space-y-1.5 bg-slate-50 dark:bg-slate-800/40 p-4 rounded-xl border border-slate-100 dark:border-slate-700">
+                    <label className="block text-xs font-bold text-slate-800 dark:text-slate-200">
+                      কাট-অফ তারিখ (Cutoff Date) *
+                    </label>
+                    <input
+                      type="date"
+                      value={baselineCutoffDate}
+                      onChange={(e) => setBaselineCutoffDate(e.target.value)}
+                      disabled={!isSuperAdmin}
+                      className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl py-2 px-3 text-xs text-slate-900 dark:text-white focus:ring-2 focus:ring-amber-500 focus:outline-hidden disabled:bg-slate-100"
+                    />
+                  </div>
+
+                  <div className="space-y-1.5 bg-slate-50 dark:bg-slate-800/40 p-4 rounded-xl border border-slate-100 dark:border-slate-700">
+                    <label className="block text-xs font-bold text-slate-800 dark:text-slate-200">
+                      বেসলাইন নোট / বিবরণ
+                    </label>
+                    <input
+                      type="text"
+                      value={baselineNote}
+                      onChange={(e) => setBaselineNote(e.target.value)}
+                      disabled={!isSuperAdmin}
+                      className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl py-2 px-3 text-xs text-slate-900 dark:text-white focus:ring-2 focus:ring-amber-500 focus:outline-hidden disabled:bg-slate-100"
+                    />
+                  </div>
+                </div>
+
+                {isSuperAdmin && (
+                  <div className="pt-2 flex items-center justify-between">
+                    <span className="text-xs text-slate-500">
+                      এই পরিবর্তনটি সরাসরি লাইভ Accounting Desk এ প্রতিফলিত হবে।
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleSaveAccountingBaselineOnly}
+                      disabled={isSavingBaseline}
+                      className="py-2.5 px-5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold text-xs rounded-xl shadow-xs transition cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
+                    >
+                      <Save size={14} />
+                      <span>{isSavingBaseline ? 'সংরক্ষণ হচ্ছে...' : 'বেসলাইন সেটিংস সংরক্ষণ করুন'}</span>
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* ========================================================================= */}
+            {/* PART 8: LIVE SELLING BRAND INVOICE PREVIEW (HEX-ONLY) */}
+            {/* ========================================================================= */}
+            {activeTab === 'preview' && previewBrand && (
+              <div className="bg-white dark:bg-slate-900 p-5 rounded-2xl border border-slate-200/80 dark:border-slate-800 shadow-xs space-y-4 animate-in fade-in duration-150">
+                <div className="border-b border-slate-100 dark:border-slate-800 pb-3 flex flex-wrap items-center justify-between gap-2">
+                  <div>
+                    <span className="text-[10px] font-mono font-bold text-amber-600 uppercase tracking-widest block">
+                      SECTION 8
+                    </span>
+                    <h3 className="text-sm font-black text-slate-900 dark:text-white flex items-center gap-2 mt-0.5">
+                      <Eye size={16} className="text-amber-500" />
+                      Live Selling Sub-Brand Invoice Visualizer
+                    </h3>
+                    <p className="text-xs text-slate-500 mt-0.5">
+                      Invoices &amp; receipts are issued strictly under selling sub-brands (never parent SAT).
+                    </p>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-1.5 bg-slate-100 dark:bg-slate-800 p-1 rounded-xl">
+                    {sellingBrands.map((b) => (
+                      <button
+                        key={b.shortCode}
+                        type="button"
+                        onClick={() => setPreviewBrandCode(b.shortCode)}
+                        className="px-2.5 py-1 rounded-lg text-xs font-bold cursor-pointer transition"
+                        style={
+                          previewBrand.shortCode === b.shortCode
+                            ? { backgroundColor: b.accentColor, color: '#FFFFFF' }
+                            : { color: '#475569' }
+                        }
+                      >
+                        {b.name} ({b.shortCode})
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                {/* Hex-only Mock Invoice Sheet */}
+                <div
+                  className="max-w-2xl mx-auto p-6 sm:p-8 rounded-2xl shadow-sm font-sans space-y-5"
+                  style={{
+                    backgroundColor: '#FFFFFF',
+                    color: '#0F172A',
+                    border: '1px solid #CBD5E1',
+                    borderTop: `5px solid ${previewBrand.accentColor}`,
+                  }}
+                >
+                  <div
+                    className="flex justify-between items-start pb-4"
+                    style={{ borderBottom: '1px solid #E2E8F0' }}
+                  >
+                    <div className="flex items-center gap-3">
+                      <div
+                        className="w-12 h-12 rounded-xl p-1.5 flex items-center justify-center shrink-0"
+                        style={{ backgroundColor: '#0F172A' }}
+                      >
+                        {previewBrand.logoUrl ? (
+                          <img
+                            src={previewBrand.logoUrl}
+                            alt={previewBrand.name}
+                            className="w-full h-full object-contain bg-white rounded"
+                          />
+                        ) : (
+                          <span
+                            className="text-sm font-black"
+                            style={{ color: previewBrand.accentColor }}
+                          >
+                            {previewBrand.shortCode}
+                          </span>
+                        )}
+                      </div>
+                      <div>
+                        <h2
+                          className="text-base font-black uppercase leading-tight"
+                          style={{ color: '#0F172A' }}
+                        >
+                          {previewBrand.name}
+                        </h2>
+                        <p
+                          className="text-[11px] font-semibold"
+                          style={{ color: previewBrand.accentColor }}
+                        >
+                          {previewBrand.tagline || tagline}
+                        </p>
+                        <p className="text-[10px] mt-0.5" style={{ color: '#64748B' }}>
+                          {previewBrand.address || address} • {previewBrand.phone || phone}
+                        </p>
+                        {showParentCreditLine && parentCreditLine.trim() && (
+                          <p className="text-[10px] font-semibold mt-0.5" style={{ color: '#94A3B8' }}>
+                            {parentCreditLine}
+                          </p>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="text-right">
+                      <span
+                        className="text-xs font-black uppercase tracking-widest block"
+                        style={{ color: '#64748B' }}
+                      >
+                        TAX INVOICE
+                      </span>
+                      <span
+                        className="font-mono font-bold text-sm block mt-0.5"
+                        style={{ color: previewBrand.accentColor }}
+                      >
+                        {(brandPrefixes[previewBrand.shortCode] || previewBrand.invoicePrefix)}-
+                        {String((countersByBrand[previewBrand.shortCode] ?? 0) + 1).padStart(4, '0')}
+                      </span>
+                      <span className="text-[10px] font-mono" style={{ color: '#64748B' }}>
+                        {new Date().toLocaleDateString()}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Mock Items Table */}
+                  <div
+                    className="rounded-xl overflow-hidden text-xs"
+                    style={{ border: '1px solid #E2E8F0' }}
+                  >
+                    <table className="w-full text-left">
+                      <thead
+                        className="text-[10px] uppercase font-bold"
+                        style={{
+                          backgroundColor: '#F8FAFC',
+                          color: '#64748B',
+                          borderBottom: '1px solid #E2E8F0',
+                        }}
+                      >
+                        <tr>
+                          <th className="p-2.5">Item Description</th>
+                          <th className="p-2.5 text-center">Qty</th>
+                          <th className="p-2.5 text-right">Rate</th>
+                          <th className="p-2.5 text-right">Amount</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        <tr style={{ borderBottom: '1px solid #F1F5F9' }}>
+                          <td className="p-2.5 font-bold">Baseus 65W GaN5 Pro Fast Charger (Black)</td>
+                          <td className="p-2.5 text-center font-mono">2</td>
+                          <td className="p-2.5 text-right font-mono">৳2,450</td>
+                          <td className="p-2.5 text-right font-mono font-bold">৳4,900</td>
+                        </tr>
+                        <tr>
+                          <td className="p-2.5 font-bold">Baseus Cafule PD Type-C 100W Cable 2M</td>
+                          <td className="p-2.5 text-center font-mono">1</td>
+                          <td className="p-2.5 text-right font-mono">৳650</td>
+                          <td className="p-2.5 text-right font-mono font-bold">৳650</td>
+                        </tr>
+                      </tbody>
+                    </table>
+                  </div>
+
+                  {/* Total Summary */}
+                  <div className="flex justify-end text-xs">
+                    <div className="w-56 space-y-1 text-right">
+                      <div className="flex justify-between" style={{ color: '#64748B' }}>
+                        <span>Subtotal:</span>
+                        <span className="font-mono font-bold" style={{ color: '#0F172A' }}>
+                          ৳5,550
+                        </span>
+                      </div>
+                      <div className="flex justify-between" style={{ color: '#64748B' }}>
+                        <span>Delivery Charge:</span>
+                        <span className="font-mono font-bold" style={{ color: '#0F172A' }}>
+                          ৳60
+                        </span>
+                      </div>
+                      <div
+                        className="flex justify-between text-sm font-black pt-1.5"
+                        style={{ borderTop: '1px solid #CBD5E1', color: '#0F172A' }}
+                      >
+                        <span>Total Amount:</span>
+                        <span className="font-mono" style={{ color: previewBrand.accentColor }}>
+                          ৳5,610
+                        </span>
+                      </div>
+                    </div>
+                  </div>
+
+                  {/* Footnote */}
+                  <div
+                    className="p-3 rounded-xl text-[11px] space-y-1.5"
+                    style={{ backgroundColor: '#F8FAFC', border: '1px solid #E2E8F0' }}
+                  >
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 font-mono text-[10px]" style={{ color: '#475569' }}>
+                      <div>
+                        bKash/Nagad: <strong>{bkashNagad}</strong>
+                      </div>
+                      <div>
+                        Bank: <strong>{bankInfo}</strong>
+                      </div>
+                    </div>
+                    {previewBrand.warrantyPolicyText && (
+                      <p className="text-[10px]" style={{ color: '#475569' }}>
+                        <strong>Warranty:</strong> {previewBrand.warrantyPolicyText}
+                      </p>
+                    )}
+                    <p
+                      className="text-[10px] italic pt-1"
+                      style={{ color: '#64748B', borderTop: '1px solid #E2E8F0' }}
+                    >
+                      {previewBrand.invoiceTerms || invoiceTerms}
+                    </p>
+                    {previewBrand.invoiceFooterNote && (
+                      <p className="text-[10px] font-bold" style={{ color: previewBrand.accentColor }}>
+                        {previewBrand.invoiceFooterNote}
+                      </p>
+                    )}
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {/* Global Floating Bottom Save Bar */}
+            {isSuperAdmin && (
+              <div className="pt-2 flex justify-end">
+                <button
+                  type="button"
+                  onClick={() => handleSaveAll()}
+                  disabled={saving}
+                  className="inline-flex items-center gap-2 bg-slate-950 hover:bg-slate-900 text-amber-400 font-bold text-xs uppercase tracking-wider py-2.5 px-6 rounded-xl shadow-md transition cursor-pointer"
+                >
+                  {saving ? (
+                    <div className="w-3.5 h-3.5 border-2 border-amber-400 border-t-transparent rounded-full animate-spin" />
+                  ) : (
+                    <Check size={15} />
+                  )}
+                  <span>{saving ? 'Publishing Settings...' : 'Save & Publish All Settings'}</span>
+                </button>
+              </div>
+            )}
+          </form>
+
+          {/* Keyboard Shortcuts Help Footer */}
+          <div className="mt-8 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm">
+            <div className="flex items-center gap-3 mb-3">
+              <div className="w-8 h-8 rounded-lg bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-500 shrink-0">
+                <Sparkles size={16} />
+              </div>
+              <div>
+                <h3 className="text-sm font-bold text-slate-900 dark:text-white">
+                  Keyboard Shortcuts &amp; Hotkeys
+                </h3>
+                <p className="text-xs text-slate-500 dark:text-slate-400">
+                  Global shortcuts enabled across the platform
+                </p>
+              </div>
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
+              <div className="p-3 bg-slate-50 dark:bg-slate-800/50 rounded-xl border border-slate-200/60 dark:border-slate-800 flex items-center justify-between">
+                <span className="text-slate-600 dark:text-slate-300 font-medium">
+                  Focus Search / Command Palette
+                </span>
+                <kbd className="px-2 py-1 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 font-mono text-[11px] font-bold rounded border border-slate-200 dark:border-slate-700 shadow-2xs">
+                  Ctrl + K / ⌘K
+                </kbd>
+              </div>
+              <div className="p-3 bg-slate-50 dark:bg-slate-800/50 rounded-xl border border-slate-200/60 dark:border-slate-800 flex items-center justify-between">
+                <span className="text-slate-600 dark:text-slate-300 font-medium">
+                  Close Modals &amp; Drawers
+                </span>
+                <kbd className="px-2 py-1 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 font-mono text-[11px] font-bold rounded border border-slate-200 dark:border-slate-700 shadow-2xs">
+                  Esc
+                </kbd>
+              </div>
+              <div className="p-3 bg-slate-50 dark:bg-slate-800/50 rounded-xl border border-slate-200/60 dark:border-slate-800 flex items-center justify-between">
+                <span className="text-slate-600 dark:text-slate-300 font-medium">
+                  Primary Form Submission
+                </span>
+                <kbd className="px-2 py-1 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 font-mono text-[11px] font-bold rounded border border-slate-200 dark:border-slate-700 shadow-2xs">
+                  Enter
+                </kbd>
               </div>
             </div>
           </div>
-        )}
+        </div>
+      </div>
 
-        {/* ========================================================================= */}
-        {/* PART 2: SUB-BRAND PROFILES */}
-        {/* ========================================================================= */}
-        {activeTab === 'subbrands' && (
-          <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs space-y-5 animate-in fade-in duration-150">
-            <div className="border-b border-slate-100 pb-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+      {/* ========================================================================= */}
+      {/* ADD / EDIT SELLING SUB-BRAND MODAL */}
+      {/* ========================================================================= */}
+      {brandModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl w-full max-w-3xl max-h-[90vh] flex flex-col overflow-hidden">
+            <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-slate-50 dark:bg-slate-950/60">
               <div>
-                <span className="text-[10px] font-mono font-bold text-amber-600 uppercase tracking-widest block">
-                  SECTION 2
-                </span>
-                <h3 className="text-sm font-black text-slate-900 flex items-center gap-2 mt-0.5">
-                  <Tag size={16} className="text-amber-500" />
-                  Sub-Brand Profiles & Customized Invoice Headers
+                <h3 className="text-base font-black text-slate-900 dark:text-white">
+                  {brandForm.mode === 'create'
+                    ? 'Add New Selling Sub-Brand'
+                    : `Edit Selling Sub-Brand (${brandForm.shortCode})`}
                 </h3>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  Configure customized details for each of the 3 active commercial sub-brands.
+                <p className="text-xs text-slate-500">
+                  Customer-facing identity, invoice prefix, SKU prefix, and hex accent color.
                 </p>
               </div>
-
-              {/* Sub-brand Switcher Pills */}
-              <div className="flex bg-slate-100 p-1 rounded-xl border border-slate-200 shrink-0">
-                <button
-                  type="button"
-                  onClick={() => setSelectedSubBrand('SAT')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
-                    selectedSubBrand === 'SAT'
-                      ? 'bg-amber-400 text-slate-950 shadow-2xs'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  <img src="/sat_logo.jpg" alt="SAT" className="w-3.5 h-3.5 rounded-xs" />
-                  <span>Sky Auto (SAT)</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setSelectedSubBrand('GZ')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
-                    selectedSubBrand === 'GZ'
-                      ? 'bg-teal-500 text-white shadow-2xs'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  <img src="/gz_logo.jpg" alt="GZ" className="w-3.5 h-3.5 rounded-xs" />
-                  <span>GadgetZu (GZ)</span>
-                </button>
-
-                <button
-                  type="button"
-                  onClick={() => setSelectedSubBrand('RTX')}
-                  className={`px-3 py-1.5 rounded-lg text-xs font-bold transition flex items-center gap-1.5 ${
-                    selectedSubBrand === 'RTX'
-                      ? 'bg-orange-500 text-white shadow-2xs'
-                      : 'text-slate-600 hover:text-slate-900'
-                  }`}
-                >
-                  <img src="/rtx_logo.jpg" alt="RTX" className="w-3.5 h-3.5 rounded-xs" />
-                  <span>RTX Gadget (RTX)</span>
-                </button>
-              </div>
+              <button
+                type="button"
+                onClick={() => setBrandModalOpen(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 hover:bg-slate-200/60 cursor-pointer"
+              >
+                <X size={18} />
+              </button>
             </div>
 
-            {/* Sub-brand Details Form */}
-            <div className="p-4 bg-slate-50/70 border border-slate-200 rounded-2xl space-y-4">
-              <div className="flex items-center gap-3 pb-3 border-b border-slate-200/80">
-                <div className="w-12 h-12 rounded-xl bg-slate-950 p-1.5 border border-slate-800 flex items-center justify-center shrink-0">
-                  <img 
-                    src={subBrands[selectedSubBrand].logoUrl || `/${selectedSubBrand.toLowerCase()}_logo.jpg`}
-                    alt={selectedSubBrand}
-                    className="w-full h-full object-contain"
-                    onError={(e) => {
-                      e.currentTarget.onerror = null;
-                      e.currentTarget.src = `/${selectedSubBrand.toLowerCase()}_logo.jpg`;
+            <form onSubmit={handleSaveSubBrandModal} className="flex-1 overflow-y-auto p-5 space-y-4">
+              {brandModalError && (
+                <div className="p-3 bg-red-50 border border-red-200 text-red-700 rounded-xl text-xs font-semibold flex items-center gap-2">
+                  <AlertCircle size={14} className="shrink-0" />
+                  <span>{brandModalError}</span>
+                </div>
+              )}
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] font-bold uppercase text-slate-600 dark:text-slate-300 mb-1">
+                    Brand Name *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={brandForm.name}
+                    onChange={(e) => {
+                      const val = e.target.value;
+                      setBrandForm((prev) => {
+                        if (prev.mode === 'create' && !prev.shortCode) {
+                          const suggested = val
+                            .trim()
+                            .toUpperCase()
+                            .replace(/[^A-Z0-9]/g, '')
+                            .slice(0, 6);
+                          return {
+                            ...prev,
+                            name: val,
+                            shortCode: suggested,
+                            invoicePrefix: suggested ? `${suggested}-INV` : prev.invoicePrefix,
+                            skuPrefix: suggested || prev.skuPrefix,
+                          };
+                        }
+                        return { ...prev, name: val };
+                      });
                     }}
+                    placeholder="e.g. Nova Gear"
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-xs font-bold text-slate-900 dark:text-white"
                   />
                 </div>
+
                 <div>
-                  <h4 className="font-black text-slate-900 text-sm">
-                    {selectedSubBrand === 'SAT' ? 'Sky Automation Tech (SAT)' : selectedSubBrand === 'GZ' ? 'GadgetZu (GZ)' : 'RTX Gadget (RTX)'}
-                  </h4>
-                  <p className="text-[11px] text-slate-500">
-                    These specific details will appear on brand-filtered customer receipts and invoices.
-                  </p>
+                  <label className="block text-[11px] font-bold uppercase text-slate-600 dark:text-slate-300 mb-1">
+                    Short Code * {brandForm.mode === 'edit' && '(Locked)'}
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    disabled={brandForm.mode === 'edit'}
+                    value={brandForm.shortCode}
+                    onChange={(e) => {
+                      const code = normalizeSubBrandCode(e.target.value);
+                      setBrandForm((prev) => ({
+                        ...prev,
+                        shortCode: code,
+                        invoicePrefix:
+                          !prev.invoicePrefix || prev.invoicePrefix === `${prev.shortCode}-INV`
+                            ? code
+                              ? `${code}-INV`
+                              : ''
+                            : prev.invoicePrefix,
+                        skuPrefix:
+                          !prev.skuPrefix || prev.skuPrefix === prev.shortCode
+                            ? code
+                            : prev.skuPrefix,
+                      }));
+                    }}
+                    placeholder="e.g. NOVA"
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-xs font-mono font-bold uppercase text-slate-900 dark:text-white disabled:opacity-60"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold uppercase text-slate-600 dark:text-slate-300 mb-1">
+                    Invoice Prefix *
+                  </label>
+                  <input
+                    type="text"
+                    required
+                    value={brandForm.invoicePrefix}
+                    onChange={(e) =>
+                      setBrandForm((prev) => ({
+                        ...prev,
+                        invoicePrefix: e.target.value.toUpperCase().replace(/\s+/g, '-'),
+                      }))
+                    }
+                    placeholder="e.g. NOVA-INV"
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-xs font-mono font-bold text-slate-900 dark:text-white"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-[11px] font-bold uppercase text-slate-600 dark:text-slate-300 mb-1">
+                    SKU Prefix (New Products)
+                  </label>
+                  <input
+                    type="text"
+                    value={brandForm.skuPrefix}
+                    onChange={(e) =>
+                      setBrandForm((prev) => ({
+                        ...prev,
+                        skuPrefix: normalizeSubBrandCode(e.target.value),
+                      }))
+                    }
+                    placeholder="e.g. NOVA"
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-xs font-mono font-bold text-slate-900 dark:text-white"
+                  />
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                <div>
-                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1">
-                    Display Name
-                  </label>
+              {/* Hex Accent Color Picker */}
+              <div className="p-3.5 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 rounded-xl space-y-2">
+                <label className="block text-[11px] font-bold uppercase text-slate-600 dark:text-slate-300">
+                  Accent Color (#RRGGBB — Print &amp; PDF Safe) *
+                </label>
+                <div className="flex flex-wrap items-center gap-2">
+                  {SUB_BRAND_ACCENT_PALETTE.map((swatch) => (
+                    <button
+                      key={swatch.hex}
+                      type="button"
+                      onClick={() => setBrandForm((prev) => ({ ...prev, accentColor: swatch.hex }))}
+                      title={swatch.label}
+                      className={`w-7 h-7 rounded-lg border-2 cursor-pointer transition-transform ${
+                        brandForm.accentColor.toUpperCase() === swatch.hex
+                          ? 'scale-110 border-slate-950 ring-2 ring-amber-400'
+                          : 'border-white'
+                      }`}
+                      style={{ backgroundColor: swatch.hex }}
+                    />
+                  ))}
                   <input
-                    type="text"
-                    disabled={!isSuperAdmin}
-                    value={subBrands[selectedSubBrand].companyName || ''}
-                    onChange={(e) => handleSubBrandFieldChange(selectedSubBrand, 'companyName', e.target.value)}
-                    className="w-full bg-white border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-900 font-bold focus:outline-hidden focus:border-amber-400 disabled:opacity-60"
+                    type="color"
+                    value={sanitizeHexColor(brandForm.accentColor, '#0F766E')}
+                    onChange={(e) =>
+                      setBrandForm((prev) => ({
+                        ...prev,
+                        accentColor: e.target.value.toUpperCase(),
+                      }))
+                    }
+                    className="w-8 h-7 rounded border border-slate-300 cursor-pointer"
                   />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1">
-                    Tagline
-                  </label>
                   <input
                     type="text"
-                    disabled={!isSuperAdmin}
-                    value={subBrands[selectedSubBrand].tagline || ''}
-                    onChange={(e) => handleSubBrandFieldChange(selectedSubBrand, 'tagline', e.target.value)}
-                    className="w-full bg-white border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 focus:outline-hidden focus:border-amber-400 disabled:opacity-60"
+                    value={brandForm.accentColor}
+                    onChange={(e) =>
+                      setBrandForm((prev) => ({ ...prev, accentColor: e.target.value.toUpperCase() }))
+                    }
+                    placeholder="#0F766E"
+                    className="w-24 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg px-2 py-1 text-xs font-mono font-bold"
                   />
                 </div>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              {/* Logo Upload + URL */}
+              <div className="p-3.5 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 rounded-xl flex flex-col sm:flex-row items-center gap-3">
+                <div className="w-14 h-14 rounded-xl bg-slate-950 p-1.5 flex items-center justify-center shrink-0">
+                  {brandForm.logoUrl ? (
+                    <img
+                      src={brandForm.logoUrl}
+                      alt="Brand Logo"
+                      className="w-full h-full object-contain bg-white rounded"
+                    />
+                  ) : (
+                    <span className="text-xs font-black" style={{ color: brandForm.accentColor }}>
+                      {brandForm.shortCode || 'LOGO'}
+                    </span>
+                  )}
+                </div>
+                <div className="flex-1 w-full space-y-2">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <label className="cursor-pointer bg-slate-900 text-amber-400 font-bold text-xs px-3 py-1.5 rounded-lg inline-flex items-center gap-1.5">
+                      <Upload size={12} />
+                      <span>Upload Logo</span>
+                      <input type="file" accept="image/*" onChange={handleModalLogoUpload} className="hidden" />
+                    </label>
+                    {brandForm.logoUrl && (
+                      <button
+                        type="button"
+                        onClick={() => setBrandForm((p) => ({ ...p, logoUrl: '' }))}
+                        className="text-xs text-rose-500 font-semibold cursor-pointer"
+                      >
+                        Clear
+                      </button>
+                    )}
+                  </div>
+                  <input
+                    type="text"
+                    value={brandForm.logoUrl}
+                    onChange={(e) => setBrandForm((p) => ({ ...p, logoUrl: e.target.value }))}
+                    placeholder="Or paste /logo_url.jpg or https://..."
+                    className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1 text-[11px] font-mono"
+                  />
+                </div>
+              </div>
+
+              {/* Contact & Details */}
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
-                    Physical Address
+                  <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
+                    Phone
                   </label>
                   <input
                     type="text"
-                    disabled={!isSuperAdmin}
-                    value={subBrands[selectedSubBrand].address || ''}
-                    onChange={(e) => handleSubBrandFieldChange(selectedSubBrand, 'address', e.target.value)}
-                    className="w-full bg-white border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 focus:outline-hidden disabled:opacity-60"
+                    value={brandForm.phone}
+                    onChange={(e) => setBrandForm((p) => ({ ...p, phone: e.target.value }))}
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-1.5 text-xs font-mono"
                   />
                 </div>
-
                 <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
-                    Hotline Phone
+                  <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
+                    WhatsApp
                   </label>
                   <input
                     type="text"
-                    disabled={!isSuperAdmin}
-                    value={subBrands[selectedSubBrand].phone || ''}
-                    onChange={(e) => handleSubBrandFieldChange(selectedSubBrand, 'phone', e.target.value)}
-                    className="w-full bg-white border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 font-mono font-bold focus:outline-hidden disabled:opacity-60"
+                    value={brandForm.whatsapp}
+                    onChange={(e) => setBrandForm((p) => ({ ...p, whatsapp: e.target.value }))}
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-1.5 text-xs font-mono"
                   />
                 </div>
-
                 <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
-                    Support WhatsApp (For Tracking Portal)
-                  </label>
-                  <input
-                    type="text"
-                    disabled={!isSuperAdmin}
-                    value={subBrands[selectedSubBrand].whatsapp || ''}
-                    onChange={(e) => handleSubBrandFieldChange(selectedSubBrand, 'whatsapp', e.target.value)}
-                    placeholder="e.g. 01577351518"
-                    className="w-full bg-white border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 font-mono font-bold focus:outline-hidden disabled:opacity-60"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-semibold uppercase tracking-wider text-slate-500 mb-1">
+                  <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
                     Support Email
                   </label>
                   <input
                     type="email"
-                    disabled={!isSuperAdmin}
-                    value={subBrands[selectedSubBrand].email || ''}
-                    onChange={(e) => handleSubBrandFieldChange(selectedSubBrand, 'email', e.target.value)}
-                    className="w-full bg-white border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 focus:outline-hidden disabled:opacity-60"
+                    value={brandForm.email}
+                    onChange={(e) => setBrandForm((p) => ({ ...p, email: e.target.value }))}
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-1.5 text-xs"
                   />
                 </div>
               </div>
 
-              <div>
-                <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1">
-                  Custom Terms & Conditions for {selectedSubBrand} Invoices
-                </label>
-                <textarea
-                  rows={2.5}
-                  disabled={!isSuperAdmin}
-                  value={subBrands[selectedSubBrand].invoiceTerms || ''}
-                  onChange={(e) => handleSubBrandFieldChange(selectedSubBrand, 'invoiceTerms', e.target.value)}
-                  className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800 font-mono focus:outline-hidden focus:border-amber-400 disabled:opacity-60"
-                />
-              </div>
-
-              {isSuperAdmin && (
-                <div className="pt-2 flex items-center gap-2">
-                  <label className="cursor-pointer bg-slate-900 hover:bg-slate-800 text-amber-400 font-bold text-xs py-1.5 px-3 rounded-lg transition inline-flex items-center gap-1.5">
-                    <Upload size={12} />
-                    Upload {selectedSubBrand} Logo
-                    <input 
-                      type="file" 
-                      accept="image/*" 
-                      onChange={(e) => handleSubBrandLogoUpload(selectedSubBrand, e)} 
-                      className="hidden" 
-                    />
-                  </label>
-                  <span className="text-[11px] text-slate-400">Updates brand logo file.</span>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-
-        {/* ========================================================================= */}
-        {/* PART 3: INVOICE & PAYMENT SETUP */}
-        {/* ========================================================================= */}
-        {activeTab === 'invoice' && (
-          <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs space-y-5 animate-in fade-in duration-150">
-            <div className="border-b border-slate-100 pb-3">
-              <span className="text-[10px] font-mono font-bold text-amber-600 uppercase tracking-widest block">
-                SECTION 3
-              </span>
-              <h3 className="text-sm font-black text-slate-900 flex items-center gap-2 mt-0.5">
-                <Receipt size={16} className="text-amber-500" />
-                Invoice Prefixes & Payment Instructions
-              </h3>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Configure serial number prefixes, payment receiving accounts (bKash/Bank), and printed footer directives.
-              </p>
-            </div>
-
-            {/* Serial Prefixes */}
-            <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-3">
-              <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
-                <Hash size={13} className="text-amber-500" />
-                Serial Number Prefixes
-              </h4>
-
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div>
-                  <label className="block text-[11px] font-semibold text-slate-500 mb-1">
-                    Sky Auto (SAT) Prefix
-                  </label>
-                  <input
-                    type="text"
-                    disabled={!isSuperAdmin}
-                    value={satPrefix}
-                    onChange={(e) => setSatPrefix(e.target.value)}
-                    placeholder="SAT-INV"
-                    className="w-full bg-white border border-slate-200 rounded-xl py-2 px-3 text-xs text-amber-600 font-mono font-bold focus:outline-hidden disabled:opacity-60"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-[11px] font-semibold text-slate-500 mb-1">
-                    GadgetZu (GZ) Prefix
-                  </label>
-                  <input
-                    type="text"
-                    disabled={!isSuperAdmin}
-                    value={gzPrefix}
-                    onChange={(e) => setGzPrefix(e.target.value)}
-                    placeholder="GZ-INV"
-                    className="w-full bg-white border border-slate-200 rounded-xl py-2 px-3 text-xs text-teal-600 font-mono font-bold focus:outline-hidden disabled:opacity-60"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-[11px] font-semibold text-slate-500 mb-1">
-                    RTX Gadget (RTX) Prefix
-                  </label>
-                  <input
-                    type="text"
-                    disabled={!isSuperAdmin}
-                    value={rtxPrefix}
-                    onChange={(e) => setRtxPrefix(e.target.value)}
-                    placeholder="RTX-INV"
-                    className="w-full bg-white border border-slate-200 rounded-xl py-2 px-3 text-xs text-orange-600 font-mono font-bold focus:outline-hidden disabled:opacity-60"
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Payment Methods */}
-            <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-3">
-              <h4 className="text-xs font-bold text-slate-700 uppercase tracking-wider flex items-center gap-1.5">
-                <CreditCard size={13} className="text-amber-500" />
-                Customer Payment Receiving Channels (Printed on Invoices)
-              </h4>
-
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-                <div>
-                  <label className="block text-[11px] font-semibold text-slate-600 mb-1 flex items-center gap-1">
-                    <Smartphone size={12} className="text-pink-600" /> bKash / Nagad Number
-                  </label>
-                  <input
-                    type="text"
-                    disabled={!isSuperAdmin}
-                    value={bkashNagad}
-                    onChange={(e) => setBkashNagad(e.target.value)}
-                    placeholder="01577351518"
-                    className="w-full bg-white border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 font-bold focus:outline-hidden disabled:opacity-60"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-[11px] font-semibold text-slate-600 mb-1 flex items-center gap-1">
-                    <Building2 size={12} className="text-blue-600" /> Bank Account Info
-                  </label>
-                  <input
-                    type="text"
-                    disabled={!isSuperAdmin}
-                    value={bankInfo}
-                    onChange={(e) => setBankInfo(e.target.value)}
-                    placeholder="DBBL - 105.***.***.18"
-                    className="w-full bg-white border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 font-bold focus:outline-hidden disabled:opacity-60"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-[11px] font-semibold text-slate-600 mb-1 flex items-center gap-1">
-                    <MessageSquare size={12} className="text-emerald-600" /> WhatsApp Slip Submission
-                  </label>
-                  <input
-                    type="text"
-                    disabled={!isSuperAdmin}
-                    value={whatsappContact}
-                    onChange={(e) => setWhatsappContact(e.target.value)}
-                    placeholder="01577351518"
-                    className="w-full bg-white border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 font-bold focus:outline-hidden disabled:opacity-60"
-                  />
-                </div>
-              </div>
-            </div>
-
-            {/* Default Terms */}
-            <div>
-              <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1 flex items-center gap-1">
-                <FileText size={12} /> Default Master Invoice Policy / Terms & Conditions
-              </label>
-              <textarea
-                rows={3}
-                disabled={!isSuperAdmin}
-                value={invoiceTerms}
-                onChange={(e) => setInvoiceTerms(e.target.value)}
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 font-mono focus:outline-hidden focus:border-amber-400 disabled:opacity-60"
-                placeholder="Goods once sold are non-refundable. Please verify items at delivery."
-              />
-            </div>
-          </div>
-        )}
-
-        {/* ========================================================================= */}
-        {/* PART 4: INVENTORY & AGING THRESHOLDS */}
-        {/* ========================================================================= */}
-        {activeTab === 'inventory' && (
-          <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs space-y-5 animate-in fade-in duration-150">
-            <div className="border-b border-slate-100 pb-3">
-              <span className="text-[10px] font-mono font-bold text-amber-600 uppercase tracking-widest block">
-                SECTION 4
-              </span>
-              <h3 className="text-sm font-black text-slate-900 flex items-center gap-2 mt-0.5">
-                <Sliders size={16} className="text-amber-500" />
-                Inventory Reorder Levels & Due Payment Aging
-              </h3>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Set automated low stock triggers, credit aging buckets, and standard vendor terms.
-              </p>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-1">
-                <label className="block text-xs font-bold uppercase text-slate-600">
-                  Low Stock Alert Level (Qty)
-                </label>
-                <input
-                  type="number"
-                  disabled={!isSuperAdmin}
-                  value={lowStockThreshold}
-                  onChange={(e) => setLowStockThreshold(Number(e.target.value))}
-                  min={1}
-                  className="w-full bg-white border border-slate-200 rounded-lg p-2 text-xs font-mono font-bold text-slate-900 focus:outline-hidden"
-                />
-                <span className="text-[10px] text-slate-400 block">Products at or below this trigger alerts.</span>
-              </div>
-
-              <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-1">
-                <label className="block text-xs font-bold uppercase text-slate-600">
-                  Aging Warning Bucket 1
-                </label>
-                <input
-                  type="number"
-                  disabled={!isSuperAdmin}
-                  value={agingBucket1}
-                  onChange={(e) => setAgingBucket1(Number(e.target.value))}
-                  min={1}
-                  className="w-full bg-white border border-slate-200 rounded-lg p-2 text-xs font-mono font-bold text-amber-600 focus:outline-hidden"
-                />
-                <span className="text-[10px] text-slate-400 block">Days overdue for moderate warning.</span>
-              </div>
-
-              <div className="p-3.5 bg-slate-50 border border-slate-200 rounded-xl space-y-1">
-                <label className="block text-xs font-bold uppercase text-slate-600">
-                  Aging Critical Bucket 2
-                </label>
-                <input
-                  type="number"
-                  disabled={!isSuperAdmin}
-                  value={agingBucket2}
-                  onChange={(e) => setAgingBucket2(Number(e.target.value))}
-                  min={1}
-                  className="w-full bg-white border border-slate-200 rounded-lg p-2 text-xs font-mono font-bold text-red-600 focus:outline-hidden"
-                />
-                <span className="text-[10px] text-slate-400 block">Days overdue for critical warning.</span>
-              </div>
-            </div>
-
-            <div>
-              <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 mb-1">
-                Default Supplier Payment Terms Note
-              </label>
-              <textarea
-                rows={2}
-                disabled={!isSuperAdmin}
-                value={supplierTerms}
-                onChange={(e) => setSupplierTerms(e.target.value)}
-                placeholder="Standard payment terms: Net 15 days."
-                className="w-full bg-slate-50 border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800 focus:outline-hidden disabled:opacity-60"
-              />
-            </div>
-          </div>
-        )}
-
-        {/* ========================================================================= */}
-        {/* PART 5: INTEGRATIONS & EMAILJS */}
-        {/* ========================================================================= */}
-        {activeTab === 'integrations' && (
-          <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs space-y-5 animate-in fade-in duration-150">
-            <div className="border-b border-slate-100 pb-3">
-              <span className="text-[10px] font-mono font-bold text-amber-600 uppercase tracking-widest block">
-                SECTION 5
-              </span>
-              <h3 className="text-sm font-black text-slate-900 flex items-center gap-2 mt-0.5">
-                <Bell size={16} className="text-amber-500" />
-                EmailJS Real-Time Notification Gateway
-              </h3>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Send automatic stock depletion alerts directly to your administrator inbox.
-              </p>
-            </div>
-
-            <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-3">
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                    EmailJS Service ID
+                  <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
+                    Tagline
                   </label>
                   <input
                     type="text"
-                    disabled={!isSuperAdmin}
-                    value={emailJsServiceId}
-                    onChange={(e) => setEmailJsServiceId(e.target.value)}
-                    placeholder="e.g. service_xxxxxxx"
-                    className="w-full bg-white border border-slate-200 rounded-xl p-2 text-xs font-mono disabled:opacity-60"
+                    value={brandForm.tagline}
+                    onChange={(e) => setBrandForm((p) => ({ ...p, tagline: e.target.value }))}
+                    placeholder="Smart Gadgets & Accessories"
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-1.5 text-xs"
                   />
                 </div>
-
                 <div>
-                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                    EmailJS Template ID
+                  <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
+                    Website
                   </label>
                   <input
                     type="text"
-                    disabled={!isSuperAdmin}
-                    value={emailJsTemplateId}
-                    onChange={(e) => setEmailJsTemplateId(e.target.value)}
-                    placeholder="e.g. template_xxxxxxx"
-                    className="w-full bg-white border border-slate-200 rounded-xl p-2 text-xs font-mono disabled:opacity-60"
+                    value={brandForm.website}
+                    onChange={(e) => setBrandForm((p) => ({ ...p, website: e.target.value }))}
+                    placeholder="https://..."
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-1.5 text-xs"
                   />
                 </div>
-
-                <div>
-                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                    EmailJS Public API Key
-                  </label>
-                  <input
-                    type="text"
-                    disabled={!isSuperAdmin}
-                    value={emailJsPublicKey}
-                    onChange={(e) => setEmailJsPublicKey(e.target.value)}
-                    placeholder="e.g. user_xxxxxxx"
-                    className="w-full bg-white border border-slate-200 rounded-xl p-2 text-xs font-mono disabled:opacity-60"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                    Admin Notification Recipient Email
-                  </label>
-                  <input
-                    type="email"
-                    disabled={!isSuperAdmin}
-                    value={emailJsRecipient}
-                    onChange={(e) => setEmailJsRecipient(e.target.value)}
-                    placeholder="skyautomationtech@gmail.com"
-                    className="w-full bg-white border border-slate-200 rounded-xl p-2 text-xs disabled:opacity-60"
-                  />
-                </div>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* ========================================================================= */}
-        {/* PART 5B: CUSTOMER PUBLIC TRACKING PORTAL SETTINGS */}
-        {/* ========================================================================= */}
-        {activeTab === 'tracking' && (
-          <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs space-y-5 animate-in fade-in duration-150">
-            <div className="border-b border-slate-100 pb-3">
-              <span className="text-[10px] font-mono font-bold text-amber-600 uppercase tracking-widest block">
-                SECTION 6
-              </span>
-              <h3 className="text-sm font-black text-slate-900 flex items-center gap-2 mt-0.5">
-                <Link2 size={16} className="text-amber-500" />
-                Customer Public Tracking Portal Settings
-              </h3>
-              <p className="text-xs text-slate-500 mt-0.5">
-                Configure your hosted domain URL, automatic link expiry rules, courier privacy default, and WhatsApp/SMS share templates.
-              </p>
-            </div>
-
-            {/* Public Base URL */}
-            <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-2.5">
-              <div className="flex flex-wrap items-center justify-between gap-2">
-                <label className="block text-xs font-bold uppercase tracking-wider text-slate-700">
-                  Public App Base URL (Vercel Hosted SPA) *
-                </label>
-                {publicAppUrl.trim() ? (
-                  isValidHttpsUrl(publicAppUrl) ? (
-                    <span className="text-[11px] font-semibold text-emerald-700 bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded-md">
-                      Valid HTTPS Base URL
-                    </span>
-                  ) : (
-                    <span className="text-[11px] font-semibold text-rose-700 bg-rose-50 border border-rose-200 px-2 py-0.5 rounded-md">
-                      Must start with https://
-                    </span>
-                  )
-                ) : (
-                  <span className="text-[11px] font-semibold text-amber-700 bg-amber-50 border border-amber-200 px-2 py-0.5 rounded-md">
-                    Unconfigured — Copy &amp; Share disabled
-                  </span>
-                )}
-              </div>
-              <input
-                type="url"
-                disabled={!isSuperAdmin}
-                value={publicAppUrl}
-                onChange={(e) => setPublicAppUrl(e.target.value)}
-                placeholder="https://sat-erp.vercel.app"
-                className="w-full bg-white border border-slate-200 rounded-xl py-2 px-3 text-xs font-mono text-slate-900 focus:outline-hidden focus:border-amber-400 disabled:opacity-60"
-              />
-              <p className="text-[11px] text-slate-500">
-                Sample generated URL:{' '}
-                <span className="font-mono text-slate-700">
-                  {isValidHttpsUrl(publicAppUrl)
-                    ? `${publicAppUrl.trim().replace(/\/+$/, '')}/track/<256-bit-token>`
-                    : 'Enter a valid https:// URL above'}
-                </span>
-              </p>
-            </div>
-
-            {/* Auto-Expiry & Default Courier Visibility */}
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-              <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-3">
-                <label className="flex items-start gap-2.5 cursor-pointer select-none">
-                  <input
-                    type="checkbox"
-                    disabled={!isSuperAdmin}
-                    checked={trackingAutoExpiryEnabled}
-                    onChange={(e) => setTrackingAutoExpiryEnabled(e.target.checked)}
-                    className="mt-0.5 rounded border-slate-300 text-amber-500 focus:ring-amber-500"
-                  />
-                  <div>
-                    <span className="block text-xs font-bold text-slate-800">
-                      Auto-expire completed tracking links
-                    </span>
-                    <span className="block text-[11px] text-slate-500 mt-0.5">
-                      Automatically disable &amp; strip public tracking snapshots N days after Delivered, Cancelled, or Refunded.
-                    </span>
-                  </div>
-                </label>
-
-                <div>
-                  <label className="block text-[11px] font-semibold text-slate-600 mb-1">
-                    Auto-Expiry Days After Completion
-                  </label>
-                  <input
-                    type="number"
-                    min={1}
-                    max={365}
-                    disabled={!isSuperAdmin || !trackingAutoExpiryEnabled}
-                    value={trackingAutoExpiryDays}
-                    onChange={(e) =>
-                      setTrackingAutoExpiryDays(Math.max(1, Number(e.target.value) || 90))
-                    }
-                    className="w-32 bg-white border border-slate-200 rounded-xl py-2 px-3 text-xs font-mono font-bold text-slate-900 disabled:opacity-50"
-                  />
-                </div>
-              </div>
-
-              <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-2.5">
-                <label className="flex items-start gap-2.5 cursor-pointer select-none">
-                  <input
-                    type="checkbox"
-                    disabled={!isSuperAdmin}
-                    checked={defaultShowCourierTracking}
-                    onChange={(e) => setDefaultShowCourierTracking(e.target.checked)}
-                    className="mt-0.5 rounded border-slate-300 text-amber-500 focus:ring-amber-500"
-                  />
-                  <div>
-                    <span className="block text-xs font-bold text-slate-800">
-                      Show courier tracking to customers by default
-                    </span>
-                    <span className="block text-[11px] text-slate-500 mt-0.5">
-                      When unchecked (recommended default), courier name, tracking number, and carrier URL stay hidden until toggled per order.
-                    </span>
-                  </div>
-                </label>
-              </div>
-            </div>
-
-            {/* WhatsApp / SMS Share Message Templates */}
-            <div className="p-4 bg-slate-50 border border-slate-200 rounded-2xl space-y-4">
-              <div>
-                <h4 className="text-xs font-bold text-slate-800 uppercase tracking-wider">
-                  Share Message Templates (English &amp; বাংলা)
-                </h4>
-                <p className="text-[11px] text-slate-500 mt-1">
-                  Supported variables:{' '}
-                  <span className="font-mono text-slate-700">
-                    {'{firstName}'}, {'{orderId}'}, {'{productName}'}, {'{brandName}'}, {'{status}'}, {'{trackingUrl}'}, {'{totalAmount}'}, {'{dueAmount}'}
-                  </span>
-                </p>
               </div>
 
               <div>
-                <div className="flex items-center justify-between mb-1">
-                  <label className="text-xs font-semibold text-slate-700">English Template</label>
-                  {isSuperAdmin && (
-                    <button
-                      type="button"
-                      onClick={() => setTrackingTemplateEn(DEFAULT_TRACKING_SHARE_TEMPLATE_EN)}
-                      className="text-[11px] font-semibold text-amber-600 hover:underline cursor-pointer"
-                    >
-                      Reset Default
-                    </button>
-                  )}
-                </div>
-                <textarea
-                  rows={2}
-                  disabled={!isSuperAdmin}
-                  value={trackingTemplateEn}
-                  onChange={(e) => setTrackingTemplateEn(e.target.value)}
-                  className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800 focus:outline-hidden focus:border-amber-400 disabled:opacity-60"
-                />
-              </div>
-
-              <div>
-                <div className="flex items-center justify-between mb-1">
-                  <label className="text-xs font-semibold text-slate-700">বাংলা টেমপ্লেট (Bangla Template)</label>
-                  {isSuperAdmin && (
-                    <button
-                      type="button"
-                      onClick={() => setTrackingTemplateBn(DEFAULT_TRACKING_SHARE_TEMPLATE_BN)}
-                      className="text-[11px] font-semibold text-amber-600 hover:underline cursor-pointer"
-                    >
-                      Reset Default
-                    </button>
-                  )}
-                </div>
-                <textarea
-                  rows={2}
-                  disabled={!isSuperAdmin}
-                  value={trackingTemplateBn}
-                  onChange={(e) => setTrackingTemplateBn(e.target.value)}
-                  className="w-full bg-white border border-slate-200 rounded-xl p-2.5 text-xs text-slate-800 focus:outline-hidden focus:border-amber-400 disabled:opacity-60"
-                />
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* ========================================================================= */}
-        {/* PART 6: LIVE INVOICE PREVIEW */}
-        {/* ========================================================================= */}
-        {activeTab === 'preview' && (
-          <div className="bg-white p-5 rounded-2xl border border-slate-200/80 shadow-xs space-y-4 animate-in fade-in duration-150">
-            <div className="border-b border-slate-100 pb-3 flex items-center justify-between">
-              <div>
-                <span className="text-[10px] font-mono font-bold text-amber-600 uppercase tracking-widest block">
-                  SECTION 6
-                </span>
-                <h3 className="text-sm font-black text-slate-900 flex items-center gap-2 mt-0.5">
-                  <Eye size={16} className="text-amber-500" />
-                  Live Invoice & Receipt Visualizer
-                </h3>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  Real-time preview of how invoices and receipts appear to your buyers.
-                </p>
-              </div>
-
-              <div className="flex items-center gap-1.5 bg-slate-100 p-1 rounded-xl">
-                {(['SAT', 'GZ', 'RTX'] as const).map(b => (
-                  <button
-                    key={b}
-                    type="button"
-                    onClick={() => setSelectedSubBrand(b)}
-                    className={`px-2.5 py-1 rounded-lg text-xs font-bold ${
-                      selectedSubBrand === b ? 'bg-slate-900 text-amber-400' : 'text-slate-600'
-                    }`}
-                  >
-                    {b} View
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* Mock Invoice Sheet */}
-            <div className="max-w-2xl mx-auto bg-white p-6 sm:p-8 rounded-2xl border border-slate-300 shadow-sm font-sans text-slate-900 space-y-6">
-              {/* Invoice Header */}
-              <div className="flex justify-between items-start border-b border-slate-200 pb-4">
-                <div className="flex items-center gap-3">
-                  <div className="w-12 h-12 bg-slate-950 rounded-xl p-1.5 flex items-center justify-center">
-                    <img 
-                      src={subBrands[selectedSubBrand].logoUrl || logoUrl || '/sat_logo.jpg'} 
-                      alt="Brand"
-                      className="w-full h-full object-contain"
-                    />
-                  </div>
-                  <div>
-                    <h2 className="text-base font-black uppercase text-slate-900 leading-tight">
-                      {subBrands[selectedSubBrand].companyName || companyName}
-                    </h2>
-                    <p className="text-[11px] text-amber-600 font-semibold">
-                      {subBrands[selectedSubBrand].tagline || tagline}
-                    </p>
-                    <p className="text-[10px] text-slate-400 mt-0.5">
-                      {subBrands[selectedSubBrand].address || address} &bull; {subBrands[selectedSubBrand].phone || phone}
-                    </p>
-                  </div>
-                </div>
-
-                <div className="text-right">
-                  <span className="text-xs font-black uppercase tracking-widest text-slate-400 block">TAX INVOICE</span>
-                  <span className="font-mono font-bold text-sm text-slate-900 block mt-0.5">
-                    {selectedSubBrand === 'SAT' ? satPrefix : selectedSubBrand === 'GZ' ? gzPrefix : rtxPrefix}-1024
-                  </span>
-                  <span className="text-[10px] text-slate-400 font-mono">
-                    {new Date().toLocaleDateString()}
-                  </span>
-                </div>
-              </div>
-
-              {/* Mock Items Table */}
-              <div className="border border-slate-200 rounded-xl overflow-hidden text-xs">
-                <table className="w-full text-left">
-                  <thead className="bg-slate-50 border-b border-slate-200 text-[10px] uppercase font-bold text-slate-500">
-                    <tr>
-                      <th className="p-2.5">Item Description</th>
-                      <th className="p-2.5 text-center">Qty</th>
-                      <th className="p-2.5 text-right">Rate</th>
-                      <th className="p-2.5 text-right">Amount</th>
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-slate-100">
-                    <tr>
-                      <td className="p-2.5 font-bold">Baseus 65W GaN5 Pro Fast Charger (Black)</td>
-                      <td className="p-2.5 text-center font-mono">2</td>
-                      <td className="p-2.5 text-right font-mono">৳2,450</td>
-                      <td className="p-2.5 text-right font-mono font-bold">৳4,900</td>
-                    </tr>
-                    <tr>
-                      <td className="p-2.5 font-bold">Baseus Cafule PD Type-C 100W Cable 2M</td>
-                      <td className="p-2.5 text-center font-mono">1</td>
-                      <td className="p-2.5 text-right font-mono">৳650</td>
-                      <td className="p-2.5 text-right font-mono font-bold">৳650</td>
-                    </tr>
-                  </tbody>
-                </table>
-              </div>
-
-              {/* Total Summary Strip */}
-              <div className="flex justify-end text-xs">
-                <div className="w-56 space-y-1 text-right">
-                  <div className="flex justify-between text-slate-500">
-                    <span>Subtotal:</span>
-                    <span className="font-mono font-bold text-slate-800">৳5,550</span>
-                  </div>
-                  <div className="flex justify-between text-slate-500">
-                    <span>Delivery Charge:</span>
-                    <span className="font-mono font-bold text-slate-800">৳60</span>
-                  </div>
-                  <div className="flex justify-between text-sm font-black border-t border-slate-200 pt-1.5 text-slate-900">
-                    <span>Total Amount:</span>
-                    <span className="font-mono text-amber-600">৳5,610</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Mock Payment Footnote */}
-              <div className="p-3 bg-slate-50 rounded-xl border border-slate-200/80 text-[11px] space-y-1.5">
-                <div className="font-bold text-slate-700 flex items-center gap-1">
-                  <span>💳 Payment Directive:</span>
-                </div>
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-slate-600 font-mono text-[10px]">
-                  <div>bKash/Nagad: <strong>{bkashNagad}</strong></div>
-                  <div>Bank: <strong>{bankInfo}</strong></div>
-                </div>
-                <p className="text-[10px] text-slate-400 italic pt-1 border-t border-slate-200/60">
-                  {subBrands[selectedSubBrand].invoiceTerms || invoiceTerms}
-                </p>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* ========================================================================= */}
-        {/* PART 7: ACCOUNTING BASELINE & CASH CONFIGURATION */}
-        {/* ========================================================================= */}
-        {activeTab === 'accounting' && (
-          <div className="bg-white p-5 sm:p-6 rounded-2xl border border-slate-200/80 shadow-xs space-y-6 animate-in fade-in duration-150">
-            <div className="border-b border-slate-100 pb-3 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-              <div>
-                <h3 className="text-base font-bold text-slate-900 flex items-center gap-2">
-                  <Calculator size={18} className="text-amber-500" />
-                  অ্যাকাউন্টিং বেসলাইন সেটিংস (Accounting Baseline & Cash Settings)
-                </h3>
-                <p className="text-xs text-slate-500 mt-0.5">
-                  হাতে নগদ ক্যাশ, প্রারম্ভিক বিনিয়োগ এবং কাট-অফ তারিখ কনফিগারেশন
-                </p>
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-[11px] font-mono font-bold bg-emerald-100 text-emerald-800 px-2.5 py-1 rounded-full">
-                  হাতে নগদ: ৳{Number(baselineCash).toLocaleString()}
-                </span>
-                <span className="text-[11px] font-mono font-bold bg-amber-100 text-amber-800 px-2.5 py-1 rounded-full">
-                  বিনিয়োগ: ৳{Number(baselineInvestment).toLocaleString()}
-                </span>
-              </div>
-            </div>
-
-            {/* Instruction Notice */}
-            <div className="p-4 bg-amber-50/70 border border-amber-200/80 rounded-2xl text-xs text-amber-900 space-y-1.5">
-              <p className="font-bold flex items-center gap-1.5 text-amber-950">
-                <ShieldCheck size={16} className="text-amber-600 shrink-0" />
-                পূর্ববর্তী হিসাব বাদ দেওয়ার নিয়ম (Baseline Cutoff Rule)
-              </p>
-              <p className="text-[11px] leading-relaxed text-amber-800">
-                ব্যবহারকারীর নির্দেশনা অনুযায়ী, কাট-অফ তারিখের পূর্ববর্তী কোনো পুরনো অর্ডার, খরচ বা লেনদেন নতুন ক্যাশ ও বিনিয়োগ হিসেবে অন্তর্ভুক্ত হবে না। নতুন সমস্ত দৈনন্দিন লাভ, খরচ ও ক্যাশ পরিবর্তন এই বেসলাইনের উপর ভিত্তি করে গণনা করা হবে।
-              </p>
-            </div>
-
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-              <div className="space-y-1.5 bg-slate-50 p-4 rounded-xl border border-slate-100">
-                <label className="block text-xs font-bold text-slate-800 flex items-center gap-1.5">
-                  <Wallet size={14} className="text-emerald-600" />
-                  বর্তমান হাতে নগদ ক্যাশ (Baseline Cash in Hand) *
-                </label>
-                <div className="relative">
-                  <span className="absolute left-3 top-2.5 text-sm font-bold text-slate-400 font-mono">৳</span>
-                  <input
-                    type="number"
-                    step="any"
-                    value={baselineCash}
-                    onChange={(e) => setBaselineCash(parseFloat(e.target.value) || 0)}
-                    disabled={!isSuperAdmin}
-                    className="w-full bg-white border border-slate-200 rounded-xl py-2 pl-7 pr-3 text-sm font-mono font-bold text-slate-900 focus:ring-2 focus:ring-amber-500 focus:outline-hidden disabled:bg-slate-100"
-                    placeholder="0"
-                  />
-                </div>
-                <p className="text-[11px] text-slate-500">
-                  বর্তমানে ক্যাশে নির্ধারিত টাকা: <strong>৳{Number(baselineCash || 0).toLocaleString()}</strong>
-                </p>
-              </div>
-
-              <div className="space-y-1.5 bg-slate-50 p-4 rounded-xl border border-slate-100">
-                <label className="block text-xs font-bold text-slate-800 flex items-center gap-1.5">
-                  <Briefcase size={14} className="text-amber-600" />
-                  আমাদের মোট বিনিয়োগ (Total Investment Baseline) *
-                </label>
-                <div className="relative">
-                  <span className="absolute left-3 top-2.5 text-sm font-bold text-slate-400 font-mono">৳</span>
-                  <input
-                    type="number"
-                    step="any"
-                    value={baselineInvestment}
-                    onChange={(e) => setBaselineInvestment(parseFloat(e.target.value) || 0)}
-                    disabled={!isSuperAdmin}
-                    className="w-full bg-white border border-slate-200 rounded-xl py-2 pl-7 pr-3 text-sm font-mono font-bold text-slate-900 focus:ring-2 focus:ring-amber-500 focus:outline-hidden disabled:bg-slate-100"
-                    placeholder="39550"
-                  />
-                </div>
-                <p className="text-[11px] text-slate-500">
-                  বর্তমানে মোট বিনিয়োগ নির্ধারিত: <strong>৳৩৯,৫৫০</strong>
-                </p>
-              </div>
-
-              <div className="space-y-1.5 bg-slate-50 p-4 rounded-xl border border-slate-100">
-                <label className="block text-xs font-bold text-slate-800">
-                  কাট-অফ তারিখ (Cutoff Date) *
-                </label>
-                <input
-                  type="date"
-                  value={baselineCutoffDate}
-                  onChange={(e) => setBaselineCutoffDate(e.target.value)}
-                  disabled={!isSuperAdmin}
-                  className="w-full bg-white border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-900 focus:ring-2 focus:ring-amber-500 focus:outline-hidden disabled:bg-slate-100"
-                />
-                <p className="text-[11px] text-amber-700">
-                  এই তারিখের আগের কোনো লেনদেন বা অর্ডার হিসাবে আসবে না।
-                </p>
-              </div>
-
-              <div className="space-y-1.5 bg-slate-50 p-4 rounded-xl border border-slate-100">
-                <label className="block text-xs font-bold text-slate-800">
-                  বেসলাইন নোট / বিবরণ
+                <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
+                  Address
                 </label>
                 <input
                   type="text"
-                  value={baselineNote}
-                  onChange={(e) => setBaselineNote(e.target.value)}
-                  disabled={!isSuperAdmin}
-                  className="w-full bg-white border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-900 focus:ring-2 focus:ring-amber-500 focus:outline-hidden disabled:bg-slate-100"
-                  placeholder="যেমন: বর্তমান ক্যাশ ও বিনিয়োগ থেকে নতুন হিসাব চালু"
+                  value={brandForm.address}
+                  onChange={(e) => setBrandForm((p) => ({ ...p, address: e.target.value }))}
+                  className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-1.5 text-xs"
                 />
-                <p className="text-[11px] text-slate-500">
-                  অ্যাকাউন্টিং অডিটের জন্য বিবরণ
-                </p>
               </div>
-            </div>
 
-            {isSuperAdmin && (
-              <div className="pt-2 flex items-center justify-between">
-                <span className="text-xs text-slate-500">
-                  এই পরিবর্তনটি সরাসরি লাইভ Accounting Desk এ প্রতিফলিত হবে।
-                </span>
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                <div>
+                  <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">Facebook</label>
+                  <input
+                    type="text"
+                    value={brandForm.facebook}
+                    onChange={(e) => setBrandForm((p) => ({ ...p, facebook: e.target.value }))}
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2 py-1 text-[11px]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">Instagram</label>
+                  <input
+                    type="text"
+                    value={brandForm.instagram}
+                    onChange={(e) => setBrandForm((p) => ({ ...p, instagram: e.target.value }))}
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2 py-1 text-[11px]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">TikTok</label>
+                  <input
+                    type="text"
+                    value={brandForm.tiktok}
+                    onChange={(e) => setBrandForm((p) => ({ ...p, tiktok: e.target.value }))}
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2 py-1 text-[11px]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-semibold text-slate-500 mb-0.5">YouTube</label>
+                  <input
+                    type="text"
+                    value={brandForm.youtube}
+                    onChange={(e) => setBrandForm((p) => ({ ...p, youtube: e.target.value }))}
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2 py-1 text-[11px]"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
+                    Invoice Footer Note
+                  </label>
+                  <input
+                    type="text"
+                    value={brandForm.invoiceFooterNote}
+                    onChange={(e) => setBrandForm((p) => ({ ...p, invoiceFooterNote: e.target.value }))}
+                    placeholder="Thank you for shopping with us!"
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-1.5 text-xs"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
+                    Warranty Policy Text
+                  </label>
+                  <input
+                    type="text"
+                    value={brandForm.warrantyPolicyText}
+                    onChange={(e) => setBrandForm((p) => ({ ...p, warrantyPolicyText: e.target.value }))}
+                    placeholder="Standard warranty applies."
+                    className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-1.5 text-xs"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-[11px] font-semibold text-slate-600 dark:text-slate-400 mb-1">
+                  Invoice Terms &amp; Conditions
+                </label>
+                <textarea
+                  rows={2}
+                  value={brandForm.invoiceTerms}
+                  onChange={(e) => setBrandForm((p) => ({ ...p, invoiceTerms: e.target.value }))}
+                  className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl p-2.5 text-xs font-mono"
+                />
+              </div>
+
+              {/* Live Hex-Only Preview */}
+              <div
+                className="p-3.5 rounded-xl flex items-center justify-between gap-3"
+                style={{
+                  backgroundColor: '#FFFFFF',
+                  color: '#0F172A',
+                  border: `1px solid ${sanitizeHexColor(brandForm.accentColor, '#0F766E')}`,
+                  borderLeft: `6px solid ${sanitizeHexColor(brandForm.accentColor, '#0F766E')}`,
+                }}
+              >
+                <div className="min-w-0">
+                  <div className="text-xs font-black uppercase truncate">
+                    {brandForm.name || 'Sub-Brand Name'} ({brandForm.shortCode || 'CODE'})
+                  </div>
+                  <div
+                    className="text-[11px] font-semibold truncate"
+                    style={{ color: sanitizeHexColor(brandForm.accentColor, '#0F766E') }}
+                  >
+                    {brandForm.tagline || 'Tagline preview'}
+                  </div>
+                  {showParentCreditLine && parentCreditLine.trim() && (
+                    <div className="text-[10px]" style={{ color: '#64748B' }}>
+                      {parentCreditLine}
+                    </div>
+                  )}
+                </div>
+                <div className="text-right font-mono text-xs shrink-0">
+                  <div className="font-bold" style={{ color: sanitizeHexColor(brandForm.accentColor, '#0F766E') }}>
+                    {brandForm.invoicePrefix || 'CODE-INV'}-0001
+                  </div>
+                  <div className="text-[10px]" style={{ color: '#64748B' }}>
+                    {brandForm.invoiceFooterNote || 'Footer preview'}
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-3 border-t border-slate-200 dark:border-slate-800">
                 <button
                   type="button"
-                  onClick={handleSaveAccountingBaselineOnly}
-                  disabled={isSavingBaseline}
-                  className="py-2.5 px-5 bg-amber-500 hover:bg-amber-600 text-slate-950 font-bold text-xs rounded-xl shadow-xs transition cursor-pointer disabled:opacity-50 flex items-center gap-1.5"
+                  onClick={() => setBrandModalOpen(false)}
+                  className="px-4 py-2 text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl cursor-pointer"
                 >
-                  <Save size={14} />
-                  <span>{isSavingBaseline ? 'সংরক্ষণ হচ্ছে...' : 'বেসলাইন সেটিংস সংরক্ষণ করুন'}</span>
+                  Cancel
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingBrand}
+                  className="px-5 py-2 text-xs font-bold bg-slate-950 hover:bg-slate-900 text-amber-400 rounded-xl cursor-pointer disabled:opacity-50"
+                >
+                  {savingBrand
+                    ? 'Saving...'
+                    : brandForm.mode === 'create'
+                      ? 'Create Selling Sub-Brand'
+                      : 'Save Changes'}
                 </button>
               </div>
-            )}
-          </div>
-        )}
-
-
-        {/* Global Floating Bottom Save Bar (Visible on all tabs for Super Admin) */}
-        {isSuperAdmin && (
-          <div className="pt-2 flex justify-end">
-            <button
-              type="button"
-              onClick={() => handleSaveAll()}
-              disabled={saving}
-              className="inline-flex items-center gap-2 bg-slate-950 hover:bg-slate-900 text-amber-400 font-bold text-xs uppercase tracking-wider py-2.5 px-6 rounded-xl shadow-md transition cursor-pointer"
-            >
-              {saving ? (
-                <div className="w-3.5 h-3.5 border-2 border-amber-400 border-t-transparent rounded-full animate-spin" />
-              ) : (
-                <Check size={15} />
-              )}
-              <span>{saving ? 'Publishing Settings...' : 'Save & Publish All Settings'}</span>
-            </button>
-          </div>
-        )}
-      </form>
-
-      {/* Keyboard Shortcuts Help Footer */}
-      <div className="mt-8 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-5 shadow-sm">
-        <div className="flex items-center gap-3 mb-3">
-          <div className="w-8 h-8 rounded-lg bg-amber-500/10 border border-amber-500/20 flex items-center justify-center text-amber-500 shrink-0">
-            <Sparkles size={16} />
-          </div>
-          <div>
-            <h3 className="text-sm font-bold text-slate-900 dark:text-white">Keyboard Shortcuts & Hotkeys</h3>
-            <p className="text-xs text-slate-500 dark:text-slate-400">Global shortcuts enabled across the platform</p>
+            </form>
           </div>
         </div>
-        <div className="grid grid-cols-1 sm:grid-cols-3 gap-3 text-xs">
-          <div className="p-3 bg-slate-50 dark:bg-slate-800/50 rounded-xl border border-slate-200/60 dark:border-slate-800 flex items-center justify-between">
-            <span className="text-slate-600 dark:text-slate-300 font-medium">Focus Search / Command Palette</span>
-            <kbd className="px-2 py-1 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 font-mono text-[11px] font-bold rounded border border-slate-200 dark:border-slate-700 shadow-2xs">Ctrl + K / ⌘K</kbd>
-          </div>
-          <div className="p-3 bg-slate-50 dark:bg-slate-800/50 rounded-xl border border-slate-200/60 dark:border-slate-800 flex items-center justify-between">
-            <span className="text-slate-600 dark:text-slate-300 font-medium">Close Modals & Drawers</span>
-            <kbd className="px-2 py-1 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 font-mono text-[11px] font-bold rounded border border-slate-200 dark:border-slate-700 shadow-2xs">Esc</kbd>
-          </div>
-          <div className="p-3 bg-slate-50 dark:bg-slate-800/50 rounded-xl border border-slate-200/60 dark:border-slate-800 flex items-center justify-between">
-            <span className="text-slate-600 dark:text-slate-300 font-medium">Primary Form Submission</span>
-            <kbd className="px-2 py-1 bg-white dark:bg-slate-800 text-slate-700 dark:text-slate-200 font-mono text-[11px] font-bold rounded border border-slate-200 dark:border-slate-700 shadow-2xs">Enter</kbd>
+      )}
+
+      {/* ========================================================================= */}
+      {/* REASSIGN LEGACY SAT RECORDS MODAL */}
+      {/* ========================================================================= */}
+      {reassignModalOpen && (
+        <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto">
+          <div className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-2xl w-full max-w-2xl max-h-[88vh] flex flex-col overflow-hidden">
+            <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between bg-slate-50 dark:bg-slate-950/60">
+              <div>
+                <h3 className="text-base font-black text-slate-900 dark:text-white">
+                  Reassign Legacy SAT &amp; Unassigned Records
+                </h3>
+                <p className="text-xs text-slate-500">
+                  Tags reporting subBrand only — printed invoice/PO numbers, SKUs &amp; barcodes never change.
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => setReassignModalOpen(false)}
+                className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 cursor-pointer"
+              >
+                <X size={18} />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-5 space-y-4 text-xs">
+              {loadingReassignPreview ? (
+                <div className="py-10 text-center text-slate-500">Scanning Firestore collections...</div>
+              ) : reassignPreview ? (
+                <>
+                  <div className="p-3 bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700 rounded-xl flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                    <div>
+                      <span className="font-bold text-slate-800 dark:text-slate-200 block">
+                        Target Selling Sub-Brand
+                      </span>
+                      <span className="text-[11px] text-slate-500">
+                        Selected records will be tagged to this selling brand.
+                      </span>
+                    </div>
+                    <select
+                      value={reassignTargetBrand}
+                      onChange={(e) => setReassignTargetBrand(e.target.value)}
+                      className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2 text-xs font-bold"
+                    >
+                      {activeSellingBrands.map((sb) => (
+                        <option key={sb.shortCode} value={sb.shortCode}>
+                          {sb.name} ({sb.shortCode})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-center">
+                    <div className="p-2.5 rounded-xl bg-amber-50 border border-amber-200">
+                      <span className="text-[10px] font-bold text-amber-700 block">Products</span>
+                      <span className="text-base font-black text-amber-900 font-mono">
+                        {selectedProdIds.length}/{reassignPreview.products.length}
+                      </span>
+                    </div>
+                    <div className="p-2.5 rounded-xl bg-blue-50 border border-blue-200">
+                      <span className="text-[10px] font-bold text-blue-700 block">Orders</span>
+                      <span className="text-base font-black text-blue-900 font-mono">
+                        {selectedOrderIds.length}/{reassignPreview.orders.length}
+                      </span>
+                    </div>
+                    <div className="p-2.5 rounded-xl bg-purple-50 border border-purple-200">
+                      <span className="text-[10px] font-bold text-purple-700 block">Invoices</span>
+                      <span className="text-base font-black text-purple-900 font-mono">
+                        {selectedInvoiceIds.length}/{reassignPreview.invoices.length}
+                      </span>
+                    </div>
+                    <div className="p-2.5 rounded-xl bg-teal-50 border border-teal-200">
+                      <span className="text-[10px] font-bold text-teal-700 block">Pre-Orders</span>
+                      <span className="text-base font-black text-teal-900 font-mono">
+                        {selectedPreOrderIds.length}/{reassignPreview.preOrders.length}
+                      </span>
+                    </div>
+                  </div>
+
+                  {reassignPreview.products.length +
+                    reassignPreview.orders.length +
+                    reassignPreview.invoices.length +
+                    reassignPreview.preOrders.length ===
+                  0 ? (
+                    <div className="p-6 text-center bg-emerald-50 border border-emerald-200 rounded-xl text-emerald-800 font-semibold">
+                      No legacy SAT or unassigned records found! Everything is already assigned to selling sub-brands.
+                    </div>
+                  ) : (
+                    <div className="space-y-3 max-h-60 overflow-y-auto pr-1">
+                      {reassignPreview.products.length > 0 && (
+                        <div className="border border-slate-200 rounded-xl p-2.5 space-y-1">
+                          <div className="flex justify-between font-bold text-slate-700">
+                            <span>Products ({reassignPreview.products.length})</span>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setSelectedProdIds(
+                                  selectedProdIds.length === reassignPreview.products.length
+                                    ? []
+                                    : reassignPreview.products.map((p) => p.id)
+                                )
+                              }
+                              className="text-amber-600 cursor-pointer"
+                            >
+                              {selectedProdIds.length === reassignPreview.products.length
+                                ? 'Unselect All'
+                                : 'Select All'}
+                            </button>
+                          </div>
+                          {reassignPreview.products.slice(0, 30).map((p) => (
+                            <label key={p.id} className="flex items-center gap-2 text-[11px] cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={selectedProdIds.includes(p.id)}
+                                onChange={(e) =>
+                                  setSelectedProdIds((prev) =>
+                                    e.target.checked
+                                      ? [...prev, p.id]
+                                      : prev.filter((id) => id !== p.id)
+                                  )
+                                }
+                              />
+                              <span className="truncate font-semibold">{p.name}</span>
+                              <span className="font-mono text-slate-400 ml-auto">{p.sku}</span>
+                            </label>
+                          ))}
+                        </div>
+                      )}
+
+                      {reassignPreview.orders.length > 0 && (
+                        <div className="border border-slate-200 rounded-xl p-2.5 space-y-1">
+                          <div className="flex justify-between font-bold text-slate-700">
+                            <span>Legacy SAT Orders ({reassignPreview.orders.length})</span>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setSelectedOrderIds(
+                                  selectedOrderIds.length === reassignPreview.orders.length
+                                    ? []
+                                    : reassignPreview.orders.map((o) => o.id)
+                                )
+                              }
+                              className="text-amber-600 cursor-pointer"
+                            >
+                              {selectedOrderIds.length === reassignPreview.orders.length
+                                ? 'Unselect All'
+                                : 'Select All'}
+                            </button>
+                          </div>
+                          {reassignPreview.orders.slice(0, 30).map((o) => (
+                            <label key={o.id} className="flex items-center gap-2 text-[11px] cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={selectedOrderIds.includes(o.id)}
+                                onChange={(e) =>
+                                  setSelectedOrderIds((prev) =>
+                                    e.target.checked
+                                      ? [...prev, o.id]
+                                      : prev.filter((id) => id !== o.id)
+                                  )
+                                }
+                              />
+                              <span className="font-mono font-bold">#{o.id.slice(-6)}</span>
+                              <span className="truncate">{o.customerName}</span>
+                              <span className="font-mono text-slate-400 ml-auto">
+                                ৳{Number(o.totalAmount || 0).toLocaleString()}
+                              </span>
+                            </label>
+                          ))}
+                        </div>
+                      )}
+
+                      {reassignPreview.invoices.length > 0 && (
+                        <div className="border border-slate-200 rounded-xl p-2.5 space-y-1">
+                          <div className="flex justify-between font-bold text-slate-700">
+                            <span>Legacy SAT Invoices ({reassignPreview.invoices.length})</span>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setSelectedInvoiceIds(
+                                  selectedInvoiceIds.length === reassignPreview.invoices.length
+                                    ? []
+                                    : reassignPreview.invoices.map((i) => i.id)
+                                )
+                              }
+                              className="text-amber-600 cursor-pointer"
+                            >
+                              {selectedInvoiceIds.length === reassignPreview.invoices.length
+                                ? 'Unselect All'
+                                : 'Select All'}
+                            </button>
+                          </div>
+                          {reassignPreview.invoices.slice(0, 30).map((inv) => (
+                            <label key={inv.id} className="flex items-center gap-2 text-[11px] cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={selectedInvoiceIds.includes(inv.id)}
+                                onChange={(e) =>
+                                  setSelectedInvoiceIds((prev) =>
+                                    e.target.checked
+                                      ? [...prev, inv.id]
+                                      : prev.filter((id) => id !== inv.id)
+                                  )
+                                }
+                              />
+                              <span className="font-mono font-bold">{inv.invoiceNumber}</span>
+                              <span className="truncate">{inv.customerName}</span>
+                            </label>
+                          ))}
+                        </div>
+                      )}
+
+                      {reassignPreview.preOrders.length > 0 && (
+                        <div className="border border-slate-200 rounded-xl p-2.5 space-y-1">
+                          <div className="flex justify-between font-bold text-slate-700">
+                            <span>Legacy SAT Pre-Orders ({reassignPreview.preOrders.length})</span>
+                            <button
+                              type="button"
+                              onClick={() =>
+                                setSelectedPreOrderIds(
+                                  selectedPreOrderIds.length === reassignPreview.preOrders.length
+                                    ? []
+                                    : reassignPreview.preOrders.map((po) => po.id)
+                                )
+                              }
+                              className="text-amber-600 cursor-pointer"
+                            >
+                              {selectedPreOrderIds.length === reassignPreview.preOrders.length
+                                ? 'Unselect All'
+                                : 'Select All'}
+                            </button>
+                          </div>
+                          {reassignPreview.preOrders.slice(0, 30).map((po) => (
+                            <label key={po.id} className="flex items-center gap-2 text-[11px] cursor-pointer">
+                              <input
+                                type="checkbox"
+                                checked={selectedPreOrderIds.includes(po.id)}
+                                onChange={(e) =>
+                                  setSelectedPreOrderIds((prev) =>
+                                    e.target.checked
+                                      ? [...prev, po.id]
+                                      : prev.filter((id) => id !== po.id)
+                                  )
+                                }
+                              />
+                              <span className="font-mono font-bold">{po.preOrderNumber}</span>
+                              <span className="truncate">{po.customerName}</span>
+                            </label>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </>
+              ) : null}
+            </div>
+
+            <div className="px-5 py-3 border-t border-slate-200 dark:border-slate-800 flex justify-end gap-2 bg-slate-50 dark:bg-slate-950/60">
+              <button
+                type="button"
+                onClick={() => setReassignModalOpen(false)}
+                className="px-4 py-2 text-xs font-bold text-slate-600 bg-slate-100 hover:bg-slate-200 rounded-xl cursor-pointer"
+              >
+                Close
+              </button>
+              <button
+                type="button"
+                disabled={
+                  applyingReassign ||
+                  selectedProdIds.length +
+                    selectedOrderIds.length +
+                    selectedInvoiceIds.length +
+                    selectedPreOrderIds.length ===
+                    0
+                }
+                onClick={handleConfirmReassignment}
+                className="px-5 py-2 text-xs font-bold bg-teal-600 hover:bg-teal-700 text-white rounded-xl cursor-pointer disabled:opacity-40"
+              >
+                {applyingReassign
+                  ? 'Applying...'
+                  : `Reassign Selected (${selectedProdIds.length + selectedOrderIds.length + selectedInvoiceIds.length + selectedPreOrderIds.length})`}
+              </button>
+            </div>
           </div>
         </div>
-      </div>
-        </div>
-      </div>
+      )}
     </div>
   );
 }

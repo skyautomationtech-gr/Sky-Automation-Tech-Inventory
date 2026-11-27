@@ -15,10 +15,17 @@ import {
   RotateCcw,
 } from 'lucide-react';
 import {
+  CompanySettings,
   PreOrderStatus,
   RolePermissionsMap,
+  SubBrand,
   UserProfile,
 } from '../../types';
+import {
+  getSellingSubBrands,
+  getUserAllowedSubBrandIds,
+} from '../../utils/subBrands';
+import { SubBrandBadge } from './PreOrderStatusBadge';
 import {
   PRE_ORDER_STATUSES,
   hasPermission,
@@ -68,6 +75,9 @@ import {
 export interface PreOrderReportsViewProps {
   user: UserProfile;
   rolePermissions: RolePermissionsMap | null;
+  companySettings?: CompanySettings | null;
+  subBrands?: SubBrand[];
+  globalBrandFilter?: string;
   onNavigate?: (tab: string, subAction?: string, initialId?: string | null) => void;
 }
 
@@ -113,6 +123,9 @@ const ROWS_PER_PAGE = 50;
 export const PreOrderReportsView: React.FC<PreOrderReportsViewProps> = ({
   user,
   rolePermissions,
+  companySettings,
+  subBrands,
+  globalBrandFilter,
   onNavigate,
 }) => {
   const toast = useToast();
@@ -122,16 +135,36 @@ export const PreOrderReportsView: React.FC<PreOrderReportsViewProps> = ({
   const canViewSupplier =
     hasPermission(user, rolePermissions, 'preOrderSupplier') || isAdmin;
 
-  const allowedSubBrands = useMemo<Array<'SAT' | 'GZ' | 'RTX'>>(() => {
-    const isSuper = user.role === 'superadmin' || (user.role as string) === 'super_admin';
-    if (isSuper || !user.subBrandAccess || user.subBrandAccess.length === 0) {
-      return ['SAT', 'GZ', 'RTX'];
+  const sellingSubBrands = useMemo(
+    () => getSellingSubBrands(subBrands, { includeInactive: true, companySettings }),
+    [subBrands, companySettings]
+  );
+
+  const allowedSubBrands = useMemo<string[] | undefined>(() => {
+    if (isAdmin) return undefined;
+    const ids = getUserAllowedSubBrandIds(user, subBrands, {
+      includeInactive: true,
+      companySettings,
+    });
+    return ids.length > 0 ? ids : sellingSubBrands.map((sb) => sb.shortCode);
+  }, [isAdmin, user, subBrands, companySettings, sellingSubBrands]);
+
+  const brandFilterOptions = useMemo(() => {
+    const visible = isAdmin
+      ? sellingSubBrands
+      : sellingSubBrands.filter((sb) => !allowedSubBrands || allowedSubBrands.includes(sb.shortCode));
+    const opts = [
+      { value: 'ALL', label: 'All Sub-Brands' },
+      ...visible.map((sb) => ({
+        value: sb.shortCode,
+        label: sb.active ? `${sb.shortCode} — ${sb.name}` : `${sb.shortCode} — ${sb.name} (Inactive)`,
+      })),
+    ];
+    if (isAdmin) {
+      opts.push({ value: 'LEGACY_SAT', label: 'Legacy (SAT)' });
     }
-    const valid = user.subBrandAccess.filter(
-      (b): b is 'SAT' | 'GZ' | 'RTX' => b === 'SAT' || b === 'GZ' || b === 'RTX'
-    );
-    return valid.length > 0 ? valid : ['SAT'];
-  }, [user.role, user.subBrandAccess]);
+    return opts;
+  }, [isAdmin, sellingSubBrands, allowedSubBrands]);
 
   const permittedTabs = useMemo(
     () =>
@@ -153,7 +186,9 @@ export const PreOrderReportsView: React.FC<PreOrderReportsViewProps> = ({
   const [datePreset, setDatePreset] = useState<ReportDatePreset>('month');
   const [customDateFrom, setCustomDateFrom] = useState('');
   const [customDateTo, setCustomDateTo] = useState('');
-  const [subBrand, setSubBrand] = useState<'ALL' | 'SAT' | 'GZ' | 'RTX'>('ALL');
+  const [subBrand, setSubBrand] = useState<string>(() =>
+    globalBrandFilter && globalBrandFilter !== 'ALL' ? globalBrandFilter : 'ALL'
+  );
   const [statuses, setStatuses] = useState<PreOrderStatus[]>([]);
   const [statusMenuOpen, setStatusMenuOpen] = useState(false);
   const statusMenuRef = useRef<HTMLDivElement>(null);
@@ -176,6 +211,12 @@ export const PreOrderReportsView: React.FC<PreOrderReportsViewProps> = ({
     document.addEventListener('mousedown', handler);
     return () => document.removeEventListener('mousedown', handler);
   }, []);
+
+  useEffect(() => {
+    if (globalBrandFilter) {
+      setSubBrand(globalBrandFilter);
+    }
+  }, [globalBrandFilter]);
 
   useEffect(() => {
     if (!permittedTabs.some((t) => t.id === activeReport)) {
@@ -541,11 +582,8 @@ export const PreOrderReportsView: React.FC<PreOrderReportsViewProps> = ({
             <Select
               value={subBrand}
               searchable={false}
-              options={[
-                { value: 'ALL', label: 'All Sub-Brands' },
-                ...allowedSubBrands.map((b) => ({ value: b, label: b })),
-              ]}
-              onChange={(val) => setSubBrand(val as 'ALL' | 'SAT' | 'GZ' | 'RTX')}
+              options={brandFilterOptions}
+              onChange={(val) => setSubBrand(String(val))}
             />
           </div>
 
@@ -762,9 +800,7 @@ export const PreOrderReportsView: React.FC<PreOrderReportsViewProps> = ({
                               }`}
                             >
                               {col.key === 'subBrand' && raw && raw !== '—' ? (
-                                <Badge variant="subBrand" size="xs">
-                                  {String(raw)}
-                                </Badge>
+                                <SubBrandBadge subBrand={String(raw)} subBrands={subBrands} />
                               ) : (
                                 <span className="max-w-[260px] truncate inline-block align-bottom" title={formatted}>
                                   {formatted}

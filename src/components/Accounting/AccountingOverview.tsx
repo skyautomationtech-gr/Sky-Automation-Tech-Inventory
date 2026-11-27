@@ -35,7 +35,9 @@ import {
   Order,
   AccountingBaselineSettings,
   CashTransaction,
-  AccountingPosting
+  AccountingPosting,
+  SubBrand,
+  CompanySettings
 } from '../../types';
 import { 
   getAccountingBaselineSettings,
@@ -56,13 +58,20 @@ import {
 } from '../../firebase/db';
 import { getPreOrderAccountingPostings } from '../../firebase/preOrderDb';
 import { summarizePreOrderAccounting } from '../../preOrders/accounting';
+import { SHARED_ACCOUNTING_TAG, getSellingSubBrands } from '../../utils/subBrands';
 
 interface AccountingOverviewProps {
   user: UserProfile;
   onSelectTab: (tab: string) => void;
+  subBrands?: SubBrand[];
+  companySettings?: CompanySettings | null;
 }
 
-export const AccountingOverview: React.FC<AccountingOverviewProps> = ({ user, onSelectTab }) => {
+export const AccountingOverview: React.FC<AccountingOverviewProps> = ({ user, onSelectTab, subBrands, companySettings }) => {
+  const activeSellingBrands = useMemo(
+    () => getSellingSubBrands(subBrands, { includeInactive: false, companySettings }),
+    [subBrands, companySettings]
+  );
   // Baseline settings state
   const [baseline, setBaseline] = useState<AccountingBaselineSettings>(DEFAULT_ACCOUNTING_BASELINE);
   
@@ -103,7 +112,7 @@ export const AccountingOverview: React.FC<AccountingOverviewProps> = ({ user, on
     amount: '',
     date: new Date().toISOString().split('T')[0],
     note: 'নতুন মূলধন বিনিয়োগ',
-    subBrand: 'SAT'
+    subBrand: SHARED_ACCOUNTING_TAG
   });
 
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -429,7 +438,7 @@ export const AccountingOverview: React.FC<AccountingOverviewProps> = ({ user, on
         amount: '',
         date: new Date().toISOString().split('T')[0],
         note: 'নতুন মূলধন বিনিয়োগ',
-        subBrand: 'SAT'
+        subBrand: SHARED_ACCOUNTING_TAG
       });
       setShowInvestmentModal(false);
       setNotification({ type: 'success', message: `৳${amt.toLocaleString()} নতুন মূলধন বিনিয়োগ হিসেবে যোগ করা হয়েছে।` });
@@ -981,6 +990,21 @@ export const AccountingOverview: React.FC<AccountingOverviewProps> = ({ user, on
                   className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-none"
                   required
                 />
+              </div>
+              <div>
+                <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">সাব-ব্র্যান্ড / খাত</label>
+                <select
+                  value={invForm.subBrand}
+                  onChange={e => setInvForm({ ...invForm, subBrand: e.target.value })}
+                  className="w-full px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800 text-slate-900 dark:text-white focus:outline-none"
+                >
+                  <option value={SHARED_ACCOUNTING_TAG}>Parent / Shared (Sky Automation Tech)</option>
+                  {activeSellingBrands.map((sb) => (
+                    <option key={sb.shortCode} value={sb.shortCode}>
+                      {sb.name} ({sb.shortCode})
+                    </option>
+                  ))}
+                </select>
               </div>
               <div>
                 <label className="block font-semibold text-slate-700 dark:text-slate-300 mb-1">নোট / বিবরণ</label>

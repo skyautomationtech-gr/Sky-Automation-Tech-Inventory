@@ -13,8 +13,7 @@ export default function OnboardingWizard({ onComplete, userId }: OnboardingWizar
   const [companyName, setCompanyName] = useState('Sky Automation Tech');
   const [logoUrl, setLogoUrl] = useState('');
   
-  // Custom Prefixes state
-  const [satPrefix, setSatPrefix] = useState('SAT-INV');
+  // Custom Prefixes state (Selling Sub-Brands only)
   const [gzPrefix, setGzPrefix] = useState('GZ-INV');
   const [rtxPrefix, setRtxPrefix] = useState('RTX-INV');
   
@@ -47,9 +46,14 @@ export default function OnboardingWizard({ onComplete, userId }: OnboardingWizar
 
     const newSettings: CompanySettings = {
       companyName,
+      legalName: companyName,
+      isParent: true,
+      isSellingBrand: false,
+      parentCreditLine: `A concern of ${companyName}`,
+      showParentCreditLine: true,
+      subBrands: ['GZ', 'RTX'],
       logoUrl: logoUrl || undefined,
       prefixes: {
-        SAT: satPrefix || 'SAT-INV',
         GZ: gzPrefix || 'GZ-INV',
         RTX: rtxPrefix || 'RTX-INV'
       },
@@ -60,7 +64,7 @@ export default function OnboardingWizard({ onComplete, userId }: OnboardingWizar
       await saveCompanySettings(newSettings);
       await updateUserProfile(userId, { 
         role: 'superadmin',
-        subBrandAccess: ['SAT', 'GZ', 'RTX']
+        subBrandAccess: ['GZ', 'RTX']
       });
       
       onComplete(newSettings);
@@ -174,26 +178,21 @@ export default function OnboardingWizard({ onComplete, userId }: OnboardingWizar
         {step === 2 && (
           <div className="space-y-6">
             <div className="space-y-2">
-              <h2 className="text-lg font-bold text-slate-100">Sub-brands & Invoice Prefixing</h2>
+              <h2 className="text-lg font-bold text-slate-100">Selling Sub-Brands & Invoice Prefixes</h2>
               <p className="text-sm text-slate-400 leading-relaxed">
-                We've configured three central sub-brand segments. Set the unique serial numbering formats below.
+                {companyName} operates as the Parent / Importer company (no customer invoices). Configure your active selling sub-brands below; more can be added later in Settings.
               </p>
             </div>
 
             <div className="space-y-4">
-              <div className="p-4 bg-slate-950 rounded-2xl border border-slate-800 flex items-center justify-between">
+              <div className="p-4 bg-slate-950/60 rounded-2xl border border-slate-800/80 flex items-center justify-between">
                 <div>
-                  <h3 className="text-sm font-semibold text-white font-sans">Sky Automation Tech (SAT)</h3>
-                  <p className="text-sm text-slate-400">Central Enterprise Platform</p>
+                  <h3 className="text-sm font-semibold text-white font-sans">{companyName} (SAT)</h3>
+                  <p className="text-xs text-slate-400">Parent / Importer Company — Imports &amp; shared HQ operations</p>
                 </div>
-                <div className="w-28">
-                  <input
-                    type="text"
-                    value={satPrefix}
-                    onChange={(e) => setSatPrefix(e.target.value)}
-                    className="w-full bg-slate-900 border border-slate-800 rounded-lg py-1.5 px-2 text-center text-sm font-mono font-bold text-amber-400 focus:outline-hidden focus:ring-1 focus:ring-amber-400"
-                  />
-                </div>
+                <span className="px-2.5 py-1 rounded-lg bg-slate-900 border border-slate-700 text-[11px] font-mono text-slate-400">
+                  Non-Selling HQ
+                </span>
               </div>
 
               <div className="p-4 bg-slate-950 rounded-2xl border border-slate-800 flex items-center justify-between">
@@ -261,12 +260,12 @@ export default function OnboardingWizard({ onComplete, userId }: OnboardingWizar
 
             <div className="p-4 bg-slate-950 rounded-2xl border border-slate-800 text-sm space-y-2">
               <div className="flex justify-between border-b border-slate-900 pb-2">
-                <span className="text-slate-500 font-semibold font-sans">Business Name</span>
+                <span className="text-slate-500 font-semibold font-sans">Parent Importer HQ</span>
                 <span className="text-slate-200 font-bold">{companyName}</span>
               </div>
               <div className="flex justify-between border-b border-slate-900 pb-2">
-                <span className="text-slate-500 font-semibold font-sans">SAT Prefix</span>
-                <span className="text-amber-400 font-mono font-bold">{satPrefix}</span>
+                <span className="text-slate-500 font-semibold font-sans">Company Role</span>
+                <span className="text-slate-400 font-mono text-xs">Non-Selling Parent / Importer</span>
               </div>
               <div className="flex justify-between border-b border-slate-900 pb-2">
                 <span className="text-slate-500 font-semibold font-sans">GadgetZu Prefix</span>

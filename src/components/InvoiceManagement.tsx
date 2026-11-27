@@ -18,21 +18,39 @@ import {
   QrCode,
   ExternalLink
 } from 'lucide-react';
-import { Invoice, UserProfile, Order, CompanySettings, Product } from '../types';
+import { Invoice, UserProfile, Order, CompanySettings, Product, SubBrand } from '../types';
 import { getInvoices, voidInvoiceRecord, getOrders, getCompanySettings, getProducts, localStore } from '../firebase/db';
 import { getRolePermissions, getCachedRolePermissionsSync } from '../firebase/preOrderBootstrap';
-import { getBrandLogo, BRAND_NAMES, getSubBrandCompanyInfo } from '../utils/brandLogos';
+import { getBrandLogo, getSubBrandCompanyInfo } from '../utils/brandLogos';
+import {
+  formatBrandBadgeMeta,
+  getSellingSubBrands,
+  getUserAllowedSubBrandIds,
+  isLegacySatCode,
+  matchesGlobalBrandFilter,
+  sanitizeHexColor,
+} from '../utils/subBrands';
 
 interface InvoiceManagementProps {
   user: UserProfile | null;
   requireCheckIn?: () => boolean;
+  subBrands?: SubBrand[];
+  globalBrandFilter?: string;
+  companySettings?: CompanySettings | null;
 }
 
-export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManagementProps) {
+export default function InvoiceManagement({
+  user,
+  requireCheckIn,
+  subBrands,
+  globalBrandFilter = 'ALL',
+  companySettings: companySettingsProp
+}: InvoiceManagementProps) {
   const [invoices, setInvoices] = useState<Invoice[]>(() => localStore.get<Invoice[]>('invoices') || []);
   const [orders, setOrders] = useState<Order[]>(() => localStore.get<Order[]>('orders') || []);
   const [products, setProducts] = useState<Product[]>(() => localStore.get<Product[]>('products') || []);
-  const [companySettings, setCompanySettings] = useState<CompanySettings | null>(() => localStore.get<CompanySettings>('companySettings'));
+  const [companySettings, setCompanySettings] = useState<CompanySettings | null>(() => companySettingsProp ?? localStore.get<CompanySettings>('companySettings'));
+  const effectiveCompanySettings = companySettingsProp ?? companySettings;
   const [loading, setLoading] = useState<boolean>(() => !(localStore.get<Invoice[]>('invoices')?.length));
   const [invoiceLimit, setInvoiceLimit] = useState(100);
   const [hasMoreInvoices, setHasMoreInvoices] = useState(false);
@@ -129,9 +147,30 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
     return false;
   };
 
+  const isAdminOrSuper = user?.role === 'superadmin' || (user?.role as string) === 'super_admin' || user?.role === 'admin';
+  const allSellingSubBrands = useMemo(
+    () => getSellingSubBrands(subBrands, { includeInactive: true, companySettings: effectiveCompanySettings }),
+    [subBrands, effectiveCompanySettings]
+  );
+  const allowedBrandIds = useMemo(
+    () => getUserAllowedSubBrandIds(user, subBrands, { includeInactive: true, companySettings: effectiveCompanySettings }),
+    [user, subBrands, effectiveCompanySettings]
+  );
+  const filterBrandOptions = useMemo(
+    () => (isAdminOrSuper ? allSellingSubBrands : allSellingSubBrands.filter((sb) => allowedBrandIds.includes(sb.shortCode))),
+    [isAdminOrSuper, allSellingSubBrands, allowedBrandIds]
+  );
+
   // Filter & Search Invoices
   const filteredInvoices = useMemo(() => invoices.filter(inv => {
     if (!inv) return false;
+    if (!isAdminOrSuper && inv.subBrand && !allowedBrandIds.includes(inv.subBrand)) {
+      return false;
+    }
+    if (!matchesGlobalBrandFilter(inv.subBrand, globalBrandFilter)) {
+      return false;
+    }
+
     const queryLower = (debouncedSearch || '').toLowerCase().trim();
     const invNumber = (inv.invoiceNumber || '').toLowerCase();
     const custName = (inv.customerName || '').toLowerCase();
@@ -146,7 +185,12 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
       ordId.includes(queryLower) ||
       custId.includes(queryLower);
 
-    const matchesSubBrand = subBrandFilter === '' || inv.subBrand === subBrandFilter;
+    const matchesSubBrand =
+      subBrandFilter === ''
+        ? true
+        : subBrandFilter === 'LEGACY_SAT'
+        ? isLegacySatCode(inv.subBrand)
+        : inv.subBrand === subBrandFilter;
     const matchesPayment = paymentStatusFilter === '' || inv.paymentStatus === paymentStatusFilter;
     
     let matchesVoid = true;
@@ -158,7 +202,7 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
     const timeA = a.generatedAt || 0;
     const timeB = b.generatedAt || 0;
     return sortOrder === 'desc' ? timeB - timeA : timeA - timeB;
-  }), [invoices, debouncedSearch, subBrandFilter, paymentStatusFilter, voidFilter, sortOrder]);
+  }), [invoices, debouncedSearch, subBrandFilter, paymentStatusFilter, voidFilter, sortOrder, globalBrandFilter, isAdminOrSuper, allowedBrandIds]);
 
   const totalPages = Math.max(1, Math.ceil(filteredInvoices.length / pageSize));
   const safePage = Math.min(currentPage, totalPages);
@@ -442,10 +486,11 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
               onChange={(e) => setSubBrandFilter(e.target.value)}
               className="w-full bg-slate-50 border border-slate-200 rounded-2xl py-2.5 px-3 text-sm text-slate-700 focus:outline-hidden focus:border-amber-400"
             >
-              <option value="">All Brands</option>
-              <option value="SAT">Sky Auto (SAT)</option>
-              <option value="GZ">GadgetZu (GZ)</option>
-              <option value="RTX">RTX Gadget (RTX)</option>
+              <option value="">All Selling Brands</option>
+              {filterBrandOptions.map((sb) => (
+                <option key={sb.shortCode} value={sb.shortCode}>{sb.name} ({sb.shortCode}){!sb.active ? ' (Inactive)' : ''}</option>
+              ))}
+              {isAdminOrSuper && <option value="LEGACY_SAT">Legacy (SAT)</option>}
             </select>
           </div>
 
@@ -537,15 +582,17 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                       <div className="text-sm text-slate-400 font-mono">{inv.customerPhone || 'N/A'}</div>
                     </td>
                     <td className="py-3.5 px-6">
-                      <span className={`inline-block text-[9px] font-mono uppercase px-2 py-0.5 rounded-full font-bold ${
-                        inv.subBrand === 'SAT' 
-                          ? 'bg-amber-100 text-amber-800' 
-                          : inv.subBrand === 'GZ' 
-                            ? 'bg-teal-100 text-teal-800' 
-                            : 'bg-orange-100 text-orange-800'
-                      }`}>
-                        {inv.subBrand || 'SAT'}
-                      </span>
+                      {(() => {
+                        const meta = formatBrandBadgeMeta(inv.subBrand, subBrands, effectiveCompanySettings);
+                        return (
+                          <span
+                            style={meta.badgeStyle}
+                            className="inline-block text-[9px] font-mono uppercase px-2 py-0.5 rounded-full font-bold border"
+                          >
+                            {meta.shortLabel}
+                          </span>
+                        );
+                      })()}
                     </td>
                     <td className="py-3.5 px-6 text-slate-400 font-mono">
                       {inv.generatedAt ? new Date(inv.generatedAt).toLocaleDateString('en-GB') : 'N/A'}
@@ -752,9 +799,10 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                 </div>
               )}
 
-              {/* A4 PRINT CONTAINER (STRICT HIGH-CONTRAST MONOCHROME / DARK ACCENT FOR PERFECT A4 PRINTING) */}
+              {/* A4 PRINT CONTAINER (STRICT HIGH-CONTRAST MONOCHROME / HEX BRAND ACCENT FOR PERFECT A4 PRINTING) */}
               {(() => {
-                const subBrandInfo = getSubBrandCompanyInfo(selectedInvoice.subBrand, companySettings);
+                const subBrandInfo = getSubBrandCompanyInfo(selectedInvoice.subBrand, effectiveCompanySettings, subBrands);
+                const brandAccentHex = sanitizeHexColor(subBrandInfo.accentColor, '#0F172A');
                 const relatedOrder = selectedInvoice.orderId ? orders.find(o => o.id === selectedInvoice.orderId) : null;
                 const itemSubtotal = (selectedInvoice.items || []).reduce((acc, item) => acc + ((item.qty || 0) * (item.unitPrice || 0)), 0);
                 const discountAmt = (selectedInvoice.discountAmount ?? relatedOrder?.discountAmount ?? 0) || 0;
@@ -823,29 +871,43 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
 
                     <div className="p-8 space-y-4 font-bold text-[#0f172a]">
                       {/* 1. HEADER & BRAND IDENTITY */}
-                      <div className="flex justify-between items-start pb-4 border-b-2 border-[#0f172a]">
+                      <div
+                        className="flex justify-between items-start pb-4 border-b-2"
+                        style={{ borderBottomColor: brandAccentHex }}
+                      >
                         {/* Left: Brand Logo & Details */}
                         <div className="flex gap-4 items-center">
-                          <div className="w-16 h-16 bg-[#ffffff] border-2 border-[#cbd5e1] rounded-xl flex items-center justify-center p-1 overflow-hidden shrink-0 shadow-xs">
+                          <div
+                            className="w-16 h-16 bg-[#ffffff] border-2 rounded-xl flex items-center justify-center p-1 overflow-hidden shrink-0 shadow-xs"
+                            style={{ borderColor: brandAccentHex }}
+                          >
                             <img 
                               src={subBrandInfo.logoUrl} 
                               alt={subBrandInfo.companyName} 
                               className="w-full h-full object-contain"
                               onError={(e) => {
                                 e.currentTarget.onerror = null;
-                                e.currentTarget.src = getBrandLogo(selectedInvoice.subBrand);
+                                e.currentTarget.src = getBrandLogo(selectedInvoice.subBrand, undefined, subBrands);
                               }}
                             />
                           </div>
                           <div>
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 flex-wrap">
                               <h1 className="text-2xl font-black text-[#0f172a] m-0 tracking-tight uppercase">
                                 {subBrandInfo.companyName}
                               </h1>
-                              <span className="text-[10px] bg-[#0f172a] text-[#ffffff] font-black px-2 py-0.5 rounded-sm uppercase tracking-wider">
-                                {selectedInvoice.subBrand}
+                              <span
+                                className="text-[10px] text-[#ffffff] font-black px-2 py-0.5 rounded-sm uppercase tracking-wider"
+                                style={{ backgroundColor: brandAccentHex }}
+                              >
+                                {subBrandInfo.isLegacySat ? 'Legacy (SAT)' : subBrandInfo.shortCode}
                               </span>
                             </div>
+                            {subBrandInfo.showParentCreditLine && subBrandInfo.parentCreditLine && (
+                              <p className="text-[10px] text-[#475569] mt-0.5 font-bold uppercase tracking-wide">
+                                {subBrandInfo.parentCreditLine}
+                              </p>
+                            )}
                             <p className="text-[#1e293b] text-xs mt-0.5 font-bold">{subBrandInfo.tagline}</p>
                             
                             <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-[#0f172a]">
@@ -865,15 +927,18 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                           </div>
                         </div>
 
-                        {/* Right: Invoice Label & Official Email */}
+                        {/* Right: Invoice Label & Official Brand Contact */}
                         <div className="text-right flex flex-col items-end shrink-0">
                           <div className="text-3xl font-black text-[#0f172a] tracking-tight">INVOICE</div>
                           <div className="text-[10px] font-black text-[#334155] uppercase tracking-widest mt-0.5">
                             Customer Copy
                           </div>
-                          <div className="mt-2 bg-[#0f172a] text-[#ffffff] text-[11px] font-black px-3 py-1 rounded-lg flex items-center gap-1.5 shadow-xs">
+                          <div
+                            className="mt-2 text-[#ffffff] text-[11px] font-black px-3 py-1 rounded-lg flex items-center gap-1.5 shadow-xs"
+                            style={{ backgroundColor: brandAccentHex }}
+                          >
                             <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.5"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"></path><polyline points="22,6 12,13 2,6"></polyline></svg>
-                            <span>skyautomationtech@gmail.com</span>
+                            <span>{subBrandInfo.email}</span>
                           </div>
                         </div>
                       </div>
@@ -1028,11 +1093,21 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                             </div>
                           )}
 
-                          <div className="border-2 border-[#94a3b8] rounded-xl p-2.5 bg-[#ffffff]">
+                          <div className="border-2 border-[#94a3b8] rounded-xl p-2.5 bg-[#ffffff] space-y-1">
                             <div className="text-[10px] text-[#0f172a] font-black uppercase mb-0.5">Terms & Return Policy</div>
                             <div className="text-[10px] text-[#1e293b] font-bold leading-relaxed">
                               {subBrandInfo.invoiceTerms}
                             </div>
+                            {subBrandInfo.warrantyPolicyText && (
+                              <div className="text-[10px] text-[#334155] font-semibold leading-relaxed pt-1 border-t border-[#e2e8f0]">
+                                <strong className="text-[#0f172a]">Warranty:</strong> {subBrandInfo.warrantyPolicyText}
+                              </div>
+                            )}
+                            {subBrandInfo.invoiceFooterNote && (
+                              <div className="text-[10px] text-[#475569] italic leading-relaxed">
+                                {subBrandInfo.invoiceFooterNote}
+                              </div>
+                            )}
                           </div>
 
                           {/* 6. AUTHENTIC OFFICIAL STAMP & SIGNATURE */}
@@ -1067,7 +1142,7 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                               <div className="border-t-2 border-[#0f172a] pt-1 text-[10px] font-black text-[#0f172a] uppercase tracking-wider">
                                 Authorised Signatory
                               </div>
-                              <div className="text-[9px] text-[#0f172a] font-bold">Sky Automation Tech Accounts</div>
+                              <div className="text-[9px] text-[#0f172a] font-bold">{subBrandInfo.companyName} Accounts</div>
                             </div>
                           </div>
                         </div>
@@ -1150,11 +1225,11 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                             const amountPaid = selectedInvoice.amountPaid || 0;
                             const dueVal = (selectedInvoice.amountDue ?? (totalAmount - amountPaid)) || 0;
                             const paidVal = amountPaid;
-                            const brandCode = selectedInvoice.subBrand || 'SAT';
+                            const brandCode = selectedInvoice.subBrand || 'GZ';
                             
                             // Domain target: Use live production Vercel URL as primary verification endpoint
                             const vercelDomain = 'https://sky-automation-tech-inventory.vercel.app';
-                            const qrUrl = `${vercelDomain}/?inv=${encodeURIComponent(invCode)}&d=${dueVal}&p=${paidVal}&t=${totalAmount}&b=${encodeURIComponent(brandCode)}`;
+                            const qrUrl = `${vercelDomain}/?inv=${encodeURIComponent(invCode)}&d=${dueVal}&p=${paidVal}&t=${totalAmount}&b=${encodeURIComponent(brandCode)}&bn=${encodeURIComponent(subBrandInfo.companyName)}`;
 
                             return (
                               <a 

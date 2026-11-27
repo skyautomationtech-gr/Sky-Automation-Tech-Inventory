@@ -5,7 +5,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
 } from 'lucide-react';
-import { RolePermissionsMap, UserProfile } from '../types';
+import { RolePermissionsMap, SubBrand, UserProfile } from '../types';
 import {
   SidebarBadgeCounts,
   SidebarGroup,
@@ -14,6 +14,11 @@ import {
   findActiveNavigationMatch,
   isSidebarSubItemActive,
 } from '../navigation/sidebarConfig';
+import {
+  formatBrandBadgeMeta,
+  getSellingSubBrands,
+  getUserAllowedSubBrandIds,
+} from '../utils/subBrands';
 
 interface SidebarProps {
   currentTab: string;
@@ -30,6 +35,9 @@ interface SidebarProps {
   logoUrl?: string;
   isCollapsed?: boolean;
   setIsCollapsed?: (collapsed: boolean) => void;
+  subBrands?: SubBrand[];
+  globalBrandFilter?: string;
+  onGlobalBrandFilterChange?: (brandFilter: string) => void;
 }
 
 export default function Sidebar({
@@ -47,8 +55,36 @@ export default function Sidebar({
   logoUrl,
   isCollapsed = false,
   setIsCollapsed,
+  subBrands = [],
+  globalBrandFilter = 'ALL',
+  onGlobalBrandFilterChange,
 }: SidebarProps) {
   const storageKey = `sat_sidebar_open_group_${user?.id || 'guest'}`;
+
+  const activeSellingSubBrands = useMemo(
+    () => getSellingSubBrands(subBrands, { includeInactive: false }),
+    [subBrands]
+  );
+
+  const userAllowedBrandIds = useMemo(
+    () => getUserAllowedSubBrandIds(user, subBrands),
+    [user, subBrands]
+  );
+
+  const isAdminOrSuperAdmin =
+    user?.role === 'superadmin' || user?.role === 'admin' || (user?.role as string) === 'super_admin';
+
+  const visibleBrandOptions = useMemo(() => {
+    if (isAdminOrSuperAdmin) return activeSellingSubBrands;
+    if (userAllowedBrandIds.length === 0) return activeSellingSubBrands;
+    return activeSellingSubBrands.filter((sb) => userAllowedBrandIds.includes(sb.shortCode));
+  }, [isAdminOrSuperAdmin, activeSellingSubBrands, userAllowedBrandIds]);
+
+  const activeBrandMeta = useMemo(() => {
+    if (!globalBrandFilter || globalBrandFilter === 'ALL') return null;
+    if (globalBrandFilter === 'LEGACY_SAT') return formatBrandBadgeMeta('SAT', subBrands);
+    return formatBrandBadgeMeta(globalBrandFilter, subBrands);
+  }, [globalBrandFilter, subBrands]);
 
   const menuGroups = useMemo(
     () => buildSidebarGroups({ user, rolePermissions, badges }),
@@ -256,7 +292,7 @@ export default function Sidebar({
                     {companyName || 'Sky Automation Tech'}
                   </h1>
                   <p className="text-[9px] text-amber-600 dark:text-[#D4AF37] font-mono tracking-widest uppercase truncate">
-                    Enterprise Platform
+                    Parent Importer HQ
                   </p>
                 </div>
               </div>
@@ -304,6 +340,95 @@ export default function Sidebar({
             </div>
           )}
         </div>
+
+        {/* Selling Brand Scope Switcher (Sidebar-only; never placed in TopBar) */}
+        {onGlobalBrandFilterChange && (
+          <div className="px-3 py-2 border-b border-slate-200/80 dark:border-slate-800/80 bg-slate-50/70 dark:bg-slate-900/50 shrink-0">
+            {isCollapsed ? (
+              <button
+                type="button"
+                onClick={() => {
+                  if (!isAdminOrSuperAdmin && visibleBrandOptions.length <= 1) return;
+                  const cycleOrder = [
+                    'ALL',
+                    ...visibleBrandOptions.map((b) => b.shortCode),
+                    ...(isAdminOrSuperAdmin ? ['LEGACY_SAT'] : []),
+                  ];
+                  const idx = cycleOrder.indexOf(globalBrandFilter || 'ALL');
+                  const next = cycleOrder[(idx + 1) % cycleOrder.length] || 'ALL';
+                  onGlobalBrandFilterChange(next);
+                }}
+                title={
+                  activeBrandMeta
+                    ? `Active Scope: ${activeBrandMeta.label} (Click to switch)`
+                    : 'Active Scope: All Selling Brands (Click to switch)'
+                }
+                className="w-full flex items-center justify-center py-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-950 text-[10px] font-mono font-bold cursor-pointer hover:border-amber-400 transition-colors"
+                style={
+                  activeBrandMeta
+                    ? {
+                        color: activeBrandMeta.accentColor,
+                        borderColor: activeBrandMeta.badgeStyle.borderColor,
+                        backgroundColor: activeBrandMeta.badgeStyle.backgroundColor,
+                      }
+                    : undefined
+                }
+              >
+                {activeBrandMeta ? activeBrandMeta.shortLabel.slice(0, 4) : 'ALL'}
+              </button>
+            ) : !isAdminOrSuperAdmin && visibleBrandOptions.length === 1 ? (
+              <div className="space-y-1">
+                <span className="text-[9px] font-mono font-bold uppercase tracking-widest text-slate-400 block">
+                  Assigned Brand
+                </span>
+                <div
+                  className="px-2.5 py-1.5 rounded-lg border text-xs font-bold flex items-center gap-2"
+                  style={
+                    formatBrandBadgeMeta(visibleBrandOptions[0].shortCode, subBrands).badgeStyle
+                  }
+                >
+                  <span
+                    className="w-2 h-2 rounded-full shrink-0"
+                    style={{ backgroundColor: visibleBrandOptions[0].accentColor }}
+                  />
+                  <span className="truncate">
+                    {visibleBrandOptions[0].name} ({visibleBrandOptions[0].shortCode})
+                  </span>
+                </div>
+              </div>
+            ) : (
+              <div className="space-y-1">
+                <div className="flex items-center justify-between">
+                  <span className="text-[9px] font-mono font-bold uppercase tracking-widest text-slate-400">
+                    Selling Brand Scope
+                  </span>
+                  {activeBrandMeta && (
+                    <span
+                      className="w-2 h-2 rounded-full shrink-0"
+                      style={{ backgroundColor: activeBrandMeta.accentColor }}
+                    />
+                  )}
+                </div>
+                <select
+                  value={globalBrandFilter || 'ALL'}
+                  onChange={(e) => onGlobalBrandFilterChange(e.target.value)}
+                  aria-label="Selling Brand Scope"
+                  className="w-full bg-white dark:bg-slate-950 border border-slate-200 dark:border-slate-800 rounded-lg px-2.5 py-1.5 text-xs font-bold text-slate-800 dark:text-slate-100 focus:outline-hidden focus:ring-1 focus:ring-[#D4AF37] cursor-pointer"
+                >
+                  <option value="ALL">All Selling Brands</option>
+                  {visibleBrandOptions.map((sb) => (
+                    <option key={sb.shortCode} value={sb.shortCode}>
+                      {sb.name} ({sb.shortCode})
+                    </option>
+                  ))}
+                  {isAdminOrSuperAdmin && (
+                    <option value="LEGACY_SAT">Legacy Records (SAT)</option>
+                  )}
+                </select>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Navigation Menu (Accordion Groups) */}
         <div

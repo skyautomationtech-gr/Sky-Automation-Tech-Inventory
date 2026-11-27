@@ -40,6 +40,7 @@ import {
 import { hasPermission } from '../preOrders/constants';
 import { auth, db } from '../firebase/config';
 import { perfTrackListener, perfTrackRead } from '../utils/perfLogger';
+import { formatBrandBadgeMeta, getUserAllowedSubBrandIds, isLegacySatCode } from '../utils/subBrands';
 
 interface NotificationCenterProps {
   user: UserProfile | null;
@@ -63,7 +64,7 @@ interface UnifiedNotificationItem {
   subAction?: string;
   targetId?: string;
   preOrderId?: string;
-  subBrand?: 'SAT' | 'GZ' | 'RTX';
+  subBrand?: string;
   severity?: 'info' | 'warning' | 'urgent';
 }
 
@@ -162,21 +163,16 @@ export default function NotificationCenter({
   locallyReadRef.current = locallyReadIds;
 
   const isSuperAdmin = user?.role === 'superadmin' || (user?.role as string) === 'super_admin';
+  const isAdminOrOwner = isSuperAdmin || user?.role === 'admin';
   const canViewPreOrders =
     Boolean(user) &&
     (isSuperAdmin || rolePermissionsReady) &&
     hasPermission(user, rolePermissions, 'preOrderView');
 
-  const allowedSubBrands = useMemo<Array<'SAT' | 'GZ' | 'RTX'>>(() => {
-    if (!user) return ['SAT', 'GZ', 'RTX'];
-    if (isSuperAdmin || !user.subBrandAccess || user.subBrandAccess.length === 0) {
-      return ['SAT', 'GZ', 'RTX'];
-    }
-    const valid = user.subBrandAccess.filter(
-      (b): b is 'SAT' | 'GZ' | 'RTX' => b === 'SAT' || b === 'GZ' || b === 'RTX'
-    );
-    return valid.length > 0 ? valid : ['SAT'];
-  }, [user, isSuperAdmin]);
+  const allowedSubBrands = useMemo<string[] | null>(() => {
+    if (!user || isAdminOrOwner) return null; // null = unrestricted (all selling + legacy)
+    return getUserAllowedSubBrandIds(user);
+  }, [user, isAdminOrOwner]);
 
   // Compile unified notifications from Firestore docs + Inventory alerts + User approvals + Pre-Order reminders
   const compileNotificationsList = useCallback(
@@ -262,10 +258,14 @@ export default function NotificationCenter({
         const nowMs = Date.now();
         poNotifs.forEach((poNotif) => {
           if (
+            allowedSubBrands !== null &&
             poNotif.subBrand &&
-            allowedSubBrands.length < 3 &&
+            !isLegacySatCode(poNotif.subBrand) &&
             !allowedSubBrands.includes(poNotif.subBrand)
           ) {
+            return;
+          }
+          if (allowedSubBrands !== null && poNotif.subBrand && isLegacySatCode(poNotif.subBrand)) {
             return;
           }
           const snoozedUntil = poNotif.snoozedUntilBy?.[user.id] || 0;
@@ -281,7 +281,9 @@ export default function NotificationCenter({
             read: Boolean(poNotif.readBy?.includes(user.id)),
             targetScreen: poNotif.targetTab || 'preorder_list',
             preOrderId: poNotif.preOrderId,
-            subBrand: poNotif.subBrand,
+            subBrand: poNotif.subBrand
+              ? formatBrandBadgeMeta(poNotif.subBrand).shortLabel
+              : undefined,
             severity: poNotif.severity,
           });
         });

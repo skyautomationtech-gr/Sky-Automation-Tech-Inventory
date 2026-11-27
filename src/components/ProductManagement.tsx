@@ -45,7 +45,28 @@ import {
   normalizeProductImages,
   buildCategoryPathLabel,
 } from '../utils/productImageUpload';
-import { Product, Category, Brand, UserProfile, StockLog, ProductColor, ProductModel, ProductEditHistoryEntry } from '../types';
+import {
+  Product,
+  Category,
+  Brand,
+  UserProfile,
+  StockLog,
+  ProductColor,
+  ProductModel,
+  ProductEditHistoryEntry,
+  SubBrand,
+  CompanySettings,
+} from '../types';
+import {
+  formatBrandBadgeMeta,
+  getSellingSubBrands,
+  isLegacySatCode,
+  matchesGlobalBrandFilter,
+  normalizeSubBrandCode,
+  productNeedsBrandAssignment,
+  resolveDefaultSellingSubBrand,
+} from '../utils/subBrands';
+import { applyBulkProductBrandAssignment } from '../firebase/subBrandsRegistry';
 import { 
   updateProduct, 
   archiveProduct, 
@@ -95,6 +116,9 @@ interface ProductManagementProps {
   initialProductId?: string | null;
   clearInitialProductId?: () => void;
   onNavigateToStock?: (productId: string) => void;
+  subBrands?: SubBrand[];
+  globalBrandFilter?: string;
+  companySettings?: CompanySettings | null;
 }
 
 function ProductThumbnail({
@@ -183,10 +207,47 @@ export default function ProductManagement({
   requireCheckIn,
   initialProductId,
   clearInitialProductId,
-  onNavigateToStock
+  onNavigateToStock,
+  subBrands,
+  globalBrandFilter = 'ALL',
+  companySettings,
 }: ProductManagementProps) {
   const isStaff = user?.role === 'staff';
   const isSuperAdmin = user?.role === 'superadmin' || (user?.role as string) === 'super_admin';
+  const isAdminOrOwner = isSuperAdmin || user?.role === 'admin';
+
+  const activeSellingSubBrands = useMemo(
+    () => getSellingSubBrands(subBrands, { includeInactive: false, companySettings }),
+    [subBrands, companySettings]
+  );
+  const allSellingSubBrands = useMemo(
+    () => getSellingSubBrands(subBrands, { includeInactive: true, companySettings }),
+    [subBrands, companySettings]
+  );
+  const defaultSellingSubBrand = useMemo(
+    () => resolveDefaultSellingSubBrand({ globalBrandFilter, user, subBrands, companySettings }),
+    [globalBrandFilter, user, subBrands, companySettings]
+  );
+
+  const renderSubBrandBadge = (code?: string | null, withLogo = false) => {
+    const badge = formatBrandBadgeMeta(code, subBrands, companySettings);
+    return (
+      <span
+        style={badge.badgeStyle}
+        className="inline-flex items-center gap-1 text-[10px] font-mono font-black px-2 py-0.5 rounded-full border"
+        title={badge.label}
+      >
+        {withLogo && !badge.isNeedsAssignment && (
+          <img
+            src={getBrandLogo(code || undefined, undefined, subBrands)}
+            alt={badge.shortLabel}
+            className="w-3.5 h-3.5 object-contain rounded-xs"
+          />
+        )}
+        <span>{badge.shortLabel}</span>
+      </span>
+    );
+  };
 
   // Sub tabs
   const [activeSubTab, setActiveSubTab] = useState<ProductSubTab>(initialSubTab || 'catalog');
@@ -211,7 +272,7 @@ export default function ProductManagement({
 
   useEffect(() => {
     setCurrentPage(1);
-  }, [debouncedSearch, filterCategory, filterBrand, filterSubBrand, filterStockStatus, sortBy, sortOrder, activeSubTab]);
+  }, [debouncedSearch, filterCategory, filterBrand, filterSubBrand, filterStockStatus, sortBy, sortOrder, activeSubTab, globalBrandFilter]);
 
   // Detail / Action States
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
@@ -219,12 +280,17 @@ export default function ProductManagement({
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [editModeProduct, setEditModeProduct] = useState<Product | null>(null);
 
+  // Bulk Selling Sub-Brand Assignment Modal
+  const [isBulkBrandModalOpen, setIsBulkBrandModalOpen] = useState(false);
+  const [bulkTargetBrand, setBulkTargetBrand] = useState<string>(defaultSellingSubBrand);
+  const [bulkAssigning, setBulkAssigning] = useState(false);
+
   // Category and Brand editing state
   const [newCatName, setNewCatName] = useState('');
   const [newCatSub, setNewCatSub] = useState('');
   const [newBrandName, setNewBrandName] = useState('');
   const [newBrandLogoUrl, setNewBrandLogoUrl] = useState('');
-  const [newBrandSubBrands, setNewBrandSubBrands] = useState<string[]>(['SAT']);
+  const [newBrandSubBrands, setNewBrandSubBrands] = useState<string[]>([defaultSellingSubBrand]);
   const [newBrandCategories, setNewBrandCategories] = useState<string[]>([]);
 
   const [editingBrandLogoUrl, setEditingBrandLogoUrl] = useState('');
@@ -1094,7 +1160,7 @@ export default function ProductManagement({
       setFormSuccess(`Brand "${newBrandName}" created successfully!`);
       setNewBrandName('');
       setNewBrandLogoUrl('');
-      setNewBrandSubBrands(['SAT']);
+      setNewBrandSubBrands([defaultSellingSubBrand]);
       setNewBrandCategories([]);
       await onRefreshData();
     } catch (err: any) {
@@ -1293,8 +1359,9 @@ export default function ProductManagement({
           // Build a basic product payload from row
           const pCategory = categoryIdx !== -1 ? cols[categoryIdx] : 'Smart Phones';
           const pBrand = brandIdx !== -1 ? cols[brandIdx] : 'Generic';
-          const pSubBrandRaw = subBrandIdx !== -1 ? cols[subBrandIdx].toUpperCase() : 'SAT';
-          const pSubBrand = ['SAT', 'GZ', 'RTX'].includes(pSubBrandRaw) ? pSubBrandRaw as 'SAT' | 'GZ' | 'RTX' : 'SAT';
+          const pSubBrandRaw = subBrandIdx !== -1 ? normalizeSubBrandCode(cols[subBrandIdx]) : '';
+          const matchedSelling = allSellingSubBrands.find((b) => b.shortCode === pSubBrandRaw);
+          const pSubBrand = matchedSelling ? matchedSelling.shortCode : defaultSellingSubBrand;
           const pCost = costPriceIdx !== -1 ? Number(cols[costPriceIdx]) || 0 : 0;
           const pSelling = sellingPriceIdx !== -1 ? Number(cols[sellingPriceIdx]) || 0 : 0;
           const pReorder = reorderIdx !== -1 ? Number(cols[reorderIdx]) || 5 : 5;
@@ -1304,7 +1371,8 @@ export default function ProductManagement({
             sku: pSku.toUpperCase(),
             category: pCategory,
             brand: pBrand,
-            subBrand: pSubBrand as 'SAT' | 'GZ' | 'RTX',
+            subBrand: pSubBrand,
+            subBrandId: pSubBrand,
             costPrice: pCost,
             sellingPrice: pSelling,
             reorderThreshold: pReorder,
@@ -1345,7 +1413,15 @@ export default function ProductManagement({
     
     const matchesCategory = !filterCategory || product.category === filterCategory || product.mainCategory === filterCategory;
     const matchesBrand = !filterBrand || product.brand === filterBrand;
-    const matchesSubBrand = !filterSubBrand || product.subBrand === filterSubBrand;
+    const matchesGlobalBrand = matchesGlobalBrandFilter(product.subBrand, globalBrandFilter);
+    const matchesSubBrand =
+      !filterSubBrand
+        ? true
+        : filterSubBrand === 'NEEDS_ASSIGNMENT'
+        ? productNeedsBrandAssignment(product, subBrands, companySettings)
+        : filterSubBrand === 'LEGACY_SAT'
+        ? isLegacySatCode(product.subBrand)
+        : normalizeSubBrandCode(product.subBrand) === normalizeSubBrandCode(filterSubBrand);
     
     const availQty = getProductAvailableStock(product);
     const threshold = product.reorderThreshold ?? 5;
@@ -1363,8 +1439,8 @@ export default function ProductManagement({
     const matchesArchived = !product.archived;
     const matchesStockStatus = product.stockStatus !== 'out_of_stock';
     
-    return matchesSearch && matchesCategory && matchesBrand && matchesSubBrand && matchesStock && matchesStatus && matchesArchived && matchesStockStatus;
-  }), [products, debouncedSearch, filterCategory, filterBrand, filterSubBrand, filterStockStatus]);
+    return matchesSearch && matchesCategory && matchesBrand && matchesGlobalBrand && matchesSubBrand && matchesStock && matchesStatus && matchesArchived && matchesStockStatus;
+  }), [products, debouncedSearch, filterCategory, filterBrand, filterSubBrand, filterStockStatus, globalBrandFilter, subBrands, companySettings]);
 
   // Sort
   const sortedProducts = useMemo(() => [...filteredProducts].sort((a, b) => {
@@ -1737,7 +1813,14 @@ export default function ProductManagement({
                   onChange={(e) => setFilterSubBrand(e.target.value)}
                   className="bg-white border border-slate-200 rounded-2xl py-2.5 px-3.5 text-sm text-slate-700 font-semibold focus:outline-hidden focus:ring-2 focus:ring-teal-500/20 focus:border-teal-600 shadow-2xs transition-all"
                 >
-                  <option value="">🏢 Sky Automation Tech (SAT)</option>
+                  <option value="">🏪 All Selling Sub-Brands</option>
+                  {allSellingSubBrands.map((sb) => (
+                    <option key={sb.shortCode} value={sb.shortCode}>
+                      {sb.name} ({sb.shortCode}){!sb.active ? ' — Inactive' : ''}
+                    </option>
+                  ))}
+                  <option value="NEEDS_ASSIGNMENT">⚠️ Needs Brand Assignment</option>
+                  {!isStaff && <option value="LEGACY_SAT">🏛️ Legacy (SAT)</option>}
                 </select>
 
                 {/* Stock Alert Filter */}
@@ -1885,16 +1968,7 @@ export default function ProductManagement({
                                 </div>
                               </td>
                               <td className="py-3 px-3 text-center">
-                                <span className={`inline-flex items-center gap-1.5 text-[9px] font-mono font-black px-2 py-0.5 rounded-full ${
-                                  product.subBrand === 'SAT' 
-                                    ? 'bg-slate-900 text-amber-400 border border-slate-800' 
-                                    : product.subBrand === 'GZ' 
-                                    ? 'bg-amber-100 text-amber-800 border border-amber-200' 
-                                    : 'bg-teal-50 text-teal-700 border border-teal-200'
-                                }`}>
-                                  <img src={getBrandLogo(product.subBrand)} alt={product.subBrand} className="w-3.5 h-3.5 object-contain rounded-xs" />
-                                  {product.subBrand}
-                                </span>
+                                {renderSubBrandBadge(product.subBrand, true)}
                               </td>
                               <td className="py-3 px-3">
                                 {inlineEditProductId === product.id ? (
@@ -2058,11 +2132,7 @@ export default function ProductManagement({
                                 />
                               </div>
                               <div className="absolute top-2 right-2">
-                                <span className={`text-[10px] font-mono font-bold px-2 py-0.5 rounded-md ${
-                                  product.subBrand === 'SAT' ? 'bg-slate-950 text-amber-400' : 'bg-amber-100 text-amber-900'
-                                }`}>
-                                  {product.subBrand}
-                                </span>
+                                {renderSubBrandBadge(product.subBrand)}
                               </div>
                               <div className="absolute bottom-2 left-2 flex flex-wrap gap-1">
                                 <span className={`text-xs font-bold px-2 py-0.5 rounded-md shadow-xs ${
@@ -2176,11 +2246,7 @@ export default function ProductManagement({
 
                             {/* SubBrand Badge */}
                             <div className="absolute top-1.5 right-1.5">
-                              <span className={`text-[10px] font-mono font-bold px-1.5 py-0.5 rounded ${
-                                product.subBrand === 'SAT' ? 'bg-slate-950/90 text-amber-400' : 'bg-amber-100 text-amber-900'
-                              }`}>
-                                {product.subBrand}
-                              </span>
+                              {renderSubBrandBadge(product.subBrand)}
                             </div>
 
                             {/* Stock Badge */}
@@ -2265,19 +2331,33 @@ export default function ProductManagement({
               )}
             </div>
 
-            {/* Bulk Barcode Printing & CSV Export Floating Action Bar */}
+            {/* Bulk Barcode Printing, CSV Export & Brand Assignment Floating Action Bar */}
             {selectedProductIds.length > 0 && (
-              <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 bg-slate-900 text-white py-3.5 px-5 rounded-2xl shadow-xl flex items-center gap-3 border border-slate-800 animate-in fade-in slide-in-from-bottom-4 duration-300 w-[90%] max-w-lg">
-                <div className="flex-1 min-w-0">
+              <div className="fixed bottom-6 left-1/2 -translate-x-1/2 z-40 bg-slate-900 text-white py-3.5 px-5 rounded-2xl shadow-xl flex flex-wrap items-center gap-3 border border-slate-800 animate-in fade-in slide-in-from-bottom-4 duration-300 w-[94%] max-w-2xl">
+                <div className="flex-1 min-w-[140px]">
                   <span className="text-sm font-bold font-mono text-amber-400 block">
                     {selectedProductIds.length} {selectedProductIds.length === 1 ? 'Product' : 'Products'} Selected
                   </span>
-                  <span className="text-[9px] text-slate-400 block mt-0.5 truncate">
-                    Export to CSV or generate barcode labels
+                  <span className="text-[10px] text-slate-400 block mt-0.5 truncate">
+                    Assign selling brand, export CSV, or print labels
                   </span>
                 </div>
-                <div className="h-6 w-px bg-slate-700" />
-                <div className="flex items-center gap-2">
+                <div className="h-6 w-px bg-slate-700 hidden sm:block" />
+                <div className="flex flex-wrap items-center gap-2">
+                  {isAdminOrOwner && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setBulkTargetBrand(defaultSellingSubBrand);
+                        setIsBulkBrandModalOpen(true);
+                      }}
+                      className="px-3 py-1.5 bg-indigo-500 hover:bg-indigo-600 text-white font-bold text-xs rounded-xl flex items-center gap-1.5 transition-all shadow-xs cursor-pointer"
+                      title="Assign selling sub-brand without modifying SKU or barcode"
+                    >
+                      <Tag size={12} />
+                      Assign Brand
+                    </button>
+                  )}
                   <button
                     type="button"
                     onClick={() => {
@@ -2309,6 +2389,99 @@ export default function ProductManagement({
               </div>
             )}
 
+            {/* BULK BRAND ASSIGNMENT MODAL */}
+            {isBulkBrandModalOpen && isAdminOrOwner && typeof document !== 'undefined' && createPortal(
+              <div
+                className="fixed inset-0 z-[95] bg-slate-950/70 backdrop-blur-xs flex items-center justify-center p-4"
+                onClick={() => !bulkAssigning && setIsBulkBrandModalOpen(false)}
+              >
+                <div
+                  className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-md w-full p-6 space-y-4 shadow-2xl"
+                  onClick={(e) => e.stopPropagation()}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <h3 className="text-base font-black text-slate-900 dark:text-white">
+                        Assign Selling Sub-Brand
+                      </h3>
+                      <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                        Update {selectedProductIds.length} selected product(s). Existing SKUs &amp; printed barcodes will NOT be altered.
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      disabled={bulkAssigning}
+                      onClick={() => setIsBulkBrandModalOpen(false)}
+                      className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 cursor-pointer"
+                    >
+                      <X size={16} />
+                    </button>
+                  </div>
+
+                  <div>
+                    <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1.5">
+                      Target Selling Sub-Brand
+                    </label>
+                    <select
+                      value={bulkTargetBrand}
+                      onChange={(e) => setBulkTargetBrand(e.target.value)}
+                      className="w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl px-3 py-2.5 text-sm font-semibold text-slate-900 dark:text-white"
+                    >
+                      {activeSellingSubBrands.map((sb) => (
+                        <option key={sb.shortCode} value={sb.shortCode}>
+                          {sb.name} ({sb.shortCode})
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  <div className="flex justify-end gap-2 pt-2">
+                    <button
+                      type="button"
+                      disabled={bulkAssigning}
+                      onClick={() => setIsBulkBrandModalOpen(false)}
+                      className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold cursor-pointer"
+                    >
+                      Cancel
+                    </button>
+                    <button
+                      type="button"
+                      disabled={bulkAssigning || !bulkTargetBrand}
+                      onClick={async () => {
+                        setBulkAssigning(true);
+                        setFormError('');
+                        try {
+                          const count = await applyBulkProductBrandAssignment({
+                            productIds: selectedProductIds,
+                            targetSubBrandId: bulkTargetBrand,
+                            actor: {
+                              id: user?.id || '',
+                              name: user?.name || 'Admin',
+                              role: user?.role || 'admin',
+                            },
+                          });
+                          setIsBulkBrandModalOpen(false);
+                          setSelectedProductIds([]);
+                          await onRefreshData();
+                          setFormSuccess(`Assigned ${count} product(s) to ${bulkTargetBrand} without modifying SKU or barcode.`);
+                          setTimeout(() => setFormSuccess(''), 4000);
+                        } catch (err: any) {
+                          setFormError(err?.message || 'Failed to bulk assign sub-brand.');
+                        } finally {
+                          setBulkAssigning(false);
+                        }
+                      }}
+                      className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                    >
+                      {bulkAssigning && <Loader2 size={13} className="animate-spin" />}
+                      <span>Apply Brand Tag</span>
+                    </button>
+                  </div>
+                </div>
+              </div>,
+              document.body
+            )}
+
             {/* FULL SCREEN PRODUCT OVERVIEW MODAL */}
             {selectedProduct && (
               <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-md flex items-center justify-center p-3 sm:p-6 animate-in fade-in duration-200">
@@ -2318,7 +2491,7 @@ export default function ProductManagement({
                   <div className="sticky top-0 z-20 bg-white/95 backdrop-blur-md border-b border-slate-200 px-6 py-4 flex items-center justify-between">
                     <div>
                       <span className="text-[10px] font-mono tracking-widest font-extrabold text-teal-700 bg-teal-50 px-2.5 py-1 rounded-full uppercase">
-                        {selectedProduct.subBrand} Product Overview
+                        {formatBrandBadgeMeta(selectedProduct.subBrand, subBrands, companySettings).shortLabel} Product Overview
                       </span>
                       <h2 className="text-xl sm:text-2xl font-black text-slate-900 mt-1">{selectedProduct.name}</h2>
                       <p className="text-xs font-mono text-slate-500">SKU: {selectedProduct.sku}</p>
@@ -2986,10 +3159,11 @@ export default function ProductManagement({
 
               <div>
                 <label className="block text-xs font-bold uppercase tracking-wider text-slate-500 mb-1.5">
-                  Associated Sub-Brands
+                  Associated Selling Sub-Brands
                 </label>
                 <div className="flex flex-wrap gap-2 bg-slate-50 p-2.5 rounded-xl border border-slate-200">
-                  {['SAT', 'GZ', 'RTX'].map((sb) => {
+                  {activeSellingSubBrands.map((brandMeta) => {
+                    const sb = brandMeta.shortCode;
                     const isChecked = newBrandSubBrands.includes(sb);
                     return (
                       <label 
@@ -3010,7 +3184,7 @@ export default function ProductManagement({
                           }}
                           className="sr-only"
                         />
-                        <span>{sb}</span>
+                        <span>{brandMeta.name} ({sb})</span>
                         {isChecked && <Check size={12} className="text-amber-700" />}
                       </label>
                     );
@@ -3394,7 +3568,13 @@ export default function ProductManagement({
             subName.includes(searchLower);
 
           const matchesSubBrand =
-            !pendingSubBrandFilter || (p.subBrand || 'SAT') === pendingSubBrandFilter;
+            !pendingSubBrandFilter
+              ? true
+              : pendingSubBrandFilter === 'NEEDS_ASSIGNMENT'
+              ? productNeedsBrandAssignment(p, subBrands, companySettings)
+              : pendingSubBrandFilter === 'LEGACY_SAT'
+              ? isLegacySatCode(p.subBrand)
+              : normalizeSubBrandCode(p.subBrand) === normalizeSubBrandCode(pendingSubBrandFilter);
 
           const matchesSubmitter =
             !pendingSubmitterFilter || subKey === pendingSubmitterFilter;
@@ -3474,10 +3654,14 @@ export default function ProductManagement({
                   aria-label="Filter by Sub-Brand"
                   className="w-full px-3 py-2 rounded-xl bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-sm text-slate-700 dark:text-slate-200 font-semibold cursor-pointer"
                 >
-                  <option value="">All Sub-Brands</option>
-                  <option value="SAT">SAT — Sky Automation Tech</option>
-                  <option value="GZ">GZ — GadgetZu</option>
-                  <option value="RTX">RTX — RTX Gadget</option>
+                  <option value="">All Selling Sub-Brands</option>
+                  {allSellingSubBrands.map((sb) => (
+                    <option key={sb.shortCode} value={sb.shortCode}>
+                      {sb.shortCode} — {sb.name}
+                    </option>
+                  ))}
+                  <option value="NEEDS_ASSIGNMENT">Needs Brand Assignment</option>
+                  <option value="LEGACY_SAT">Legacy (SAT)</option>
                 </select>
               </div>
 
@@ -3645,15 +3829,7 @@ export default function ProductManagement({
                               </div>
                             </td>
                             <td className="py-3 px-3 text-center">
-                              <span
-                                className={`inline-block text-[10px] font-mono font-black px-2 py-0.5 rounded-md border ${
-                                  product.subBrand === 'SAT'
-                                    ? 'bg-slate-900 text-amber-400 border-slate-800 dark:bg-amber-400/15 dark:text-amber-300 dark:border-amber-400/30'
-                                    : 'bg-amber-100 text-amber-800 border-amber-200 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-800'
-                                }`}
-                              >
-                                {product.subBrand || 'SAT'}
-                              </span>
+                              {renderSubBrandBadge(product.subBrand)}
                             </td>
                             <td className="py-3 px-3 min-w-[160px] max-w-[240px]">
                               <p
@@ -3782,9 +3958,7 @@ export default function ProductManagement({
                           />
                           <div className="flex-1 min-w-0">
                             <div className="flex items-center gap-2">
-                              <span className="text-[10px] font-mono font-bold px-1.5 py-0.5 rounded bg-slate-900 text-amber-400">
-                                {product.subBrand || 'SAT'}
-                              </span>
+                              {renderSubBrandBadge(product.subBrand)}
                               <span className="text-[11px] font-mono text-slate-500 truncate">
                                 {product.sku}
                               </span>
@@ -3929,15 +4103,7 @@ export default function ProductManagement({
                           </div>
                         </td>
                         <td className="py-3 px-3 text-center">
-                          <span className={`inline-block text-[9px] font-mono font-black px-2 py-0.5 rounded-full ${
-                            product.subBrand === 'SAT' 
-                              ? 'bg-slate-900 text-amber-400' 
-                              : product.subBrand === 'GZ' 
-                              ? 'bg-amber-100 text-amber-800' 
-                              : 'bg-teal-50 text-teal-700 border border-teal-100'
-                          }`}>
-                            {product.subBrand}
-                          </span>
+                          {renderSubBrandBadge(product.subBrand)}
                         </td>
                         <td className="py-3 px-3 text-right">
                           <p className="font-bold text-slate-900">৳ {product.sellingPrice.toLocaleString()}</p>
@@ -4029,15 +4195,7 @@ export default function ProductManagement({
                           </div>
                         </td>
                         <td className="py-3 px-3 text-center">
-                          <span className={`inline-block text-[9px] font-mono font-black px-2 py-0.5 rounded-full ${
-                            product.subBrand === 'SAT' 
-                              ? 'bg-slate-900 text-amber-400' 
-                              : product.subBrand === 'GZ' 
-                              ? 'bg-amber-100 text-amber-800' 
-                              : 'bg-teal-50 text-teal-700 border border-teal-100'
-                          }`}>
-                            {product.subBrand}
-                          </span>
+                          {renderSubBrandBadge(product.subBrand)}
                         </td>
                         <td className="py-3 px-3 text-right">
                           <p className="font-bold text-slate-900">৳ {product.sellingPrice.toLocaleString()}</p>
@@ -4097,9 +4255,7 @@ export default function ProductManagement({
                     <div className="space-y-3">
                       <div className="flex justify-between items-start gap-2">
                         <div>
-                          <span className="text-[9px] font-bold text-amber-600 bg-amber-50 border border-amber-100 px-1.5 py-0.5 rounded-md uppercase tracking-wider font-mono">
-                            {product.subBrand || 'SAT'}
-                          </span>
+                          {renderSubBrandBadge(product.subBrand)}
                           <h4 className="text-sm font-black text-slate-900 mt-1.5">{product.name}</h4>
                           <p className="text-[9px] font-mono font-bold text-slate-400 uppercase mt-0.5">SKU: {product.sku}</p>
                         </div>
@@ -4196,6 +4352,9 @@ export default function ProductManagement({
         brands={brands}
         productColors={productColors}
         productModels={productModels}
+        subBrands={subBrands}
+        globalBrandFilter={globalBrandFilter}
+        companySettings={companySettings}
         requireCheckIn={requireCheckIn}
         onRefreshData={onRefreshData}
         onSaved={({ message }) => {
@@ -4222,6 +4381,8 @@ export default function ProductManagement({
         actionLoading={Boolean(
           reviewProduct && pendingActionLoadingId === reviewProduct.id
         )}
+        subBrands={subBrands}
+        companySettings={companySettings}
         onClose={() => setReviewProductId(null)}
         onEdit={(prod) => openEditDrawer(prod, true)}
         onRequestApprove={(prod) => handleRequestApproveProduct(prod)}

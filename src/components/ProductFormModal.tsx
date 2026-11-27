@@ -27,6 +27,8 @@ import {
   ProductColor,
   ProductModel,
   ProductEditHistoryEntry,
+  SubBrand,
+  CompanySettings,
 } from '../types';
 import {
   addProduct,
@@ -43,6 +45,14 @@ import {
   buildCategoryPathLabel,
   normalizeProductImages,
 } from '../utils/productImageUpload';
+import {
+  formatBrandBadgeMeta,
+  getSellingSubBrands,
+  isLegacySatCode,
+  normalizeSubBrandCode,
+  resolveDefaultSellingSubBrand,
+  resolveSubBrandMeta,
+} from '../utils/subBrands';
 
 interface ProductFormModalProps {
   isOpen: boolean;
@@ -58,6 +68,9 @@ interface ProductFormModalProps {
   brands: Brand[];
   productColors: ProductColor[];
   productModels: ProductModel[];
+  subBrands?: SubBrand[];
+  globalBrandFilter?: string;
+  companySettings?: CompanySettings | null;
   requireCheckIn?: () => boolean;
   onRefreshData: () => Promise<void>;
   onSaved?: (info: { message: string; productId: string; status: 'pending_review' | 'approved' | 'rejected' }) => void;
@@ -76,10 +89,22 @@ export default function ProductFormModal({
   brands,
   productColors,
   productModels,
+  subBrands,
+  globalBrandFilter,
+  companySettings,
   requireCheckIn,
   onRefreshData,
   onSaved,
 }: ProductFormModalProps) {
+  const activeSellingSubBrands = React.useMemo(
+    () => getSellingSubBrands(subBrands, { includeInactive: false, companySettings }),
+    [subBrands, companySettings]
+  );
+  const defaultSellingSubBrand = React.useMemo(
+    () => resolveDefaultSellingSubBrand({ globalBrandFilter, user, subBrands, companySettings }),
+    [globalBrandFilter, user, subBrands, companySettings]
+  );
+
   const [formName, setFormName] = useState('');
   const [formSku, setFormSku] = useState('');
   const [formMainCategory, setFormMainCategory] = useState('');
@@ -87,7 +112,7 @@ export default function ProductFormModal({
   const [formChildCategory, setFormChildCategory] = useState('');
   const [formCategory, setFormCategory] = useState('');
   const [formBrand, setFormBrand] = useState('');
-  const [formSubBrand, setFormSubBrand] = useState<'SAT' | 'GZ' | 'RTX'>('SAT');
+  const [formSubBrand, setFormSubBrand] = useState<string>(defaultSellingSubBrand);
   const [formDescription, setFormDescription] = useState('');
   const [formNotes, setFormNotes] = useState('');
   const [formCostPrice, setFormCostPrice] = useState<number | ''>('');
@@ -117,7 +142,14 @@ export default function ProductFormModal({
   const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
 
   const generateSkuCode = (subBrand: string, category: string, brandName: string) => {
-    const div = subBrand || 'SAT';
+    const meta = resolveSubBrandMeta(subBrand, subBrands, companySettings);
+    const normalized = normalizeSubBrandCode(subBrand);
+    const div =
+      meta?.skuPrefix ||
+      meta?.shortCode ||
+      (normalized && !isLegacySatCode(normalized) ? normalized : '') ||
+      defaultSellingSubBrand ||
+      'GZ';
 
     let cat = 'GEN';
     if (category) {
@@ -174,7 +206,8 @@ export default function ProductFormModal({
       setFormChildCategory(editModeProduct.childCategory || '');
       setFormCategory(editModeProduct.category || editModeProduct.mainCategory || '');
       setFormBrand(editModeProduct.brand || '');
-      setFormSubBrand((editModeProduct.subBrand as 'SAT' | 'GZ' | 'RTX') || 'SAT');
+      const existingSub = normalizeSubBrandCode(editModeProduct.subBrand);
+      setFormSubBrand(existingSub || defaultSellingSubBrand);
       setFormDescription(editModeProduct.description || '');
       setFormNotes(editModeProduct.notes || '');
       setFormCostPrice(editModeProduct.costPrice ?? 0);
@@ -200,7 +233,7 @@ export default function ProductFormModal({
       setFormChildCategory('');
       setFormCategory(initialMain);
       setFormBrand(initialBrand);
-      setFormSubBrand('SAT');
+      setFormSubBrand(defaultSellingSubBrand);
       setFormDescription('');
       setFormNotes('');
       setFormCostPrice(isStaff ? 0 : '');
@@ -211,9 +244,9 @@ export default function ProductFormModal({
       setFormVariants([{ id: Date.now().toString(), color: 'Default', model: 'Standard', stock: 10 }]);
       setWizardStep(1);
       setWizardMaxStep(1);
-      setFormSku(generateSkuCode('SAT', initialMain, initialBrand));
+      setFormSku(generateSkuCode(defaultSellingSubBrand, initialMain, initialBrand));
     }
-  }, [isOpen, editModeProduct?.id]);
+  }, [isOpen, editModeProduct?.id, defaultSellingSubBrand]);
 
   // Auto-generate SKU in add mode when user hasn't manually edited SKU
   useEffect(() => {
@@ -233,7 +266,7 @@ export default function ProductFormModal({
     };
     window.addEventListener('keydown', onKeyDown);
     return () => window.removeEventListener('keydown', onKeyDown);
-  }, [isOpen, submitting, formName, formSku, formMainCategory, formSubCategory, formChildCategory, formBrand, formCostPrice, formSellingPrice, formReorderThreshold, formImages, formDescription, formNotes]);
+  }, [isOpen, submitting, formName, formSku, formSubBrand, formMainCategory, formSubCategory, formChildCategory, formBrand, formCostPrice, formSellingPrice, formReorderThreshold, formImages, formDescription, formNotes]);
 
   if (!isOpen) return null;
 
@@ -246,6 +279,9 @@ export default function ProductFormModal({
     if (step === 1) {
       if (!formName.trim()) errors.name = 'Product Display Name is required';
       if (!formSku.trim()) errors.sku = 'SKU Code is required';
+      if (!formSubBrand || isLegacySatCode(formSubBrand)) {
+        errors.subBrand = 'Select an active selling sub-brand (Parent SAT does not sell directly).';
+      }
       if (!formMainCategory) errors.mainCategory = 'Main Category is required';
 
       const mainParentId = categories.find(
@@ -349,6 +385,7 @@ export default function ProductFormModal({
     const isDirty = editModeProduct
       ? formName !== editModeProduct.name ||
         formSku !== editModeProduct.sku ||
+        formSubBrand !== (normalizeSubBrandCode(editModeProduct.subBrand) || defaultSellingSubBrand) ||
         formMainCategory !== (editModeProduct.mainCategory || editModeProduct.category) ||
         formSubCategory !== (editModeProduct.subCategory || '') ||
         formChildCategory !== (editModeProduct.childCategory || '') ||
@@ -598,9 +635,17 @@ export default function ProductFormModal({
       return false;
     };
 
+    const effectiveSubBrand =
+      normalizeSubBrandCode(formSubBrand) && !isLegacySatCode(formSubBrand)
+        ? normalizeSubBrandCode(formSubBrand)
+        : defaultSellingSubBrand;
+    const skuBrandPrefix =
+      resolveSubBrandMeta(effectiveSubBrand, subBrands, companySettings)?.skuPrefix ||
+      effectiveSubBrand;
+
     let mainBarcodeValue = editModeProduct?.barcodeValue;
     if (needsMigration(mainBarcodeValue, finalSku)) {
-      mainBarcodeValue = getUniqueBarcodeValue(formSubBrand, products, generatedInSession);
+      mainBarcodeValue = getUniqueBarcodeValue(skuBrandPrefix, products, generatedInSession);
       generatedInSession.add(mainBarcodeValue);
     }
 
@@ -620,7 +665,7 @@ export default function ProductFormModal({
         needsMigration(vBarcodeValue, oldLongBarcodeValue) ||
         needsMigration(vBarcodeValue, finalSku)
       ) {
-        vBarcodeValue = getUniqueBarcodeValue(formSubBrand, products, generatedInSession);
+        vBarcodeValue = getUniqueBarcodeValue(skuBrandPrefix, products, generatedInSession);
         generatedInSession.add(vBarcodeValue);
       }
 
@@ -654,7 +699,8 @@ export default function ProductFormModal({
       subCategory: formSubCategory || '',
       childCategory: formChildCategory || '',
       brand: formBrand || '',
-      subBrand: formSubBrand || 'SAT',
+      subBrand: effectiveSubBrand,
+      subBrandId: effectiveSubBrand,
       costPrice: effectiveCostPrice,
       sellingPrice: Number(formSellingPrice),
       reorderThreshold: Number(formReorderThreshold || 0),
@@ -772,6 +818,7 @@ export default function ProductFormModal({
             targetScreen: 'products',
             subAction: 'pending',
             targetId: targetProductId,
+            subBrand: effectiveSubBrand,
             forRoles: ['superadmin', 'admin'],
           });
         }
@@ -947,17 +994,51 @@ export default function ProductFormModal({
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 <div>
                   <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300 mb-1">
-                    Sub-Brand / Division <span className="text-rose-500">*</span>
+                    Selling Sub-Brand <span className="text-rose-500">*</span>
                   </label>
                   <select
                     value={formSubBrand}
-                    onChange={(e) => setFormSubBrand(e.target.value as 'SAT' | 'GZ' | 'RTX')}
-                    className="w-full bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl py-2.5 px-3 text-sm text-slate-900 dark:text-slate-100 cursor-pointer"
+                    onChange={(e) => {
+                      setFormSubBrand(e.target.value);
+                      if (stepErrors.subBrand) setStepErrors((prev) => ({ ...prev, subBrand: '' }));
+                    }}
+                    className={`w-full bg-white dark:bg-slate-900 border rounded-xl py-2.5 px-3 text-sm text-slate-900 dark:text-slate-100 cursor-pointer ${
+                      stepErrors.subBrand
+                        ? 'border-rose-400 focus:ring-rose-400/20'
+                        : 'border-slate-200 dark:border-slate-700'
+                    }`}
                   >
-                    <option value="SAT">Sky Automation Tech (SAT)</option>
-                    {editModeProduct?.subBrand === 'GZ' && <option value="GZ">GadgetZu (GZ)</option>}
-                    {editModeProduct?.subBrand === 'RTX' && <option value="RTX">RTX Gadget (RTX)</option>}
+                    {isLegacySatCode(formSubBrand) && (
+                      <option value="SAT" disabled>
+                        Legacy (SAT) — Assign Selling Sub-Brand
+                      </option>
+                    )}
+                    {!formSubBrand && (
+                      <option value="">-- Select Selling Sub-Brand --</option>
+                    )}
+                    {activeSellingSubBrands.map((sb) => (
+                      <option key={sb.shortCode} value={sb.shortCode}>
+                        {sb.name} ({sb.shortCode})
+                      </option>
+                    ))}
+                    {editModeProduct?.subBrand &&
+                      !isLegacySatCode(editModeProduct.subBrand) &&
+                      !activeSellingSubBrands.some(
+                        (s) => s.shortCode === normalizeSubBrandCode(editModeProduct.subBrand)
+                      ) && (
+                        <option value={normalizeSubBrandCode(editModeProduct.subBrand)}>
+                          {formatBrandBadgeMeta(editModeProduct.subBrand, subBrands, companySettings).label}
+                        </option>
+                      )}
                   </select>
+                  {isLegacySatCode(editModeProduct?.subBrand) && (
+                    <p className="text-[11px] font-medium text-amber-700 dark:text-amber-300 mt-1">
+                      Parent company SAT does not sell directly. Pick a selling sub-brand (existing SKU &amp; barcode stay unchanged).
+                    </p>
+                  )}
+                  {stepErrors.subBrand && (
+                    <p className="text-xs font-semibold text-rose-500 mt-1">{stepErrors.subBrand}</p>
+                  )}
                 </div>
 
                 <div>
@@ -973,7 +1054,7 @@ export default function ProductFormModal({
                         setIsSkuDirty(true);
                         if (stepErrors.sku) setStepErrors((prev) => ({ ...prev, sku: '' }));
                       }}
-                      placeholder="SAT-PRO-001"
+                      placeholder={`${defaultSellingSubBrand}-GEN-PRO-001`}
                       className={`flex-1 min-w-0 bg-white dark:bg-slate-900 border rounded-xl py-2.5 px-3 text-sm font-mono uppercase text-slate-900 dark:text-slate-100 focus:outline-none focus:ring-2 ${
                         stepErrors.sku
                           ? 'border-rose-400 focus:ring-rose-400/20'
@@ -1684,9 +1765,9 @@ export default function ProductFormModal({
                     </span>
                   </div>
                   <div>
-                    <span className="text-slate-400 block">Brand & Division</span>
+                    <span className="text-slate-400 block">Brand &amp; Selling Sub-Brand</span>
                     <span className="font-semibold text-slate-800 dark:text-slate-200">
-                      {formBrand || 'Generic'} ({formSubBrand})
+                      {formBrand || 'Generic'} ({formatBrandBadgeMeta(formSubBrand, subBrands, companySettings).label})
                     </span>
                   </div>
                   <div>

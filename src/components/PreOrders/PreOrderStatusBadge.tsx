@@ -1,6 +1,7 @@
 import React from 'react';
-import { PreOrderPaymentState, PreOrderStatus } from '../../types';
+import { PreOrderPaymentState, PreOrderStatus, SubBrand } from '../../types';
 import { PRE_ORDER_STATUS_META } from '../../preOrders/constants';
+import { formatBrandBadgeMeta } from '../../utils/subBrands';
 
 export const PreOrderStatusBadge: React.FC<{
   status: PreOrderStatus;
@@ -53,23 +54,20 @@ export const PartiallyReceivedTag: React.FC<{
 );
 
 export const SubBrandBadge: React.FC<{
-  subBrand: 'SAT' | 'GZ' | 'RTX' | string;
+  subBrand?: string | null;
+  subBrands?: SubBrand[] | null;
+  showFullName?: boolean;
   className?: string;
-}> = ({ subBrand, className = '' }) => {
-  const colorMap: Record<string, string> = {
-    SAT: 'bg-slate-900 text-[#D4AF37] border-[#D4AF37]/40 dark:bg-slate-950 dark:text-[#E2C255]',
-    GZ: 'bg-sky-950 text-sky-300 border-sky-700/60',
-    RTX: 'bg-violet-950 text-violet-300 border-violet-700/60',
-  };
-  const cls =
-    colorMap[subBrand] ||
-    'bg-slate-800 text-slate-200 border-slate-700';
+}> = ({ subBrand, subBrands, showFullName = false, className = '' }) => {
+  const meta = formatBrandBadgeMeta(subBrand, subBrands);
 
   return (
     <span
-      className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-mono font-bold border tracking-wider shrink-0 ${cls} ${className}`}
+      style={meta.badgeStyle}
+      title={meta.label}
+      className={`inline-flex items-center px-2 py-0.5 rounded text-[11px] font-mono font-bold border tracking-wider shrink-0 whitespace-nowrap ${className}`}
     >
-      {subBrand}
+      {showFullName ? meta.label : meta.shortLabel}
     </span>
   );
 };

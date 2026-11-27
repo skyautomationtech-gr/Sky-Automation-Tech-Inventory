@@ -90,11 +90,52 @@ service cloud.firestore {
       ]);
     }
 
+    function isValidSellingSubBrandId(brandId) {
+      return isValidId(brandId) &&
+        brandId != 'SAT' &&
+        exists(/databases/$(database)/documents/subBrands/$(brandId));
+    }
+
+    function isValidSubBrand(data, brandId) {
+      return isValidId(brandId) &&
+        brandId != 'SAT' &&
+        brandId != 'PARENT' &&
+        data.id == brandId &&
+        data.shortCode is string &&
+        data.shortCode.size() >= 2 &&
+        data.shortCode.size() <= 16 &&
+        data.shortCode != 'SAT' &&
+        data.name is string &&
+        data.name.size() >= 1 &&
+        data.name.size() <= 100 &&
+        data.invoicePrefix is string &&
+        data.invoicePrefix.size() >= 2 &&
+        data.invoicePrefix.size() <= 24 &&
+        data.invoicePrefix != 'SAT-INV' &&
+        data.accentColor is string &&
+        data.accentColor.size() == 7 &&
+        data.accentColor.matches('^#[0-9A-Fa-f]{6}$') &&
+        data.isSellingBrand == true &&
+        data.active is bool &&
+        (!('skuPrefix' in data) || (data.skuPrefix is string && data.skuPrefix.size() <= 24)) &&
+        (!('tagline' in data) || (data.tagline is string && data.tagline.size() <= 200)) &&
+        (!('phone' in data) || (data.phone is string && data.phone.size() <= 40)) &&
+        (!('whatsapp' in data) || (data.whatsapp is string && data.whatsapp.size() <= 40)) &&
+        (!('email' in data) || (data.email is string && data.email.size() <= 120)) &&
+        (!('address' in data) || (data.address is string && data.address.size() <= 400)) &&
+        (!('website' in data) || (data.website is string && data.website.size() <= 240)) &&
+        (!('invoiceTerms' in data) || (data.invoiceTerms is string && data.invoiceTerms.size() <= 2000)) &&
+        (!('invoiceFooterNote' in data) || (data.invoiceFooterNote is string && data.invoiceFooterNote.size() <= 500)) &&
+        (!('warrantyPolicyText' in data) || (data.warrantyPolicyText is string && data.warrantyPolicyText.size() <= 2000));
+    }
+
     function hasValidPreOrderBase(data) {
       return data.preOrderNumber is string &&
         data.preOrderNumber.size() > 0 &&
         data.preOrderNumber.size() <= 40 &&
-        data.subBrand in ['SAT', 'GZ', 'RTX'] &&
+        data.subBrand is string &&
+        data.subBrand.size() >= 2 &&
+        data.subBrand.size() <= 20 &&
         data.customerName is string &&
         data.customerName.size() > 0 &&
         data.customerName.size() <= 200 &&
@@ -125,6 +166,7 @@ service cloud.firestore {
 
     function isValidPreOrderCreate(data) {
       return hasValidPreOrderBase(data) &&
+        isValidSellingSubBrandId(data.subBrand) &&
         hasValidPreOrderItemsArray(data) &&
         data.subtotal is number &&
         data.subtotal >= 0 &&
@@ -136,6 +178,7 @@ service cloud.firestore {
 
     function isValidPreOrderUpdate(data) {
       return hasValidPreOrderBase(data) &&
+        (data.subBrand == resource.data.subBrand || isValidSellingSubBrandId(data.subBrand)) &&
         (!('items' in data) || (
           data.items is list &&
           data.items.size() >= 1 &&
@@ -309,6 +352,12 @@ service cloud.firestore {
     match /settings/company {
       allow read: if isSignedIn();
       allow write: if isSuperAdmin();
+    }
+
+    match /subBrands/{brandId} {
+      allow read: if isSignedIn();
+      allow create, update: if isAdmin() && isValidSubBrand(request.resource.data, brandId);
+      allow delete: if isSuperAdmin();
     }
 
     match /settings/{settingId} {

@@ -50,22 +50,59 @@
     },
     "CompanySettings": {
       "title": "CompanySettings",
-      "description": "Company settings document",
+      "description": "Parent company settings document (Sky Automation Tech)",
       "type": "object",
       "properties": {
         "companyName": { "type": "string" },
+        "legalName": { "type": "string" },
+        "isParent": { "type": "boolean" },
+        "isSellingBrand": { "type": "boolean" },
+        "parentCreditLine": { "type": "string" },
+        "showParentCreditLine": { "type": "boolean" },
+        "subBrandsSeeded": { "type": "boolean" },
         "onboarded": { "type": "boolean" },
         "prefixes": { "type": "object" }
       }
     },
+    "SubBrand": {
+      "title": "SubBrand",
+      "description": "Selling Sub-Brand configuration and branding record (GZ, RTX, or custom added sub-brands)",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "shortCode": { "type": "string" },
+        "invoicePrefix": { "type": "string" },
+        "skuPrefix": { "type": "string" },
+        "logoUrl": { "type": "string" },
+        "accentColor": { "type": "string" },
+        "phone": { "type": "string" },
+        "whatsapp": { "type": "string" },
+        "email": { "type": "string" },
+        "address": { "type": "string" },
+        "website": { "type": "string" },
+        "tagline": { "type": "string" },
+        "invoiceTerms": { "type": "string" },
+        "invoiceFooterNote": { "type": "string" },
+        "warrantyPolicyText": { "type": "string" },
+        "active": { "type": "boolean" },
+        "isSellingBrand": { "type": "boolean" },
+        "sortOrder": { "type": "number" },
+        "createdAt": { "type": "number" },
+        "updatedAt": { "type": "number" }
+      },
+      "required": ["id", "name", "shortCode", "invoicePrefix", "accentColor", "active", "isSellingBrand"]
+    },
     "InvoiceCounters": {
       "title": "InvoiceCounters",
-      "description": "Counters for automatic sequential invoice number generation per sub-brand",
+      "description": "Counters for automatic sequential invoice number generation per selling sub-brand",
       "type": "object",
       "properties": {
         "satCounter": { "type": "number" },
         "gzCounter": { "type": "number" },
-        "rtxCounter": { "type": "number" }
+        "rtxCounter": { "type": "number" },
+        "satCounterRetired": { "type": "boolean" },
+        "countersByBrand": { "type": "object" }
       }
     },
     "CustomerCounters": {
@@ -78,7 +115,7 @@
     },
     "Customer": {
       "title": "Customer",
-      "description": "Customer Directory record",
+      "description": "Customer Directory record (shared globally by phone, tagged with selling brandIds)",
       "type": "object",
       "properties": {
         "customerId": { "type": "string" },
@@ -87,6 +124,7 @@
         "whatsapp": { "type": "string" },
         "address": { "type": "string" },
         "subBrand": { "type": "string" },
+        "brandIds": { "type": "array" },
         "notes": { "type": "string" },
         "totalOrders": { "type": "number" },
         "lifetimeValue": { "type": "number" },
@@ -805,7 +843,11 @@
     },
     "/settings/company": {
       "schema": "CompanySettings",
-      "description": "Company settings document"
+      "description": "Parent company settings document"
+    },
+    "/subBrands/{brandId}": {
+      "schema": "SubBrand",
+      "description": "Dynamic selling sub-brands registry collection"
     },
     "/settings/invoiceCounters": {
       "schema": "InvoiceCounters",

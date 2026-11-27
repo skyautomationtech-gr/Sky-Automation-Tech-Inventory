@@ -24,6 +24,13 @@ import { normalizeProductImages } from '../utils/productImageUpload';
 import { db, auth } from './config';
 import { perfTrackRead, perfTrackWrite, perfTrackListener } from '../utils/perfLogger';
 import { triggerPublicTrackingSync } from './trackingSyncBridge';
+import {
+  DEFAULT_PARENT_CREDIT_LINE,
+  PARENT_COMPANY_NAME,
+  getRegistrySubBrandsSync,
+  isLegacySatCode,
+  normalizeSubBrandCode,
+} from '../utils/subBrands';
 import { 
   UserProfile, 
   Product, 
@@ -277,8 +284,13 @@ export async function ensurePermanentSuperAdminProfile(
     } catch {}
   }
 
-  const requiredBrands = ['SAT', 'GZ', 'RTX'];
-  const hasAllBrands = requiredBrands.every((b) => existing?.subBrandAccess?.includes(b));
+  const activeSellingCodes = getRegistrySubBrandsSync()
+    .filter((b) => b.active && b.isSellingBrand && !isLegacySatCode(b.shortCode))
+    .map((b) => b.shortCode);
+  const requiredBrands = activeSellingCodes.length > 0 ? activeSellingCodes : ['GZ', 'RTX'];
+  const currentAccess = (existing?.subBrandAccess || []).filter((b) => !isLegacySatCode(b));
+  const hasAllBrands = requiredBrands.every((b) => currentAccess.includes(b)) &&
+    !(existing?.subBrandAccess || []).some((b) => isLegacySatCode(b));
   const needsRepair =
     !existing ||
     existing.id !== cleanUid ||
@@ -295,7 +307,7 @@ export async function ensurePermanentSuperAdminProfile(
     role: 'superadmin',
     status: 'approved',
     active: true,
-    subBrandAccess: ['SAT', 'GZ', 'RTX'],
+    subBrandAccess: Array.from(new Set([...requiredBrands, ...currentAccess])),
     createdAt: existing?.createdAt || Date.now(),
     updatedAt: Date.now()
   };
@@ -377,6 +389,9 @@ export async function getUserProfile(
           return cachedUser;
         }
         if (auth.currentUser && auth.currentUser.uid === trimmedUid) {
+          const defaultBrands = getRegistrySubBrandsSync()
+            .filter((b) => b.active && !isLegacySatCode(b.shortCode))
+            .map((b) => b.shortCode);
           const fallbackProfile: UserProfile = {
             id: trimmedUid,
             email: auth.currentUser.email || 'operator@skyautomation.tech',
@@ -384,7 +399,7 @@ export async function getUserProfile(
             role: 'superadmin',
             active: true,
             status: 'approved',
-            subBrandAccess: ['SAT', 'GZ', 'RTX'],
+            subBrandAccess: defaultBrands.length > 0 ? defaultBrands : ['GZ', 'RTX'],
             currentSessionStatus: 'checked_in',
             currentSessionDate: new Date().toISOString().split('T')[0],
             createdAt: Date.now()
@@ -553,6 +568,13 @@ export async function createUserProfile(userId: string, data: Partial<UserProfil
     const docRef = doc(db, 'users', userId);
     const sanitizedData = sanitizeData(data);
     const isPermanent = isPermanentSuperAdminEmail(sanitizedData.email);
+    const activeSellingCodes = getRegistrySubBrandsSync()
+      .filter((b) => b.active && b.isSellingBrand && !isLegacySatCode(b.shortCode))
+      .map((b) => b.shortCode);
+    const defaultBrands = activeSellingCodes.length > 0 ? activeSellingCodes : ['GZ', 'RTX'];
+    const cleanedAccess = Array.isArray(sanitizedData.subBrandAccess)
+      ? sanitizedData.subBrandAccess.filter((b: string) => !isLegacySatCode(b))
+      : [];
     
     const finalData = {
       ...sanitizedData,
@@ -562,11 +584,11 @@ export async function createUserProfile(userId: string, data: Partial<UserProfil
             role: 'superadmin',
             status: 'approved',
             active: true,
-            subBrandAccess: ['SAT', 'GZ', 'RTX'],
+            subBrandAccess: defaultBrands,
           }
         : {
             active: sanitizedData.active !== undefined ? sanitizedData.active : true,
-            subBrandAccess: sanitizedData.subBrandAccess || ['SAT', 'GZ', 'RTX'],
+            subBrandAccess: cleanedAccess.length > 0 ? cleanedAccess : defaultBrands,
           }),
       createdAt: sanitizedData.createdAt || Date.now()
     };
@@ -613,13 +635,20 @@ export async function initializeUser(userId: string, data: Partial<UserProfile>)
   }
 
   const autoPromoteSuperAdmin = permanentOwner || isFirstUser;
+  const activeSellingCodes = getRegistrySubBrandsSync()
+    .filter((b) => b.active && b.isSellingBrand && !isLegacySatCode(b.shortCode))
+    .map((b) => b.shortCode);
+  const defaultBrands = activeSellingCodes.length > 0 ? activeSellingCodes : ['GZ', 'RTX'];
+  const cleanedAccess = Array.isArray(sanitizedData.subBrandAccess)
+    ? sanitizedData.subBrandAccess.filter((b: string) => !isLegacySatCode(b))
+    : [];
   const docRef = doc(db, 'users', userId);
   const profile: UserProfile = {
     ...sanitizedData,
     id: userId,
     ...(permanentOwner ? { email: PERMANENT_SUPERADMIN_EMAIL } : {}),
     role: autoPromoteSuperAdmin ? 'superadmin' : (sanitizedData.role || 'staff'),
-    subBrandAccess: autoPromoteSuperAdmin ? ['SAT', 'GZ', 'RTX'] : (sanitizedData.subBrandAccess || ['SAT', 'GZ', 'RTX']),
+    subBrandAccess: autoPromoteSuperAdmin ? defaultBrands : (cleanedAccess.length > 0 ? cleanedAccess : defaultBrands),
     status: autoPromoteSuperAdmin ? 'approved' : (sanitizedData.status || 'pending_approval'),
     active: autoPromoteSuperAdmin ? true : (sanitizedData.active ?? true),
     createdAt: Date.now()
@@ -642,18 +671,26 @@ export async function updateUserProfile(userId: string, data: Partial<UserProfil
   const isPermanent =
     isPermanentSuperAdminEmail(existing?.email) ||
     isPermanentSuperAdminEmail(data.email);
+  const activeSellingCodes = getRegistrySubBrandsSync()
+    .filter((b) => b.active && b.isSellingBrand && !isLegacySatCode(b.shortCode))
+    .map((b) => b.shortCode);
+  const defaultBrands = activeSellingCodes.length > 0 ? activeSellingCodes : ['GZ', 'RTX'];
+  const sanitizedInput = { ...data };
+  if (Array.isArray(sanitizedInput.subBrandAccess)) {
+    sanitizedInput.subBrandAccess = sanitizedInput.subBrandAccess.filter((b) => !isLegacySatCode(b));
+  }
 
   const sanitizedData = sanitizeData(
     isPermanent
       ? {
-          ...data,
+          ...sanitizedInput,
           email: PERMANENT_SUPERADMIN_EMAIL,
           role: 'superadmin',
           status: 'approved',
           active: true,
-          subBrandAccess: ['SAT', 'GZ', 'RTX'],
+          subBrandAccess: defaultBrands,
         }
-      : data
+      : sanitizedInput
   );
 
   if (existing) {
@@ -688,9 +725,14 @@ export async function getCompanySettings(): Promise<CompanySettings | null> {
   if (dbCache.settings) return dbCache.settings;
   const cached = localStore.get<CompanySettings>('company_settings');
   const defaultSettings: CompanySettings = {
-    companyName: 'Sky Automation Tech',
-    subBrands: ['SAT', 'GZ', 'RTX'],
-    prefixes: { SAT: 'SAT-INV', GZ: 'GZ-INV', RTX: 'RTX-INV' },
+    companyName: PARENT_COMPANY_NAME,
+    legalName: PARENT_COMPANY_NAME,
+    isParent: true,
+    isSellingBrand: false,
+    parentCreditLine: DEFAULT_PARENT_CREDIT_LINE,
+    showParentCreditLine: true,
+    subBrands: ['GZ', 'RTX'],
+    prefixes: { GZ: 'GZ-INV', RTX: 'RTX-INV' },
     onboarded: true,
     phone: '+880 1800-000000',
     address: 'Dhaka, Bangladesh',
@@ -1230,7 +1272,8 @@ export function normalizeProduct(id: string, data: any): Product {
     subCategory,
     childCategory,
     brand: data.brand || 'Generic',
-    subBrand: data.subBrand || 'SAT',
+    subBrand: data.subBrand || '',
+    subBrandId: data.subBrandId || data.subBrand || '',
     costPrice,
     sellingPrice,
     discountPrice,
@@ -2089,7 +2132,8 @@ export async function checkInOnBehalf(
     }
 
     // 2. Create attendance record
-    const subBrand = targetUser.subBrandAccess?.[0] || 'SAT';
+    const subBrand =
+      (targetUser.subBrandAccess || []).find((b) => !isLegacySatCode(b)) || 'GZ';
     const docRef = await addDoc(colRef, {
       userId: targetUserId,
       userName: targetUser.name,
@@ -2484,8 +2528,20 @@ export async function addCustomer(customerData: Omit<Customer, 'id'>): Promise<s
       cid = `CUS-${Math.floor(1000 + Math.random() * 9000)}`;
     }
   }
+  const initialBrand = customerData.subBrand && !isLegacySatCode(customerData.subBrand)
+    ? normalizeSubBrandCode(customerData.subBrand)
+    : undefined;
+  const brandIds = Array.from(
+    new Set(
+      [...(customerData.brandIds || []), ...(initialBrand ? [initialBrand] : [])]
+        .map((b) => normalizeSubBrandCode(b))
+        .filter((b) => b && !isLegacySatCode(b))
+    )
+  );
   const payload = {
     ...customerData,
+    ...(initialBrand ? { subBrand: initialBrand } : {}),
+    ...(brandIds.length > 0 ? { brandIds } : {}),
     customerId: cid,
     createdAt: customerData.createdAt || Date.now()
   };
@@ -2764,10 +2820,16 @@ export function subscribeToOrders(callback: (orders: Order[]) => void, limitCoun
 }
 
 export async function addOrder(orderData: Omit<Order, 'id'>): Promise<string> {
+  const brandCode = normalizeSubBrandCode(orderData.subBrand);
+  if (!brandCode || isLegacySatCode(brandCode)) {
+    throw new Error('Parent company (Sky Automation Tech / SAT) does not sell to customers. Please select an active selling sub-brand.');
+  }
   dbCache.orders = null;
   dbCache.invoices = null;
   const sanitized = sanitizeData({
     ...orderData,
+    subBrand: brandCode,
+    subBrandId: brandCode,
     createdAt: orderData.createdAt || Date.now()
   });
 
@@ -2775,6 +2837,11 @@ export async function addOrder(orderData: Omit<Order, 'id'>): Promise<string> {
     const colRef = collection(db, 'orders');
     const docRef = await addDoc(colRef, sanitized);
     perfTrackWrite('orders/addOrder', 1);
+    if (orderData.customerId) {
+      updateDoc(doc(db, 'customers', orderData.customerId), {
+        brandIds: arrayUnion(brandCode),
+      }).catch(() => {});
+    }
     const cached = localStore.get<Order[]>('orders') || [];
     localStore.set('orders', [{ id: docRef.id, ...sanitized } as Order, ...cached]);
     return docRef.id;
@@ -2877,17 +2944,23 @@ export async function updateOrderAndHandleStock(
         }
       }
       
-      // 2. Read settings, counters, and customer if auto-generating invoice
+      // 2. Read settings, counters, subBrand doc, and customer if auto-generating invoice
       const isAutoInvoice = newStatus === 'Confirmed' && oldStatus !== 'Confirmed' && !updatedOrder.invoiceId;
       let companySettingsSnap = null;
       let countersSnap = null;
+      let subBrandSnap = null;
       let custSnapForInvoice = null;
       const companySettingsRef = doc(db, 'settings', 'company');
       const countersRef = doc(db, 'settings', 'invoiceCounters');
       
       if (isAutoInvoice) {
+        const subCode = normalizeSubBrandCode(updatedOrder.subBrand);
+        if (!subCode || isLegacySatCode(subCode)) {
+          throw new Error('Parent company (Sky Automation Tech / SAT) cannot issue customer invoices. Assign a selling sub-brand first.');
+        }
         companySettingsSnap = await transaction.get(companySettingsRef);
         countersSnap = await transaction.get(countersRef);
+        subBrandSnap = await transaction.get(doc(db, 'subBrands', subCode));
         if (updatedOrder.customerId) {
           custSnapForInvoice = await transaction.get(doc(db, 'customers', updatedOrder.customerId));
         }
@@ -2996,42 +3069,38 @@ export async function updateOrderAndHandleStock(
       
       // 2. Handle auto-invoice writes
       if (isAutoInvoice) {
+        const sub = normalizeSubBrandCode(updatedOrder.subBrand);
         const prefixes = companySettingsSnap && companySettingsSnap.exists() 
           ? companySettingsSnap.data().prefixes 
-          : { SAT: 'SAT-INV', GZ: 'GZ-INV', RTX: 'RTX-INV' };
-        
-        let satCounter = 0;
-        let gzCounter = 0;
-        let rtxCounter = 0;
-        if (countersSnap && countersSnap.exists()) {
-          const cData = countersSnap.data();
-          satCounter = cData.satCounter || 0;
-          gzCounter = cData.gzCounter || 0;
-          rtxCounter = cData.rtxCounter || 0;
-        }
-        
-        let prefix = 'INV';
-        let nextNum = 1;
-        const sub = updatedOrder.subBrand || 'SAT';
-        if (sub === 'SAT') {
-          prefix = prefixes?.SAT || 'SAT-INV';
-          satCounter++;
-          nextNum = satCounter;
-        } else if (sub === 'GZ') {
-          prefix = prefixes?.GZ || 'GZ-INV';
-          gzCounter++;
-          nextNum = gzCounter;
-        } else if (sub === 'RTX') {
-          prefix = prefixes?.RTX || 'RTX-INV';
-          rtxCounter++;
-          nextNum = rtxCounter;
-        }
-        
-        transaction.set(countersRef, {
-          satCounter,
-          gzCounter,
-          rtxCounter
-        }, { merge: true });
+          : { GZ: 'GZ-INV', RTX: 'RTX-INV' };
+        const subBrandDocData = subBrandSnap && subBrandSnap.exists() ? (subBrandSnap.data() as any) : null;
+        const prefix =
+          subBrandDocData?.invoicePrefix ||
+          prefixes?.[sub] ||
+          `${sub}-INV`;
+
+        const cData = countersSnap && countersSnap.exists() ? countersSnap.data() : {};
+        const existingByBrand: Record<string, number> = {
+          ...(cData.countersByBrand || {}),
+        };
+        const prevCount = Number(
+          existingByBrand[sub] ??
+            (sub === 'GZ' ? cData.gzCounter : sub === 'RTX' ? cData.rtxCounter : 0) ??
+            0
+        );
+        const nextNum = prevCount + 1;
+
+        const counterPatch: Record<string, any> = {
+          countersByBrand: {
+            ...existingByBrand,
+            [sub]: nextNum,
+          },
+          satCounterRetired: true,
+        };
+        if (sub === 'GZ') counterPatch.gzCounter = nextNum;
+        if (sub === 'RTX') counterPatch.rtxCounter = nextNum;
+
+        transaction.set(countersRef, counterPatch, { merge: true });
         
         const invoiceNum = `${prefix}-${String(nextNum).padStart(4, '0')}`;
         const invoiceId = `INV-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -3043,7 +3112,8 @@ export async function updateOrderAndHandleStock(
           id: invoiceId,
           orderId: orderId,
           invoiceNumber: invoiceNum,
-          subBrand: updatedOrder.subBrand,
+          subBrand: sub,
+          subBrandId: sub,
           subBrandPrefix: prefix,
           customerId: invoiceCustId,
           customerName: updatedOrder.customerName,
@@ -3425,6 +3495,11 @@ export async function generateInvoiceForOrder(orderId: string, userId: string): 
         return; // already has one
       }
 
+      const sub = normalizeSubBrandCode(order.subBrand);
+      if (!sub || isLegacySatCode(sub)) {
+        throw new Error('Parent company (Sky Automation Tech / SAT) cannot issue customer invoices. Assign a selling sub-brand first.');
+      }
+
       // Fetch customer details if available
       let custIdVal = '';
       if (order.customerId) {
@@ -3434,47 +3509,45 @@ export async function generateInvoiceForOrder(orderId: string, userId: string): 
         }
       }
       
-      // Fetch prefixes
+      // Fetch prefixes, subBrand registry doc, and counters
       const companySettingsRef = doc(db, 'settings', 'company');
-      const companySettingsSnap = await transaction.get(companySettingsRef);
-      const prefixes = companySettingsSnap.exists() ? companySettingsSnap.data().prefixes : { SAT: 'SAT-INV', GZ: 'GZ-INV', RTX: 'RTX-INV' };
-      
-      // Fetch counters
+      const subBrandRef = doc(db, 'subBrands', sub);
       const countersRef = doc(db, 'settings', 'invoiceCounters');
-      const countersSnap = await transaction.get(countersRef);
-      let satCounter = 0;
-      let gzCounter = 0;
-      let rtxCounter = 0;
-      if (countersSnap.exists()) {
-        const cData = countersSnap.data();
-        satCounter = cData.satCounter || 0;
-        gzCounter = cData.gzCounter || 0;
-        rtxCounter = cData.rtxCounter || 0;
-      }
-      
-      let prefix = 'INV';
-      let nextNum = 1;
-      const sub = order.subBrand || 'SAT';
-      if (sub === 'SAT') {
-        prefix = prefixes?.SAT || 'SAT-INV';
-        satCounter++;
-        nextNum = satCounter;
-      } else if (sub === 'GZ') {
-        prefix = prefixes?.GZ || 'GZ-INV';
-        gzCounter++;
-        nextNum = gzCounter;
-      } else if (sub === 'RTX') {
-        prefix = prefixes?.RTX || 'RTX-INV';
-        rtxCounter++;
-        nextNum = rtxCounter;
-      }
-      
-      // Save counters
-      transaction.set(countersRef, {
-        satCounter,
-        gzCounter,
-        rtxCounter
-      }, { merge: true });
+      const [companySettingsSnap, subBrandSnap, countersSnap] = await Promise.all([
+        transaction.get(companySettingsRef),
+        transaction.get(subBrandRef),
+        transaction.get(countersRef),
+      ]);
+      const prefixes = companySettingsSnap.exists() ? companySettingsSnap.data().prefixes : { GZ: 'GZ-INV', RTX: 'RTX-INV' };
+      const subBrandDocData = subBrandSnap.exists() ? (subBrandSnap.data() as any) : null;
+      const prefix =
+        subBrandDocData?.invoicePrefix ||
+        prefixes?.[sub] ||
+        `${sub}-INV`;
+
+      const cData = countersSnap.exists() ? countersSnap.data() : {};
+      const existingByBrand: Record<string, number> = {
+        ...(cData.countersByBrand || {}),
+      };
+      const prevCount = Number(
+        existingByBrand[sub] ??
+          (sub === 'GZ' ? cData.gzCounter : sub === 'RTX' ? cData.rtxCounter : 0) ??
+          0
+      );
+      const nextNum = prevCount + 1;
+
+      const counterPatch: Record<string, any> = {
+        countersByBrand: {
+          ...existingByBrand,
+          [sub]: nextNum,
+        },
+        satCounterRetired: true,
+      };
+      if (sub === 'GZ') counterPatch.gzCounter = nextNum;
+      if (sub === 'RTX') counterPatch.rtxCounter = nextNum;
+
+      // Save counters without touching satCounter
+      transaction.set(countersRef, counterPatch, { merge: true });
       
       const invoiceNum = `${prefix}-${String(nextNum).padStart(4, '0')}`;
       const invoiceId = `INV-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
@@ -3484,7 +3557,8 @@ export async function generateInvoiceForOrder(orderId: string, userId: string): 
         id: invoiceId,
         orderId: orderId,
         invoiceNumber: invoiceNum,
-        subBrand: order.subBrand,
+        subBrand: sub,
+        subBrandId: sub,
         subBrandPrefix: prefix,
         customerId: custIdVal,
         customerName: order.customerName,

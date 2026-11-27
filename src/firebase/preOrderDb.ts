@@ -24,6 +24,17 @@ import { auth, db } from './config';
 import { perfTrackRead, perfTrackWrite, perfTimeAsync } from '../utils/perfLogger';
 import { registerPublicTrackingSyncer } from './trackingSyncBridge';
 import {
+  SHARED_ACCOUNTING_TAG,
+  isLegacySatCode,
+  matchesGlobalBrandFilter,
+  normalizeSubBrandCode,
+} from '../utils/subBrands';
+
+function resolveQuerySubBrand(subBrand?: string): string | undefined {
+  if (!subBrand || subBrand === 'ALL') return undefined;
+  return subBrand === 'LEGACY_SAT' ? 'SAT' : subBrand;
+}
+import {
   getRolePermissions as bootstrapGetRolePermissions,
   getPreOrderStatsSummary as bootstrapGetPreOrderStatsSummary,
   invalidateRolePermissionsCache,
@@ -311,7 +322,7 @@ function applyOrderSnapshotContribution(stats: PreOrderStats, po: PreOrder, dir:
   stats.totalCustomerDue = fromPaisa(Math.max(0, toPaisa(stats.totalCustomerDue) + dir * dueP));
   stats.totalRefunded = fromPaisa(Math.max(0, toPaisa(stats.totalRefunded) + dir * refP));
 
-  const sb: 'SAT' | 'GZ' | 'RTX' = po.subBrand === 'GZ' || po.subBrand === 'RTX' ? po.subBrand : 'SAT';
+  const sb = normalizeSubBrandCode(po.subBrand) || 'SAT';
   if (!stats.subBrandStats[sb]) {
     stats.subBrandStats[sb] = { count: 0, totalAmount: 0, advancePaid: 0, dueAmount: 0 };
   }
@@ -342,16 +353,24 @@ function writeStatsDeltaInTxn(
 ): void {
   const base = createEmptyPreOrderStats();
   const raw = statsSnap && statsSnap.exists() ? (statsSnap.data() as Partial<PreOrderStats>) : {};
+  const mergedSubBrandStats: PreOrderStats['subBrandStats'] = {
+    ...base.subBrandStats,
+  };
+  Object.entries(raw.subBrandStats || {}).forEach(([brandKey, bucket]) => {
+    if (!bucket) return;
+    mergedSubBrandStats[brandKey] = {
+      count: Number(bucket.count || 0),
+      totalAmount: Number(bucket.totalAmount || 0),
+      advancePaid: Number(bucket.advancePaid || 0),
+      dueAmount: Number(bucket.dueAmount || 0),
+    };
+  });
   const next: PreOrderStats = {
     ...base,
     ...raw,
     id: 'summary',
     statusCounts: { ...base.statusCounts, ...(raw.statusCounts || {}) },
-    subBrandStats: {
-      SAT: { ...base.subBrandStats.SAT, ...(raw.subBrandStats?.SAT || {}) },
-      GZ: { ...base.subBrandStats.GZ, ...(raw.subBrandStats?.GZ || {}) },
-      RTX: { ...base.subBrandStats.RTX, ...(raw.subBrandStats?.RTX || {}) },
-    },
+    subBrandStats: mergedSubBrandStats,
     lastUpdatedAt: params.now,
   };
 
@@ -524,7 +543,8 @@ export async function lookupCustomerByPhone(rawPhone: string): Promise<Customer 
 // ==========================================
 
 export interface CreatePreOrderInput {
-  subBrand: 'SAT' | 'GZ' | 'RTX';
+  subBrand: string;
+  subBrandId?: string;
   customerId?: string;
   customerCode?: string;
   customerName: string;
@@ -587,6 +607,10 @@ export async function createPreOrder(
   actor: PreOrderActor
 ): Promise<CreatePreOrderResult> {
   return perfTimeAsync('Create Pre-Order Save', async () => {
+  const sellingSubBrand = normalizeSubBrandCode(input.subBrand);
+  if (!sellingSubBrand || isLegacySatCode(sellingSubBrand)) {
+    throw new Error('Parent company (Sky Automation Tech / SAT) does not take customer pre-orders. Select an active selling sub-brand.');
+  }
   const normalizedPhone = normalizeBdPhone(input.customerPhone);
   if (!isValidBdPhone(normalizedPhone)) {
     throw new Error('Please enter a valid Bangladesh phone number (01XXXXXXXXX).');
@@ -837,6 +861,16 @@ export async function createPreOrder(
       const custData = existingCustSnap.data() as Customer;
       resolvedCustomerDocId = existingCustSnap.id;
       resolvedCustomerCode = custData.customerId || input.customerCode || '';
+      const existingBrandIds = Array.isArray(custData.brandIds) ? custData.brandIds : [];
+      if (!existingBrandIds.includes(sellingSubBrand)) {
+        txn.update(
+          doc(db, 'customers', resolvedCustomerDocId),
+          sanitizeData({
+            brandIds: arrayUnion(sellingSubBrand),
+            ...( !custData.subBrand || isLegacySatCode(custData.subBrand) ? {} : {} ),
+          })
+        );
+      }
     } else {
       const currentCustCount = custCounterSnap.exists() ? Number(custCounterSnap.data().count || 0) : 0;
       const nextCustCount = currentCustCount + 1;
@@ -850,7 +884,8 @@ export async function createPreOrder(
         phone: normalizedPhone,
         whatsapp: normalizedWhatsapp,
         address: input.customerAddress.trim(),
-        subBrand: input.subBrand || 'SAT',
+        subBrand: sellingSubBrand,
+        brandIds: [sellingSubBrand],
         totalOrders: 0,
         lifetimeValue: 0,
         createdAt: now,
@@ -885,7 +920,8 @@ export async function createPreOrder(
     const preOrderDoc: PreOrder = {
       id: preOrderId,
       preOrderNumber: createdNumber,
-      subBrand: input.subBrand || 'SAT',
+      subBrand: sellingSubBrand,
+      subBrandId: sellingSubBrand,
       customerId: resolvedCustomerDocId,
       customerCode: resolvedCustomerCode,
       customerName: input.customerName.trim(),
@@ -1175,8 +1211,8 @@ export interface QueryPreOrdersOptions {
   pageSize?: 25 | 50 | 100 | number;
   cursor?: QueryDocumentSnapshot<DocumentData> | null;
   statuses?: PreOrderStatus[];
-  subBrand?: 'SAT' | 'GZ' | 'RTX' | 'ALL';
-  allowedSubBrands?: Array<'SAT' | 'GZ' | 'RTX'>;
+  subBrand?: string;
+  allowedSubBrands?: string[];
   supplierId?: string;
   paymentState?: PreOrderPaymentState | 'ALL';
   dateFrom?: string; // YYYY-MM-DD
@@ -1198,7 +1234,7 @@ function matchesClientSideFilters(order: PreOrder, opts: QueryPreOrdersOptions):
   if (opts.allowedSubBrands && opts.allowedSubBrands.length > 0) {
     if (!opts.allowedSubBrands.includes(order.subBrand)) return false;
   }
-  if (opts.subBrand && opts.subBrand !== 'ALL' && order.subBrand !== opts.subBrand) {
+  if (opts.subBrand && opts.subBrand !== 'ALL' && !matchesGlobalBrandFilter(order.subBrand, opts.subBrand)) {
     return false;
   }
   if (opts.statuses && opts.statuses.length > 0 && !opts.statuses.includes(order.status)) {
@@ -1306,9 +1342,10 @@ export async function queryPreOrdersPage(
 
   const buildPrimaryQuery = () => {
     const constraints: any[] = [];
-    if (options.subBrand && options.subBrand !== 'ALL') {
-      constraints.push(where('subBrand', '==', options.subBrand));
-    } else if (options.allowedSubBrands && options.allowedSubBrands.length > 0 && options.allowedSubBrands.length < 3) {
+    const targetSubBrand = resolveQuerySubBrand(options.subBrand);
+    if (targetSubBrand) {
+      constraints.push(where('subBrand', '==', targetSubBrand));
+    } else if (options.allowedSubBrands && options.allowedSubBrands.length > 0 && options.allowedSubBrands.length <= 10) {
       constraints.push(where('subBrand', 'in', options.allowedSubBrands));
     }
 
@@ -1374,7 +1411,7 @@ export async function queryPreOrdersPage(
 
 export interface GetPreOrdersOptions {
   status?: PreOrderStatus;
-  subBrand?: 'SAT' | 'GZ' | 'RTX';
+  subBrand?: string;
   limitCount?: number;
   cursor?: QueryDocumentSnapshot<DocumentData> | null;
 }
@@ -1499,6 +1536,7 @@ export type UpdatePreOrderInput = Partial<
   Pick<
     PreOrder,
     | 'subBrand'
+    | 'subBrandId'
     | 'customerName'
     | 'customerPhone'
     | 'customerWhatsapp'
@@ -3608,8 +3646,8 @@ export interface QueryPreOrderPaymentsGroupOptions {
   status?: PreOrderPaymentStatus | 'ALL';
   type?: PreOrderPaymentType | 'ALL';
   method?: PreOrderPaymentMethod | 'ALL';
-  subBrand?: 'SAT' | 'GZ' | 'RTX' | 'ALL';
-  allowedSubBrands?: Array<'SAT' | 'GZ' | 'RTX'>;
+  subBrand?: string;
+  allowedSubBrands?: string[];
   dateFrom?: string; // YYYY-MM-DD
   dateTo?: string; // YYYY-MM-DD
   searchTerm?: string;
@@ -3633,7 +3671,7 @@ function matchesPaymentFilters(
   if (opts.allowedSubBrands && opts.allowedSubBrands.length > 0 && p.subBrand) {
     if (!opts.allowedSubBrands.includes(p.subBrand)) return false;
   }
-  if (opts.subBrand && opts.subBrand !== 'ALL' && p.subBrand && p.subBrand !== opts.subBrand) {
+  if (opts.subBrand && opts.subBrand !== 'ALL' && p.subBrand && !matchesGlobalBrandFilter(p.subBrand, opts.subBrand)) {
     return false;
   }
   if (opts.status && opts.status !== 'ALL' && p.status !== opts.status) {
@@ -3705,8 +3743,9 @@ export async function queryPreOrderPaymentsGroup(
     } else if (options.method && options.method !== 'ALL') {
       constraints.push(where('method', '==', options.method));
     }
-    if (options.subBrand && options.subBrand !== 'ALL') {
-      constraints.push(where('subBrand', '==', options.subBrand));
+    const targetSubBrand = resolveQuerySubBrand(options.subBrand);
+    if (targetSubBrand) {
+      constraints.push(where('subBrand', '==', targetSubBrand));
     }
     constraints.push(orderBy('createdAt', 'desc'));
     if (options.cursor) {
@@ -3798,8 +3837,8 @@ export async function queryPreOrderPaymentsGroup(
 export interface QueryPreOrderDueListOptions {
   pageSize?: number;
   cursor?: QueryDocumentSnapshot<DocumentData> | null;
-  subBrand?: 'SAT' | 'GZ' | 'RTX' | 'ALL';
-  allowedSubBrands?: Array<'SAT' | 'GZ' | 'RTX'>;
+  subBrand?: string;
+  allowedSubBrands?: string[];
   searchTerm?: string;
 }
 
@@ -3817,7 +3856,7 @@ export async function queryPreOrderDueList(
     if (options.allowedSubBrands && options.allowedSubBrands.length > 0) {
       if (!options.allowedSubBrands.includes(o.subBrand)) return false;
     }
-    if (options.subBrand && options.subBrand !== 'ALL' && o.subBrand !== options.subBrand) {
+    if (options.subBrand && options.subBrand !== 'ALL' && !matchesGlobalBrandFilter(o.subBrand, options.subBrand)) {
       return false;
     }
     if (options.searchTerm?.trim()) {
@@ -3897,8 +3936,8 @@ export interface PreOrderPaymentsSummaryKPIs {
 }
 
 export async function getPreOrderPaymentsSummary(
-  allowedSubBrands?: Array<'SAT' | 'GZ' | 'RTX'>,
-  subBrandFilter?: 'SAT' | 'GZ' | 'RTX' | 'ALL'
+  allowedSubBrands?: string[],
+  subBrandFilter?: string
 ): Promise<PreOrderPaymentsSummaryKPIs> {
   if (!auth?.currentUser) {
     return {
@@ -3928,7 +3967,7 @@ export async function getPreOrderPaymentsSummary(
     if (allowedSubBrands && allowedSubBrands.length > 0 && !allowedSubBrands.includes(o.subBrand)) {
       return;
     }
-    if (subBrandFilter && subBrandFilter !== 'ALL' && o.subBrand !== subBrandFilter) {
+    if (subBrandFilter && subBrandFilter !== 'ALL' && !matchesGlobalBrandFilter(o.subBrand, subBrandFilter)) {
       return;
     }
     verifiedPaisa += Math.max(0, toPaisa(o.advancePaid || 0));
@@ -3947,7 +3986,7 @@ export async function getPreOrderPaymentsSummary(
       if (allowedSubBrands && allowedSubBrands.length > 0 && p.subBrand && !allowedSubBrands.includes(p.subBrand)) {
         return;
       }
-      if (subBrandFilter && subBrandFilter !== 'ALL' && p.subBrand && p.subBrand !== subBrandFilter) {
+      if (subBrandFilter && subBrandFilter !== 'ALL' && p.subBrand && !matchesGlobalBrandFilter(p.subBrand, subBrandFilter)) {
         return;
       }
       pendingCountApprox += 1;
@@ -4801,7 +4840,7 @@ export async function addPreOrderShipmentEvent(
 }
 
 export async function queryShipmentTrackingOrders(options: {
-  allowedSubBrands?: Array<'SAT' | 'GZ' | 'RTX'>;
+  allowedSubBrands?: string[];
   limitCount?: number;
 } = {}): Promise<PreOrder[]> {
   if (!auth?.currentUser) return [];
@@ -4813,7 +4852,7 @@ export async function queryShipmentTrackingOrders(options: {
   );
   const snap = await getDocs(q);
   const rows = snap.docs.map((d) => withNormalizedPreOrderItems({ ...(d.data() as PreOrder), id: d.id }));
-  if (options.allowedSubBrands && options.allowedSubBrands.length > 0 && options.allowedSubBrands.length < 3) {
+  if (options.allowedSubBrands && options.allowedSubBrands.length > 0) {
     return rows.filter((r) => options.allowedSubBrands!.includes(r.subBrand));
   }
   return rows;
@@ -5628,15 +5667,15 @@ export async function addPreOrderSupplierPayment(
     if (existing.exists()) return;
 
     // Fetch allocated pre-orders upfront before any writes to resolve exact subBrand
-    const allocSubBrandMap: Record<string, 'SAT' | 'GZ' | 'RTX'> = {};
+    const allocSubBrandMap: Record<string, string> = {};
     if (cleanAllocations.length > 0) {
       const allocSnaps = await Promise.all(
         cleanAllocations.map((alloc) => txn.get(doc(db, 'preOrders', alloc.preOrderId)))
       );
       allocSnaps.forEach((snap, idx) => {
         const alloc = cleanAllocations[idx];
-        const sb = snap.exists() ? (snap.data()?.subBrand as 'SAT' | 'GZ' | 'RTX' | undefined) : undefined;
-        allocSubBrandMap[alloc.preOrderId] = sb === 'GZ' || sb === 'RTX' ? sb : 'SAT';
+        const sb = snap.exists() ? normalizeSubBrandCode(snap.data()?.subBrand) : '';
+        allocSubBrandMap[alloc.preOrderId] = sb || SHARED_ACCOUNTING_TAG;
       });
     }
 
@@ -5695,7 +5734,7 @@ export async function addPreOrderSupplierPayment(
         const supPosting = buildSupplierPaymentPosting({
           preOrderId: alloc.preOrderId,
           preOrderNumber: alloc.preOrderNumber,
-          subBrand: allocSubBrandMap[alloc.preOrderId] || 'SAT',
+          subBrand: allocSubBrandMap[alloc.preOrderId] || SHARED_ACCOUNTING_TAG,
           supplierPaymentId: paymentId,
           amountBdt: alloc.amountBdt,
           method: input.method,
@@ -5725,7 +5764,7 @@ export async function addPreOrderSupplierPayment(
       const unallocPosting = buildSupplierPaymentPosting({
         preOrderId: `SUPPLIER_${input.supplierId}`,
         preOrderNumber: input.supplierName || 'General Supplier Advance',
-        subBrand: 'SAT',
+        subBrand: SHARED_ACCOUNTING_TAG,
         supplierPaymentId: paymentId,
         amountBdt: safeAmountBdt,
         method: input.method,
@@ -7009,15 +7048,23 @@ export async function convertPreOrderToSale(
       );
     }
 
+    const sellingSubBrand = normalizeSubBrandCode(po.subBrand);
+    if (!sellingSubBrand || isLegacySatCode(sellingSubBrand)) {
+      throw new Error(
+        'Parent company (Sky Automation Tech / SAT) cannot issue customer invoices. Reassign this pre-order to a selling sub-brand first.'
+      );
+    }
+
     const uniqueProductIds = Array.from(new Set(convertibleItems.map((e) => e.productId)));
     const customerRef = po.customerId ? doc(db, 'customers', po.customerId) : null;
 
     // ALL REMAINING READS FIRST
-    const [costSnap, ledger, companySettingsSnap, countersSnap, custSnap, statsSnap, ...productSnaps] =
+    const [costSnap, ledger, companySettingsSnap, subBrandSnap, countersSnap, custSnap, statsSnap, ...productSnaps] =
       await Promise.all([
         txn.get(costRef),
         loadAndLockOrderLedgerInTxn(txn, preOrderId),
         txn.get(companySettingsRef),
+        txn.get(doc(db, 'subBrands', sellingSubBrand)),
         txn.get(countersRef),
         customerRef ? txn.get(customerRef) : Promise.resolve(null),
         txn.get(doc(db, 'preOrderStats', 'summary')),
@@ -7148,38 +7195,37 @@ export async function convertPreOrderToSale(
       });
     }
 
-    // Allocate sequential Invoice Number using existing invoiceCounters pattern
+    // Allocate sequential Invoice Number using continuous countersByBrand (never resets GZ/RTX; SAT counter retired)
+    const sub = normalizeSubBrandCode(po.subBrand);
     const prefixes =
       companySettingsSnap.exists() && companySettingsSnap.data()?.prefixes
         ? companySettingsSnap.data().prefixes
-        : { SAT: 'SAT-INV', GZ: 'GZ-INV', RTX: 'RTX-INV' };
+        : { GZ: 'GZ-INV', RTX: 'RTX-INV' };
+    const subBrandDocData = subBrandSnap.exists() ? (subBrandSnap.data() as any) : null;
+    const prefix =
+      subBrandDocData?.invoicePrefix ||
+      prefixes?.[sub] ||
+      `${sub}-INV`;
 
-    let satCounter = 0;
-    let gzCounter = 0;
-    let rtxCounter = 0;
-    if (countersSnap.exists()) {
-      const cData = countersSnap.data();
-      satCounter = cData.satCounter || 0;
-      gzCounter = cData.gzCounter || 0;
-      rtxCounter = cData.rtxCounter || 0;
-    }
-
-    let prefix = 'SAT-INV';
-    let nextNum = 1;
-    const sub = po.subBrand || 'SAT';
-    if (sub === 'SAT') {
-      prefix = prefixes?.SAT || 'SAT-INV';
-      satCounter++;
-      nextNum = satCounter;
-    } else if (sub === 'GZ') {
-      prefix = prefixes?.GZ || 'GZ-INV';
-      gzCounter++;
-      nextNum = gzCounter;
-    } else if (sub === 'RTX') {
-      prefix = prefixes?.RTX || 'RTX-INV';
-      rtxCounter++;
-      nextNum = rtxCounter;
-    }
+    const cData = countersSnap.exists() ? countersSnap.data() : {};
+    const existingByBrand: Record<string, number> = {
+      ...(cData.countersByBrand || {}),
+    };
+    const prevCount = Number(
+      existingByBrand[sub] ??
+        (sub === 'GZ' ? cData.gzCounter : sub === 'RTX' ? cData.rtxCounter : 0) ??
+        0
+    );
+    const nextNum = prevCount + 1;
+    const counterPatch: Record<string, any> = {
+      countersByBrand: {
+        ...existingByBrand,
+        [sub]: nextNum,
+      },
+      satCounterRetired: true,
+    };
+    if (sub === 'GZ') counterPatch.gzCounter = nextNum;
+    if (sub === 'RTX') counterPatch.rtxCounter = nextNum;
 
     const invoiceNumber = `${prefix}-${String(nextNum).padStart(4, '0')}`;
     const orderRef = doc(collection(db, 'orders'));
@@ -7302,7 +7348,7 @@ export async function convertPreOrderToSale(
     };
 
     // ALL WRITES START HERE
-    txn.set(countersRef, { satCounter, gzCounter, rtxCounter }, { merge: true });
+    txn.set(countersRef, counterPatch, { merge: true });
 
     for (const [pid, prodState] of productStateMap.entries()) {
       const nextTotalStock = prodState.variants.reduce((s, v) => s + (Number(v.stock) || 0), 0);
@@ -7337,10 +7383,10 @@ export async function convertPreOrderToSale(
       );
     }
 
-    const ordPayload = sanitizeData(newOrderDoc);
+    const ordPayload = sanitizeData({ ...newOrderDoc, subBrand: sub, subBrandId: sub });
     delete ordPayload.id;
     txn.set(orderRef, ordPayload);
-    txn.set(invoiceRef, sanitizeData(newInvoiceDoc));
+    txn.set(invoiceRef, sanitizeData({ ...newInvoiceDoc, subBrand: sub, subBrandId: sub }));
 
     if (customerRef && custSnap && custSnap.exists()) {
       const cData = custSnap.data() as Customer;
@@ -7349,6 +7395,7 @@ export async function convertPreOrderToSale(
         sanitizeData({
           totalOrders: (Number(cData.totalOrders) || 0) + 1,
           lifetimeValue: roundMoney((Number(cData.lifetimeValue) || 0) + conversionCalc.totalAmount),
+          brandIds: arrayUnion(sub),
         })
       );
     }
@@ -8325,7 +8372,7 @@ export async function snoozePreOrderNotification(
 export async function syncDailyTimeBasedReminders(options: {
   settings?: PreOrderSettings;
   actor: PreOrderActor;
-  allowedSubBrands?: Array<'SAT' | 'GZ' | 'RTX'>;
+  allowedSubBrands?: string[];
   force?: boolean;
 }): Promise<{ created: number; evaluated: number; skippedSessionGuard?: boolean }> {
   if (!auth?.currentUser) return { created: 0, evaluated: 0 };
@@ -8340,7 +8387,7 @@ export async function syncDailyTimeBasedReminders(options: {
     query(collection(db, 'preOrders'), orderBy('updatedAt', 'desc'), limit(250))
   );
   let orders = activeSnap.docs.map((d) => ({ ...(d.data() as PreOrder), id: d.id }));
-  if (options.allowedSubBrands && options.allowedSubBrands.length > 0 && options.allowedSubBrands.length < 3) {
+  if (options.allowedSubBrands && options.allowedSubBrands.length > 0) {
     orders = orders.filter((o) => options.allowedSubBrands!.includes(o.subBrand));
   }
 
@@ -8457,7 +8504,7 @@ export interface PreOrderDashboardData {
 export async function loadPreOrderDashboardData(options: {
   canViewProfit: boolean;
   canViewSupplier: boolean;
-  allowedSubBrands?: Array<'SAT' | 'GZ' | 'RTX'>;
+  allowedSubBrands?: string[];
 }): Promise<PreOrderDashboardData> {
   if (!auth?.currentUser) {
     return {
@@ -8496,22 +8543,14 @@ export async function loadPreOrderDashboardData(options: {
   let orders: PreOrder[] = ordersSnap.docs.map((d) =>
     withNormalizedPreOrderItems({ ...(d.data() as PreOrder), id: d.id })
   );
-  if (
-    options.allowedSubBrands &&
-    options.allowedSubBrands.length > 0 &&
-    options.allowedSubBrands.length < 3
-  ) {
+  if (options.allowedSubBrands && options.allowedSubBrands.length > 0) {
     orders = orders.filter((o) => options.allowedSubBrands!.includes(o.subBrand));
   }
 
   let payments: PreOrderPayment[] = paymentsSnap
     ? paymentsSnap.docs.map((d) => ({ ...(d.data() as PreOrderPayment), id: d.id }))
     : [];
-  if (
-    options.allowedSubBrands &&
-    options.allowedSubBrands.length > 0 &&
-    options.allowedSubBrands.length < 3
-  ) {
+  if (options.allowedSubBrands && options.allowedSubBrands.length > 0) {
     payments = payments.filter((p) => !p.subBrand || options.allowedSubBrands!.includes(p.subBrand));
   }
 
@@ -8601,7 +8640,7 @@ export interface PreOrderReportsDataset {
 export async function loadPreOrderReportsDataset(options: {
   canViewProfit: boolean;
   canViewSupplier: boolean;
-  allowedSubBrands?: Array<'SAT' | 'GZ' | 'RTX'>;
+  allowedSubBrands?: string[];
 }): Promise<PreOrderReportsDataset> {
   if (!auth?.currentUser) {
     return {
@@ -8634,22 +8673,14 @@ export async function loadPreOrderReportsDataset(options: {
   let preOrders = ordersSnap.docs.map((d) =>
     withNormalizedPreOrderItems({ ...(d.data() as PreOrder), id: d.id })
   );
-  if (
-    options.allowedSubBrands &&
-    options.allowedSubBrands.length > 0 &&
-    options.allowedSubBrands.length < 3
-  ) {
+  if (options.allowedSubBrands && options.allowedSubBrands.length > 0) {
     preOrders = preOrders.filter((o) => options.allowedSubBrands!.includes(o.subBrand));
   }
 
   let payments = paymentsSnap
     ? paymentsSnap.docs.map((d) => ({ ...(d.data() as PreOrderPayment), id: d.id }))
     : [];
-  if (
-    options.allowedSubBrands &&
-    options.allowedSubBrands.length > 0 &&
-    options.allowedSubBrands.length < 3
-  ) {
+  if (options.allowedSubBrands && options.allowedSubBrands.length > 0) {
     payments = payments.filter((p) => !p.subBrand || options.allowedSubBrands!.includes(p.subBrand));
   }
 
@@ -8710,7 +8741,7 @@ export async function getPreOrdersByCustomer(
 }
 
 export async function searchPreOrdersForCommandPalette(
-  allowedSubBrands?: Array<'SAT' | 'GZ' | 'RTX'>,
+  allowedSubBrands?: string[],
   limitCount: number = 80
 ): Promise<PreOrder[]> {
   if (!auth?.currentUser) return [];
@@ -8721,7 +8752,7 @@ export async function searchPreOrdersForCommandPalette(
     const items = snap.docs.map((d) =>
       withNormalizedPreOrderItems({ ...(d.data() as PreOrder), id: d.id })
     );
-    if (allowedSubBrands && allowedSubBrands.length > 0 && allowedSubBrands.length < 3) {
+    if (allowedSubBrands && allowedSubBrands.length > 0) {
       return items.filter((o) => allowedSubBrands.includes(o.subBrand));
     }
     return items;

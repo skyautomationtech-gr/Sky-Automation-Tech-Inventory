@@ -23,6 +23,7 @@ import {
   Wallet,
 } from 'lucide-react';
 import {
+  CompanySettings,
   PreOrder,
   PreOrderAuditEntry,
   PreOrderListFilterPreset,
@@ -31,8 +32,16 @@ import {
   PreOrderStatsRebuildDiff,
   PreOrderStatus,
   RolePermissionsMap,
+  SubBrand,
   UserProfile,
 } from '../../types';
+import {
+  formatBrandBadgeMeta,
+  getSellingSubBrands,
+  getUserAllowedSubBrandIds,
+  isLegacySatCode,
+  matchesGlobalBrandFilter,
+} from '../../utils/subBrands';
 import {
   PRE_ORDER_STATUSES,
   formatBDT,
@@ -70,6 +79,9 @@ import {
 export interface PreOrderOverviewViewProps {
   user: UserProfile;
   rolePermissions: RolePermissionsMap | null;
+  companySettings?: CompanySettings | null;
+  subBrands?: SubBrand[];
+  globalBrandFilter?: string;
   onNavigate: (tab: string, subAction?: string, initialId?: string | null) => void;
   onOpenPreOrderList: (preset: PreOrderListFilterPreset) => void;
   onOpenOrderDetail?: (preOrderId: string) => void;
@@ -154,6 +166,9 @@ const PreOrderOverviewCharts = React.lazy(() => import('./PreOrderOverviewCharts
 export const PreOrderOverviewView: React.FC<PreOrderOverviewViewProps> = ({
   user,
   rolePermissions,
+  companySettings,
+  subBrands,
+  globalBrandFilter,
   onNavigate,
   onOpenPreOrderList,
 }) => {
@@ -164,16 +179,36 @@ export const PreOrderOverviewView: React.FC<PreOrderOverviewViewProps> = ({
   const canViewProfit = hasPermission(user, rolePermissions, 'preOrderViewProfit');
   const canViewSupplier = hasPermission(user, rolePermissions, 'preOrderSupplier') || isAdmin;
 
-  const allowedSubBrands = useMemo<Array<'SAT' | 'GZ' | 'RTX'>>(() => {
-    const isSuper = user.role === 'superadmin' || (user.role as string) === 'super_admin';
-    if (isSuper || !user.subBrandAccess || user.subBrandAccess.length === 0) {
-      return ['SAT', 'GZ', 'RTX'];
+  const sellingSubBrands = useMemo(
+    () => getSellingSubBrands(subBrands, { includeInactive: true, companySettings }),
+    [subBrands, companySettings]
+  );
+
+  const allowedSubBrands = useMemo<string[] | undefined>(() => {
+    if (isAdmin) return undefined;
+    const ids = getUserAllowedSubBrandIds(user, subBrands, {
+      includeInactive: true,
+      companySettings,
+    });
+    return ids.length > 0 ? ids : sellingSubBrands.map((sb) => sb.shortCode);
+  }, [isAdmin, user, subBrands, companySettings, sellingSubBrands]);
+
+  const brandFilterOptions = useMemo(() => {
+    const visible = isAdmin
+      ? sellingSubBrands
+      : sellingSubBrands.filter((sb) => !allowedSubBrands || allowedSubBrands.includes(sb.shortCode));
+    const opts = [
+      { value: 'ALL', label: 'All Brands' },
+      ...visible.map((sb) => ({
+        value: sb.shortCode,
+        label: sb.active ? sb.name : `${sb.name} (Inactive)`,
+      })),
+    ];
+    if (isAdmin) {
+      opts.push({ value: 'LEGACY_SAT', label: 'Legacy (SAT)' });
     }
-    const valid = user.subBrandAccess.filter(
-      (b): b is 'SAT' | 'GZ' | 'RTX' => b === 'SAT' || b === 'GZ' || b === 'RTX'
-    );
-    return valid.length > 0 ? valid : ['SAT'];
-  }, [user.role, user.subBrandAccess]);
+    return opts;
+  }, [isAdmin, sellingSubBrands, allowedSubBrands]);
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -186,7 +221,9 @@ export const PreOrderOverviewView: React.FC<PreOrderOverviewViewProps> = ({
   const [dateRangeMode, setDateRangeMode] = useState<DateRangeMode>('all');
   const [customFrom, setCustomFrom] = useState('');
   const [customTo, setCustomTo] = useState('');
-  const [subBrandFilter, setSubBrandFilter] = useState<'ALL' | 'SAT' | 'GZ' | 'RTX'>('ALL');
+  const [subBrandFilter, setSubBrandFilter] = useState<string>(() =>
+    globalBrandFilter && globalBrandFilter !== 'ALL' ? globalBrandFilter : 'ALL'
+  );
 
   const [settings, setSettings] = useState<PreOrderSettings>(DEFAULT_PRE_ORDER_SETTINGS);
   const [editingRecDays, setEditingRecDays] = useState(3);
@@ -226,6 +263,12 @@ export const PreOrderOverviewView: React.FC<PreOrderOverviewViewProps> = ({
   }, [canViewProfit, canViewSupplier, allowedSubBrands, user?.id]);
 
   useEffect(() => {
+    if (globalBrandFilter) {
+      setSubBrandFilter(globalBrandFilter);
+    }
+  }, [globalBrandFilter]);
+
+  useEffect(() => {
     if (!auth?.currentUser || !user?.id) return;
     fetchDashboard();
   }, [fetchDashboard, user?.id]);
@@ -246,12 +289,12 @@ export const PreOrderOverviewView: React.FC<PreOrderOverviewViewProps> = ({
   const isFilteredScope =
     dateRangeMode !== 'all' ||
     subBrandFilter !== 'ALL' ||
-    allowedSubBrands.length < 3;
+    Boolean(allowedSubBrands && allowedSubBrands.length > 0);
 
   const scopedOrders = useMemo(() => {
     if (!data) return [];
     return data.orders.filter((po) => {
-      if (subBrandFilter !== 'ALL' && po.subBrand !== subBrandFilter) return false;
+      if (subBrandFilter !== 'ALL' && !matchesGlobalBrandFilter(po.subBrand, subBrandFilter)) return false;
       const day = getPreOrderDay(po);
       if (resolvedWindow.from && day < resolvedWindow.from) return false;
       if (resolvedWindow.to && day > resolvedWindow.to) return false;
@@ -262,7 +305,7 @@ export const PreOrderOverviewView: React.FC<PreOrderOverviewViewProps> = ({
   const scopedPayments = useMemo(() => {
     if (!data) return [];
     return data.payments.filter((p) => {
-      if (subBrandFilter !== 'ALL' && p.subBrand && p.subBrand !== subBrandFilter) return false;
+      if (subBrandFilter !== 'ALL' && p.subBrand && !matchesGlobalBrandFilter(p.subBrand, subBrandFilter)) return false;
       const day = toIsoDayFromTimestamp(p.receivedAt || p.createdAt);
       if (resolvedWindow.from && day < resolvedWindow.from) return false;
       if (resolvedWindow.to && day > resolvedWindow.to) return false;
@@ -289,7 +332,7 @@ export const PreOrderOverviewView: React.FC<PreOrderOverviewViewProps> = ({
   const needsAttention = useMemo(
     () =>
       computeNeedsAttentionBuckets(
-        data?.orders.filter((o) => subBrandFilter === 'ALL' || o.subBrand === subBrandFilter) || [],
+        data?.orders.filter((o) => subBrandFilter === 'ALL' || matchesGlobalBrandFilter(o.subBrand, subBrandFilter)) || [],
         settings
       ),
     [data?.orders, subBrandFilter, settings]
@@ -334,15 +377,33 @@ export const PreOrderOverviewView: React.FC<PreOrderOverviewViewProps> = ({
 
   // Chart 4: Sub-Brand Split
   const subBrandChartData = useMemo(() => {
-    return (['SAT', 'GZ', 'RTX'] as const)
-      .filter((sb) => allowedSubBrands.includes(sb))
-      .map((sb) => ({
-        name: sb,
+    const keys = new Set<string>();
+    const visibleBrands = isAdmin
+      ? sellingSubBrands
+      : sellingSubBrands.filter((sb) => !allowedSubBrands || allowedSubBrands.includes(sb.shortCode));
+    visibleBrands.forEach((sb) => keys.add(sb.shortCode));
+
+    Object.entries(effectiveStats.subBrandStats || {}).forEach(([k, bucket]) => {
+      const b = bucket as { count?: number; totalAmount?: number; advancePaid?: number } | undefined;
+      if (!b) return;
+      if ((b.count || 0) > 0 || (b.totalAmount || 0) > 0 || (b.advancePaid || 0) > 0) {
+        if (isAdmin || (allowedSubBrands && allowedSubBrands.includes(k))) {
+          keys.add(k);
+        }
+      }
+    });
+
+    return Array.from(keys).map((sb) => {
+      const meta = formatBrandBadgeMeta(sb, subBrands, companySettings);
+      const label = isLegacySatCode(sb) ? meta.label : meta.shortLabel;
+      return {
+        name: label,
         orders: effectiveStats.subBrandStats[sb]?.count || 0,
         orderValue: Math.round(effectiveStats.subBrandStats[sb]?.totalAmount || 0),
         advance: Math.round(effectiveStats.subBrandStats[sb]?.advancePaid || 0),
-      }));
-  }, [effectiveStats, allowedSubBrands]);
+      };
+    });
+  }, [effectiveStats, allowedSubBrands, sellingSubBrands, isAdmin, subBrands, companySettings]);
 
   // Chart 5: China Procurement & Shipment Pipeline Funnel
   const pipelineChartData = useMemo(() => {
@@ -537,16 +598,13 @@ export const PreOrderOverviewView: React.FC<PreOrderOverviewViewProps> = ({
             </div>
           )}
 
-          {allowedSubBrands.length > 1 && (
+          {brandFilterOptions.length > 2 && (
             <Select
               value={subBrandFilter}
               searchable={false}
-              options={[
-                { value: 'ALL', label: 'All Brands' },
-                ...allowedSubBrands.map((sb) => ({ value: sb, label: sb })),
-              ]}
-              onChange={(val) => setSubBrandFilter(val as any)}
-              className="w-32 text-xs"
+              options={brandFilterOptions}
+              onChange={(val) => setSubBrandFilter(String(val))}
+              className="w-40 text-xs"
             />
           )}
 

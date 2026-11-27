@@ -23,8 +23,14 @@ import {
   PreOrderNotificationType,
   PreOrderSettings,
   RolePermissionsMap,
+  SubBrand,
   UserProfile,
 } from '../../types';
+import {
+  getSellingSubBrands,
+  getUserAllowedSubBrandIds,
+  matchesGlobalBrandFilter,
+} from '../../utils/subBrands';
 import {
   hasPermission,
   isPreOrderAdminRole,
@@ -59,11 +65,14 @@ import {
   useToast,
 } from '../../design-system';
 import CustomerMessageModal from './CustomerMessageModal';
+import { SubBrandBadge } from './PreOrderStatusBadge';
 
 export interface RemindersCenterViewProps {
   user: UserProfile;
   rolePermissions: RolePermissionsMap | null;
   companySettings?: CompanySettings | null;
+  subBrands?: SubBrand[];
+  globalBrandFilter?: string;
   onNavigate?: (tab: string, subAction?: string, initialId?: string | null) => void;
 }
 
@@ -109,6 +118,8 @@ export const RemindersCenterView: React.FC<RemindersCenterViewProps> = ({
   user,
   rolePermissions,
   companySettings,
+  subBrands,
+  globalBrandFilter,
   onNavigate,
 }) => {
   const toast = useToast();
@@ -116,16 +127,36 @@ export const RemindersCenterView: React.FC<RemindersCenterViewProps> = ({
   const isAdmin = isPreOrderAdminRole(user.role);
   const canEditSettings = isAdmin || user.role === 'manager';
 
-  const allowedSubBrands = useMemo<Array<'SAT' | 'GZ' | 'RTX'>>(() => {
-    const isSuper = user.role === 'superadmin' || (user.role as string) === 'super_admin';
-    if (isSuper || !user.subBrandAccess || user.subBrandAccess.length === 0) {
-      return ['SAT', 'GZ', 'RTX'];
+  const sellingSubBrands = useMemo(
+    () => getSellingSubBrands(subBrands, { includeInactive: true, companySettings }),
+    [subBrands, companySettings]
+  );
+
+  const allowedSubBrands = useMemo<string[] | undefined>(() => {
+    if (isAdmin) return undefined;
+    const ids = getUserAllowedSubBrandIds(user, subBrands, {
+      includeInactive: true,
+      companySettings,
+    });
+    return ids.length > 0 ? ids : sellingSubBrands.map((sb) => sb.shortCode);
+  }, [isAdmin, user, subBrands, companySettings, sellingSubBrands]);
+
+  const brandFilterOptions = useMemo(() => {
+    const visible = isAdmin
+      ? sellingSubBrands
+      : sellingSubBrands.filter((sb) => !allowedSubBrands || allowedSubBrands.includes(sb.shortCode));
+    const opts = [
+      { value: 'ALL', label: 'All Sub-Brands' },
+      ...visible.map((sb) => ({
+        value: sb.shortCode,
+        label: sb.active ? `${sb.shortCode} — ${sb.name}` : `${sb.shortCode} — ${sb.name} (Inactive)`,
+      })),
+    ];
+    if (isAdmin) {
+      opts.push({ value: 'LEGACY_SAT', label: 'Legacy (SAT)' });
     }
-    const valid = user.subBrandAccess.filter(
-      (b): b is 'SAT' | 'GZ' | 'RTX' => b === 'SAT' || b === 'GZ' || b === 'RTX'
-    );
-    return valid.length > 0 ? valid : ['SAT'];
-  }, [user.role, user.subBrandAccess]);
+    return opts;
+  }, [isAdmin, sellingSubBrands, allowedSubBrands]);
 
   const [notifications, setNotifications] = useState<PreOrderNotification[]>([]);
   const [cursor, setCursor] = useState<QueryDocumentSnapshot<DocumentData> | null>(null);
@@ -136,7 +167,9 @@ export const RemindersCenterView: React.FC<RemindersCenterViewProps> = ({
 
   const [activeTab, setActiveTab] = useState<ReminderFilterTab>('all');
   const [searchQuery, setSearchQuery] = useState('');
-  const [subBrandFilter, setSubBrandFilter] = useState<'ALL' | 'SAT' | 'GZ' | 'RTX'>('ALL');
+  const [subBrandFilter, setSubBrandFilter] = useState<string>(() =>
+    globalBrandFilter && globalBrandFilter !== 'ALL' ? globalBrandFilter : 'ALL'
+  );
   const [showSnoozed, setShowSnoozed] = useState(false);
 
   // Settings & Bilingual Templates State
@@ -180,6 +213,12 @@ export const RemindersCenterView: React.FC<RemindersCenterViewProps> = ({
     },
     [canView, toast]
   );
+
+  useEffect(() => {
+    if (globalBrandFilter) {
+      setSubBrandFilter(globalBrandFilter);
+    }
+  }, [globalBrandFilter]);
 
   useEffect(() => {
     if (!canView || !auth?.currentUser || !user?.id) return;
@@ -227,12 +266,13 @@ export const RemindersCenterView: React.FC<RemindersCenterViewProps> = ({
     return notifications.filter((n) => {
       if (
         n.subBrand &&
-        allowedSubBrands.length < 3 &&
+        allowedSubBrands &&
+        allowedSubBrands.length > 0 &&
         !allowedSubBrands.includes(n.subBrand)
       ) {
         return false;
       }
-      if (subBrandFilter !== 'ALL' && n.subBrand && n.subBrand !== subBrandFilter) {
+      if (subBrandFilter !== 'ALL' && n.subBrand && !matchesGlobalBrandFilter(n.subBrand, subBrandFilter)) {
         return false;
       }
       const snoozedUntil = n.snoozedUntilBy?.[user.id] || 0;
@@ -718,11 +758,8 @@ export const RemindersCenterView: React.FC<RemindersCenterViewProps> = ({
             <Select
               value={subBrandFilter}
               searchable={false}
-              options={[
-                { value: 'ALL', label: 'All Sub-Brands' },
-                ...allowedSubBrands.map((b) => ({ value: b, label: b })),
-              ]}
-              onChange={(val) => setSubBrandFilter(val as 'ALL' | 'SAT' | 'GZ' | 'RTX')}
+              options={brandFilterOptions}
+              onChange={(val) => setSubBrandFilter(String(val))}
             />
           </div>
         </div>
@@ -780,9 +817,7 @@ export const RemindersCenterView: React.FC<RemindersCenterViewProps> = ({
                           {notif.title}
                         </span>
                         {notif.subBrand && (
-                          <Badge variant="subBrand" size="xs">
-                            {notif.subBrand}
-                          </Badge>
+                          <SubBrandBadge subBrand={notif.subBrand} subBrands={subBrands} />
                         )}
                         <Badge variant={sevVariant} size="xs">
                           {notif.severity || 'info'}

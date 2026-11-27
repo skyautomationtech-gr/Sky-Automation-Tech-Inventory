@@ -33,7 +33,7 @@ function makeBasePosting(params: {
   id: string;
   preOrderId: string;
   preOrderNumber: string;
-  subBrand: 'SAT' | 'GZ' | 'RTX';
+  subBrand: string;
   type: AccountingPostingType;
   direction?: 'normal' | 'reversal';
   reversesPostingId?: string;
@@ -47,6 +47,7 @@ function makeBasePosting(params: {
     preOrderId: params.preOrderId,
     preOrderNumber: params.preOrderNumber,
     subBrand: params.subBrand,
+    subBrandId: params.subBrand,
     type: params.type,
     direction: params.direction || 'normal',
     ...(params.reversesPostingId ? { reversesPostingId: params.reversesPostingId } : {}),
@@ -79,7 +80,7 @@ export function getAdvanceVerifiedPostingId(preOrderId: string, paymentId: strin
 export function buildAdvanceVerifiedPosting(params: {
   preOrderId: string;
   preOrderNumber: string;
-  subBrand: 'SAT' | 'GZ' | 'RTX';
+  subBrand: string;
   paymentId: string;
   amount: number;
   method: string;
@@ -115,7 +116,7 @@ export function getSupplierPaymentPostingId(preOrderId: string, supplierPaymentI
 export function buildSupplierPaymentPosting(params: {
   preOrderId: string;
   preOrderNumber: string;
-  subBrand: 'SAT' | 'GZ' | 'RTX';
+  subBrand: string;
   supplierPaymentId: string;
   amountBdt: number;
   method: string;
@@ -151,7 +152,7 @@ export function getShippingExpensePostingId(preOrderId: string, expenseSeqOrId: 
 export function buildShippingExpensePosting(params: {
   preOrderId: string;
   preOrderNumber: string;
-  subBrand: 'SAT' | 'GZ' | 'RTX';
+  subBrand: string;
   expenseSeqOrId: string | number;
   deltaAmount: number;
   method: string;
@@ -187,7 +188,7 @@ export function getInventoryReceivedPostingId(preOrderId: string, receiptId: str
 export function buildInventoryReceivedPosting(params: {
   preOrderId: string;
   preOrderNumber: string;
-  subBrand: 'SAT' | 'GZ' | 'RTX';
+  subBrand: string;
   receiptId: string;
   goodLandedCost: number;
   damagedLossCost?: number;
@@ -223,7 +224,7 @@ export function getConvertToSalePostingId(preOrderId: string): string {
 export function buildConvertToSalePosting(params: {
   preOrderId: string;
   preOrderNumber: string;
-  subBrand: 'SAT' | 'GZ' | 'RTX';
+  subBrand: string;
   orderId: string;
   invoiceNumber: string;
   advanceApplied: number;
@@ -264,7 +265,7 @@ export function getCustomerRefundPostingId(preOrderId: string, paymentId: string
 export function buildCustomerRefundPosting(params: {
   preOrderId: string;
   preOrderNumber: string;
-  subBrand: 'SAT' | 'GZ' | 'RTX';
+  subBrand: string;
   paymentId: string;
   refundAmount: number;
   method: string;
@@ -300,7 +301,7 @@ export function getCancellationChargePostingId(preOrderId: string): string {
 export function buildCancellationChargePosting(params: {
   preOrderId: string;
   preOrderNumber: string;
-  subBrand: 'SAT' | 'GZ' | 'RTX';
+  subBrand: string;
   retainedAmount: number;
   note?: string;
   actor: PostingActorContext;
@@ -330,7 +331,7 @@ export function getSupplierReceivablePostingId(preOrderId: string, receivableId:
 export function buildSupplierReceivablePosting(params: {
   preOrderId: string;
   preOrderNumber: string;
-  subBrand: 'SAT' | 'GZ' | 'RTX';
+  subBrand: string;
   receivableId: string;
   amount: number;
   note?: string;
@@ -362,7 +363,7 @@ export function getSupplierLossPostingId(preOrderId: string, lossId: string): st
 export function buildSupplierLossPosting(params: {
   preOrderId: string;
   preOrderNumber: string;
-  subBrand: 'SAT' | 'GZ' | 'RTX';
+  subBrand: string;
   lossId: string;
   amount: number;
   note?: string;
@@ -394,7 +395,7 @@ export function getStockReleasedPostingId(preOrderId: string): string {
 export function buildStockReleasedPosting(params: {
   preOrderId: string;
   preOrderNumber: string;
-  subBrand: 'SAT' | 'GZ' | 'RTX';
+  subBrand: string;
   releasedValue: number;
   note?: string;
   actor: PostingActorContext;
@@ -423,7 +424,7 @@ export function getStockReturnedSupplierPostingId(preOrderId: string, receivable
 export function buildStockReturnedSupplierPosting(params: {
   preOrderId: string;
   preOrderNumber: string;
-  subBrand: 'SAT' | 'GZ' | 'RTX';
+  subBrand: string;
   receivableId: string;
   returnedValue: number;
   note?: string;

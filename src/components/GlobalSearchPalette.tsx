@@ -49,6 +49,7 @@ import {
   normalizePreOrderItems,
 } from '../preOrders/constants';
 import { buildSidebarGroups } from '../navigation/sidebarConfig';
+import { formatBrandBadgeMeta, getUserAllowedSubBrandIds } from '../utils/subBrands';
 
 interface GlobalSearchPaletteProps {
   isOpen: boolean;
@@ -103,16 +104,10 @@ export const GlobalSearchPalette: React.FC<GlobalSearchPaletteProps> = ({
   const isPrivileged = isSuperAdmin || user?.role === 'admin';
   const canViewPreOrders = hasPermission(user, rolePermissions, 'preOrderView');
   const canViewSupplier = hasPermission(user, rolePermissions, 'preOrderSupplier') || isPreOrderAdminRole(user?.role);
-  const allowedSubBrands = useMemo<Array<'SAT' | 'GZ' | 'RTX'>>(() => {
-    if (!user) return ['SAT', 'GZ', 'RTX'];
-    if (isSuperAdmin || !user.subBrandAccess || user.subBrandAccess.length === 0) {
-      return ['SAT', 'GZ', 'RTX'];
-    }
-    const valid = user.subBrandAccess.filter(
-      (b): b is 'SAT' | 'GZ' | 'RTX' => b === 'SAT' || b === 'GZ' || b === 'RTX'
-    );
-    return valid.length > 0 ? valid : ['SAT'];
-  }, [user, isSuperAdmin]);
+  const allowedSubBrands = useMemo<string[] | undefined>(() => {
+    if (!user || isPrivileged) return undefined; // Admin/SuperAdmin see all active & legacy pre-orders
+    return getUserAllowedSubBrandIds(user);
+  }, [user, isPrivileged]);
 
   // Load supplementary data once when palette opens
   useEffect(() => {
@@ -330,7 +325,7 @@ export const GlobalSearchPalette: React.FC<GlobalSearchPaletteProps> = ({
     return list.map((po) => ({
       type: 'preorder' as const,
       id: po.id,
-      title: `${po.preOrderNumber} · ${formatPreOrderProductLabel(po)} (${po.subBrand})`,
+      title: `${po.preOrderNumber} · ${formatPreOrderProductLabel(po)} (${formatBrandBadgeMeta(po.subBrand).shortLabel})`,
       subtitle: `${po.customerName} (${po.customerPhone}) · ${po.status} · Total ${formatBDT(po.totalAmount)}${po.trackingNumber ? ` · Trk: ${po.trackingNumber}` : ''}`,
       icon: Plane,
       action: () => {

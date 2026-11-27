@@ -15,6 +15,8 @@ import {
 } from 'lucide-react';
 import { getInvoices, getOrders } from '../firebase/db';
 import { Invoice, Order } from '../types';
+import { getSubBrandCompanyInfo } from '../utils/brandLogos';
+import { DEFAULT_SELLING_SUB_BRANDS, formatBrandBadgeMeta } from '../utils/subBrands';
 
 interface PublicInvoiceVerificationProps {
   onDismiss?: () => void;
@@ -24,6 +26,7 @@ export const PublicInvoiceVerification: React.FC<PublicInvoiceVerificationProps>
   const [params, setParams] = useState<{
     inv: string;
     brand: string;
+    brandName: string;
     name: string;
     phone: string;
     total: number;
@@ -33,7 +36,8 @@ export const PublicInvoiceVerification: React.FC<PublicInvoiceVerificationProps>
     order: string;
   }>({
     inv: '',
-    brand: 'SAT',
+    brand: 'GZ',
+    brandName: '',
     name: '',
     phone: '',
     total: 0,
@@ -73,7 +77,8 @@ export const PublicInvoiceVerification: React.FC<PublicInvoiceVerificationProps>
       };
 
       const inv = extractParam('verify_inv') || extractParam('inv') || '';
-      const brand = extractParam('brand') || extractParam('b') || 'SAT';
+      const brand = extractParam('brand') || extractParam('b') || 'GZ';
+      const brandName = extractParam('bn') || '';
       const name = extractParam('name') || extractParam('n') || '';
       const phone = extractParam('phone') || extractParam('ph') || '';
       const total = parseFloat(extractParam('total') || extractParam('t') || '0');
@@ -82,7 +87,7 @@ export const PublicInvoiceVerification: React.FC<PublicInvoiceVerificationProps>
       const date = extractParam('date') || new Date().toLocaleDateString('en-GB');
       const order = extractParam('order') || '';
 
-      setParams({ inv, brand, name, phone, total, due, paid, date, order });
+      setParams({ inv, brand, brandName, name, phone, total, due, paid, date, order });
 
       // Try fetching live invoice if online
       if (inv) {
@@ -121,45 +126,25 @@ export const PublicInvoiceVerification: React.FC<PublicInvoiceVerificationProps>
     }
   }, []);
 
-  const getSubBrandMeta = (code: string) => {
-    const brand = (code || 'SAT').toUpperCase();
-    if (brand === 'RTX' || brand === 'RTX GADGET') {
-      return {
-        name: 'RTX GADGET',
-        logoUrl: '/rtx_logo.jpg',
-        tagline: 'Premium Consumer Electronics & Audio Accessories',
-        phone: '01577351518',
-        whatsapp: '8801577351518',
-        email: 'rtxgadget@gmail.com',
-        color: 'from-blue-600 to-indigo-700',
-        badge: 'RTX-AUTHENTIC',
-      };
-    }
-    if (brand === 'GZ' || brand === 'GADGETZU') {
-      return {
-        name: 'GadgetZu',
-        logoUrl: '/gz_logo.jpg',
-        tagline: 'Everyday Lifestyle & Smart Wearables',
-        phone: '01577351518',
-        whatsapp: '8801577351518',
-        email: 'gadgetzubd@gmail.com',
-        color: 'from-amber-500 to-orange-600',
-        badge: 'GZ-OFFICIAL',
-      };
-    }
-    return {
-      name: 'Sky Automation Tech',
-      logoUrl: '/sat_logo.jpg',
-      tagline: 'IoT Smart Automation & Precision Electronics',
-      phone: '01577351518',
-      whatsapp: '8801577351518',
-      email: 'skyautomationtech@gmail.com',
-      color: 'from-slate-900 to-slate-800',
-      badge: 'SAT-GENUINE',
-    };
+  const resolvedBrandCode = liveInvoice?.subBrand || liveOrder?.subBrand || params.brand || 'GZ';
+  const info = getSubBrandCompanyInfo(resolvedBrandCode, null, DEFAULT_SELLING_SUB_BRANDS);
+  const badgeMeta = formatBrandBadgeMeta(resolvedBrandCode, DEFAULT_SELLING_SUB_BRANDS);
+  const resolvedBrandName =
+    info.isLegacySat
+      ? 'Sky Automation Tech'
+      : params.brandName && info.companyName === resolvedBrandCode
+      ? params.brandName
+      : info.companyName;
+  const brandMeta = {
+    name: resolvedBrandName,
+    logoUrl: info.logoUrl,
+    tagline: info.tagline,
+    phone: info.phone,
+    whatsapp: (info.whatsapp || '01577351518').replace(/[^0-9]/g, '').replace(/^01/, '8801'),
+    email: info.email,
+    badge: info.isLegacySat ? 'LEGACY (SAT)' : `${info.shortCode}-OFFICIAL`,
+    parentCreditLine: info.showParentCreditLine ? info.parentCreditLine : '',
   };
-
-  const brandMeta = getSubBrandMeta(liveInvoice?.subBrand || liveOrder?.subBrand || params.brand);
   const invNumber = liveInvoice?.invoiceNumber || params.inv || 'INV-VERIFIED';
   const customerName = liveInvoice?.customerName || liveOrder?.customerName || params.name || 'Valued Customer';
   const customerPhone = liveInvoice?.customerPhone || liveOrder?.customerPhone || params.phone || '';
@@ -212,8 +197,16 @@ export const PublicInvoiceVerification: React.FC<PublicInvoiceVerificationProps>
             Authentic Digital Invoice
           </h1>
           <p className="text-xs text-slate-400 mt-1">
-            Issued & Authenticated by <strong className="text-slate-200">{brandMeta.name}</strong>
+            Issued &amp; Authenticated by <strong className="text-slate-200">{brandMeta.name}</strong>
+            {badgeMeta.isLegacySat && (
+              <span className="ml-1.5 inline-block text-[9px] px-1.5 py-0.5 rounded bg-slate-800 text-slate-300 border border-slate-700 font-mono">
+                Legacy (SAT)
+              </span>
+            )}
           </p>
+          {brandMeta.parentCreditLine && (
+            <p className="text-[10px] text-slate-400 mt-0.5">{brandMeta.parentCreditLine}</p>
+          )}
 
           <div className="mt-4 bg-slate-950/80 border border-slate-800 rounded-2xl p-3 flex items-center justify-between">
             <div className="text-left">

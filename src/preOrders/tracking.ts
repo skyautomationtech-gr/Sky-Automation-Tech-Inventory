@@ -134,7 +134,7 @@ export function renderTrackingShareMessage(
   trackingUrl: string,
   companySettings?: CompanySettings | null
 ): string {
-  const brandInfo = getSubBrandCompanyInfo(order.subBrand || 'SAT', companySettings);
+  const brandInfo = getSubBrandCompanyInfo(order.subBrand || 'GZ', companySettings);
   const firstName = extractCustomerFirstName(order.customerName);
   const productLabel = formatPreOrderProductLabel(order);
   const replacements: Record<string, string> = {
@@ -208,7 +208,7 @@ export function buildWhitelistedPublicTrackingDoc(
     return buildDisabledPublicTrackingDoc(now);
   }
 
-  const subBrand = order.subBrand || 'SAT';
+  const subBrand = order.subBrand || 'GZ';
   const brandInfo = getSubBrandCompanyInfo(subBrand, companySettings);
   const subBrandCustom = companySettings?.subBrandDetails?.[subBrand];
 
@@ -319,6 +319,12 @@ export function buildWhitelistedPublicTrackingDoc(
     subBrand,
     brandName: String(brandInfo.companyName || BRAND_NAMES[subBrand] || 'Sky Automation Tech'),
     brandLogoUrl,
+    accentColor: brandInfo.accentColor,
+    parentCreditLine: brandInfo.parentCreditLine,
+    showParentCreditLine: brandInfo.showParentCreditLine,
+    ...(brandInfo.warrantyPolicyText?.trim()
+      ? { warrantyPolicyText: brandInfo.warrantyPolicyText.trim() }
+      : {}),
     productName: formatPreOrderProductLabel(order),
     ...(productImageUrl ? { productImageUrl } : {}),
     ...(order.variant?.trim() ? { variant: order.variant.trim() } : {}),

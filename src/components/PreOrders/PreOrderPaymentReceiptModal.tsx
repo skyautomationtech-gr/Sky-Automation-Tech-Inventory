@@ -1,8 +1,9 @@
 import React, { useEffect, useState } from 'react';
 import { Download, Printer, X } from 'lucide-react';
-import { CompanySettings, PreOrder, PreOrderPayment } from '../../types';
+import { CompanySettings, PreOrder, PreOrderPayment, SubBrand } from '../../types';
 import { getCompanySettings } from '../../firebase/db';
 import { getSubBrandCompanyInfo } from '../../utils/brandLogos';
+import { formatBrandBadgeMeta } from '../../utils/subBrands';
 import {
   formatBDT,
   formatPreOrderProductLabel,
@@ -17,6 +18,7 @@ export interface PreOrderPaymentReceiptModalProps {
   order: PreOrder | null;
   payment: PreOrderPayment | null;
   companySettings?: CompanySettings | null;
+  subBrands?: SubBrand[];
 }
 
 function formatReceiptDateTime(ts?: number): string {
@@ -53,6 +55,7 @@ export const PreOrderPaymentReceiptModal: React.FC<PreOrderPaymentReceiptModalPr
   order,
   payment,
   companySettings: propSettings,
+  subBrands,
 }) => {
   const toast = useToast();
   const [downloading, setDownloading] = useState(false);
@@ -76,7 +79,8 @@ export const PreOrderPaymentReceiptModal: React.FC<PreOrderPaymentReceiptModalPr
 
   if (!isOpen || !order || !payment) return null;
 
-  const brandInfo = getSubBrandCompanyInfo(order.subBrand || 'SAT', resolvedSettings);
+  const brandInfo = getSubBrandCompanyInfo(order.subBrand || 'GZ', resolvedSettings, subBrands);
+  const brandMeta = formatBrandBadgeMeta(order.subBrand, subBrands, resolvedSettings);
   const orderItems = normalizePreOrderItems(order);
   const totalQty = order.totalQty ?? orderItems.reduce((s, it) => s + it.qty, 0);
   const netPaid = calculatePreOrderFinancials({
@@ -301,6 +305,11 @@ export const PreOrderPaymentReceiptModal: React.FC<PreOrderPaymentReceiptModalPr
                 >
                   {brandInfo.companyName}
                 </div>
+                {brandInfo.parentCreditLine && (
+                  <div style={{ fontSize: '10px', fontWeight: 600, color: '#4b5563', marginTop: '1px' }}>
+                    {brandInfo.parentCreditLine}
+                  </div>
+                )}
                 <div style={{ fontSize: '11px', color: '#374151', marginTop: '2px' }}>
                   {brandInfo.address}
                 </div>
@@ -413,7 +422,7 @@ export const PreOrderPaymentReceiptModal: React.FC<PreOrderPaymentReceiptModalPr
                 </div>
               )}
               <div style={{ fontSize: '11px', color: '#374151', marginTop: '2px' }}>
-                Sub-Brand: <strong>{order.subBrand}</strong> | Status: <strong>{order.status}</strong>
+                Selling Brand: <strong>{brandMeta.label}</strong> | Status: <strong>{order.status}</strong>
               </div>
               <div style={{ fontSize: '11px', color: '#374151', marginTop: '2px' }}>
                 Received Date: {formatReceiptDateTime(payment.receivedAt || payment.createdAt)}

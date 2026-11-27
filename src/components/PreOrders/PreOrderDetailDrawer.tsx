@@ -61,9 +61,15 @@ import {
   PreOrderSupplierPayment,
   Product,
   RolePermissionsMap,
+  SubBrand,
   Supplier,
   UserProfile,
 } from '../../types';
+import {
+  getSellingSubBrands,
+  getUserAllowedSubBrandIds,
+  isLegacySatCode,
+} from '../../utils/subBrands';
 import {
   MAX_PRE_ORDER_ITEMS,
   PRE_ORDER_EDIT_LOCKED_STATUSES,
@@ -161,6 +167,7 @@ export interface PreOrderDetailDrawerProps {
   products?: Product[];
   suppliers: Supplier[];
   companySettings?: CompanySettings | null;
+  subBrands?: SubBrand[];
   initialEditMode?: boolean;
   initialTab?: DetailTab;
   onNavigate?: (tab: string, subAction?: string, initialId?: string | null) => void;
@@ -210,6 +217,7 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
   products,
   suppliers,
   companySettings,
+  subBrands,
   initialEditMode = false,
   initialTab = 'overview',
   onNavigate,
@@ -231,16 +239,18 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
   const canManageTracking = hasPermission(user, rolePermissions, 'preOrderManageTracking') || isAdminUser;
   const canViewAudit = isAdminUser;
 
-  const allowedSubBrands = useMemo<Array<'SAT' | 'GZ' | 'RTX'>>(() => {
-    const isSuper = isPreOrderSuperAdmin(user);
-    if (isSuper || !user.subBrandAccess || user.subBrandAccess.length === 0) {
-      return ['SAT', 'GZ', 'RTX'];
-    }
-    const valid = user.subBrandAccess.filter(
-      (b): b is 'SAT' | 'GZ' | 'RTX' => b === 'SAT' || b === 'GZ' || b === 'RTX'
-    );
-    return valid.length > 0 ? valid : ['SAT'];
-  }, [user]);
+  const activeSellingSubBrands = useMemo(
+    () => getSellingSubBrands(subBrands, { includeInactive: false, companySettings }),
+    [subBrands, companySettings]
+  );
+
+  const allowedSubBrands = useMemo<string[]>(() => {
+    const ids = getUserAllowedSubBrandIds(user, subBrands, {
+      includeInactive: false,
+      companySettings,
+    });
+    return ids.length > 0 ? ids : activeSellingSubBrands.map((sb) => sb.shortCode);
+  }, [user, subBrands, companySettings, activeSellingSubBrands]);
 
   const [activeTab, setActiveTab] = useState<DetailTab>(initialTab);
   const [loading, setLoading] = useState(false);
@@ -313,7 +323,7 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
   const [editSupplierOrderRef, setEditSupplierOrderRef] = useState('');
   const [editOrderDate, setEditOrderDate] = useState('');
   const [editEstimatedDeliveryDate, setEditEstimatedDeliveryDate] = useState('');
-  const [editSubBrand, setEditSubBrand] = useState<'SAT' | 'GZ' | 'RTX'>('SAT');
+  const [editSubBrand, setEditSubBrand] = useState<string>('GZ');
   const [editNotes, setEditNotes] = useState('');
   const [editInternalNotes, setEditInternalNotes] = useState('');
 
@@ -360,7 +370,7 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
       setEditSupplierOrderRef(ord.supplierOrderRef || priv?.supplierOrderRef || '');
       setEditOrderDate(ord.orderDate || getTodayIsoDate());
       setEditEstimatedDeliveryDate(ord.estimatedDeliveryDate || '');
-      setEditSubBrand(ord.subBrand || 'SAT');
+      setEditSubBrand(ord.subBrand || '');
       setEditNotes(ord.notes || '');
       setEditInternalNotes(priv?.internalNotes || '');
     },
@@ -796,10 +806,19 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
       const selectedSupplier = suppliers.find((s) => s.id === editSupplierId);
       const actor = actorFromUser(user);
 
+      if (isLegacySatCode(editSubBrand)) {
+        toast.error(
+          'Sky Automation Tech (SAT) is the parent importer company and cannot hold customer pre-orders. Please choose an active selling sub-brand.'
+        );
+        setSaving(false);
+        return;
+      }
+
       const updateRes = await updatePreOrder(
         order.id,
         {
           subBrand: editSubBrand,
+          subBrandId: editSubBrand,
           customerName: editCustomerName.trim(),
           customerPhone: normPhone,
           customerWhatsapp: editCustomerWhatsapp.trim()
@@ -1192,7 +1211,7 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
               <span className="font-mono font-bold text-slate-900 dark:text-slate-100">
                 {order.preOrderNumber}
               </span>
-              <SubBrandBadge subBrand={order.subBrand} />
+              <SubBrandBadge subBrand={order.subBrand} subBrands={subBrands} />
               <PreOrderStatusBadge status={order.status} size="xs" />
               {isPreOrderPartiallyReceived(order) && <PartiallyReceivedTag />}
               {needsRefundRequired && (
@@ -2271,11 +2290,28 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
                           onChange={(e) => setEditEstimatedDeliveryDate(e.target.value)}
                         />
                       </FormField>
-                      <FormField label="Sub-Brand">
+                      <FormField label="Selling Sub-Brand">
                         <Select
-                          options={allowedSubBrands.map((b) => ({ value: b, label: b }))}
+                          options={[
+                            ...(isLegacySatCode(editSubBrand)
+                              ? [
+                                  {
+                                    value: 'SAT',
+                                    label: 'Legacy (SAT) — Reassign to Selling Brand',
+                                    disabled: true,
+                                  },
+                                ]
+                              : []),
+                            ...allowedSubBrands.map((b) => {
+                              const meta = activeSellingSubBrands.find((sb) => sb.shortCode === b);
+                              return {
+                                value: b,
+                                label: meta ? `${meta.shortCode} — ${meta.name}` : b,
+                              };
+                            }),
+                          ]}
                           value={editSubBrand}
-                          onChange={(val) => setEditSubBrand(val as 'SAT' | 'GZ' | 'RTX')}
+                          onChange={(val) => setEditSubBrand(String(val))}
                           searchable={false}
                         />
                       </FormField>
@@ -3193,6 +3229,7 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
         privateCost={privateCost}
         user={user}
         companySettings={companySettings}
+        subBrands={subBrands}
         onSuccess={() => {
           loadDetail();
           onUpdated?.();
@@ -3218,6 +3255,7 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
         order={order}
         payment={printableReceiptPayment}
         companySettings={companySettings}
+        subBrands={subBrands}
       />
 
       {/* Part 4 Supplier Payment & Reversal Modals */}

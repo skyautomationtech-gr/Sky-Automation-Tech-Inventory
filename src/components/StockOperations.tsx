@@ -16,6 +16,7 @@ import {
 import { Product, Variant, StockLog, StockLogType, UserProfile } from '../types';
 import { addStockLog, updateProduct, getStockLogs, getVariantAvailableStock } from '../firebase/db';
 import { auth } from '../firebase/config';
+import { matchesGlobalBrandFilter } from '../utils/subBrands';
 
 interface StockOperationsProps {
   products: Product[];
@@ -25,6 +26,7 @@ interface StockOperationsProps {
   onActionChange?: (action: 'in' | 'out' | 'adjust' | 'ledger') => void;
   requireCheckIn?: () => boolean;
   initialProductId?: string;
+  globalBrandFilter?: string;
 }
 
 export default function StockOperations({
@@ -34,8 +36,20 @@ export default function StockOperations({
   initialAction = 'in',
   onActionChange,
   requireCheckIn,
-  initialProductId = ''
+  initialProductId = '',
+  globalBrandFilter = 'ALL',
 }: StockOperationsProps) {
+  const visibleProducts = React.useMemo(
+    () =>
+      products.filter(
+        (p) =>
+          p.id === initialProductId ||
+          !globalBrandFilter ||
+          globalBrandFilter === 'ALL' ||
+          matchesGlobalBrandFilter(p.subBrand, globalBrandFilter)
+      ),
+    [products, globalBrandFilter, initialProductId]
+  );
   const isStaff = user?.role === 'staff';
 
   const normalizeAction = (act?: string): 'in' | 'out' | 'adjust' | 'ledger' => {
@@ -435,7 +449,7 @@ export default function StockOperations({
                     required
                   >
                     <option value="">-- Choose Gadget --</option>
-                    {products.map(p => (
+                    {visibleProducts.map(p => (
                       <option key={p.id} value={p.id}>{p.name} [{p.sku}]</option>
                     ))}
                   </select>
@@ -580,7 +594,7 @@ export default function StockOperations({
                     </label>
                     <input
                       type="text"
-                      placeholder="e.g. SAT-INV-204"
+                      placeholder="e.g. GZ-INV-204"
                       value={refNo}
                       onChange={(e) => setRefNo(e.target.value)}
                       className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-sm text-slate-800 focus:outline-hidden"

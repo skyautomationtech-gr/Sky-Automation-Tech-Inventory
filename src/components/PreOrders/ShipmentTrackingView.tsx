@@ -19,9 +19,15 @@ import {
   PreOrder,
   PreOrderStatus,
   RolePermissionsMap,
+  SubBrand,
   Supplier,
   UserProfile,
 } from '../../types';
+import {
+  getSellingSubBrands,
+  getUserAllowedSubBrandIds,
+  matchesGlobalBrandFilter,
+} from '../../utils/subBrands';
 import {
   formatPreOrderProductLabel,
   hasPermission,
@@ -94,6 +100,8 @@ export interface ShipmentTrackingViewProps {
   categories: Category[];
   suppliers?: Supplier[];
   companySettings?: CompanySettings | null;
+  subBrands?: SubBrand[];
+  globalBrandFilter?: string;
 }
 
 export const ShipmentTrackingView: React.FC<ShipmentTrackingViewProps> = ({
@@ -102,6 +110,8 @@ export const ShipmentTrackingView: React.FC<ShipmentTrackingViewProps> = ({
   categories,
   suppliers: suppliersProp,
   companySettings,
+  subBrands,
+  globalBrandFilter,
 }) => {
   const toast = useToast();
   const isAdmin = isPreOrderAdminRole(user.role);
@@ -117,16 +127,19 @@ export const ShipmentTrackingView: React.FC<ShipmentTrackingViewProps> = ({
     }
   }, [suppliersProp]);
 
-  const allowedSubBrands = useMemo<Array<'SAT' | 'GZ' | 'RTX'>>(() => {
-    const isSuper = user.role === 'superadmin' || (user.role as string) === 'super_admin';
-    if (isSuper || !user.subBrandAccess || user.subBrandAccess.length === 0) {
-      return ['SAT', 'GZ', 'RTX'];
-    }
-    const valid = user.subBrandAccess.filter(
-      (b): b is 'SAT' | 'GZ' | 'RTX' => b === 'SAT' || b === 'GZ' || b === 'RTX'
-    );
-    return valid.length > 0 ? valid : ['SAT'];
-  }, [user.role, user.subBrandAccess]);
+  const sellingSubBrands = useMemo(
+    () => getSellingSubBrands(subBrands, { includeInactive: true, companySettings }),
+    [subBrands, companySettings]
+  );
+
+  const allowedSubBrands = useMemo<string[] | undefined>(() => {
+    if (isAdmin) return undefined;
+    const ids = getUserAllowedSubBrandIds(user, subBrands, {
+      includeInactive: true,
+      companySettings,
+    });
+    return ids.length > 0 ? ids : sellingSubBrands.map((sb) => sb.shortCode);
+  }, [isAdmin, user, subBrands, companySettings, sellingSubBrands]);
 
   const [orders, setOrders] = useState<PreOrder[]>([]);
   const [loading, setLoading] = useState(true);
@@ -199,6 +212,9 @@ export const ShipmentTrackingView: React.FC<ShipmentTrackingViewProps> = ({
 
   const filteredOrders = useMemo(() => {
     return pipelineOrders.filter((o) => {
+      if (globalBrandFilter && globalBrandFilter !== 'ALL' && !matchesGlobalBrandFilter(o.subBrand, globalBrandFilter)) {
+        return false;
+      }
       if (supplierFilter !== 'ALL' && o.supplierId !== supplierFilter) return false;
       if (methodFilter !== 'ALL' && o.shippingMethod !== methodFilter) return false;
       if (
@@ -240,6 +256,7 @@ export const ShipmentTrackingView: React.FC<ShipmentTrackingViewProps> = ({
     });
   }, [
     pipelineOrders,
+    globalBrandFilter,
     supplierFilter,
     methodFilter,
     forwarderFilter,
@@ -925,6 +942,7 @@ export const ShipmentTrackingView: React.FC<ShipmentTrackingViewProps> = ({
         categories={categories}
         suppliers={suppliers}
         companySettings={companySettings}
+        subBrands={subBrands}
         initialTab="shipment"
         onUpdated={loadOrders}
       />

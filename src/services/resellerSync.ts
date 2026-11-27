@@ -1,4 +1,5 @@
 import { Product } from '../types';
+import { resolveDefaultSellingSubBrand } from '../utils/subBrands';
 
 export interface ResellerSyncConfig {
   enabled: boolean;
@@ -56,7 +57,7 @@ export function buildResellerProductPayload(product: Product, config: ResellerSy
     name: product.name,
     category: product.category || product.mainCategory || 'General',
     brand: product.brand || '',
-    subBrand: product.subBrand || 'SAT',
+    subBrand: product.subBrand || resolveDefaultSellingSubBrand(),
     sellingPrice: config.syncPrices ? (product.sellingPrice || 0) : undefined,
     wholesalePrice: config.syncPrices ? ((product as any).wholesalePrice || product.sellingPrice || 0) : undefined,
     costPrice: product.costPrice || 0,

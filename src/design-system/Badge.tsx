@@ -10,6 +10,7 @@ export interface BadgeProps {
   dot?: boolean;
   pulse?: boolean;
   className?: string;
+  style?: React.CSSProperties;
 }
 
 export const Badge: React.FC<BadgeProps> = ({
@@ -19,6 +20,7 @@ export const Badge: React.FC<BadgeProps> = ({
   dot = false,
   pulse = false,
   className = '',
+  style,
 }) => {
   const sizeClasses: Record<BadgeSize, string> = {
     xs: 'text-[10px] px-1.5 py-0.5 rounded gap-1',
@@ -48,6 +50,7 @@ export const Badge: React.FC<BadgeProps> = ({
 
   return (
     <span
+      style={style}
       className={`
         inline-flex items-center font-sans tracking-tight shrink-0 select-none
         ${sizeClasses[size]}

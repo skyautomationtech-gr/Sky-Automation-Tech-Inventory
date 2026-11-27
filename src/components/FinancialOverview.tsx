@@ -63,9 +63,21 @@ import {
   Income, 
   IncomeCategory, 
   IncomePaymentMethod,
-  AccountingPosting
+  AccountingPosting,
+  SubBrand,
+  CompanySettings
 } from '../types';
 import { getPreOrderAccountingPostings } from '../firebase/preOrderDb';
+import {
+  SHARED_ACCOUNTING_TAG,
+  PARENT_COMPANY_NAME,
+  getSellingSubBrands,
+  formatBrandBadgeMeta,
+  isLegacySatCode,
+  isSharedAccountingTag,
+  normalizeSubBrandCode,
+} from '../utils/subBrands';
+import { SubBrandBadge } from './PreOrders/PreOrderStatusBadge';
 
 interface FinancialOverviewProps {
   user: UserProfile;
@@ -73,6 +85,9 @@ interface FinancialOverviewProps {
   onRefreshData?: () => void;
   initialTab?: 'overview' | 'income' | 'expenses';
   onTabChange?: (tab: 'overview' | 'income' | 'expenses') => void;
+  subBrands?: SubBrand[];
+  companySettings?: CompanySettings | null;
+  globalBrandFilter?: string;
 }
 
 export const EXPENSE_CATEGORIES: ExpenseCategory[] = [
@@ -152,9 +167,27 @@ export const PAYMENT_METHODS: { id: IncomePaymentMethod; label: string; icon: st
   { id: 'Other', label: 'Other', icon: '💳', bg: 'bg-slate-50', text: 'text-slate-700', border: 'border-slate-200' }
 ];
 
-export default function FinancialOverview({ user, products, onRefreshData, initialTab, onTabChange }: FinancialOverviewProps) {
+export default function FinancialOverview({
+  user,
+  products,
+  onRefreshData,
+  initialTab,
+  onTabChange,
+  subBrands,
+  companySettings,
+  globalBrandFilter,
+}: FinancialOverviewProps) {
   // Navigation
   const [activeTab, setActiveTab] = useState<'overview' | 'income' | 'expenses'>(initialTab || 'overview');
+
+  const activeSellingSubBrands = useMemo(
+    () => getSellingSubBrands(subBrands, { includeInactive: false, companySettings }),
+    [subBrands, companySettings]
+  );
+  const allSellingSubBrands = useMemo(
+    () => getSellingSubBrands(subBrands, { includeInactive: true, companySettings }),
+    [subBrands, companySettings]
+  );
 
   useEffect(() => {
     if (initialTab) {
@@ -189,7 +222,18 @@ export default function FinancialOverview({ user, products, onRefreshData, initi
   const [endDate, setEndDate] = useState(() => {
     return new Date().toISOString().split('T')[0];
   });
-  const [subBrandFilter, setSubBrandFilter] = useState<'All' | 'SAT' | 'GZ' | 'RTX'>('All');
+  const [subBrandFilter, setSubBrandFilter] = useState<string>(() => {
+    if (!globalBrandFilter || globalBrandFilter === 'ALL') return 'All';
+    return globalBrandFilter;
+  });
+
+  useEffect(() => {
+    if (!globalBrandFilter || globalBrandFilter === 'ALL') {
+      setSubBrandFilter('All');
+    } else {
+      setSubBrandFilter(globalBrandFilter);
+    }
+  }, [globalBrandFilter]);
 
   // Income Ledger Filters
   const [incomeSearch, setIncomeSearch] = useState('');
@@ -217,7 +261,7 @@ export default function FinancialOverview({ user, products, onRefreshData, initi
   const [incomeFormCustomerName, setIncomeFormCustomerName] = useState('');
   const [incomeFormInvoiceNo, setIncomeFormInvoiceNo] = useState('');
   const [incomeFormReference, setIncomeFormReference] = useState('');
-  const [incomeFormSubBrand, setIncomeFormSubBrand] = useState<'SAT' | 'GZ' | 'RTX' | 'ALL' | ''>('');
+  const [incomeFormSubBrand, setIncomeFormSubBrand] = useState<string>(SHARED_ACCOUNTING_TAG);
   const [incomeFormNotes, setIncomeFormNotes] = useState('');
   const [isSubmittingIncome, setIsSubmittingIncome] = useState(false);
 
@@ -236,7 +280,7 @@ export default function FinancialOverview({ user, products, onRefreshData, initi
   const [expenseFormSupplierName, setExpenseFormSupplierName] = useState('');
   const [expenseFormReference, setExpenseFormReference] = useState('');
   const [expenseFormInvoiceNo, setExpenseFormInvoiceNo] = useState('');
-  const [expenseFormSubBrand, setExpenseFormSubBrand] = useState<'SAT' | 'GZ' | 'RTX' | 'ALL' | ''>('');
+  const [expenseFormSubBrand, setExpenseFormSubBrand] = useState<string>(SHARED_ACCOUNTING_TAG);
   const [expenseFormNotes, setExpenseFormNotes] = useState('');
   const [expenseReceiptFile, setExpenseReceiptFile] = useState<File | null>(null);
   const [expenseReceiptUrl, setExpenseReceiptUrl] = useState('');
@@ -403,6 +447,27 @@ export default function FinancialOverview({ user, products, onRefreshData, initi
     return [...incomes, ...preOrderCancelIncomes, ...autoSalesIncomes].sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
   }, [incomes, preOrderCancelIncomes, autoSalesIncomes]);
 
+  const matchesFinancialBrandFilter = React.useCallback(
+    (recordSubBrand?: string | null, filterVal?: string): boolean => {
+      const filter = (filterVal || 'All').trim();
+      if (!filter || filter === 'All' || filter === 'ALL') return true;
+      const upper = filter.toUpperCase();
+      if (upper === 'LEGACY_SAT' || upper === 'SAT') {
+        return isLegacySatCode(recordSubBrand);
+      }
+      if (upper === 'SHARED' || filter === SHARED_ACCOUNTING_TAG) {
+        return !recordSubBrand || isSharedAccountingTag(recordSubBrand);
+      }
+      // Specific selling brand: match exact brand or shared/unallocated overhead entries
+      return (
+        normalizeSubBrandCode(recordSubBrand) === normalizeSubBrandCode(filter) ||
+        !recordSubBrand ||
+        isSharedAccountingTag(recordSubBrand)
+      );
+    },
+    []
+  );
+
   // Recalculated values based on filters (applied to metrics)
   const financialMetrics = useMemo(() => {
     const startMs = startDate ? new Date(startDate + 'T00:00:00').getTime() : 0;
@@ -412,7 +477,7 @@ export default function FinancialOverview({ user, products, onRefreshData, initi
     const filteredIncomes = allCombinedIncomes.filter(inc => {
       const incTime = inc.createdAt || new Date(inc.date + 'T00:00:00').getTime();
       const dateMatch = incTime >= startMs && incTime <= endMs;
-      const subBrandMatch = subBrandFilter === 'All' || inc.subBrand === subBrandFilter || inc.subBrand === 'ALL' || inc.subBrand === '';
+      const subBrandMatch = matchesFinancialBrandFilter(inc.subBrand, subBrandFilter);
       return dateMatch && subBrandMatch;
     });
 
@@ -455,7 +520,7 @@ export default function FinancialOverview({ user, products, onRefreshData, initi
     const filteredExpenses = expenses.filter(exp => {
       const expTime = new Date(exp.date + 'T00:00:00').getTime();
       const dateInMatch = expTime >= startMs && expTime <= endMs;
-      const subBrandMatch = subBrandFilter === 'All' || exp.subBrand === subBrandFilter || exp.subBrand === '';
+      const subBrandMatch = matchesFinancialBrandFilter(exp.subBrand, subBrandFilter);
       return dateInMatch && subBrandMatch;
     });
 
@@ -475,10 +540,10 @@ export default function FinancialOverview({ user, products, onRefreshData, initi
 
     // Apply subBrand filter for today & month calculations
     const subBrandIncomes = allCombinedIncomes.filter(inc => {
-      return subBrandFilter === 'All' || inc.subBrand === subBrandFilter || inc.subBrand === 'ALL' || inc.subBrand === '';
+      return matchesFinancialBrandFilter(inc.subBrand, subBrandFilter);
     });
     const subBrandExpenses = expenses.filter(exp => {
-      return subBrandFilter === 'All' || exp.subBrand === subBrandFilter || exp.subBrand === '';
+      return matchesFinancialBrandFilter(exp.subBrand, subBrandFilter);
     });
 
     const todayIncome = subBrandIncomes
@@ -530,18 +595,28 @@ export default function FinancialOverview({ user, products, onRefreshData, initi
 
     // 6. Daily / Breakdown
     const incomeByDay: Record<string, number> = {};
-    const subBrandTotals: Record<string, number> = { SAT: 0, GZ: 0, RTX: 0 };
+    const subBrandTotals: Record<string, number> = {};
+    allSellingSubBrands.forEach((sb) => {
+      subBrandTotals[sb.shortCode] = 0;
+    });
     const incomeByCategory: Record<string, number> = {};
     const incomeByPaymentMethod: Record<string, number> = {};
 
     filteredIncomes.forEach(inc => {
       const dayStr = inc.date || new Date(inc.createdAt).toISOString().split('T')[0];
       incomeByDay[dayStr] = (incomeByDay[dayStr] || 0) + inc.amount;
-      
-      if (inc.subBrand && inc.subBrand in subBrandTotals) {
-        subBrandTotals[inc.subBrand] += inc.amount;
+
+      if (inc.subBrand && isLegacySatCode(inc.subBrand)) {
+        subBrandTotals.SAT = (subBrandTotals.SAT || 0) + inc.amount;
+      } else if (!inc.subBrand || isSharedAccountingTag(inc.subBrand)) {
+        subBrandTotals[SHARED_ACCOUNTING_TAG] = (subBrandTotals[SHARED_ACCOUNTING_TAG] || 0) + inc.amount;
+      } else {
+        const key = normalizeSubBrandCode(inc.subBrand);
+        if (key) {
+          subBrandTotals[key] = (subBrandTotals[key] || 0) + inc.amount;
+        }
       }
-      
+
       incomeByCategory[inc.category] = (incomeByCategory[inc.category] || 0) + inc.amount;
       incomeByPaymentMethod[inc.paymentMethod] = (incomeByPaymentMethod[inc.paymentMethod] || 0) + inc.amount;
     });
@@ -586,7 +661,7 @@ export default function FinancialOverview({ user, products, onRefreshData, initi
       filteredIncomesCount: filteredIncomes.length,
       filteredExpensesCount: filteredExpenses.length
     };
-  }, [startDate, endDate, subBrandFilter, allCombinedIncomes, orders, expenses, products]);
+  }, [startDate, endDate, subBrandFilter, allCombinedIncomes, orders, expenses, products, allSellingSubBrands, matchesFinancialBrandFilter]);
 
   // Filtered Income Ledger Rows
   const filteredLedgerIncomes = useMemo(() => {
@@ -596,7 +671,7 @@ export default function FinancialOverview({ user, products, onRefreshData, initi
     return allCombinedIncomes.filter(inc => {
       const incTime = inc.createdAt || new Date(inc.date + 'T00:00:00').getTime();
       const dateMatch = incTime >= startMs && incTime <= endMs;
-      const subBrandMatch = subBrandFilter === 'All' || inc.subBrand === subBrandFilter || inc.subBrand === 'ALL' || inc.subBrand === '';
+      const subBrandMatch = matchesFinancialBrandFilter(inc.subBrand, subBrandFilter);
       
       const categoryMatch = incomeCategoryFilter === 'All' || inc.category === incomeCategoryFilter;
       const paymentMatch = incomePaymentFilter === 'All' || inc.paymentMethod === incomePaymentFilter;
@@ -616,7 +691,7 @@ export default function FinancialOverview({ user, products, onRefreshData, initi
 
       return dateMatch && subBrandMatch && categoryMatch && paymentMatch && sourceMatch && textMatch;
     });
-  }, [allCombinedIncomes, startDate, endDate, subBrandFilter, incomeCategoryFilter, incomePaymentFilter, incomeSourceFilter, incomeSearch]);
+  }, [allCombinedIncomes, startDate, endDate, subBrandFilter, incomeCategoryFilter, incomePaymentFilter, incomeSourceFilter, incomeSearch, matchesFinancialBrandFilter]);
 
   // Render variables for Expense Ledger (filtered by ledger controls)
   const filteredLedgerExpenses = useMemo(() => {
@@ -626,7 +701,7 @@ export default function FinancialOverview({ user, products, onRefreshData, initi
     return expenses.filter(exp => {
       const expTime = exp.createdAt || new Date(exp.date + 'T00:00:00').getTime();
       const dateMatch = expTime >= startMs && expTime <= endMs;
-      const subBrandMatch = subBrandFilter === 'All' || exp.subBrand === subBrandFilter || exp.subBrand === 'ALL' || exp.subBrand === '' || !exp.subBrand;
+      const subBrandMatch = matchesFinancialBrandFilter(exp.subBrand, subBrandFilter);
 
       const categoryMatch = ledgerCategory === 'All' || exp.category === ledgerCategory;
       const paymentMatch = ledgerPaymentFilter === 'All' || exp.paymentMethod === ledgerPaymentFilter;
@@ -661,7 +736,7 @@ export default function FinancialOverview({ user, products, onRefreshData, initi
     setExpenseFormSupplierName('');
     setExpenseFormReference('');
     setExpenseFormInvoiceNo('');
-    setExpenseFormSubBrand('');
+    setExpenseFormSubBrand(SHARED_ACCOUNTING_TAG);
     setExpenseFormNotes('');
     setExpenseReceiptFile(null);
     setExpenseReceiptUrl('');
@@ -681,7 +756,7 @@ export default function FinancialOverview({ user, products, onRefreshData, initi
     setIncomeFormCustomerName('');
     setIncomeFormInvoiceNo('');
     setIncomeFormReference('');
-    setIncomeFormSubBrand('');
+    setIncomeFormSubBrand(SHARED_ACCOUNTING_TAG);
     setIncomeFormNotes('');
     setShowAddIncomeModal(true);
   };
@@ -699,7 +774,7 @@ export default function FinancialOverview({ user, products, onRefreshData, initi
     setIncomeFormCustomerName(income.customerName || '');
     setIncomeFormInvoiceNo(income.invoiceNo || '');
     setIncomeFormReference(income.reference || '');
-    setIncomeFormSubBrand(income.subBrand || '');
+    setIncomeFormSubBrand(income.subBrand || SHARED_ACCOUNTING_TAG);
     setIncomeFormNotes(income.notes || '');
     setShowAddIncomeModal(true);
   };
@@ -837,7 +912,7 @@ export default function FinancialOverview({ user, products, onRefreshData, initi
           customerName: 'Steadfast Courier COD Settlement',
           reference: 'COD-SETTLE-8831',
           notes: 'Excess courier charge collection and COD reconciliation balance',
-          subBrand: 'SAT',
+          subBrand: SHARED_ACCOUNTING_TAG,
           addedBy: user.name || user.email || 'Admin',
           createdAt: Date.now() - 86400000 * 2,
           source: 'manual'
@@ -987,7 +1062,7 @@ export default function FinancialOverview({ user, products, onRefreshData, initi
           supplierName: 'Meta Ads BD Agency',
           reference: 'UPAY-TX-77319',
           invoiceNo: 'ADS-AUG-01',
-          subBrand: 'SAT',
+          subBrand: SHARED_ACCOUNTING_TAG,
           notes: 'Targeted conversion campaign for Wireless Earbuds & Smartwatch Cases',
           createdBy: user.name || user.email || 'Admin',
           addedBy: user.name || user.email || 'Admin',
@@ -1175,7 +1250,7 @@ export default function FinancialOverview({ user, products, onRefreshData, initi
     setExpenseFormSupplierName(expense.supplierName || '');
     setExpenseFormReference(expense.reference || '');
     setExpenseFormInvoiceNo(expense.invoiceNo || '');
-    setExpenseFormSubBrand(expense.subBrand || '');
+    setExpenseFormSubBrand(expense.subBrand || SHARED_ACCOUNTING_TAG);
     setExpenseFormNotes(expense.notes || '');
     setExpenseReceiptUrl(expense.receiptUrl || '');
     setExpenseReceiptFile(null);
@@ -1637,13 +1712,17 @@ export default function FinancialOverview({ user, products, onRefreshData, initi
             <label className="block text-[9px] font-bold text-slate-400 uppercase tracking-tight mb-1">Sub-Brand</label>
             <select
               value={subBrandFilter}
-              onChange={(e) => setSubBrandFilter(e.target.value as any)}
+              onChange={(e) => setSubBrandFilter(e.target.value)}
               className="w-full bg-slate-50 border border-slate-100 rounded-xl py-2 px-2.5 text-xs text-slate-700 font-semibold focus:outline-hidden"
             >
               <option value="All">All Brands</option>
-              <option value="SAT">Sky Auto (SAT)</option>
-              <option value="GZ">GadgetZu (GZ)</option>
-              <option value="RTX">RTX Gadget (RTX)</option>
+              <option value="SHARED">Parent / Shared ({PARENT_COMPANY_NAME})</option>
+              {allSellingSubBrands.map((sb) => (
+                <option key={sb.shortCode} value={sb.shortCode}>
+                  {sb.name} ({sb.shortCode})
+                </option>
+              ))}
+              <option value="LEGACY_SAT">Legacy (SAT)</option>
             </select>
           </div>
 
@@ -2033,54 +2112,66 @@ export default function FinancialOverview({ user, products, onRefreshData, initi
           <div className="bg-white p-6 rounded-3xl border border-slate-100 space-y-6 shadow-2xs">
             <div>
               <h3 className="text-sm font-extrabold text-slate-800 uppercase tracking-tight">Operational Sub-brand Breakdown</h3>
-              <p className="text-xs text-slate-400 mt-0.5">Revenue segmented per business identity</p>
+              <p className="text-xs text-slate-400 mt-0.5">Consolidated revenue segmented per selling sub-brand and shared operations</p>
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-6">
-              {/* SAT */}
-              <div className="border border-slate-100 rounded-2xl p-4 hover:border-slate-200 transition-colors flex flex-col justify-between bg-slate-50/50">
-                <div>
-                  <div className="flex items-center justify-between mb-3">
-                    <span className="text-xs font-black text-slate-700">SKY AUTOMATION</span>
-                    <span className="text-xs font-mono font-bold bg-amber-500/10 text-amber-600 border border-amber-500/20 px-2 py-0.5 rounded-md">SAT</span>
+              {allSellingSubBrands.map((sb) => {
+                const amt = financialMetrics.subBrandTotals[sb.shortCode] || 0;
+                const badgeMeta = formatBrandBadgeMeta(sb.shortCode, subBrands, companySettings);
+                return (
+                  <div key={sb.shortCode} className="border border-slate-100 rounded-2xl p-4 hover:border-slate-200 transition-colors flex flex-col justify-between bg-slate-50/50">
+                    <div>
+                      <div className="flex items-center justify-between mb-3">
+                        <span className="text-xs font-black text-slate-700 uppercase">{sb.name}</span>
+                        <span
+                          style={badgeMeta.badgeStyle}
+                          className="text-xs font-mono font-bold border px-2 py-0.5 rounded-md"
+                        >
+                          {sb.shortCode}
+                        </span>
+                      </div>
+                      <p className="text-lg font-black text-slate-800 font-mono">৳{amt.toLocaleString()}</p>
+                    </div>
+                    <div className="mt-4 pt-3 border-t border-slate-100 flex justify-between items-center text-xs text-slate-400">
+                      <span>Relative Share</span>
+                      <span className="font-bold text-slate-600">{Math.round((amt / (financialMetrics.totalIncome || 1)) * 100)}%</span>
+                    </div>
                   </div>
-                  <p className="text-lg font-black text-slate-800 font-mono">৳{financialMetrics.subBrandTotals.SAT.toLocaleString()}</p>
-                </div>
-                <div className="mt-4 pt-3 border-t border-slate-100 flex justify-between items-center text-xs text-slate-400">
-                  <span>Relative Share</span>
-                  <span className="font-bold text-slate-600">{Math.round((financialMetrics.subBrandTotals.SAT / (financialMetrics.totalIncome || 1)) * 100)}%</span>
-                </div>
-              </div>
+                );
+              })}
 
-              {/* GZ */}
-              <div className="border border-slate-100 rounded-2xl p-4 hover:border-slate-200 transition-colors flex flex-col justify-between bg-slate-50/50">
-                <div>
-                  <div className="flex items-center justify-between mb-3">
-                    <span className="text-xs font-black text-slate-700">GADGETZU</span>
-                    <span className="text-xs font-mono font-bold bg-teal-500/10 text-teal-600 border border-teal-500/20 px-2 py-0.5 rounded-md">GZ</span>
+              {(financialMetrics.subBrandTotals[SHARED_ACCOUNTING_TAG] || 0) > 0 && (
+                <div className="border border-slate-100 rounded-2xl p-4 hover:border-slate-200 transition-colors flex flex-col justify-between bg-slate-50/50">
+                  <div>
+                    <div className="flex items-center justify-between mb-3">
+                      <span className="text-xs font-black text-slate-700 uppercase">Parent / Shared</span>
+                      <SubBrandBadge subBrand={SHARED_ACCOUNTING_TAG} subBrands={subBrands} />
+                    </div>
+                    <p className="text-lg font-black text-slate-800 font-mono">৳{(financialMetrics.subBrandTotals[SHARED_ACCOUNTING_TAG] || 0).toLocaleString()}</p>
                   </div>
-                  <p className="text-lg font-black text-slate-800 font-mono">৳{financialMetrics.subBrandTotals.GZ.toLocaleString()}</p>
+                  <div className="mt-4 pt-3 border-t border-slate-100 flex justify-between items-center text-xs text-slate-400">
+                    <span>Relative Share</span>
+                    <span className="font-bold text-slate-600">{Math.round(((financialMetrics.subBrandTotals[SHARED_ACCOUNTING_TAG] || 0) / (financialMetrics.totalIncome || 1)) * 100)}%</span>
+                  </div>
                 </div>
-                <div className="mt-4 pt-3 border-t border-slate-100 flex justify-between items-center text-xs text-slate-400">
-                  <span>Relative Share</span>
-                  <span className="font-bold text-slate-600">{Math.round((financialMetrics.subBrandTotals.GZ / (financialMetrics.totalIncome || 1)) * 100)}%</span>
-                </div>
-              </div>
+              )}
 
-              {/* RTX */}
-              <div className="border border-slate-100 rounded-2xl p-4 hover:border-slate-200 transition-colors flex flex-col justify-between bg-slate-50/50">
-                <div>
-                  <div className="flex items-center justify-between mb-3">
-                    <span className="text-xs font-black text-slate-700">RTX GADGET</span>
-                    <span className="text-xs font-mono font-bold bg-orange-500/10 text-orange-600 border border-orange-500/20 px-2 py-0.5 rounded-md">RTX</span>
+              {(financialMetrics.subBrandTotals.SAT || 0) > 0 && (
+                <div className="border border-slate-100 rounded-2xl p-4 hover:border-slate-200 transition-colors flex flex-col justify-between bg-slate-50/50">
+                  <div>
+                    <div className="flex items-center justify-between mb-3">
+                      <span className="text-xs font-black text-slate-700 uppercase">Legacy Records</span>
+                      <SubBrandBadge subBrand="SAT" subBrands={subBrands} />
+                    </div>
+                    <p className="text-lg font-black text-slate-800 font-mono">৳{(financialMetrics.subBrandTotals.SAT || 0).toLocaleString()}</p>
                   </div>
-                  <p className="text-lg font-black text-slate-800 font-mono">৳{financialMetrics.subBrandTotals.RTX.toLocaleString()}</p>
+                  <div className="mt-4 pt-3 border-t border-slate-100 flex justify-between items-center text-xs text-slate-400">
+                    <span>Relative Share</span>
+                    <span className="font-bold text-slate-600">{Math.round(((financialMetrics.subBrandTotals.SAT || 0) / (financialMetrics.totalIncome || 1)) * 100)}%</span>
+                  </div>
                 </div>
-                <div className="mt-4 pt-3 border-t border-slate-100 flex justify-between items-center text-xs text-slate-400">
-                  <span>Relative Share</span>
-                  <span className="font-bold text-slate-600">{Math.round((financialMetrics.subBrandTotals.RTX / (financialMetrics.totalIncome || 1)) * 100)}%</span>
-                </div>
-              </div>
+              )}
             </div>
           </div>
         </div>
@@ -2371,19 +2462,10 @@ export default function FinancialOverview({ user, products, onRefreshData, initi
 
                           {/* Sub-Brand */}
                           <td className="py-3 px-2.5 whitespace-nowrap">
-                            {inc.subBrand ? (
-                              <span className={`inline-block text-[9px] font-mono font-black uppercase px-1.5 py-0.5 rounded-sm ${
-                                inc.subBrand === 'SAT' 
-                                  ? 'bg-amber-500/10 text-amber-600 border border-amber-500/20'
-                                  : inc.subBrand === 'GZ' 
-                                    ? 'bg-teal-500/10 text-teal-600 border border-teal-500/20' 
-                                    : 'bg-orange-500/10 text-orange-600 border border-orange-500/20'
-                              }`}>
-                                {inc.subBrand}
-                              </span>
-                            ) : (
-                              <span className="text-[10px] text-slate-400 italic">Shared</span>
-                            )}
+                            <SubBrandBadge
+                              subBrand={inc.subBrand || (inc.source === 'order_sale' ? '' : SHARED_ACCOUNTING_TAG)}
+                              subBrands={subBrands}
+                            />
                           </td>
 
                           {/* Amount */}
@@ -2674,19 +2756,10 @@ export default function FinancialOverview({ user, products, onRefreshData, initi
 
                           {/* Sub-Brand */}
                           <td className="py-3 px-3 whitespace-nowrap">
-                            {exp.subBrand ? (
-                              <span className={`inline-block text-[10px] font-mono font-black uppercase px-2 py-0.5 rounded-md ${
-                                exp.subBrand === 'SAT' 
-                                  ? 'bg-amber-500/10 text-amber-600 border border-amber-500/20'
-                                  : exp.subBrand === 'GZ' 
-                                    ? 'bg-teal-500/10 text-teal-600 border border-teal-500/20' 
-                                    : 'bg-orange-500/10 text-orange-500 border border-orange-500/20'
-                              }`}>
-                                {exp.subBrand}
-                              </span>
-                            ) : (
-                              <span className="text-[11px] text-slate-400 italic">Shared</span>
-                            )}
+                            <SubBrandBadge
+                              subBrand={exp.subBrand || SHARED_ACCOUNTING_TAG}
+                              subBrands={subBrands}
+                            />
                           </td>
 
                           {/* Amount */}
@@ -2955,14 +3028,22 @@ export default function FinancialOverview({ user, products, onRefreshData, initi
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-slate-500 uppercase tracking-tight mb-1">
-                    Allocate to Sub-Brand
+                    Allocate to Sub-Brand / Cost Center
                   </label>
                   <select
                     value={expenseFormSubBrand}
-                    onChange={(e) => setExpenseFormSubBrand(e.target.value as any)}
+                    onChange={(e) => setExpenseFormSubBrand(e.target.value)}
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 font-semibold focus:outline-hidden focus:border-amber-500 focus:bg-white"
                   >
-                    <option value="SAT">Sky Automation Tech (SAT)</option>
+                    <option value={SHARED_ACCOUNTING_TAG}>Parent / Shared ({PARENT_COMPANY_NAME})</option>
+                    {activeSellingSubBrands.map((sb) => (
+                      <option key={sb.shortCode} value={sb.shortCode}>
+                        {sb.name} ({sb.shortCode})
+                      </option>
+                    ))}
+                    {isLegacySatCode(expenseFormSubBrand) && (
+                      <option value="SAT" disabled>Legacy (SAT) — reassign to Shared or a selling brand</option>
+                    )}
                   </select>
                 </div>
               </div>
@@ -3266,17 +3347,22 @@ export default function FinancialOverview({ user, products, onRefreshData, initi
                 </div>
                 <div>
                   <label className="block text-xs font-bold text-slate-500 uppercase tracking-tight mb-1">
-                    Allocate to Sub-Brand
+                    Allocate to Sub-Brand / Cost Center
                   </label>
                   <select
                     value={incomeFormSubBrand}
-                    onChange={(e) => setIncomeFormSubBrand(e.target.value as any)}
+                    onChange={(e) => setIncomeFormSubBrand(e.target.value)}
                     className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-xs text-slate-800 font-semibold focus:outline-hidden focus:border-emerald-500 focus:bg-white"
                   >
-                    <option value="">Shared (All Brands)</option>
-                    <option value="SAT">Sky Auto (SAT)</option>
-                    <option value="GZ">GadgetZu (GZ)</option>
-                    <option value="RTX">RTX Gadget (RTX)</option>
+                    <option value={SHARED_ACCOUNTING_TAG}>Parent / Shared ({PARENT_COMPANY_NAME})</option>
+                    {activeSellingSubBrands.map((sb) => (
+                      <option key={sb.shortCode} value={sb.shortCode}>
+                        {sb.name} ({sb.shortCode})
+                      </option>
+                    ))}
+                    {isLegacySatCode(incomeFormSubBrand) && (
+                      <option value="SAT" disabled>Legacy (SAT) — reassign to Shared or a selling brand</option>
+                    )}
                   </select>
                 </div>
               </div>
@@ -3420,6 +3506,8 @@ export default function FinancialOverview({ user, products, onRefreshData, initi
         endDate={endDate}
         subBrandFilter={subBrandFilter}
         financialMetrics={financialMetrics}
+        subBrands={subBrands}
+        companySettings={companySettings}
       />
     </div>
   );

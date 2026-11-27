@@ -37,7 +37,9 @@ import {
   SalesChannel,
   CourierName,
   PaymentMethod,
-  PaymentStatus
+  PaymentStatus,
+  SubBrand,
+  CompanySettings
 } from '../types';
 import { 
   getOrders, 
@@ -55,6 +57,16 @@ import {
   getVariantAvailableStock,
   localStore
 } from '../firebase/db';
+import {
+  formatBrandBadgeMeta,
+  getSellingSubBrands,
+  getUserAllowedSubBrandIds,
+  isActiveSellingSubBrandCode,
+  isLegacySatCode,
+  matchesGlobalBrandFilter,
+  normalizeSubBrandCode,
+  resolveDefaultSellingSubBrand,
+} from '../utils/subBrands';
 
 interface OrderManagementProps {
   user: UserProfile | null;
@@ -64,6 +76,9 @@ interface OrderManagementProps {
   initialCreateMode?: boolean;
   clearInitialCreateMode?: () => void;
   onCreateModeChange?: (isOpen: boolean) => void;
+  subBrands?: SubBrand[];
+  globalBrandFilter?: string;
+  companySettings?: CompanySettings | null;
 }
 
 export default function OrderManagement({ 
@@ -73,7 +88,10 @@ export default function OrderManagement({
   clearInitialOrderId,
   initialCreateMode = false,
   clearInitialCreateMode,
-  onCreateModeChange
+  onCreateModeChange,
+  subBrands,
+  globalBrandFilter = 'ALL',
+  companySettings
 }: OrderManagementProps) {
   // Lists
   const [orders, setOrders] = useState<Order[]>(() => localStore.get<Order[]>('orders') || []);
@@ -130,8 +148,15 @@ export default function OrderManagement({
   const [custSubBrand, setCustSubBrand] = useState('');
   const [custNotes, setCustNotes] = useState('');
   
+  const defaultSellingSubBrand = useMemo(
+    () => resolveDefaultSellingSubBrand({ globalBrandFilter, user, subBrands, companySettings }),
+    [globalBrandFilter, user, subBrands, companySettings]
+  );
+
   // Step 2: Settings
-  const [orderSubBrand, setOrderSubBrand] = useState<'SAT' | 'GZ' | 'RTX'>('SAT');
+  const [orderSubBrand, setOrderSubBrand] = useState<string>(() =>
+    resolveDefaultSellingSubBrand({ globalBrandFilter, user, subBrands, companySettings })
+  );
   const [orderSalesChannel, setOrderSalesChannel] = useState<'Facebook' | 'TikTok' | 'Instagram' | 'Daraz' | 'CartUp' | 'Packly' | 'Direct/WhatsApp'>('Direct/WhatsApp');
   const [orderCourier, setOrderCourier] = useState<CourierName>('CarryBee (Inside Dhaka)');
   const [deliveryAddress, setDeliveryAddress] = useState('');
@@ -166,7 +191,9 @@ export default function OrderManagement({
   const [editCustomerName, setEditCustomerName] = useState('');
   const [editCustomerPhone, setEditCustomerPhone] = useState('');
   const [editDeliveryAddress, setEditDeliveryAddress] = useState('');
-  const [editSubBrand, setEditSubBrand] = useState<'SAT' | 'GZ' | 'RTX'>('SAT');
+  const [editSubBrand, setEditSubBrand] = useState<string>(() =>
+    resolveDefaultSellingSubBrand({ globalBrandFilter, user, subBrands, companySettings })
+  );
   const [editSalesChannel, setEditSalesChannel] = useState<SalesChannel>('Direct/WhatsApp');
   const [editCourier, setEditCourier] = useState<CourierName>('CarryBee (Inside Dhaka)');
   const [editCourierTrackingNumber, setEditCourierTrackingNumber] = useState('');
@@ -189,11 +216,32 @@ export default function OrderManagement({
     reason: string;
   }>({ open: false, reason: '' });
 
-  const isSuperAdmin = user?.role === 'superadmin';
-  const isAdminOrSuper = user?.role === 'superadmin' || user?.role === 'admin';
+  const isSuperAdmin = user?.role === 'superadmin' || (user?.role as string) === 'super_admin';
+  const isAdminOrSuper = isSuperAdmin || user?.role === 'admin';
   const hasManageOrders = isSuperAdmin || 
     (user?.permissionOverrides?.manageOrders === true) || 
     (user?.permissionOverrides?.manageOrders !== false && user?.role === 'admin');
+
+  const activeSellingSubBrands = useMemo(
+    () => getSellingSubBrands(subBrands, { includeInactive: false, companySettings }),
+    [subBrands, companySettings]
+  );
+  const allSellingSubBrands = useMemo(
+    () => getSellingSubBrands(subBrands, { includeInactive: true, companySettings }),
+    [subBrands, companySettings]
+  );
+  const allowedBrandIds = useMemo(
+    () => getUserAllowedSubBrandIds(user, subBrands, { includeInactive: true, companySettings }),
+    [user, subBrands, companySettings]
+  );
+  const activeAllowedBrands = useMemo(
+    () => activeSellingSubBrands.filter((sb) => allowedBrandIds.includes(sb.shortCode)),
+    [activeSellingSubBrands, allowedBrandIds]
+  );
+  const filterBrandOptions = useMemo(
+    () => (isAdminOrSuper ? allSellingSubBrands : allSellingSubBrands.filter((sb) => allowedBrandIds.includes(sb.shortCode))),
+    [isAdminOrSuper, allSellingSubBrands, allowedBrandIds]
+  );
 
   useEffect(() => {
     const timer = setTimeout(() => setDebouncedSearch(searchQuery), 250);
@@ -264,11 +312,12 @@ export default function OrderManagement({
   useEffect(() => {
     if (initialCreateMode) {
       if (hasManageOrders) {
+        setOrderSubBrand(defaultSellingSubBrand);
         setShowCreateModal(true);
       }
       clearInitialCreateMode?.();
     }
-  }, [initialCreateMode, hasManageOrders, clearInitialCreateMode]);
+  }, [initialCreateMode, hasManageOrders, clearInitialCreateMode, defaultSellingSubBrand]);
 
   useEffect(() => {
     onCreateModeChange?.(showCreateModal);
@@ -400,6 +449,14 @@ export default function OrderManagement({
     setSubmitting(true);
 
     try {
+      const normalizedOrderBrand = normalizeSubBrandCode(orderSubBrand);
+      if (!normalizedOrderBrand || isLegacySatCode(normalizedOrderBrand) || !isActiveSellingSubBrandCode(normalizedOrderBrand, subBrands, companySettings)) {
+        setError('Sky Automation Tech (SAT) is the parent/importer company and cannot sell to customers. Please select an active selling sub-brand.');
+        setWizardStep(2);
+        setSubmitting(false);
+        return;
+      }
+
       let finalCustomerId = selectedCustomerId;
 
       // 1. Save customer if new
@@ -422,11 +479,14 @@ export default function OrderManagement({
         if (existing) {
           finalCustomerId = existing.id;
         } else {
+          const cleanCustBrand = normalizeSubBrandCode(custSubBrand);
+          const safeCustBrand = cleanCustBrand && !isLegacySatCode(cleanCustBrand) ? cleanCustBrand : normalizedOrderBrand;
           const newCustPayload = {
             name: custName.trim(),
             phone: custPhone.trim(),
             address: custAddress.trim() || undefined,
-            subBrand: custSubBrand || undefined,
+            subBrand: safeCustBrand || undefined,
+            brandIds: safeCustBrand ? [safeCustBrand] : [],
             notes: custNotes.trim() || undefined,
             totalOrders: 0,
             lifetimeValue: 0,
@@ -459,7 +519,8 @@ export default function OrderManagement({
         customerId: finalCustomerId,
         customerName: custName.trim() || 'Unknown',
         customerPhone: custPhone.trim() || 'No Phone',
-        subBrand: orderSubBrand,
+        subBrand: normalizedOrderBrand,
+        subBrandId: normalizedOrderBrand,
         salesChannel: orderSalesChannel,
         items: orderItems,
         discountAmount: Number(orderDiscount) || 0,
@@ -774,7 +835,7 @@ export default function OrderManagement({
     setEditCustomerName(order.customerName || '');
     setEditCustomerPhone(order.customerPhone || '');
     setEditDeliveryAddress(order.deliveryAddress || '');
-    setEditSubBrand(order.subBrand || 'SAT');
+    setEditSubBrand(order.subBrand || defaultSellingSubBrand);
     setEditSalesChannel(order.salesChannel || 'Direct/WhatsApp');
     setEditCourier(order.courier || 'CarryBee (Inside Dhaka)');
     setEditCourierTrackingNumber(order.courierTrackingNumber || '');
@@ -929,13 +990,21 @@ export default function OrderManagement({
         finalPaymentStatus = 'Due';
       }
 
+      const cleanEditBrand = normalizeSubBrandCode(editSubBrand);
+      if (cleanEditBrand && isLegacySatCode(cleanEditBrand) && !isLegacySatCode(editingOrder.subBrand)) {
+        setError('Cannot reassign an order to Sky Automation Tech (SAT). Please choose an active selling sub-brand.');
+        setSubmitting(false);
+        return;
+      }
+
       const updated = await updateOrderFullDetails(
         editingOrder.id,
         {
           customerName: editCustomerName.trim(),
           customerPhone: editCustomerPhone.trim(),
           deliveryAddress: editDeliveryAddress.trim(),
-          subBrand: editSubBrand,
+          subBrand: cleanEditBrand || editingOrder.subBrand,
+          subBrandId: cleanEditBrand || editingOrder.subBrand,
           salesChannel: editSalesChannel,
           courier: editCourier,
           courierTrackingNumber: editCourierTrackingNumber.trim(),
@@ -981,7 +1050,7 @@ export default function OrderManagement({
     setCustSubBrand('');
     setCustNotes('');
     
-    setOrderSubBrand('SAT');
+    setOrderSubBrand(resolveDefaultSellingSubBrand({ globalBrandFilter, user, subBrands, companySettings }));
     setOrderSalesChannel('Direct/WhatsApp');
     setOrderCourier('CarryBee (Inside Dhaka)');
     setDeliveryAddress('');
@@ -1010,21 +1079,28 @@ export default function OrderManagement({
 
   // Filters
   const filteredOrders = useMemo(() => orders.filter(order => {
-    // 1. Sub brand access
-    if (!isSuperAdmin && user?.subBrandAccess) {
-      if (!user.subBrandAccess.includes(order.subBrand)) {
+    // 1. Sub brand access (Admins/SuperAdmins see all)
+    if (!isAdminOrSuper && order.subBrand && !allowedBrandIds.includes(order.subBrand)) {
+      return false;
+    }
+
+    // 2. Global Brand Filter
+    if (!matchesGlobalBrandFilter(order.subBrand, globalBrandFilter)) return false;
+
+    // 3. State filters
+    if (statusFilter && order.status !== statusFilter) return false;
+    if (subBrandFilter) {
+      if (subBrandFilter === 'LEGACY_SAT') {
+        if (!isLegacySatCode(order.subBrand)) return false;
+      } else if (order.subBrand !== subBrandFilter) {
         return false;
       }
     }
-
-    // 2. State filters
-    if (statusFilter && order.status !== statusFilter) return false;
-    if (subBrandFilter && order.subBrand !== subBrandFilter) return false;
     if (salesChannelFilter && order.salesChannel !== salesChannelFilter) return false;
     if (courierFilter && order.courier !== courierFilter) return false;
     if (paymentStatusFilter && order.paymentStatus !== paymentStatusFilter) return false;
 
-    // 3. Search query (debounced)
+    // 4. Search query (debounced)
     if (debouncedSearch.trim() !== '') {
       const q = debouncedSearch.toLowerCase();
       const matchCust = (order.customerName || '').toLowerCase().includes(q) || (order.customerPhone || '').includes(q);
@@ -1033,7 +1109,7 @@ export default function OrderManagement({
     }
 
     return true;
-  }), [orders, isSuperAdmin, user?.subBrandAccess, statusFilter, subBrandFilter, salesChannelFilter, courierFilter, paymentStatusFilter, debouncedSearch]);
+  }), [orders, isAdminOrSuper, allowedBrandIds, globalBrandFilter, statusFilter, subBrandFilter, salesChannelFilter, courierFilter, paymentStatusFilter, debouncedSearch]);
 
   const totalPages = Math.max(1, Math.ceil(filteredOrders.length / pageSize));
   const safePage = Math.min(currentPage, totalPages);
@@ -1122,10 +1198,11 @@ export default function OrderManagement({
                 onChange={(e) => setSubBrandFilter(e.target.value)}
                 className="bg-slate-50 border border-slate-200 rounded-xl py-1.5 px-3 text-sm text-slate-700"
               >
-                <option value="">Sub-Brand</option>
-                {(isSuperAdmin ? ['SAT', 'GZ', 'RTX'] : user?.subBrandAccess || []).map(brand => (
-                  <option key={brand} value={brand}>{brand}</option>
+                <option value="">All Selling Brands</option>
+                {filterBrandOptions.map(sb => (
+                  <option key={sb.shortCode} value={sb.shortCode}>{sb.name} ({sb.shortCode}){!sb.active ? ' (Inactive)' : ''}</option>
                 ))}
+                {isAdminOrSuper && <option value="LEGACY_SAT">Legacy (SAT)</option>}
               </select>
 
               <select
@@ -1236,13 +1313,17 @@ export default function OrderManagement({
                             </div>
                           </td>
                           <td className="py-3 px-4 text-center">
-                            <span className={`inline-block text-[9px] font-mono font-black px-1.5 py-0.5 rounded-sm ${
-                              order.subBrand === 'SAT' ? 'bg-amber-100 text-amber-800' :
-                              order.subBrand === 'GZ' ? 'bg-teal-100 text-teal-800' :
-                              'bg-orange-100 text-orange-800'
-                            }`}>
-                              {order.subBrand}
-                            </span>
+                            {(() => {
+                              const meta = formatBrandBadgeMeta(order.subBrand, subBrands, companySettings);
+                              return (
+                                <span
+                                  style={meta.badgeStyle}
+                                  className="inline-block text-[9px] font-mono font-black px-1.5 py-0.5 rounded-sm border"
+                                >
+                                  {meta.shortLabel}
+                                </span>
+                              );
+                            })()}
                             {order.source === 'pre_order' && (
                               <div className="mt-1">
                                 <span className="inline-block text-[9px] font-bold px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 border border-amber-200">
@@ -1990,10 +2071,10 @@ export default function OrderManagement({
                           onChange={(e) => setCustSubBrand(e.target.value)}
                           className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-sm"
                         >
-                          <option value="">No specific brand</option>
-                          <option value="SAT">Sky Auto (SAT)</option>
-                          <option value="GZ">GadgetZu (GZ)</option>
-                          <option value="RTX">RTX Gadget (RTX)</option>
+                          <option value="">No specific brand (All Selling Brands)</option>
+                          {activeAllowedBrands.map((sb) => (
+                            <option key={sb.shortCode} value={sb.shortCode}>{sb.name} ({sb.shortCode})</option>
+                          ))}
                         </select>
                       </div>
                       <div className="col-span-1">
@@ -2015,15 +2096,15 @@ export default function OrderManagement({
               {wizardStep === 2 && (
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-sm font-bold uppercase tracking-wider text-slate-500 mb-1">Operating Sub-Brand *</label>
+                    <label className="block text-sm font-bold uppercase tracking-wider text-slate-500 mb-1">Selling Sub-Brand *</label>
                     <select
                       value={orderSubBrand}
-                      onChange={(e) => setOrderSubBrand(e.target.value as any)}
-                      className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-sm"
+                      onChange={(e) => setOrderSubBrand(e.target.value)}
+                      className="w-full bg-slate-50 border border-slate-200 rounded-xl py-2.5 px-3 text-sm font-semibold"
                     >
-                      <option value="SAT">Sky Auto (SAT)</option>
-                      <option value="GZ">GadgetZu (GZ)</option>
-                      <option value="RTX">RTX Gadget (RTX)</option>
+                      {activeAllowedBrands.map((sb) => (
+                        <option key={sb.shortCode} value={sb.shortCode}>{sb.name} ({sb.shortCode})</option>
+                      ))}
                     </select>
                   </div>
 
@@ -2091,6 +2172,8 @@ export default function OrderManagement({
                     orderItems={orderItems}
                     setOrderItems={setOrderItems}
                     onNext={() => setWizardStep(4)}
+                    subBrands={subBrands}
+                    companySettings={companySettings}
                   />
                 </div>
               )}
@@ -2219,8 +2302,8 @@ export default function OrderManagement({
                         <span className="font-bold text-slate-800">{custName} ({custPhone})</span>
                       </div>
                       <div>
-                        <span className="font-bold text-slate-400 uppercase text-[9px] block">Shipment Brand</span>
-                        <span className="font-bold text-slate-800">Sky Auto ({orderSubBrand})</span>
+                        <span className="font-bold text-slate-400 uppercase text-[9px] block">Selling Sub-Brand</span>
+                        <span className="font-bold text-slate-800">{formatBrandBadgeMeta(orderSubBrand, subBrands, companySettings).label} ({orderSubBrand})</span>
                       </div>
                       <div>
                         <span className="font-bold text-slate-400 uppercase text-[9px] block">Sales Channel & Courier</span>
@@ -2460,15 +2543,18 @@ export default function OrderManagement({
 
                   <div className="grid grid-cols-2 gap-3">
                     <div>
-                      <label className="block text-[11px] font-bold uppercase text-slate-500 mb-1">Sub-Brand *</label>
+                      <label className="block text-[11px] font-bold uppercase text-slate-500 mb-1">Selling Sub-Brand *</label>
                       <select
                         value={editSubBrand}
-                        onChange={(e) => setEditSubBrand(e.target.value as any)}
+                        onChange={(e) => setEditSubBrand(e.target.value)}
                         className="w-full bg-white border border-slate-200 rounded-xl py-2 px-3 text-sm focus:outline-hidden focus:border-amber-400 font-bold text-slate-800"
                       >
-                        <option value="SAT">SAT (Smart & Tech)</option>
-                        <option value="GZ">GZ (Gadget Zone)</option>
-                        <option value="RTX">RTX (Retail X)</option>
+                        {isLegacySatCode(editSubBrand) && (
+                          <option value={editSubBrand} disabled>Legacy (SAT) — Historical Record</option>
+                        )}
+                        {activeAllowedBrands.map((sb) => (
+                          <option key={sb.shortCode} value={sb.shortCode}>{sb.name} ({sb.shortCode})</option>
+                        ))}
                       </select>
                     </div>
 

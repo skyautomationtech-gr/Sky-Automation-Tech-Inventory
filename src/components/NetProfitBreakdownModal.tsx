@@ -23,7 +23,17 @@ import {
   FileSpreadsheet,
   PieChart
 } from 'lucide-react';
-import { Order, Expense, Income } from '../types';
+import { Order, Expense, Income, SubBrand, CompanySettings } from '../types';
+import {
+  SHARED_ACCOUNTING_TAG,
+  PARENT_COMPANY_NAME,
+  getSellingSubBrands,
+  formatBrandBadgeMeta,
+  isLegacySatCode,
+  isSharedAccountingTag,
+  matchesGlobalBrandFilter,
+} from '../utils/subBrands';
+import { SubBrandBadge } from './PreOrders/PreOrderStatusBadge';
 
 interface NetProfitBreakdownModalProps {
   isOpen: boolean;
@@ -45,6 +55,8 @@ interface NetProfitBreakdownModalProps {
     netProfit: number;
     profitMargin: number;
   };
+  subBrands?: SubBrand[];
+  companySettings?: CompanySettings | null;
 }
 
 export const NetProfitBreakdownModal: React.FC<NetProfitBreakdownModalProps> = ({
@@ -57,13 +69,24 @@ export const NetProfitBreakdownModal: React.FC<NetProfitBreakdownModalProps> = (
   startDate,
   endDate,
   subBrandFilter,
-  financialMetrics
+  financialMetrics,
+  subBrands,
+  companySettings,
 }) => {
   const [activeTab, setActiveTab] = useState<'products' | 'orders' | 'channels' | 'expenses'>('products');
   const [searchQuery, setSearchQuery] = useState('');
-  const [selectedSubBrand, setSelectedSubBrand] = useState<string>(subBrandFilter === 'All' ? 'All' : subBrandFilter);
+  const [selectedSubBrand, setSelectedSubBrand] = useState<string>(subBrandFilter === 'ALL' ? 'All' : subBrandFilter || 'All');
   const [sortBy, setSortBy] = useState<'profit_desc' | 'profit_asc' | 'revenue_desc' | 'qty_desc' | 'margin_desc'>('profit_desc');
   const [orderChannelFilter, setOrderChannelFilter] = useState<string>('All');
+
+  React.useEffect(() => {
+    setSelectedSubBrand(subBrandFilter === 'ALL' ? 'All' : subBrandFilter || 'All');
+  }, [subBrandFilter]);
+
+  const sellingSubBrands = useMemo(
+    () => getSellingSubBrands(subBrands, { includeInactive: true, companySettings }),
+    [subBrands, companySettings]
+  );
 
   // Map of product cost prices by productId
   const productCostMap = useMemo(() => {
@@ -73,7 +96,7 @@ export const NetProfitBreakdownModal: React.FC<NetProfitBreakdownModalProps> = (
         costPrice: Number(p.costPrice) || 0,
         name: p.name || 'Unnamed Product',
         category: p.category || 'General',
-        subBrand: p.subBrand || 'SAT',
+        subBrand: p.subBrand || '',
         sku: p.sku || ''
       });
     });
@@ -93,8 +116,12 @@ export const NetProfitBreakdownModal: React.FC<NetProfitBreakdownModalProps> = (
       if (order.status === 'Returned/Cancelled') return false;
       const orderTime = order.createdAt || new Date(order.createdAt).getTime();
       const dateMatch = orderTime >= startMs && orderTime <= endMs;
-      const brandMatch = selectedSubBrand === 'All' || order.subBrand === selectedSubBrand;
-      return dateMatch && brandMatch;
+      if (!dateMatch) return false;
+      if (selectedSubBrand === 'All' || selectedSubBrand === 'ALL') return true;
+      if (selectedSubBrand === 'SHARED' || selectedSubBrand === SHARED_ACCOUNTING_TAG) {
+        return !order.subBrand || isSharedAccountingTag(order.subBrand);
+      }
+      return matchesGlobalBrandFilter(order.subBrand, selectedSubBrand);
     });
   }, [orders, startMs, endMs, selectedSubBrand]);
 
@@ -103,8 +130,19 @@ export const NetProfitBreakdownModal: React.FC<NetProfitBreakdownModalProps> = (
     return expenses.filter(exp => {
       const expTime = new Date(exp.date + 'T00:00:00').getTime();
       const dateMatch = expTime >= startMs && expTime <= endMs;
-      const brandMatch = selectedSubBrand === 'All' || exp.subBrand === selectedSubBrand || exp.subBrand === '' || exp.subBrand === 'ALL';
-      return dateMatch && brandMatch;
+      if (!dateMatch) return false;
+      if (selectedSubBrand === 'All' || selectedSubBrand === 'ALL') return true;
+      if (selectedSubBrand === 'LEGACY_SAT' || selectedSubBrand === 'SAT') {
+        return isLegacySatCode(exp.subBrand);
+      }
+      if (selectedSubBrand === 'SHARED' || selectedSubBrand === SHARED_ACCOUNTING_TAG) {
+        return !exp.subBrand || isSharedAccountingTag(exp.subBrand);
+      }
+      return (
+        matchesGlobalBrandFilter(exp.subBrand, selectedSubBrand) ||
+        !exp.subBrand ||
+        isSharedAccountingTag(exp.subBrand)
+      );
     });
   }, [expenses, startMs, endMs, selectedSubBrand]);
 
@@ -135,7 +173,7 @@ export const NetProfitBreakdownModal: React.FC<NetProfitBreakdownModalProps> = (
         const prodInfo = productCostMap.get(item.productId);
         const name = prodInfo?.name || item.productName || 'Unknown Product';
         const category = prodInfo?.category || 'General';
-        const subBrand = prodInfo?.subBrand || order.subBrand || 'SAT';
+        const subBrand = prodInfo?.subBrand || order.subBrand || '';
         const sku = prodInfo?.sku || '';
         
         // Accurate cost price: snapshotted line item costPrice (e.g. pre-order landed cost), product profile, or 70% fallback
@@ -260,7 +298,7 @@ export const NetProfitBreakdownModal: React.FC<NetProfitBreakdownModalProps> = (
         createdAt: order.createdAt,
         customerName: order.customerName || 'Direct Customer',
         customerPhone: order.customerPhone || '',
-        subBrand: order.subBrand || 'SAT',
+        subBrand: order.subBrand || '',
         salesChannel: order.salesChannel || 'Direct/WhatsApp',
         status: order.status,
         itemsCount: (order.items || []).reduce((sum, i) => sum + (Number(i.qty) || 1), 0),
@@ -328,7 +366,7 @@ export const NetProfitBreakdownModal: React.FC<NetProfitBreakdownModalProps> = (
       const profit = effectiveTotal - orderCost;
 
       // Brand
-      const bKey = order.subBrand || 'SAT';
+      const bKey = order.subBrand || '';
       if (!brandMap.has(bKey)) {
         brandMap.set(bKey, { name: bKey, revenue: effectiveTotal, cost: orderCost, profit, ordersCount: 1 });
       } else {
@@ -401,7 +439,9 @@ export const NetProfitBreakdownModal: React.FC<NetProfitBreakdownModalProps> = (
                   Net Profit Breakdown <span className="text-emerald-400 font-bold">(নিট লাভ ও প্রফিট বিশ্লেষণ)</span>
                 </h2>
                 <span className="text-[10px] font-mono font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-md">
-                  {selectedSubBrand === 'All' ? 'All Brands' : `Brand: ${selectedSubBrand}`}
+                  {selectedSubBrand === 'All' || selectedSubBrand === 'ALL'
+                    ? 'All Brands'
+                    : `Brand: ${formatBrandBadgeMeta(selectedSubBrand === 'LEGACY_SAT' ? 'SAT' : selectedSubBrand, subBrands, companySettings).label}`}
                 </span>
               </div>
               <p className="text-xs text-slate-400 mt-0.5">
@@ -567,9 +607,13 @@ export const NetProfitBreakdownModal: React.FC<NetProfitBreakdownModalProps> = (
               className="bg-white border border-slate-200 rounded-xl py-1.5 px-2.5 text-xs text-slate-700 font-bold focus:outline-hidden focus:border-amber-400"
             >
               <option value="All">All Brands (সকল ব্র্যান্ড)</option>
-              <option value="SAT">SAT</option>
-              <option value="GZ">GZ</option>
-              <option value="RTX">RTX</option>
+              <option value="SHARED">Parent / Shared ({PARENT_COMPANY_NAME})</option>
+              {sellingSubBrands.map((sb) => (
+                <option key={sb.shortCode} value={sb.shortCode}>
+                  {sb.name} ({sb.shortCode})
+                </option>
+              ))}
+              <option value="LEGACY_SAT">Legacy (SAT)</option>
             </select>
 
             {/* Sort Filter */}
@@ -654,9 +698,7 @@ export const NetProfitBreakdownModal: React.FC<NetProfitBreakdownModalProps> = (
                                   <div>
                                     <div className="font-bold text-slate-900 leading-snug flex items-center gap-1.5">
                                       <span>{prod.productName}</span>
-                                      <span className="text-[10px] font-mono font-bold bg-slate-100 text-slate-600 px-1.5 py-0.2 rounded">
-                                        {prod.subBrand}
-                                      </span>
+                                      <SubBrandBadge subBrand={prod.subBrand} subBrands={subBrands} />
                                     </div>
                                     <div className="text-xs text-slate-400 flex items-center gap-2 mt-0.5 font-mono">
                                       <span>Cat: {prod.category}</span>
@@ -808,9 +850,7 @@ export const NetProfitBreakdownModal: React.FC<NetProfitBreakdownModalProps> = (
 
                               {/* Sub-Brand & Channel */}
                               <td className="py-3 px-3">
-                                <span className="inline-block font-mono text-[10px] font-bold bg-amber-100 text-amber-900 px-1.5 py-0.5 rounded mr-1">
-                                  {ord.subBrand}
-                                </span>
+                                <SubBrandBadge subBrand={ord.subBrand} subBrands={subBrands} className="mr-1.5" />
                                 <span className="text-xs text-slate-600 font-medium">
                                   {ord.salesChannel}
                                 </span>
@@ -889,9 +929,7 @@ export const NetProfitBreakdownModal: React.FC<NetProfitBreakdownModalProps> = (
                     return (
                       <div key={b.name} className="bg-slate-50 p-4 rounded-2xl border border-slate-200 space-y-2">
                         <div className="flex items-center justify-between">
-                          <span className="font-mono font-black text-sm text-slate-900 uppercase px-2 py-0.5 bg-white border border-slate-200 rounded-lg">
-                            {b.name}
-                          </span>
+                          <SubBrandBadge subBrand={b.name} subBrands={subBrands} showFullName />
                           <span className="text-xs font-mono font-bold text-slate-500">
                             {b.ordersCount} orders
                           </span>

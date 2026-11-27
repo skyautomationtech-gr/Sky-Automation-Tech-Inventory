@@ -1,19 +1,27 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Trash2, Briefcase, Calendar, CheckCircle2, AlertTriangle, X } from 'lucide-react';
-import { UserProfile, InvestmentEntry } from '../../types';
+import { UserProfile, InvestmentEntry, SubBrand, CompanySettings } from '../../types';
 import { getInvestments, addInvestment, deleteInvestment } from '../../firebase/db';
+import { SHARED_ACCOUNTING_TAG, getSellingSubBrands } from '../../utils/subBrands';
+import { SubBrandBadge } from '../PreOrders/PreOrderStatusBadge';
 
 interface InvestmentsTabProps {
   user: UserProfile;
+  subBrands?: SubBrand[];
+  companySettings?: CompanySettings | null;
 }
 
-export const InvestmentsTab: React.FC<InvestmentsTabProps> = ({ user }) => {
+export const InvestmentsTab: React.FC<InvestmentsTabProps> = ({ user, subBrands, companySettings }) => {
+  const activeSellingBrands = React.useMemo(
+    () => getSellingSubBrands(subBrands, { includeInactive: false, companySettings }),
+    [subBrands, companySettings]
+  );
   const [investments, setInvestments] = useState<InvestmentEntry[]>([]);
   const [showForm, setShowForm] = useState(false);
   const [amount, setAmount] = useState('');
   const [date, setDate] = useState(new Date().toISOString().split('T')[0]);
   const [note, setNote] = useState('ব্যবসায়িক মূলধন বিনিয়োগ');
-  const [subBrand, setSubBrand] = useState('SAT');
+  const [subBrand, setSubBrand] = useState<string>(SHARED_ACCOUNTING_TAG);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
@@ -49,6 +57,7 @@ export const InvestmentsTab: React.FC<InvestmentsTabProps> = ({ user }) => {
       });
       setAmount('');
       setNote('ব্যবসায়িক মূলধন বিনিয়োগ');
+      setSubBrand(SHARED_ACCOUNTING_TAG);
       setShowForm(false);
       setNotification({ type: 'success', message: 'মূলধন বিনিয়োগ সফলভাবে সংরক্ষণ করা হয়েছে।' });
       setTimeout(() => setNotification(null), 4000);
@@ -181,15 +190,18 @@ export const InvestmentsTab: React.FC<InvestmentsTabProps> = ({ user }) => {
             </div>
 
             <div>
-              <label className="block text-[11px] font-bold text-slate-700 mb-1">সাব-ব্র্যান্ড</label>
+              <label className="block text-[11px] font-bold text-slate-700 mb-1">সাব-ব্র্যান্ড / খাত</label>
               <select
                 value={subBrand}
                 onChange={e => setSubBrand(e.target.value)}
                 className="w-full bg-white border border-slate-300 rounded-xl px-3 py-2 text-xs text-slate-900 font-medium focus:outline-none focus:ring-2 focus:ring-amber-500"
               >
-                <option value="SAT">Sky Automation Tech (SAT)</option>
-                <option value="GZ">GadgetZu (GZ)</option>
-                <option value="RTX">RTX Gadget (RTX)</option>
+                <option value={SHARED_ACCOUNTING_TAG}>Parent / Shared (Sky Automation Tech)</option>
+                {activeSellingBrands.map((sb) => (
+                  <option key={sb.shortCode} value={sb.shortCode}>
+                    {sb.name} ({sb.shortCode})
+                  </option>
+                ))}
               </select>
             </div>
 
@@ -248,9 +260,7 @@ export const InvestmentsTab: React.FC<InvestmentsTabProps> = ({ user }) => {
                   <tr key={inv?.id} className="hover:bg-slate-50/80 transition">
                     <td className="px-4 py-3 font-medium text-slate-700">{inv?.date || '-'}</td>
                     <td className="px-4 py-3">
-                      <span className="px-2 py-0.5 rounded-md text-[11px] font-bold bg-amber-50 text-amber-700 border border-amber-200/60">
-                        {inv?.subBrand || 'SAT'}
-                      </span>
+                      <SubBrandBadge subBrand={inv?.subBrand || SHARED_ACCOUNTING_TAG} subBrands={subBrands} />
                     </td>
                     <td className="px-4 py-3 text-slate-800 font-medium">{inv?.note || 'ব্যবসায়িক মূলধন'}</td>
                     <td className="px-4 py-3 text-right font-mono font-bold text-amber-700">

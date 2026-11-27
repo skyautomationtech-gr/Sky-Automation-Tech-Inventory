@@ -34,6 +34,7 @@ import type {
   ProductColor,
   ProductModel,
   RolePermissionsMap,
+  SubBrand,
 } from './types';
 import {
   getCachedRolePermissionsSync,
@@ -42,6 +43,17 @@ import {
 } from './firebase/preOrderBootstrap';
 import { hasPermission } from './preOrders/constants';
 import { SidebarBadgeCounts, normalizeDefaultSubAction } from './navigation/sidebarConfig';
+import {
+  getRegistrySubBrandsSync,
+  getSellingSubBrands,
+  getUserAllowedSubBrandIds,
+  isLegacySatCode,
+  normalizeSubBrandCode,
+} from './utils/subBrands';
+import {
+  ensureSubBrandsSeeded,
+  subscribeSubBrandsChange,
+} from './firebase/subBrandsRegistry';
 import {
   perfMarkDashboardVisible,
   perfSetScreen,
@@ -283,6 +295,12 @@ export default function App() {
   const [firebaseAuthed, setFirebaseAuthed] = useState<boolean>(() => Boolean(auth?.currentUser));
   const [dataLoading, setDataLoading] = useState(false);
   const [showCheckInModal, setShowCheckInModal] = useState(false);
+
+  // Dynamic Sub-Brands Registry & Global Brand Scope Filter
+  const [subBrands, setSubBrands] = useState<SubBrand[]>(() =>
+    getRegistrySubBrandsSync(localStore.get<CompanySettings>('company_settings'))
+  );
+  const [globalBrandFilter, setGlobalBrandFilter] = useState<string>('ALL');
 
   // Public QR Invoice Verification state
   const [isPublicVerification, setIsPublicVerification] = useState<boolean>(() => {
@@ -754,6 +772,69 @@ export default function App() {
     }
   };
 
+  // Seed & subscribe to dynamic subBrands registry once authenticated and onboarded
+  useEffect(() => {
+    if (publicTrackingRoute.isTrackingRoute || !authReady || !user || !firebaseAuthed || !profileLoaded || isOnboarding) {
+      return;
+    }
+    let mounted = true;
+    const unsub = subscribeSubBrandsChange((list) => {
+      if (mounted && list.length > 0) setSubBrands(list);
+    });
+    ensureSubBrandsSeeded(companySettings, user.role)
+      .then((list) => {
+        if (mounted && list?.length) setSubBrands(list);
+      })
+      .catch(() => {});
+    return () => {
+      mounted = false;
+      unsub();
+    };
+  }, [publicTrackingRoute.isTrackingRoute, authReady, user?.id, user?.role, firebaseAuthed, profileLoaded, isOnboarding, companySettings]);
+
+  // Keep globalBrandFilter synchronized with user permissions and localStorage
+  useEffect(() => {
+    if (!user?.id) return;
+    const isAdminUser =
+      user.role === 'superadmin' || user.role === 'admin' || (user.role as string) === 'super_admin';
+    const activeSelling = getSellingSubBrands(subBrands, { includeInactive: false, companySettings });
+    const allowedIds = getUserAllowedSubBrandIds(user, subBrands, { companySettings });
+    const storageKey = `sat_brand_filter_${user.id}`;
+    let saved = 'ALL';
+    try {
+      saved = localStorage.getItem(storageKey) || 'ALL';
+    } catch {}
+
+    if (!isAdminUser && allowedIds.length === 1) {
+      setGlobalBrandFilter(allowedIds[0]);
+      return;
+    }
+
+    if (saved === 'LEGACY_SAT') {
+      setGlobalBrandFilter(isAdminUser ? 'LEGACY_SAT' : 'ALL');
+      return;
+    }
+
+    const code = normalizeSubBrandCode(saved);
+    if (code && code !== 'ALL' && !isLegacySatCode(code)) {
+      const valid = activeSelling.some((sb) => sb.shortCode === code) && (isAdminUser || allowedIds.includes(code));
+      if (valid) {
+        setGlobalBrandFilter(code);
+        return;
+      }
+    }
+    setGlobalBrandFilter('ALL');
+  }, [user?.id, user?.role, user?.subBrandAccess, subBrands, companySettings]);
+
+  const handleGlobalBrandFilterChange = (nextFilter: string) => {
+    setGlobalBrandFilter(nextFilter);
+    if (user?.id) {
+      try {
+        localStorage.setItem(`sat_brand_filter_${user.id}`, nextFilter);
+      } catch {}
+    }
+  };
+
   useEffect(() => {
     if (!publicTrackingRoute.isTrackingRoute && authReady && user && firebaseAuthed && profileLoaded && !isOnboarding) {
       perfMarkDashboardVisible();
@@ -802,6 +883,11 @@ export default function App() {
           // Once-per-day background pre-order reminder sync (only loads preOrderDb on idle)
           const todayIso = new Date().toISOString().split('T')[0];
           const syncKey = `sat_reminder_sync_${user.id}_${todayIso}`;
+          const isAdminUser =
+            user.role === 'superadmin' || user.role === 'admin' || (user.role as string) === 'super_admin';
+          const allowedSelling = isAdminUser
+            ? undefined
+            : getUserAllowedSubBrandIds(user, subBrands, { companySettings });
           try {
             if (localStorage.getItem(syncKey) !== 'done') {
               void import('./firebase/preOrderDb')
@@ -812,7 +898,7 @@ export default function App() {
                       name: user.name,
                       role: user.role,
                     },
-                    allowedSubBrands: user.subBrandAccess,
+                    allowedSubBrands: allowedSelling,
                   })
                 )
                 .then(() => {
@@ -1126,7 +1212,9 @@ export default function App() {
     const updated = {
       ...(companySettings || {
         companyName: 'Sky Automation Tech',
-        subBrands: ['SAT', 'GZ', 'RTX'],
+        isParent: true,
+        isSellingBrand: false,
+        subBrands: getSellingSubBrands(subBrands).map((s) => s.shortCode),
         onboarded: true
       }),
       ...extraData
@@ -1438,6 +1526,9 @@ export default function App() {
                 setIsSidebarCollapsed(collapsed);
                 try { localStorage.setItem('sat_sidebar_collapsed', String(collapsed)); } catch {}
               }}
+              subBrands={subBrands}
+              globalBrandFilter={globalBrandFilter}
+              onGlobalBrandFilterChange={handleGlobalBrandFilterChange}
             />
           </Suspense>
 
@@ -1505,6 +1596,8 @@ export default function App() {
             user={user} 
             onNavigateToTab={navigateToTab} 
             onUserUpdate={refreshUserProfile}
+            subBrands={subBrands}
+            globalBrandFilter={globalBrandFilter}
           />
         )}
 
@@ -1534,6 +1627,9 @@ export default function App() {
                 setCurrentTab('stock');
                 setCurrentSubAction('in');
               }}
+              subBrands={subBrands}
+              globalBrandFilter={globalBrandFilter}
+              companySettings={companySettings}
             />
           </ErrorBoundary>
         )}
@@ -1552,6 +1648,7 @@ export default function App() {
               }}
               requireCheckIn={requireCheckIn}
               initialProductId={initialStockProductId}
+              globalBrandFilter={globalBrandFilter}
             />
           </ErrorBoundary>
         )}
@@ -1562,6 +1659,9 @@ export default function App() {
             <PreOrderOverviewView
               user={user}
               rolePermissions={rolePermissions}
+              companySettings={companySettings}
+              subBrands={subBrands}
+              globalBrandFilter={globalBrandFilter}
               onNavigate={navigateToTab}
               onOpenPreOrderList={(preset) => {
                 setPreOrderListPreset(preset);
@@ -1579,6 +1679,8 @@ export default function App() {
               products={products}
               categories={categories}
               companySettings={companySettings}
+              subBrands={subBrands}
+              globalBrandFilter={globalBrandFilter}
               onDirtyChange={setPreOrderCreateDirty}
               onCancel={() => {
                 setPreOrderCreateDirty(false);
@@ -1601,6 +1703,8 @@ export default function App() {
               brands={brands}
               products={products}
               companySettings={companySettings}
+              subBrands={subBrands}
+              globalBrandFilter={globalBrandFilter}
               onCreateNew={() => navigateToTab('preorder_create')}
               onNavigate={navigateToTab}
               initialSelectedPreOrderId={selectedPreOrderId}
@@ -1620,6 +1724,8 @@ export default function App() {
               brands={brands}
               products={products}
               companySettings={companySettings}
+              subBrands={subBrands}
+              globalBrandFilter={globalBrandFilter}
               onNavigate={navigateToTab}
             />
           </ErrorBoundary>
@@ -1643,6 +1749,8 @@ export default function App() {
               rolePermissions={rolePermissions}
               categories={categories}
               companySettings={companySettings}
+              subBrands={subBrands}
+              globalBrandFilter={globalBrandFilter}
             />
           </ErrorBoundary>
         )}
@@ -1654,6 +1762,8 @@ export default function App() {
               rolePermissions={rolePermissions}
               categories={categories}
               companySettings={companySettings}
+              subBrands={subBrands}
+              globalBrandFilter={globalBrandFilter}
               onNavigateSettings={isUserSuperAdmin ? () => navigateToTab('settings') : undefined}
             />
           </ErrorBoundary>
@@ -1665,6 +1775,8 @@ export default function App() {
               user={user}
               rolePermissions={rolePermissions}
               companySettings={companySettings}
+              subBrands={subBrands}
+              globalBrandFilter={globalBrandFilter}
               onNavigate={navigateToTab}
             />
           </ErrorBoundary>
@@ -1675,6 +1787,9 @@ export default function App() {
             <PreOrderReportsView
               user={user}
               rolePermissions={rolePermissions}
+              companySettings={companySettings}
+              subBrands={subBrands}
+              globalBrandFilter={globalBrandFilter}
               onNavigate={navigateToTab}
             />
           </ErrorBoundary>
@@ -1702,6 +1817,7 @@ export default function App() {
                 setUsersSubTab(tab);
                 setCurrentSubAction(tab);
               }}
+              subBrands={subBrands}
             />
           </ErrorBoundary>
         )}
@@ -1715,6 +1831,9 @@ export default function App() {
               initialCustomerId={initialCustomerId}
               clearInitialCustomerId={() => setInitialCustomerId(null)}
               onOpenPreOrder={(preOrderId) => navigateToTab('preorder_list', 'detail', preOrderId)}
+              subBrands={subBrands}
+              globalBrandFilter={globalBrandFilter}
+              companySettings={companySettings}
             />
           </ErrorBoundary>
         )}
@@ -1734,6 +1853,9 @@ export default function App() {
                   setCurrentSubAction(isOpen ? 'create' : 'list');
                 }
               }}
+              subBrands={subBrands}
+              globalBrandFilter={globalBrandFilter}
+              companySettings={companySettings}
             />
           </ErrorBoundary>
         )}
@@ -1741,14 +1863,26 @@ export default function App() {
         {/* Tab Invoices: Invoice Desk View */}
         {currentTab === 'invoices' && (
           <ErrorBoundary fallbackTitle="Invoice Desk encountered an issue">
-            <InvoiceManagement user={user} requireCheckIn={requireCheckIn} />
+            <InvoiceManagement
+              user={user}
+              requireCheckIn={requireCheckIn}
+              subBrands={subBrands}
+              globalBrandFilter={globalBrandFilter}
+              companySettings={companySettings}
+            />
           </ErrorBoundary>
         )}
 
         {/* Tab Receivables: Due Payments View */}
         {currentTab === 'receivables' && (
           <ErrorBoundary fallbackTitle="Due Payments encountered an issue">
-            <DuePayments user={user} requireCheckIn={requireCheckIn} />
+            <DuePayments
+              user={user}
+              requireCheckIn={requireCheckIn}
+              subBrands={subBrands}
+              globalBrandFilter={globalBrandFilter}
+              companySettings={companySettings}
+            />
           </ErrorBoundary>
         )}
 
@@ -1764,6 +1898,9 @@ export default function App() {
                 setFinancialsSubTab(tab);
                 setCurrentSubAction(tab);
               }}
+              subBrands={subBrands}
+              companySettings={companySettings}
+              globalBrandFilter={globalBrandFilter}
             />
           ) : (
             <div className="bg-red-50 border border-red-200 rounded-3xl p-8 max-w-lg mx-auto text-center space-y-4 my-12 shadow-sm">
@@ -1791,6 +1928,9 @@ export default function App() {
                   setAccountingSubTab(tab);
                   setCurrentSubAction(tab);
                 }}
+                subBrands={subBrands}
+                companySettings={companySettings}
+                globalBrandFilter={globalBrandFilter}
               />
             </ErrorBoundary>
           ) : (
@@ -1817,13 +1957,24 @@ export default function App() {
 
         {/* Tab Suppliers: Supplier Management View */}
         {currentTab === 'suppliers' && (
-          <SupplierManagement user={user} rolePermissions={rolePermissions || {}} />
+          <SupplierManagement
+            user={user}
+            rolePermissions={rolePermissions || {}}
+            subBrands={subBrands}
+            companySettings={companySettings}
+            globalBrandFilter={globalBrandFilter}
+          />
         )}
 
         {/* Tab Reports: Reports & Analytics View (Super Admin Only) */}
         {currentTab === 'reports' && (
           isUserSuperAdmin ? (
-            <ReportsAnalytics user={user} />
+            <ReportsAnalytics
+              user={user}
+              subBrands={subBrands}
+              companySettings={companySettings}
+              globalBrandFilter={globalBrandFilter}
+            />
           ) : (
             <div className="bg-red-50 border border-red-200 rounded-3xl p-8 max-w-lg mx-auto text-center space-y-4 my-12 shadow-sm">
               <h2 className="text-base font-extrabold text-red-800 uppercase tracking-tight">Access Restricted</h2>
@@ -1860,7 +2011,9 @@ export default function App() {
                   const updated = {
                     ...(companySettings || {
                       companyName: 'Sky Automation Tech',
-                      subBrands: ['SAT', 'GZ', 'RTX'],
+                      isParent: true,
+                      isSellingBrand: false,
+                      subBrands: getSellingSubBrands(subBrands).map((s) => s.shortCode),
                       onboarded: true
                     }),
                     ...updatedFields
@@ -1869,6 +2022,8 @@ export default function App() {
                   setCompanySettings(updated as CompanySettings);
                 }}
                 requireCheckIn={requireCheckIn}
+                subBrands={subBrands}
+                onSubBrandsUpdated={setSubBrands}
               />
             </ErrorBoundary>
 

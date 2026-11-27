@@ -1,5 +1,6 @@
 import type { WorkBook } from 'xlsx';
 import type { Product, Brand, Category } from '../types';
+import { formatBrandBadgeMeta } from './subBrands';
 import { 
   getProducts, 
   getOrders, 
@@ -13,6 +14,14 @@ import {
   getAllUsers, 
   getAllAttendanceRecords 
 } from '../firebase/db';
+
+function formatExportSubBrand(raw?: string | null, defaultLabel = 'Needs Assignment'): string {
+  const trimmed = (raw || '').trim();
+  if (!trimmed) return defaultLabel;
+  const meta = formatBrandBadgeMeta(trimmed);
+  if (meta.isLegacySat || meta.isShared || meta.isNeedsAssignment) return meta.label;
+  return meta.label !== meta.shortLabel ? `${meta.label} (${meta.shortLabel})` : meta.label;
+}
 
 async function loadXlsx() {
   return import('xlsx');
@@ -92,7 +101,7 @@ export async function exportProductsToCSV(productsList?: Product[], customFilena
       escapeCsv(p.subCategory || ''),
       escapeCsv(p.childCategory || ''),
       escapeCsv(p.brand || ''),
-      escapeCsv(p.subBrand || ''),
+      escapeCsv(formatExportSubBrand(p.subBrand, 'Needs Assignment')),
       p.costPrice || 0,
       p.sellingPrice || 0,
       totalStock,
@@ -143,7 +152,7 @@ export async function exportBrandsToCSV(brandsList?: Brand[], productsList?: Pro
       } else {
         outOfStockCount++;
       }
-      if (p.subBrand) subBrandsSet.add(p.subBrand);
+      if (p.subBrand) subBrandsSet.add(formatExportSubBrand(p.subBrand, 'Needs Assignment'));
       if (p.category) categoriesSet.add(p.category);
     });
 
@@ -209,7 +218,7 @@ export async function exportProductsToExcel(productsList?: Product[]) {
     'Name': p.name || '',
     'Category': p.category || '',
     'Brand': p.brand || '',
-    'Sub-Brand': p.subBrand || '',
+    'Sub-Brand': formatExportSubBrand(p.subBrand, 'Needs Assignment'),
     'Cost Price (৳)': p.costPrice || 0,
     'Selling Price (৳)': p.sellingPrice || 0,
     'Stock Status': p.stockStatus || '',
@@ -231,7 +240,7 @@ export async function exportOrdersToExcel() {
     'Order ID': o.id,
     'Customer Name': o.customerName || '',
     'Customer Phone': o.customerPhone || '',
-    'Sub-Brand': o.subBrand || '',
+    'Sub-Brand': formatExportSubBrand(o.subBrand, 'Needs Assignment'),
     'Sales Channel': o.salesChannel || '',
     'Status': o.status || '',
     'Payment Status': o.paymentStatus || '',
@@ -281,7 +290,7 @@ export async function exportCustomersToExcel() {
     'Name': c.name || '',
     'Phone': c.phone || '',
     'Address': c.address || '',
-    'Sub-Brand': c.subBrand || '',
+    'Sub-Brand': formatExportSubBrand(c.subBrand, 'Needs Assignment'),
     'Total Orders': c.totalOrders || 0,
     'Lifetime Value (৳)': c.lifetimeValue || 0,
     'Notes': c.notes || '',
@@ -301,7 +310,7 @@ export async function exportSuppliersToExcel() {
     'Name': s.name || '',
     'Phone': s.phone || '',
     'Address': s.address || '',
-    'Sub-Brand': s.subBrand || '',
+    'Sub-Brand': formatExportSubBrand(s.subBrand, 'Parent / Shared'),
     'Total Purchases (৳)': s.totalPurchases || 0,
     'Total Paid (৳)': s.totalPaid || 0,
     'Outstanding Due (৳)': s.outstandingDue || 0,
@@ -343,7 +352,7 @@ export async function exportExpensesToExcel() {
     'Category': e.category || '',
     'Amount (৳)': e.amount || 0,
     'Date': e.date || '',
-    'Sub-Brand': e.subBrand || '',
+    'Sub-Brand': formatExportSubBrand(e.subBrand, 'Parent / Shared'),
     'Notes': e.notes || '',
     'Recorded By': e.createdBy || '',
     'Created At': formatDate(e.createdAt)
@@ -405,7 +414,7 @@ export async function exportAttendanceToExcel() {
     'User ID': a.userId || '',
     'User Name': a.userName || '',
     'Role': a.role || '',
-    'Sub-Brand': a.subBrand || '',
+    'Sub-Brand': formatExportSubBrand(a.subBrand, 'Parent / Shared'),
     'Date': a.date || '',
     'Check-In Time': formatDate(a.checkInTime),
     'Check-Out Time': formatDate(a.checkOutTime),
@@ -444,7 +453,7 @@ export async function exportEverythingWorkbook() {
       'Order ID': o.id,
       'Customer Name': o.customerName || '',
       'Customer Phone': o.customerPhone || '',
-      'Sub-Brand': o.subBrand || '',
+      'Sub-Brand': formatExportSubBrand(o.subBrand, 'Needs Assignment'),
       'Status': o.status || '',
       'Total Amount (৳)': o.totalAmount || 0,
       'Amount Paid (৳)': o.amountPaid || 0,

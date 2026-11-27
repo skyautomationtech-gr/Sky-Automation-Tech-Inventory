@@ -24,9 +24,14 @@ import {
   PreOrder,
   PreOrderStatus,
   RolePermissionsMap,
+  SubBrand,
   Supplier,
   UserProfile,
 } from '../../types';
+import {
+  getSellingSubBrands,
+  getUserAllowedSubBrandIds,
+} from '../../utils/subBrands';
 import {
   PRE_ORDER_STATUSES,
   formatPreOrderProductLabel,
@@ -71,6 +76,8 @@ export interface CustomerTrackingLinksViewProps {
   rolePermissions: RolePermissionsMap | null;
   categories: Category[];
   companySettings?: CompanySettings | null;
+  subBrands?: SubBrand[];
+  globalBrandFilter?: string;
   onNavigateSettings?: () => void;
 }
 
@@ -113,6 +120,8 @@ export const CustomerTrackingLinksView: React.FC<CustomerTrackingLinksViewProps>
   rolePermissions,
   categories,
   companySettings,
+  subBrands,
+  globalBrandFilter,
   onNavigateSettings,
 }) => {
   const toast = useToast();
@@ -121,16 +130,36 @@ export const CustomerTrackingLinksView: React.FC<CustomerTrackingLinksViewProps>
   const isAdmin = isPreOrderAdminRole(user.role);
   const canManageTracking = hasPermission(user, rolePermissions, 'preOrderManageTracking') || isAdmin;
 
-  const allowedSubBrands = useMemo<Array<'SAT' | 'GZ' | 'RTX'>>(() => {
-    const isSuper = user.role === 'superadmin' || (user.role as string) === 'super_admin';
-    if (isSuper || !user.subBrandAccess || user.subBrandAccess.length === 0) {
-      return ['SAT', 'GZ', 'RTX'];
+  const sellingSubBrands = useMemo(
+    () => getSellingSubBrands(subBrands, { includeInactive: true, companySettings }),
+    [subBrands, companySettings]
+  );
+
+  const allowedSubBrands = useMemo<string[] | undefined>(() => {
+    if (isAdmin) return undefined;
+    const ids = getUserAllowedSubBrandIds(user, subBrands, {
+      includeInactive: true,
+      companySettings,
+    });
+    return ids.length > 0 ? ids : sellingSubBrands.map((sb) => sb.shortCode);
+  }, [isAdmin, user, subBrands, companySettings, sellingSubBrands]);
+
+  const brandFilterOptions = useMemo(() => {
+    const visible = isAdmin
+      ? sellingSubBrands
+      : sellingSubBrands.filter((sb) => !allowedSubBrands || allowedSubBrands.includes(sb.shortCode));
+    const opts = [
+      { value: 'ALL', label: 'All Sub-Brands' },
+      ...visible.map((sb) => ({
+        value: sb.shortCode,
+        label: sb.active ? `${sb.shortCode} — ${sb.name}` : `${sb.shortCode} — ${sb.name} (Inactive)`,
+      })),
+    ];
+    if (isAdmin) {
+      opts.push({ value: 'LEGACY_SAT', label: 'Legacy (SAT)' });
     }
-    const valid = user.subBrandAccess.filter(
-      (b): b is 'SAT' | 'GZ' | 'RTX' => b === 'SAT' || b === 'GZ' || b === 'RTX'
-    );
-    return valid.length > 0 ? valid : ['SAT'];
-  }, [user.role, user.subBrandAccess]);
+    return opts;
+  }, [isAdmin, sellingSubBrands, allowedSubBrands]);
 
   const baseUrlValid = isValidHttpsUrl(companySettings?.publicAppUrl);
 
@@ -139,7 +168,9 @@ export const CustomerTrackingLinksView: React.FC<CustomerTrackingLinksViewProps>
   const [debouncedSearch, setDebouncedSearch] = useState('');
   const [linkFilter, setLinkFilter] = useState<LinkStatusFilter>('ALL');
   const [orderStatusFilter, setOrderStatusFilter] = useState<'ALL' | PreOrderStatus>('ALL');
-  const [subBrandFilter, setSubBrandFilter] = useState<'ALL' | 'SAT' | 'GZ' | 'RTX'>('ALL');
+  const [subBrandFilter, setSubBrandFilter] = useState<string>(() =>
+    globalBrandFilter && globalBrandFilter !== 'ALL' ? globalBrandFilter : 'ALL'
+  );
   const [pageSize] = useState<25 | 50>(25);
   const [cursorHistory, setCursorHistory] = useState<
     Array<QueryDocumentSnapshot<DocumentData> | null>
@@ -169,6 +200,12 @@ export const CustomerTrackingLinksView: React.FC<CustomerTrackingLinksViewProps>
   const [toggleTarget, setToggleTarget] = useState<{ order: PreOrder; enable: boolean } | null>(null);
   const [toggleReason, setToggleReason] = useState('');
   const [toggleSubmitting, setToggleSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (globalBrandFilter) {
+      setSubBrandFilter(globalBrandFilter);
+    }
+  }, [globalBrandFilter]);
 
   useEffect(() => {
     const t = window.setTimeout(() => setDebouncedSearch(searchInput), 280);
@@ -524,12 +561,9 @@ export const CustomerTrackingLinksView: React.FC<CustomerTrackingLinksViewProps>
           />
 
           <Select
-            options={[
-              { value: 'ALL', label: 'All Sub-Brands' },
-              ...allowedSubBrands.map((b) => ({ value: b, label: b })),
-            ]}
+            options={brandFilterOptions}
             value={subBrandFilter}
-            onChange={(val) => setSubBrandFilter(val as 'ALL' | 'SAT' | 'GZ' | 'RTX')}
+            onChange={(val) => setSubBrandFilter(String(val))}
             searchable={false}
           />
         </div>
@@ -589,7 +623,7 @@ export const CustomerTrackingLinksView: React.FC<CustomerTrackingLinksViewProps>
                           {order.preOrderNumber}
                         </button>
                         <div className="flex items-center gap-1.5 mt-1">
-                          <SubBrandBadge subBrand={order.subBrand} />
+                          <SubBrandBadge subBrand={order.subBrand} subBrands={subBrands} />
                           <span className="text-[11px] font-mono text-slate-400">
                             {order.orderDate || ''}
                           </span>
@@ -831,6 +865,7 @@ export const CustomerTrackingLinksView: React.FC<CustomerTrackingLinksViewProps>
         categories={categories}
         suppliers={suppliers}
         companySettings={companySettings}
+        subBrands={subBrands}
         onUpdated={() => fetchPage()}
       />
 

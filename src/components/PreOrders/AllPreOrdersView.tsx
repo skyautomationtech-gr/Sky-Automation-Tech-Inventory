@@ -68,6 +68,13 @@ import {
   PreOrderStatusBadge,
   SubBrandBadge,
 } from './PreOrderStatusBadge';
+import {
+  SubBrand,
+} from '../../types';
+import {
+  getSellingSubBrands,
+  getUserAllowedSubBrandIds,
+} from '../../utils/subBrands';
 import PreOrderDetailDrawer from './PreOrderDetailDrawer';
 import PreOrderStatusDialog from './PreOrderStatusDialog';
 import PreOrderIntegrityModal from './PreOrderIntegrityModal';
@@ -79,6 +86,8 @@ export interface AllPreOrdersViewProps {
   brands?: Brand[];
   products?: Product[];
   companySettings?: CompanySettings | null;
+  subBrands?: SubBrand[];
+  globalBrandFilter?: string;
   onCreateNew: () => void;
   onNavigate?: (tab: string, subAction?: string, initialId?: string | null) => void;
   initialSelectedPreOrderId?: string | null;
@@ -94,6 +103,8 @@ export const AllPreOrdersView: React.FC<AllPreOrdersViewProps> = ({
   brands,
   products,
   companySettings,
+  subBrands,
+  globalBrandFilter,
   onCreateNew,
   onNavigate,
   initialSelectedPreOrderId,
@@ -105,16 +116,36 @@ export const AllPreOrdersView: React.FC<AllPreOrdersViewProps> = ({
   const canView = hasPermission(user, rolePermissions, 'preOrderView');
   const canCreate = hasPermission(user, rolePermissions, 'preOrderCreate');
 
-  const allowedSubBrands = useMemo<Array<'SAT' | 'GZ' | 'RTX'>>(() => {
-    const isSuper = user.role === 'superadmin' || (user.role as string) === 'super_admin';
-    if (isSuper || !user.subBrandAccess || user.subBrandAccess.length === 0) {
-      return ['SAT', 'GZ', 'RTX'];
+  const sellingSubBrands = useMemo(
+    () => getSellingSubBrands(subBrands, { includeInactive: true, companySettings }),
+    [subBrands, companySettings]
+  );
+
+  const allowedSubBrands = useMemo<string[] | undefined>(() => {
+    if (isAdmin) return undefined;
+    const ids = getUserAllowedSubBrandIds(user, subBrands, {
+      includeInactive: true,
+      companySettings,
+    });
+    return ids.length > 0 ? ids : sellingSubBrands.map((sb) => sb.shortCode);
+  }, [isAdmin, user, subBrands, companySettings, sellingSubBrands]);
+
+  const brandFilterOptions = useMemo(() => {
+    const visible = isAdmin
+      ? sellingSubBrands
+      : sellingSubBrands.filter((sb) => !allowedSubBrands || allowedSubBrands.includes(sb.shortCode));
+    const opts = [
+      { value: 'ALL', label: 'All Sub-Brands' },
+      ...visible.map((sb) => ({
+        value: sb.shortCode,
+        label: sb.active ? `${sb.shortCode} — ${sb.name}` : `${sb.shortCode} — ${sb.name} (Inactive)`,
+      })),
+    ];
+    if (isAdmin) {
+      opts.push({ value: 'LEGACY_SAT', label: 'Legacy (SAT)' });
     }
-    const valid = user.subBrandAccess.filter(
-      (b): b is 'SAT' | 'GZ' | 'RTX' => b === 'SAT' || b === 'GZ' || b === 'RTX'
-    );
-    return valid.length > 0 ? valid : ['SAT'];
-  }, [user.role, user.subBrandAccess]);
+    return opts;
+  }, [isAdmin, sellingSubBrands, allowedSubBrands]);
 
   // Filter & Search States
   const [searchInput, setSearchInput] = useState('');
@@ -123,7 +154,9 @@ export const AllPreOrdersView: React.FC<AllPreOrdersViewProps> = ({
   const [statusMenuOpen, setStatusMenuOpen] = useState(false);
   const statusMenuRef = useRef<HTMLDivElement>(null);
 
-  const [subBrandFilter, setSubBrandFilter] = useState<'ALL' | 'SAT' | 'GZ' | 'RTX'>('ALL');
+  const [subBrandFilter, setSubBrandFilter] = useState<string>(() =>
+    globalBrandFilter && globalBrandFilter !== 'ALL' ? globalBrandFilter : 'ALL'
+  );
   const [supplierFilter, setSupplierFilter] = useState<string>('ALL');
   const [paymentStateFilter, setPaymentStateFilter] = useState<'ALL' | PreOrderPaymentState>('ALL');
   const [dateFrom, setDateFrom] = useState('');
@@ -187,6 +220,12 @@ export const AllPreOrdersView: React.FC<AllPreOrdersViewProps> = ({
     setDateFrom('');
     setDateTo('');
   }, [initialFilter]);
+
+  useEffect(() => {
+    if (globalBrandFilter && !initialFilter?.subBrand) {
+      setSubBrandFilter(globalBrandFilter);
+    }
+  }, [globalBrandFilter, initialFilter?.subBrand]);
 
   // Close multi-select status dropdown & row actions menu on outside click
   useEffect(() => {
@@ -514,14 +553,9 @@ export const AllPreOrdersView: React.FC<AllPreOrdersViewProps> = ({
           {/* Sub-Brand */}
           <div className="lg:col-span-2">
             <Select
-              options={[
-                { value: 'ALL', label: 'All Sub-Brands' },
-                ...allowedSubBrands.map((b) => ({ value: b, label: b })),
-              ]}
+              options={brandFilterOptions}
               value={subBrandFilter}
-              onChange={(val) =>
-                setSubBrandFilter(val as 'ALL' | 'SAT' | 'GZ' | 'RTX')
-              }
+              onChange={(val) => setSubBrandFilter(String(val))}
               searchable={false}
             />
           </div>
@@ -913,7 +947,7 @@ export const AllPreOrdersView: React.FC<AllPreOrdersViewProps> = ({
                       </td>
 
                       <td className="px-4 py-3 whitespace-nowrap">
-                        <SubBrandBadge subBrand={row.subBrand} />
+                        <SubBrandBadge subBrand={row.subBrand} subBrands={subBrands} />
                       </td>
 
                       <td className="px-4 py-3 whitespace-nowrap font-mono text-slate-500 dark:text-slate-400">
@@ -1133,6 +1167,7 @@ export const AllPreOrdersView: React.FC<AllPreOrdersViewProps> = ({
         products={products}
         suppliers={suppliers}
         companySettings={companySettings}
+        subBrands={subBrands}
         onNavigate={onNavigate}
         onUpdated={fetchPage}
       />

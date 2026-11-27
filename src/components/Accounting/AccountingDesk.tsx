@@ -10,7 +10,7 @@ import {
   TrendingDown,
   Calculator
 } from 'lucide-react';
-import { UserProfile, AccountingBaselineSettings } from '../../types';
+import { UserProfile, AccountingBaselineSettings, SubBrand, CompanySettings } from '../../types';
 import { AccountingOverview } from './AccountingOverview';
 import { InvestmentsTab } from './InvestmentsTab';
 import { CompanyPurchasesTab } from './CompanyPurchasesTab';
@@ -26,9 +26,19 @@ interface AccountingDeskProps {
   user: UserProfile;
   initialTab?: string;
   onTabChange?: (tab: string) => void;
+  subBrands?: SubBrand[];
+  companySettings?: CompanySettings | null;
+  globalBrandFilter?: string;
 }
 
-export const AccountingDesk: React.FC<AccountingDeskProps> = ({ user, initialTab, onTabChange }) => {
+export const AccountingDesk: React.FC<AccountingDeskProps> = ({
+  user,
+  initialTab,
+  onTabChange,
+  subBrands,
+  companySettings,
+  globalBrandFilter,
+}) => {
   const [activeTab, setActiveTab] = useState<string>(initialTab || 'overview');
   const [baseline, setBaseline] = useState<AccountingBaselineSettings>(DEFAULT_ACCOUNTING_BASELINE);
 
@@ -98,19 +108,28 @@ export const AccountingDesk: React.FC<AccountingDeskProps> = ({ user, initialTab
       <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 shadow-sm min-h-[500px]">
         <ErrorBoundary fallbackTitle="Accounting Module Encountered an Issue">
           {activeTab === 'overview' && (
-            <AccountingOverview user={user} onSelectTab={(t) => handleSelectTab(t)} />
+            <AccountingOverview
+              user={user}
+              onSelectTab={(t) => handleSelectTab(t)}
+              subBrands={subBrands}
+              companySettings={companySettings}
+            />
           )}
           {activeTab === 'investments' && (
-            <InvestmentsTab user={user} />
+            <InvestmentsTab user={user} subBrands={subBrands} companySettings={companySettings} />
           )}
           {activeTab === 'purchases' && (
             <CompanyPurchasesTab user={user} />
           )}
           {activeTab === 'losses' && (
-            <CompanyLossesTab user={user} />
+            <CompanyLossesTab user={user} subBrands={subBrands} companySettings={companySettings} />
           )}
           {activeTab === 'loss_orders' && (
-            <LossMakingOrdersTab user={user} />
+            <LossMakingOrdersTab
+              user={user}
+              subBrands={subBrands}
+              globalBrandFilter={globalBrandFilter}
+            />
           )}
           {activeTab === 'platforms' && (
             <PaymentPlatformTab user={user} />

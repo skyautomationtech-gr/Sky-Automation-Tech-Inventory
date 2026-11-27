@@ -32,9 +32,16 @@ import {
   PreOrderPaymentMethod,
   Product,
   RolePermissionsMap,
+  SubBrand,
   Supplier,
   UserProfile,
 } from '../../types';
+import {
+  getSellingSubBrands,
+  getUserAllowedSubBrandIds,
+  normalizeSubBrandCode,
+  resolveDefaultSellingSubBrand,
+} from '../../utils/subBrands';
 import {
   MAX_PRE_ORDER_ITEMS,
   PRE_ORDER_PAYMENT_METHODS,
@@ -80,6 +87,8 @@ export interface CreatePreOrderViewProps {
   products: Product[];
   categories: Category[];
   companySettings?: CompanySettings | null;
+  subBrands?: SubBrand[];
+  globalBrandFilter?: string;
   onCancel: () => void;
   onCreated: (result: CreatePreOrderResult) => void;
   onDirtyChange?: (dirty: boolean) => void;
@@ -174,6 +183,8 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
   products,
   categories,
   companySettings,
+  subBrands,
+  globalBrandFilter,
   onCancel,
   onCreated,
   onDirtyChange,
@@ -188,16 +199,18 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
   const canAddSupplier =
     hasPermission(user, rolePermissions, 'preOrderSupplier') || canCreate;
 
-  const allowedSubBrands = useMemo<Array<'SAT' | 'GZ' | 'RTX'>>(() => {
-    const isSuper = user.role === 'superadmin' || (user.role as string) === 'super_admin';
-    if (isSuper || !user.subBrandAccess || user.subBrandAccess.length === 0) {
-      return ['SAT', 'GZ', 'RTX'];
-    }
-    const valid = user.subBrandAccess.filter(
-      (b): b is 'SAT' | 'GZ' | 'RTX' => b === 'SAT' || b === 'GZ' || b === 'RTX'
-    );
-    return valid.length > 0 ? valid : ['SAT'];
-  }, [user.role, user.subBrandAccess]);
+  const activeSellingSubBrands = useMemo(
+    () => getSellingSubBrands(subBrands, { includeInactive: false, companySettings }),
+    [subBrands, companySettings]
+  );
+
+  const allowedSubBrands = useMemo<string[]>(() => {
+    const ids = getUserAllowedSubBrandIds(user, subBrands, {
+      includeInactive: false,
+      companySettings,
+    });
+    return ids.length > 0 ? ids : activeSellingSubBrands.map((sb) => sb.shortCode);
+  }, [user, subBrands, companySettings, activeSellingSubBrands]);
 
   const idempotencyKeyRef = useRef<string>(generateIdempotencyKey());
   const submitInFlightRef = useRef<boolean>(false);
@@ -247,7 +260,14 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
   const [supplierOrderRef, setSupplierOrderRef] = useState('');
   const [orderDate, setOrderDate] = useState<string>(() => getTodayIsoDate());
   const [estimatedDeliveryDate, setEstimatedDeliveryDate] = useState('');
-  const [subBrand, setSubBrand] = useState<'SAT' | 'GZ' | 'RTX'>(allowedSubBrands[0]);
+  const [subBrand, setSubBrand] = useState<string>(() =>
+    resolveDefaultSellingSubBrand({
+      globalBrandFilter,
+      user,
+      subBrands,
+      companySettings,
+    })
+  );
   const [notes, setNotes] = useState('');
   const [internalNotes, setInternalNotes] = useState('');
 
@@ -285,9 +305,23 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
 
   useEffect(() => {
     if (!allowedSubBrands.includes(subBrand)) {
-      setSubBrand(allowedSubBrands[0]);
+      setSubBrand(
+        resolveDefaultSellingSubBrand({
+          globalBrandFilter,
+          user,
+          subBrands,
+          companySettings,
+        })
+      );
     }
-  }, [allowedSubBrands, subBrand]);
+  }, [allowedSubBrands, subBrand, globalBrandFilter, user, subBrands, companySettings]);
+
+  useEffect(() => {
+    const code = normalizeSubBrandCode(globalBrandFilter);
+    if (code && allowedSubBrands.includes(code)) {
+      setSubBrand(code);
+    }
+  }, [globalBrandFilter, allowedSubBrands]);
 
   useEffect(() => {
     if (whatsappSameAsPhone) {
@@ -915,6 +949,7 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
       const result = await createPreOrder(
         {
           subBrand,
+          subBrandId: subBrand,
           customerId: existingCustomer?.id,
           customerCode: existingCustomer?.customerId,
           customerName: customerName.trim(),
@@ -1043,7 +1078,7 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
         </div>
 
         <div className="flex items-center gap-2">
-          <SubBrandBadge subBrand={subBrand} />
+          <SubBrandBadge subBrand={subBrand} subBrands={subBrands} />
           <PreOrderStatusBadge status={startStatus} />
         </div>
       </div>
@@ -1964,19 +1999,17 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
                 />
               </FormField>
 
-              <FormField label="Sub-Brand" required>
+              <FormField label="Selling Sub-Brand" required>
                 <Select
-                  options={allowedSubBrands.map((b) => ({
-                    value: b,
-                    label:
-                      b === 'SAT'
-                        ? 'SAT — Sky Automation Tech'
-                        : b === 'GZ'
-                        ? 'GZ — GadgetZone'
-                        : 'RTX — Robotics & Tech',
-                  }))}
+                  options={allowedSubBrands.map((b) => {
+                    const meta = activeSellingSubBrands.find((sb) => sb.shortCode === b);
+                    return {
+                      value: b,
+                      label: meta ? `${meta.shortCode} — ${meta.name}` : b,
+                    };
+                  })}
                   value={subBrand}
-                  onChange={(val) => setSubBrand(val as 'SAT' | 'GZ' | 'RTX')}
+                  onChange={(val) => setSubBrand(String(val))}
                   searchable={false}
                 />
               </FormField>
@@ -2019,7 +2052,7 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
               <h3 className="text-sm font-bold text-slate-900 dark:text-slate-100 font-display">
                 Order Summary
               </h3>
-              <SubBrandBadge subBrand={subBrand} />
+              <SubBrandBadge subBrand={subBrand} subBrands={subBrands} />
             </div>
 
             <div className="space-y-3 text-xs">

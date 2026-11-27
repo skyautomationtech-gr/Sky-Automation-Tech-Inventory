@@ -18,6 +18,7 @@ import { deleteDoc, doc, setDoc } from 'firebase/firestore';
 import { auth as firebaseAuth, authPersistenceReady, db, isFirebaseConfigured } from '../firebase/config';
 import { sendOTPEmail } from '../lib/emailjs';
 import { UserProfile, UserRole } from '../types';
+import { getSellingSubBrands } from '../utils/subBrands';
 import {
   perfMarkLoginClicked,
   perfMarkLoginScreenVisible,
@@ -88,8 +89,12 @@ export default function SplashAndAuth({
   // Detailed Signup fields
   const [phone, setPhone] = useState('');
   const [confirmPassword, setConfirmPassword] = useState('');
+  const sellingBrandsList = getSellingSubBrands(null);
   const [requestedRole, setRequestedRole] = useState<'staff' | 'admin' | 'manager'>('staff');
-  const [requestedSubBrands, setRequestedSubBrands] = useState<string[]>(['SAT']);
+  const [requestedSubBrands, setRequestedSubBrands] = useState<string[]>(() => {
+    const first = getSellingSubBrands(null)[0]?.shortCode;
+    return first ? [first] : ['GZ'];
+  });
   const [designation, setDesignation] = useState('');
   const [photoUrl, setPhotoUrl] = useState('');
   const [signupSuccess, setSignupSuccess] = useState(false);
@@ -268,7 +273,8 @@ export default function SplashAndAuth({
     setPhone('');
     setConfirmPassword('');
     setRequestedRole('staff');
-    setRequestedSubBrands(['SAT']);
+    const firstBrand = getSellingSubBrands(null)[0]?.shortCode;
+    setRequestedSubBrands(firstBrand ? [firstBrand] : ['GZ']);
     setDesignation('');
     setPhotoUrl('');
     setOtpSent(false);
@@ -841,21 +847,34 @@ export default function SplashAndAuth({
           {/* Sub-Brands Badges */}
           <div className="mt-8 pt-8 border-t border-slate-800/80">
             <p className="text-[11px] font-mono font-bold text-slate-500 uppercase tracking-widest mb-3">
-              Supported Retail & Distribution Brands
+              Parent Importer HQ · Active Selling Sub-Brands
             </p>
-            <div className="flex items-center gap-3">
-              <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-900/90 border border-slate-800 text-xs text-amber-400 font-bold">
-                <img src="/gz_logo.jpg" alt="GadgetZu" className="w-4 h-4 rounded object-contain bg-white p-0.5" onError={(e) => { e.currentTarget.onerror = null; e.currentTarget.src = "/gz_logo.jpg"; }} />
-                <span>GadgetZu (GZ)</span>
-              </div>
-              <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-900/90 border border-slate-800 text-xs text-teal-400 font-bold">
-                <img src="/rtx_logo.jpg" alt="RTX Gadget" className="w-4 h-4 rounded object-contain bg-white p-0.5" onError={(e) => { e.currentTarget.onerror = null; e.currentTarget.src = "/rtx_logo.jpg"; }} />
-                <span>RTX Gadget</span>
-              </div>
-              <div className="flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-900/90 border border-slate-800 text-xs text-[#D4AF37] font-bold">
-                <span className="w-2 h-2 rounded-full bg-[#D4AF37]" />
-                <span>SAT Core</span>
-              </div>
+            <div className="flex flex-wrap items-center gap-3">
+              {sellingBrandsList.map((brand) => (
+                <div
+                  key={brand.shortCode}
+                  className="flex items-center gap-2 px-3 py-2 rounded-xl bg-slate-900/90 border border-slate-800 text-xs font-bold text-slate-200"
+                >
+                  {brand.logoUrl ? (
+                    <img
+                      src={brand.logoUrl}
+                      alt={brand.name}
+                      className="w-4 h-4 rounded object-contain bg-white p-0.5"
+                      onError={(e) => {
+                        e.currentTarget.style.display = 'none';
+                      }}
+                    />
+                  ) : (
+                    <span
+                      className="w-2.5 h-2.5 rounded-full shrink-0"
+                      style={{ backgroundColor: brand.accentColor }}
+                    />
+                  )}
+                  <span>
+                    {brand.name} ({brand.shortCode})
+                  </span>
+                </div>
+              ))}
             </div>
           </div>
         </div>
@@ -1745,33 +1764,31 @@ export default function SplashAndAuth({
                           </div>
                           <div>
                             <label className="block text-xs font-semibold uppercase tracking-wider text-slate-400">
-                              Sub-brand Access <span className="text-red-400">*</span>
+                              Selling Sub-brand Access <span className="text-red-400">*</span>
                             </label>
-                            <div className="mt-1 grid grid-cols-3 gap-1.5">
-                              {[
-                                { id: 'SAT', name: 'SAT' },
-                                { id: 'GZ', name: 'GZ' },
-                                { id: 'RTX', name: 'RTX' }
-                              ].map(brand => {
-                                const isSelected = requestedSubBrands.includes(brand.id);
+                            <div className="mt-1 grid grid-cols-2 sm:grid-cols-3 gap-1.5">
+                              {sellingBrandsList.map((brand) => {
+                                const isSelected = requestedSubBrands.includes(brand.shortCode);
                                 return (
                                   <button
-                                    key={brand.id}
+                                    key={brand.shortCode}
                                     type="button"
                                     onClick={() => {
                                       if (isSelected) {
-                                        setRequestedSubBrands(requestedSubBrands.filter(b => b !== brand.id));
+                                        setRequestedSubBrands(
+                                          requestedSubBrands.filter((b) => b !== brand.shortCode)
+                                        );
                                       } else {
-                                        setRequestedSubBrands([...requestedSubBrands, brand.id]);
+                                        setRequestedSubBrands([...requestedSubBrands, brand.shortCode]);
                                       }
                                     }}
-                                    className={`py-2 px-1 text-center rounded-lg text-xs font-bold transition-all cursor-pointer ${
+                                    className={`py-2 px-2 text-center rounded-lg text-xs font-bold transition-all cursor-pointer ${
                                       isSelected
                                         ? 'bg-[#D4AF37]/20 text-amber-300 border border-[#D4AF37]'
                                         : 'bg-slate-950 text-slate-400 border border-slate-800 hover:border-slate-700'
                                     }`}
                                   >
-                                    {brand.name}
+                                    {brand.name} ({brand.shortCode})
                                   </button>
                                 );
                               })}

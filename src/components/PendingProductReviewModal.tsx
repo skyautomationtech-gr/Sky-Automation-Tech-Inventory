@@ -25,11 +25,12 @@ import {
   Loader2,
 } from 'lucide-react';
 import Barcode from './Barcode';
-import { Product } from '../types';
+import { CompanySettings, Product, SubBrand } from '../types';
 import {
   normalizeProductImages,
   buildCategoryPathLabel,
 } from '../utils/productImageUpload';
+import { formatBrandBadgeMeta } from '../utils/subBrands';
 
 interface PendingProductReviewModalProps {
   product: Product | null;
@@ -38,6 +39,8 @@ interface PendingProductReviewModalProps {
   canApprove: boolean;
   canEdit: boolean;
   actionLoading?: boolean;
+  subBrands?: SubBrand[];
+  companySettings?: CompanySettings | null;
   onClose: () => void;
   onEdit: (product: Product) => void;
   onRequestApprove: (product: Product) => void;
@@ -70,6 +73,8 @@ export default function PendingProductReviewModal({
   canApprove,
   canEdit,
   actionLoading = false,
+  subBrands,
+  companySettings,
   onClose,
   onEdit,
   onRequestApprove,
@@ -255,15 +260,17 @@ export default function PendingProductReviewModal({
 
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
-              <span
-                className={`text-[10px] font-mono font-black px-2 py-0.5 rounded-md uppercase border ${
-                  product.subBrand === 'SAT'
-                    ? 'bg-slate-900 text-amber-400 border-slate-800 dark:bg-amber-400/15 dark:text-amber-300 dark:border-amber-400/30'
-                    : 'bg-amber-100 text-amber-900 border-amber-200 dark:bg-amber-900/30 dark:text-amber-300 dark:border-amber-800'
-                }`}
-              >
-                {product.subBrand || 'SAT'}
-              </span>
+              {(() => {
+                const badge = formatBrandBadgeMeta(product.subBrand, subBrands, companySettings);
+                return (
+                  <span
+                    style={badge.badgeStyle}
+                    className="text-[10px] font-mono font-black px-2 py-0.5 rounded-md uppercase border"
+                  >
+                    {badge.shortLabel}
+                  </span>
+                );
+              })()}
               <span className={`text-[11px] font-bold px-2.5 py-0.5 rounded-full border ${statusBadge.cls}`}>
                 {statusBadge.label}
               </span>

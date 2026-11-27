@@ -20,15 +20,25 @@ import {
   ChevronRight,
   ShieldAlert
 } from 'lucide-react';
-import { Order, UserProfile } from '../types';
+import { CompanySettings, Order, SubBrand, UserProfile } from '../types';
 import { getOrders, getDueOrders, recordOrderPayment, deleteOrderPayment } from '../firebase/db';
+import {
+  formatBrandBadgeMeta,
+  getSellingSubBrands,
+  getUserAllowedSubBrandIds,
+  isLegacySatCode,
+  matchesGlobalBrandFilter,
+} from '../utils/subBrands';
 
 interface DuePaymentsProps {
   user: UserProfile | null;
   requireCheckIn?: () => boolean;
+  subBrands?: SubBrand[];
+  globalBrandFilter?: string;
+  companySettings?: CompanySettings | null;
 }
 
-export default function DuePayments({ user, requireCheckIn }: DuePaymentsProps) {
+export default function DuePayments({ user, requireCheckIn, subBrands, globalBrandFilter = 'ALL', companySettings }: DuePaymentsProps) {
   const [orders, setOrders] = useState<Order[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -166,9 +176,30 @@ export default function DuePayments({ user, requireCheckIn }: DuePaymentsProps) 
     }
   };
 
+  const isAdminOrSuper = user?.role === 'superadmin' || (user?.role as string) === 'super_admin' || user?.role === 'admin';
+  const allSellingSubBrands = useMemo(
+    () => getSellingSubBrands(subBrands, { includeInactive: true, companySettings }),
+    [subBrands, companySettings]
+  );
+  const allowedBrandIds = useMemo(
+    () => getUserAllowedSubBrandIds(user, subBrands, { includeInactive: true, companySettings }),
+    [user, subBrands, companySettings]
+  );
+  const filterBrandOptions = useMemo(
+    () => (isAdminOrSuper ? allSellingSubBrands : allSellingSubBrands.filter((sb) => allowedBrandIds.includes(sb.shortCode))),
+    [isAdminOrSuper, allSellingSubBrands, allowedBrandIds]
+  );
+
   // Search and filter logic (memoized + debounced)
   const filteredOrders = useMemo(() => orders.filter(o => {
     if (!o) return false;
+    if (!isAdminOrSuper && o.subBrand && !allowedBrandIds.includes(o.subBrand)) {
+      return false;
+    }
+    if (!matchesGlobalBrandFilter(o.subBrand, globalBrandFilter)) {
+      return false;
+    }
+
     const queryLower = (debouncedSearch || '').toLowerCase().trim();
     const custName = (o.customerName || '').toLowerCase();
     const custPhone = o.customerPhone || '';
@@ -181,7 +212,12 @@ export default function DuePayments({ user, requireCheckIn }: DuePaymentsProps) 
       ordId.includes(queryLower) ||
       invId.includes(queryLower);
 
-    const matchesBrand = subBrandFilter === '' || o.subBrand === subBrandFilter;
+    const matchesBrand =
+      subBrandFilter === ''
+        ? true
+        : subBrandFilter === 'LEGACY_SAT'
+        ? isLegacySatCode(o.subBrand)
+        : o.subBrand === subBrandFilter;
     const matchesStatus = paymentStatusFilter === '' || o.paymentStatus === paymentStatusFilter;
     
     const matchesTab = activeTab === 'still_due' ? o.amountDue > 0 : o.amountDue === 0;
@@ -194,7 +230,7 @@ export default function DuePayments({ user, requireCheckIn }: DuePaymentsProps) 
       return bLastPayment - aLastPayment;
     }
     return b.createdAt - a.createdAt;
-  }), [orders, debouncedSearch, subBrandFilter, paymentStatusFilter, activeTab]);
+  }), [orders, debouncedSearch, subBrandFilter, paymentStatusFilter, activeTab, globalBrandFilter, isAdminOrSuper, allowedBrandIds]);
 
   const totalPages = Math.max(1, Math.ceil(filteredOrders.length / pageSize));
   const safePage = Math.min(currentPage, totalPages);
@@ -351,10 +387,11 @@ export default function DuePayments({ user, requireCheckIn }: DuePaymentsProps) 
               onChange={(e) => setSubBrandFilter(e.target.value)}
               className="px-3 py-2 text-xs font-semibold rounded-xl bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-800 dark:text-slate-200 focus:outline-none cursor-pointer"
             >
-              <option value="">All Sub-Brands</option>
-              <option value="SAT">Sky Auto</option>
-              <option value="GZ">GadgetZu</option>
-              <option value="RTX">RTX Gadget</option>
+              <option value="">All Selling Sub-Brands</option>
+              {filterBrandOptions.map((sb) => (
+                <option key={sb.shortCode} value={sb.shortCode}>{sb.name} ({sb.shortCode}){!sb.active ? ' (Inactive)' : ''}</option>
+              ))}
+              {isAdminOrSuper && <option value="LEGACY_SAT">Legacy (SAT)</option>}
             </select>
           </div>
         </div>
@@ -384,7 +421,20 @@ export default function DuePayments({ user, requireCheckIn }: DuePaymentsProps) 
                   return (
                     <tr key={order.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors">
                       <td className="py-3 pl-2 font-mono font-bold text-slate-900 dark:text-white">
-                        <div>#{order.id.slice(-6).toUpperCase()}</div>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <span>#{order.id.slice(-6).toUpperCase()}</span>
+                          {(() => {
+                            const meta = formatBrandBadgeMeta(order.subBrand, subBrands, companySettings);
+                            return (
+                              <span
+                                style={meta.badgeStyle}
+                                className="px-1.5 py-0.2 text-[9px] font-bold rounded border uppercase"
+                              >
+                                {meta.shortLabel}
+                              </span>
+                            );
+                          })()}
+                        </div>
                         {order.source === 'pre_order' && order.preOrderNumber && (
                           <span className="inline-block mt-0.5 px-1.5 py-0.5 text-[9px] font-bold rounded bg-amber-100 text-amber-800 border border-amber-200">
                             PO: {order.preOrderNumber}

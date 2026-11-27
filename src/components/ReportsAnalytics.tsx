@@ -21,27 +21,56 @@ import {
   Expense, 
   Product, 
   UserProfile, 
-  SalesChannel 
+  SalesChannel,
+  SubBrand,
+  CompanySettings
 } from '../types';
 import { getOrders, getExpenses, getProducts } from '../firebase/db';
+import {
+  SHARED_ACCOUNTING_TAG,
+  PARENT_COMPANY_NAME,
+  getSellingSubBrands,
+  formatBrandBadgeMeta,
+  isLegacySatCode,
+  isSharedAccountingTag,
+  matchesGlobalBrandFilter,
+} from '../utils/subBrands';
+import { SubBrandBadge } from './PreOrders/PreOrderStatusBadge';
 
 interface ReportsAnalyticsProps {
   user: UserProfile | null;
+  subBrands?: SubBrand[];
+  companySettings?: CompanySettings | null;
+  globalBrandFilter?: string;
 }
 
-export default function ReportsAnalytics({ user }: ReportsAnalyticsProps) {
+export default function ReportsAnalytics({
+  user,
+  subBrands,
+  companySettings,
+  globalBrandFilter,
+}: ReportsAnalyticsProps) {
   const [orders, setOrders] = useState<Order[]>([]);
   const [expenses, setExpenses] = useState<Expense[]>([]);
   const [products, setProducts] = useState<Product[]>([]);
   const [loading, setLoading] = useState(true);
+
+  const sellingSubBrands = useMemo(
+    () => getSellingSubBrands(subBrands, { includeInactive: true, companySettings }),
+    [subBrands, companySettings]
+  );
 
   // Filters
   const [activeReportTab, setActiveReportTab] = useState<'sales' | 'profit_loss' | 'products_rank' | 'subbrand_comp' | 'channels'>('sales');
   const [dateRangeType, setDateRangeType] = useState<'today' | 'this_week' | 'this_month' | 'last_month' | 'this_year' | 'custom'>('this_month');
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
-  const [subBrandFilter, setSubBrandFilter] = useState<'ALL' | 'SAT' | 'GZ' | 'RTX'>('ALL');
+  const [subBrandFilter, setSubBrandFilter] = useState<string>(globalBrandFilter || 'ALL');
   const [filterLossMakingOnly, setFilterLossMakingOnly] = useState(false);
+
+  useEffect(() => {
+    setSubBrandFilter(globalBrandFilter || 'ALL');
+  }, [globalBrandFilter]);
 
   const isSuperAdmin = user?.role === 'superadmin';
   const isAdmin = user?.role === 'admin';
@@ -113,7 +142,7 @@ export default function ReportsAnalytics({ user }: ReportsAnalyticsProps) {
   const filteredOrders = useMemo(() => {
     return orders.filter(o => {
       const inDate = o.createdAt >= rangeStartTs && o.createdAt <= rangeEndTs;
-      const inSubBrand = subBrandFilter === 'ALL' || o.subBrand === subBrandFilter;
+      const inSubBrand = matchesGlobalBrandFilter(o.subBrand, subBrandFilter);
       if (!inDate || !inSubBrand) return false;
 
       if (filterLossMakingOnly) {
@@ -135,8 +164,19 @@ export default function ReportsAnalytics({ user }: ReportsAnalyticsProps) {
     return expenses.filter(e => {
       const eTime = new Date(e.date).getTime();
       const inDate = eTime >= rangeStartTs && eTime <= rangeEndTs;
-      const inSubBrand = subBrandFilter === 'ALL' || !e.subBrand || e.subBrand === subBrandFilter;
-      return inDate && inSubBrand;
+      if (!inDate) return false;
+      if (!subBrandFilter || subBrandFilter === 'ALL') return true;
+      if (subBrandFilter === 'LEGACY_SAT' || subBrandFilter === 'SAT') {
+        return isLegacySatCode(e.subBrand);
+      }
+      if (subBrandFilter === 'SHARED' || subBrandFilter === SHARED_ACCOUNTING_TAG) {
+        return !e.subBrand || isSharedAccountingTag(e.subBrand);
+      }
+      return (
+        !e.subBrand ||
+        isSharedAccountingTag(e.subBrand) ||
+        matchesGlobalBrandFilter(e.subBrand, subBrandFilter)
+      );
     });
   }, [expenses, rangeStartTs, rangeEndTs, subBrandFilter]);
 
@@ -222,11 +262,28 @@ export default function ReportsAnalytics({ user }: ReportsAnalyticsProps) {
     return Object.entries(channels).map(([name, data]) => ({ name, ...data }));
   }, [filteredOrders]);
 
-  // Sub-brand Comparison Stats
+  // Sub-brand Comparison Stats (Dynamic selling brands + Legacy SAT only when present)
   const subBrandComparisonStats = useMemo(() => {
-    const subs: ('SAT' | 'GZ' | 'RTX')[] = ['SAT', 'GZ', 'RTX'];
+    const subs: string[] = sellingSubBrands.map((sb) => sb.shortCode);
+    const hasLegacySat =
+      orders.some(
+        (o) =>
+          isLegacySatCode(o.subBrand) &&
+          o.createdAt >= rangeStartTs &&
+          o.createdAt <= rangeEndTs
+      ) ||
+      expenses.some((e) => {
+        const t = new Date(e.date).getTime();
+        return isLegacySatCode(e.subBrand) && t >= rangeStartTs && t <= rangeEndTs;
+      });
+    if (hasLegacySat && !subs.includes('SAT')) {
+      subs.push('SAT');
+    }
+
     return subs.map(sb => {
-      const sbOrders = orders.filter(o => o.subBrand === sb && o.createdAt >= rangeStartTs && o.createdAt <= rangeEndTs);
+      const sbOrders = orders.filter(
+        o => matchesGlobalBrandFilter(o.subBrand, sb) && o.createdAt >= rangeStartTs && o.createdAt <= rangeEndTs
+      );
       const validOrders = sbOrders.filter(o => o.status !== 'Returned/Cancelled');
       const rev = validOrders.reduce((sum, o) => sum + o.totalAmount, 0);
       
@@ -238,7 +295,7 @@ export default function ReportsAnalytics({ user }: ReportsAnalyticsProps) {
       });
 
       const sbExp = expenses
-        .filter(e => e.subBrand === sb && new Date(e.date).getTime() >= rangeStartTs && new Date(e.date).getTime() <= rangeEndTs)
+        .filter(e => matchesGlobalBrandFilter(e.subBrand, sb) && new Date(e.date).getTime() >= rangeStartTs && new Date(e.date).getTime() <= rangeEndTs)
         .reduce((sum, e) => sum + e.amount, 0);
 
       const netProf = rev - sbCogs - sbExp;
@@ -254,7 +311,7 @@ export default function ReportsAnalytics({ user }: ReportsAnalyticsProps) {
         netProfit: netProf
       };
     });
-  }, [orders, expenses, rangeStartTs, rangeEndTs, productCostMap]);
+  }, [orders, expenses, rangeStartTs, rangeEndTs, productCostMap, sellingSubBrands]);
 
   // CSV Export
   const handleExportCSV = () => {
@@ -289,7 +346,8 @@ export default function ReportsAnalytics({ user }: ReportsAnalyticsProps) {
     } else if (activeReportTab === 'subbrand_comp') {
       csvContent += 'Sub-Brand,Total Orders,Delivered Orders,Cancelled Orders,Revenue (BDT),Expenses (BDT),Net Profit (BDT)\n';
       subBrandComparisonStats.forEach(s => {
-        const row = [s.subBrand, s.totalOrders, s.deliveredOrders, s.cancelledOrders, s.revenue, s.expenses, s.netProfit].join(',');
+        const label = formatBrandBadgeMeta(s.subBrand, subBrands, companySettings).label;
+        const row = [`"${label}"`, s.totalOrders, s.deliveredOrders, s.cancelledOrders, s.revenue, s.expenses, s.netProfit].join(',');
         csvContent += row + '\n';
       });
     }
@@ -361,13 +419,17 @@ export default function ReportsAnalytics({ user }: ReportsAnalyticsProps) {
             <Filter size={14} className="text-gold-500" />
             <select
               value={subBrandFilter}
-              onChange={(e: any) => setSubBrandFilter(e.target.value)}
+              onChange={(e) => setSubBrandFilter(e.target.value)}
               className="bg-transparent font-semibold text-slate-800 dark:text-slate-200 focus:outline-none cursor-pointer"
             >
               <option value="ALL">All Sub-Brands</option>
-              <option value="SAT">Sky Auto</option>
-              <option value="GZ">GadgetZu</option>
-              <option value="RTX">RTX Gadget</option>
+              <option value="SHARED">Parent / Shared ({PARENT_COMPANY_NAME})</option>
+              {sellingSubBrands.map((sb) => (
+                <option key={sb.shortCode} value={sb.shortCode}>
+                  {sb.name} ({sb.shortCode})
+                </option>
+              ))}
+              <option value="LEGACY_SAT">Legacy (SAT)</option>
             </select>
           </div>
 
@@ -512,7 +574,9 @@ export default function ReportsAnalytics({ user }: ReportsAnalyticsProps) {
                       <td className="py-3 pl-2 font-mono font-bold text-slate-900 dark:text-white">#{o.id.slice(-6).toUpperCase()}</td>
                       <td className="py-3 text-slate-600 dark:text-slate-400">{new Date(o.createdAt).toLocaleDateString()}</td>
                       <td className="py-3 font-medium text-slate-800 dark:text-slate-200">{o.customerName}</td>
-                      <td className="py-3 font-semibold text-slate-700 dark:text-slate-300">{o.subBrand || 'SAT'}</td>
+                      <td className="py-3">
+                        <SubBrandBadge subBrand={o.subBrand} subBrands={subBrands} />
+                      </td>
                       <td className="py-3 text-slate-500">{o.salesChannel || 'Direct'}</td>
                       <td className="py-3 text-right font-bold text-slate-900 dark:text-white tabular-nums">৳ {o.totalAmount.toLocaleString()}</td>
                       <td className="py-3 text-center">
@@ -607,7 +671,7 @@ export default function ReportsAnalytics({ user }: ReportsAnalyticsProps) {
               {subBrandComparisonStats.map(sb => (
                 <div key={sb.subBrand} className="border border-slate-200 dark:border-slate-800 rounded-2xl p-5 bg-slate-50/50 dark:bg-slate-800/30 space-y-3">
                   <div className="flex items-center justify-between">
-                    <span className="text-base font-bold text-slate-900 dark:text-white">{sb.subBrand}</span>
+                    <SubBrandBadge subBrand={sb.subBrand} subBrands={subBrands} showFullName />
                     <span className="text-xs text-slate-400">{sb.totalOrders} total orders</span>
                   </div>
                   <div className="space-y-2 text-xs pt-2 border-t border-slate-200 dark:border-slate-800">
