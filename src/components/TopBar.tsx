@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { Suspense, useState, useEffect, useRef } from 'react';
 import { 
   Search, 
   Menu, 
@@ -22,9 +22,12 @@ import { UserProfile, Product, CompanySettings, RolePermissionsMap } from '../ty
 import NotificationCenter from './NotificationCenter';
 import { ThemeToggle } from '../design-system/ThemeToggle';
 import { TAB_DIRECTORY } from './Breadcrumbs';
-import { GlobalSearchPalette } from './GlobalSearchPalette';
 import { auth } from '../firebase/config';
 import { buildSidebarGroups, findActiveNavigationMatch } from '../navigation/sidebarConfig';
+
+const GlobalSearchPalette = React.lazy(() =>
+  import('./GlobalSearchPalette').then((m) => ({ default: m.GlobalSearchPalette }))
+);
 
 interface TopBarProps {
   currentTab: string;
@@ -266,16 +269,20 @@ export const TopBar: React.FC<TopBarProps> = ({
       </header>
 
       {/* Global Command Palette Search Modal */}
-      <GlobalSearchPalette
-        isOpen={isSearchOpen}
-        onClose={() => setIsSearchOpen(false)}
-        onNavigate={onNavigate}
-        user={user}
-        rolePermissions={rolePermissions}
-        products={products}
-        onToggleTheme={onToggleTheme}
-        onLogout={onLogout}
-      />
+      {isSearchOpen && (
+        <Suspense fallback={null}>
+          <GlobalSearchPalette
+            isOpen={isSearchOpen}
+            onClose={() => setIsSearchOpen(false)}
+            onNavigate={onNavigate}
+            user={user}
+            rolePermissions={rolePermissions}
+            products={products}
+            onToggleTheme={onToggleTheme}
+            onLogout={onLogout}
+          />
+        </Suspense>
+      )}
     </>
   );
 };

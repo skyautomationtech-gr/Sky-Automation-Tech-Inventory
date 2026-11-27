@@ -94,6 +94,8 @@ export default function ProductFormModal({
   const [formSellingPrice, setFormSellingPrice] = useState<number | ''>('');
   const [formReorderThreshold, setFormReorderThreshold] = useState<number | ''>(5);
   const [formImages, setFormImages] = useState<string[]>([]);
+  const [formImageThumbs, setFormImageThumbs] = useState<string[]>([]);
+  const [pendingPreviews, setPendingPreviews] = useState<Array<{ id: string; previewUrl: string; progress: number }>>([]);
   const [brokenImgIndexes, setBrokenImgIndexes] = useState<Record<number, boolean>>({});
   const [uploadingImages, setUploadingImages] = useState(false);
   const [formVariants, setFormVariants] = useState<Variant[]>([
@@ -179,6 +181,7 @@ export default function ProductFormModal({
       setFormSellingPrice(editModeProduct.sellingPrice ?? '');
       setFormReorderThreshold(editModeProduct.reorderThreshold ?? 5);
       setFormImages(normalizeProductImages(editModeProduct));
+      setFormImageThumbs(Array.isArray(editModeProduct.imageThumbs) ? [...editModeProduct.imageThumbs] : []);
       setFormVariants(
         editModeProduct.variants && editModeProduct.variants.length > 0
           ? editModeProduct.variants.map((v) => ({ ...v }))
@@ -204,6 +207,7 @@ export default function ProductFormModal({
       setFormSellingPrice('');
       setFormReorderThreshold(5);
       setFormImages([]);
+      setFormImageThumbs([]);
       setFormVariants([{ id: Date.now().toString(), color: 'Default', model: 'Standard', stock: 10 }]);
       setWizardStep(1);
       setWizardMaxStep(1);
@@ -430,20 +434,47 @@ export default function ProductFormModal({
 
     setFormError('');
     setUploadingImages(true);
-    const uploadedUrls: string[] = [];
+
+    // Immediate instant previews via URL.createObjectURL while compressing + uploading in parallel
+    const batch = files.map((file, idx) => ({
+      id: `${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
+      file,
+      previewUrl: URL.createObjectURL(file),
+    }));
+    setPendingPreviews((prev) => [
+      ...prev,
+      ...batch.map((b) => ({ id: b.id, previewUrl: b.previewUrl, progress: 5 })),
+    ]);
+
     const errors: string[] = [];
+    const results = await Promise.all(
+      batch.map(async (item) => {
+        try {
+          const res = await uploadProductImage(item.file, formSku || formName || 'product', {
+            onProgress: (pct) => {
+              setPendingPreviews((prev) =>
+                prev.map((p) => (p.id === item.id ? { ...p, progress: pct } : p))
+              );
+            },
+          });
+          return res;
+        } catch (err: any) {
+          errors.push(err?.message || `Failed to process "${item.file.name}".`);
+          return null;
+        } finally {
+          URL.revokeObjectURL(item.previewUrl);
+          setPendingPreviews((prev) => prev.filter((p) => p.id !== item.id));
+        }
+      })
+    );
 
-    for (const file of files) {
-      try {
-        const res = await uploadProductImage(file, formSku || formName || 'product');
-        uploadedUrls.push(res.url);
-      } catch (err: any) {
-        errors.push(err?.message || `Failed to process "${file.name}".`);
-      }
-    }
-
-    if (uploadedUrls.length > 0) {
-      setFormImages((prev) => [...prev, ...uploadedUrls]);
+    const valid = results.filter((r): r is NonNullable<typeof r> => r !== null);
+    if (valid.length > 0) {
+      setFormImages((prev) => [...prev, ...valid.map((v) => v.url)]);
+      setFormImageThumbs((prev) => {
+        const padded = formImages.map((u, idx) => prev[idx] || u);
+        return [...padded, ...valid.map((v) => v.thumbUrl || v.url)];
+      });
     }
     if (errors.length > 0) {
       setFormError(errors.join(' '));
@@ -459,6 +490,13 @@ export default function ProductFormModal({
       next.splice(toIdx, 0, moved);
       return next;
     });
+    setFormImageThumbs((prev) => {
+      if (prev.length === 0) return prev;
+      const next = [...prev];
+      const [moved] = next.splice(fromIdx, 1);
+      next.splice(toIdx, 0, moved || '');
+      return next;
+    });
     setBrokenImgIndexes({});
   };
 
@@ -469,6 +507,7 @@ export default function ProductFormModal({
 
   const removeImage = (idx: number) => {
     setFormImages((prev) => prev.filter((_, i) => i !== idx));
+    setFormImageThumbs((prev) => prev.filter((_, i) => i !== idx));
     setBrokenImgIndexes({});
   };
 
@@ -600,6 +639,9 @@ export default function ProductFormModal({
       ? Number(editModeProduct?.costPrice ?? 0)
       : Number(formCostPrice || 0);
     const cleanImages = formImages.filter(Boolean);
+    const cleanThumbs = formImageThumbs
+      .slice(0, cleanImages.length)
+      .filter(Boolean);
     const nowTs = Date.now();
 
     const basePayload: Omit<Product, 'id'> = {
@@ -618,6 +660,7 @@ export default function ProductFormModal({
       reorderThreshold: Number(formReorderThreshold || 0),
       images: cleanImages,
       imageUrls: cleanImages,
+      ...(cleanThumbs.length > 0 ? { imageThumbs: cleanThumbs } : {}),
       variants: updatedVariants,
       archived: false,
       createdAt: editModeProduct ? editModeProduct.createdAt : nowTs,
@@ -1547,10 +1590,32 @@ export default function ProductFormModal({
                     </div>
                   ))}
 
+                  {pendingPreviews.map((p) => (
+                    <div
+                      key={p.id}
+                      className="relative aspect-square rounded-xl overflow-hidden border border-amber-400 bg-slate-900"
+                    >
+                      <img
+                        src={p.previewUrl}
+                        alt="Uploading preview"
+                        className="w-full h-full object-cover opacity-70"
+                      />
+                      <div className="absolute inset-x-0 bottom-0 p-1.5 bg-slate-950/80 text-white text-[10px] font-mono font-bold text-center">
+                        <div className="w-full h-1 bg-slate-700 rounded-full overflow-hidden mb-1">
+                          <div
+                            className="h-full bg-amber-400 transition-all duration-150"
+                            style={{ width: `${p.progress}%` }}
+                          />
+                        </div>
+                        Uploading {p.progress}%
+                      </div>
+                    </div>
+                  ))}
+
                   <label className="aspect-square rounded-xl border-2 border-dashed border-slate-300 dark:border-slate-700 hover:border-amber-400 hover:bg-amber-50/50 dark:hover:bg-amber-950/20 flex flex-col items-center justify-center text-slate-500 dark:text-slate-400 cursor-pointer transition-colors">
                     {uploadingImages ? <Loader2 size={18} className="animate-spin" /> : <Upload size={18} />}
                     <span className="text-[10px] font-bold mt-1 uppercase tracking-wider">
-                      {uploadingImages ? 'Adding...' : 'Add Photo'}
+                      {uploadingImages ? 'Uploading...' : 'Add Photo'}
                     </span>
                     <input
                       type="file"

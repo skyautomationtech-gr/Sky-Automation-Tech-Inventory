@@ -1,87 +1,43 @@
-import React, { useState, useEffect } from 'react';
-import { 
-  DollarSign, 
-  Package, 
-  AlertTriangle, 
-  PlusCircle, 
-  TrendingUp, 
+import React, { Suspense, lazy, useState, useEffect, useMemo } from 'react';
+import {
+  DollarSign,
+  Package,
+  AlertTriangle,
+  PlusCircle,
+  TrendingUp,
   Layers,
   Sparkles,
   ArrowRight,
   ShieldCheck,
-  UserCircle,
-  Clock,
-  LogOut,
-  LogIn,
-  MessageSquare,
-  Search,
   ShoppingBag,
   Receipt,
-  BarChart3,
   Users,
-  CheckCircle,
   AlertCircle,
   Coins,
-  Truck,
-  Percent,
   Calculator,
-  Wallet,
-  Building2,
   ChevronRight,
-  RefreshCw,
-  Zap
 } from 'lucide-react';
-import { 
-  ResponsiveContainer, 
-  BarChart, 
-  Bar, 
-  LineChart, 
-  Line, 
-  PieChart, 
-  Pie, 
-  Cell, 
-  XAxis, 
-  YAxis, 
-  Tooltip, 
-  Legend, 
-  CartesianGrid 
-} from 'recharts';
-import { 
-  Product, 
-  UserProfile, 
-  Order, 
-  Customer, 
-  Invoice,
-  Investment,
-  OtherReceivable,
-  CompanyPurchase,
-  PaymentPlatformEntry,
-  CompanyLoss,
-  ImportShippingRecord,
-  StockPurchaseRecord,
-  Expense
-} from '../types';
-import { 
-  checkInUser, 
-  checkOutUser, 
-  getTodayAttendance, 
-  getOrders, 
+import { collection, onSnapshot, query } from 'firebase/firestore';
+import type { Product, UserProfile, Order, Customer, Invoice } from '../types';
+import {
+  checkInUser,
+  checkOutUser,
+  getTodayAttendance,
+  getOrders,
   getCustomers,
   getInvoices,
   getAllUsers,
-  getInvestments,
-  getOtherReceivables,
-  getCompanyPurchases,
-  getPaymentPlatformEntries,
-  getCompanyLosses,
-  getImportShippingRecords,
-  getExpenses,
-  getAccountingBaselineSettings,
-  subscribeToAccountingBaselineSettings,
-  getCashTransactions,
-  subscribeToCashTransactions
+  localStore,
 } from '../firebase/db';
-import { auth } from '../firebase/config';
+import { auth, db } from '../firebase/config';
+import { perfTrackListener } from '../utils/perfLogger';
+
+const DashboardSalesTrendChart = lazy(() =>
+  import('./DashboardCharts').then((m) => ({ default: m.DashboardSalesTrendChart }))
+);
+const DashboardCategoryStockChart = lazy(() =>
+  import('./DashboardCharts').then((m) => ({ default: m.DashboardCategoryStockChart }))
+);
 
 interface DashboardViewProps {
   products: Product[];
@@ -94,11 +50,10 @@ export default function DashboardView({
   products,
   user,
   onNavigateToTab,
-  onUserUpdate
+  onUserUpdate,
 }: DashboardViewProps) {
-  const isStaff = user?.role === 'staff';
   const isAdminOrSuperAdmin = user?.role === 'admin' || user?.role === 'superadmin';
-  
+
   const [attendanceRecords, setAttendanceRecords] = useState<any[]>([]);
   const [loadingAttendance, setLoadingAttendance] = useState(false);
   const [processingAttendance, setProcessingAttendance] = useState(false);
@@ -107,74 +62,78 @@ export default function DashboardView({
   const [searchQuery, setSearchQuery] = useState('');
   const [searchResults, setSearchResults] = useState<any[]>([]);
   const [isSearching, setIsSearching] = useState(false);
-  const [allOrders, setAllOrders] = useState<Order[]>([]);
-  const [allCustomers, setAllCustomers] = useState<Customer[]>([]);
-  const [allInvoices, setAllInvoices] = useState<Invoice[]>([]);
-  const [allUsers, setAllUsers] = useState<UserProfile[]>([]);
-  const [loadingData, setLoadingData] = useState(true);
+  const [allOrders, setAllOrders] = useState<Order[]>(
+    () => localStore.get<Order[]>('orders')?.slice(0, 250) || []
+  );
+  const [allCustomers, setAllCustomers] = useState<Customer[]>(
+    () => localStore.get<Customer[]>('customers')?.slice(0, 200) || []
+  );
+  const [allInvoices, setAllInvoices] = useState<Invoice[]>(
+    () => localStore.get<Invoice[]>('invoices')?.slice(0, 150) || []
+  );
+  const [allUsers, setAllUsers] = useState<UserProfile[]>(
+    () => localStore.get<UserProfile[]>('all_users') || []
+  );
+  const [loadingData, setLoadingData] = useState(
+    () => !(localStore.get<Order[]>('orders')?.length)
+  );
   const [liveLoginCodes, setLiveLoginCodes] = useState<any[]>([]);
 
   useEffect(() => {
     if (user?.role !== 'superadmin' || !auth?.currentUser) return;
-    
-    let unsubscribe: any = null;
-    let isMounted = true;
-    
-    const setupListener = async () => {
-      try {
-        const { collection, onSnapshot, query } = await import('firebase/firestore');
-        const { db } = await import('../firebase/config');
-        
-        if (!isMounted || !auth?.currentUser) return;
-        
-        const q = query(collection(db, 'liveLoginCodes'));
-        unsubscribe = onSnapshot(q, (snapshot: any) => {
-          const codes: any[] = [];
-          snapshot.forEach((docSnap: any) => {
-            codes.unshift({ id: docSnap.id, ...docSnap.data() });
-          });
-          setLiveLoginCodes(codes);
-        }, (err: any) => {
-          console.warn('Live login codes listener notice:', err);
+
+    const releaseListener = perfTrackListener('liveLoginCodes/dashboard');
+    const q = query(collection(db, 'liveLoginCodes'));
+    const unsubscribe = onSnapshot(
+      q,
+      (snapshot) => {
+        const codes: any[] = [];
+        snapshot.forEach((docSnap) => {
+          codes.unshift({ id: docSnap.id, ...docSnap.data() });
         });
-      } catch (e) {
-        console.warn('Live login codes setup notice:', e);
+        setLiveLoginCodes(codes);
+      },
+      (err) => {
+        console.warn('Live login codes listener notice:', err);
       }
-    };
-    
-    setupListener();
-    
+    );
+
     return () => {
-      isMounted = false;
-      if (unsubscribe) unsubscribe();
+      releaseListener();
+      unsubscribe();
     };
-  }, [user]);
+  }, [user?.role]);
 
   useEffect(() => {
     if (!auth?.currentUser) {
       setLoadingData(false);
       return;
     }
+    let cancelled = false;
     const fetchDashboardData = async () => {
-      setLoadingData(true);
+      if (allOrders.length === 0) setLoadingData(true);
       try {
         const [orders, customers, invoices, users] = await Promise.all([
-          getOrders(),
-          getCustomers(),
-          getInvoices(),
-          isAdminOrSuperAdmin ? getAllUsers() : Promise.resolve([])
+          getOrders({ limitCount: 250 }),
+          getCustomers({ limitCount: 200 }),
+          getInvoices({ limitCount: 150 }),
+          isAdminOrSuperAdmin ? getAllUsers() : Promise.resolve([]),
         ]);
+        if (cancelled) return;
         setAllOrders(orders || []);
         setAllCustomers(customers || []);
         setAllInvoices(invoices || []);
         setAllUsers(users || []);
       } catch (err) {
-        console.error("Error fetching dashboard data", err);
+        console.error('Error fetching dashboard data', err);
       } finally {
-        setLoadingData(false);
+        if (!cancelled) setLoadingData(false);
       }
     };
     fetchDashboardData();
+    return () => {
+      cancelled = true;
+    };
   }, [user?.id, isAdminOrSuperAdmin]);
 
   useEffect(() => {
@@ -283,120 +242,102 @@ export default function DashboardView({
 
   const isCheckedIn = user?.currentSessionStatus === 'checked_in';
   
-  // Filter approved products for dashboard metrics and display
-  const approvedProducts = products.filter(product => product.status === 'approved' && !product.archived);
+  const dashboardMetrics = useMemo(() => {
+    const approvedProducts = products.filter(
+      (product) => product.status === 'approved' && !product.archived
+    );
 
-  // Dynamic stats calculation
-  let totalStockUnits = 0;
-  let totalStockValue = 0;
-  let lowStockCount = 0;
+    let totalStockUnits = 0;
+    let totalStockValue = 0;
+    let lowStockCount = 0;
 
-  approvedProducts.forEach(product => {
-    const productQty = product.variants.reduce((sum, v) => sum + (v.stock || 0), 0);
-    totalStockUnits += productQty;
-    
-    // Total stock value is cost price * total product quantity
-    totalStockValue += (product.costPrice || 0) * productQty;
+    approvedProducts.forEach((product) => {
+      const productQty = product.variants.reduce((sum, v) => sum + (v.stock || 0), 0);
+      totalStockUnits += productQty;
+      totalStockValue += (product.costPrice || 0) * productQty;
+      if (productQty <= product.reorderThreshold) {
+        lowStockCount++;
+      }
+    });
 
-    if (productQty <= product.reorderThreshold) {
-      lowStockCount++;
+    const isSameDay = (timestamp: number, targetDate: Date) => {
+      const d = new Date(timestamp);
+      return (
+        d.getFullYear() === targetDate.getFullYear() &&
+        d.getMonth() === targetDate.getMonth() &&
+        d.getDate() === targetDate.getDate()
+      );
+    };
+
+    const today = new Date();
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+
+    const startOfThisMonth = new Date();
+    startOfThisMonth.setDate(1);
+    startOfThisMonth.setHours(0, 0, 0, 0);
+    const monthStartMs = startOfThisMonth.getTime();
+
+    const todayOrders = allOrders.filter(
+      (o) => isSameDay(o.createdAt, today) && o.status !== 'Returned/Cancelled'
+    );
+    const todaySales = todayOrders.reduce((sum, o) => sum + o.totalAmount, 0);
+    const todayOrdersCount = todayOrders.length;
+
+    const yesterdayOrders = allOrders.filter(
+      (o) => isSameDay(o.createdAt, yesterday) && o.status !== 'Returned/Cancelled'
+    );
+    const yesterdaySales = yesterdayOrders.reduce((sum, o) => sum + o.totalAmount, 0);
+
+    let vsYesterdayPercent = 0;
+    if (yesterdaySales > 0) {
+      vsYesterdayPercent = Math.round(((todaySales - yesterdaySales) / yesterdaySales) * 100);
+    } else if (todaySales > 0) {
+      vsYesterdayPercent = 100;
     }
-  });
 
-  // Date helpers
-  const isSameDay = (timestamp: number, targetDate: Date) => {
-    const d = new Date(timestamp);
-    return d.getFullYear() === targetDate.getFullYear() &&
-           d.getMonth() === targetDate.getMonth() &&
-           d.getDate() === targetDate.getDate();
-  };
+    const dueOrders = allOrders.filter(
+      (o) =>
+        (o.paymentStatus === 'Due' || o.paymentStatus === 'Partial') &&
+        o.status !== 'Returned/Cancelled' &&
+        o.amountDue > 0
+    );
+    const totalDue = dueOrders.reduce((sum, o) => sum + o.amountDue, 0);
 
-  const today = new Date();
-  
-  const yesterday = new Date();
-  yesterday.setDate(yesterday.getDate() - 1);
+    const activeOrders = allOrders.filter((o) => o.status !== 'Returned/Cancelled');
+    const activePaidSum = activeOrders.reduce((sum, o) => sum + o.amountPaid, 0);
+    const activeDueSum = activeOrders.reduce((sum, o) => sum + o.amountDue, 0);
+    const collectionRate =
+      activePaidSum + activeDueSum > 0
+        ? Math.round((activePaidSum / (activePaidSum + activeDueSum)) * 100)
+        : 100;
 
-  const lastMonthSameDay = new Date();
-  lastMonthSameDay.setMonth(lastMonthSameDay.getMonth() - 1);
+    const pendingProductsCount = products.filter(
+      (p) => p.status === 'pending_review' && !p.archived
+    ).length;
+    const pendingUsersCount = allUsers.filter((u) => u.status === 'pending_approval').length;
 
-  const startOfThisMonth = new Date();
-  startOfThisMonth.setDate(1);
-  startOfThisMonth.setHours(0, 0, 0, 0);
+    const salesMap = new Map<
+      string,
+      { id: string; name: string; shortName: string; qty: number; revenue: number }
+    >();
+    const monthOrders = allOrders.filter(
+      (o) => o.createdAt >= monthStartMs && o.status !== 'Returned/Cancelled'
+    );
 
-  // Today's Sales
-  const todayOrders = allOrders.filter(o => isSameDay(o.createdAt, today) && o.status !== 'Returned/Cancelled');
-  const todaySales = todayOrders.reduce((sum, o) => sum + o.totalAmount, 0);
-  const todayOrdersCount = todayOrders.length;
+    const subBrandSales = {
+      SAT: { revenue: 0, orders: 0 },
+      GZ: { revenue: 0, orders: 0 },
+      RTX: { revenue: 0, orders: 0 },
+    };
 
-  // Yesterday's Sales
-  const yesterdayOrders = allOrders.filter(o => isSameDay(o.createdAt, yesterday) && o.status !== 'Returned/Cancelled');
-  const yesterdaySales = yesterdayOrders.reduce((sum, o) => sum + o.totalAmount, 0);
-
-  // Last Month Same Day Sales
-  const lastMonthSameDayOrders = allOrders.filter(o => isSameDay(o.createdAt, lastMonthSameDay) && o.status !== 'Returned/Cancelled');
-  const lastMonthSameDaySales = lastMonthSameDayOrders.reduce((sum, o) => sum + o.totalAmount, 0);
-
-  // Percent indicators
-  let vsYesterdayPercent = 0;
-  if (yesterdaySales > 0) {
-    vsYesterdayPercent = Math.round(((todaySales - yesterdaySales) / yesterdaySales) * 100);
-  } else if (todaySales > 0) {
-    vsYesterdayPercent = 100;
-  }
-
-  let vsLastMonthSameDayPercent = 0;
-  if (lastMonthSameDaySales > 0) {
-    vsLastMonthSameDayPercent = Math.round(((todaySales - lastMonthSameDaySales) / lastMonthSameDaySales) * 100);
-  } else if (todaySales > 0) {
-    vsLastMonthSameDayPercent = 100;
-  }
-
-  // Profit Summary
-  const productCostMap = new Map<string, number>();
-  products.forEach(p => {
-    productCostMap.set(p.id, p.costPrice || 0);
-  });
-
-  const getOrderProfit = (order: Order) => {
-    return order.items.reduce((sum, item) => {
-      const costPrice = productCostMap.has(item.productId) 
-        ? productCostMap.get(item.productId)! 
-        : (item.unitPrice * 0.7);
-      const profitPerUnit = item.unitPrice - costPrice;
-      return sum + (profitPerUnit * item.qty);
-    }, 0);
-  };
-
-  const isConfirmedOrDelivered = (o: Order) => ['Confirmed', 'Packed', 'Shipped', 'Delivered'].includes(o.status);
-
-  const todayOrdersForProfit = allOrders.filter(o => isSameDay(o.createdAt, today) && isConfirmedOrDelivered(o));
-  const todayProfit = todayOrdersForProfit.reduce((sum, o) => sum + getOrderProfit(o), 0);
-
-  const thisMonthOrdersForProfit = allOrders.filter(o => o.createdAt >= startOfThisMonth.getTime() && isConfirmedOrDelivered(o));
-  const thisMonthProfit = thisMonthOrdersForProfit.reduce((sum, o) => sum + getOrderProfit(o), 0);
-
-  // Due Payments Summary (Receivables)
-  const dueOrders = allOrders.filter(o => (o.paymentStatus === 'Due' || o.paymentStatus === 'Partial') && o.status !== 'Returned/Cancelled' && o.amountDue > 0);
-  const totalDue = dueOrders.reduce((sum, o) => sum + o.amountDue, 0);
-  
-  const activeOrders = allOrders.filter(o => o.status !== 'Returned/Cancelled');
-  const activePaidSum = activeOrders.reduce((sum, o) => sum + o.amountPaid, 0);
-  const activeDueSum = activeOrders.reduce((sum, o) => sum + o.amountDue, 0);
-  const collectionRate = (activePaidSum + activeDueSum) > 0 
-    ? Math.round((activePaidSum / (activePaidSum + activeDueSum)) * 100) 
-    : 100;
-
-  // Pending Reviews
-  const pendingProductsCount = products.filter(p => p.status === 'pending_review' && !p.archived).length;
-  const pendingUsersCount = allUsers.filter(u => u.status === 'pending_approval').length;
-
-  // Top Selling Products (This Month)
-  const getTopSellingProducts = () => {
-    const salesMap = new Map<string, { id: string; name: string; shortName: string; qty: number; revenue: number }>();
-    const monthOrders = allOrders.filter(o => o.createdAt >= startOfThisMonth.getTime() && o.status !== 'Returned/Cancelled');
-    
-    monthOrders.forEach(order => {
-      order.items.forEach(item => {
+    monthOrders.forEach((order) => {
+      const sub = (order.subBrand || 'SAT') as keyof typeof subBrandSales;
+      if (subBrandSales[sub]) {
+        subBrandSales[sub].revenue += order.totalAmount;
+        subBrandSales[sub].orders++;
+      }
+      order.items.forEach((item) => {
         const pName = item.productName || 'Unknown Product';
         const existing = salesMap.get(item.productId);
         if (existing) {
@@ -408,102 +349,98 @@ export default function DashboardView({
             name: pName,
             shortName: pName.length > 22 ? pName.slice(0, 20) + '…' : pName,
             qty: item.qty,
-            revenue: item.qty * item.unitPrice
+            revenue: item.qty * item.unitPrice,
           });
         }
       });
     });
-    
-    return Array.from(salesMap.values())
+
+    const topSellingProducts = Array.from(salesMap.values())
       .sort((a, b) => b.qty - a.qty)
       .slice(0, 5);
-  };
-  const topSellingProducts = getTopSellingProducts();
 
-  // Sub-brand Breakdown
-  const getSubBrandSales = () => {
-    const breakdown = {
-      SAT: { revenue: 0, orders: 0 },
-      GZ: { revenue: 0, orders: 0 },
-      RTX: { revenue: 0, orders: 0 }
-    };
-    const monthOrders = allOrders.filter(o => o.createdAt >= startOfThisMonth.getTime() && o.status !== 'Returned/Cancelled');
-    
-    monthOrders.forEach(o => {
-      const sub = (o.subBrand || 'SAT') as keyof typeof breakdown;
-      if (breakdown[sub]) {
-        breakdown[sub].revenue += o.totalAmount;
-        breakdown[sub].orders++;
-      }
-    });
-    return breakdown;
-  };
-  const subBrandSales = getSubBrandSales();
+    const activeStaff = allUsers.filter((u) => u.currentSessionStatus === 'checked_in');
 
-  // Reorder List
-  const reorderList = products
-    .filter(p => !p.archived && p.status === 'approved')
-    .map(p => {
-      const stock = p.variants.reduce((sum, v) => sum + (v.stock || 0), 0);
-      return { ...p, stock };
-    })
-    .filter(p => p.stock <= p.reorderThreshold)
-    .sort((a, b) => a.stock - b.stock)
-    .slice(0, 5);
-
-  // Active Staff
-  const activeStaff = allUsers.filter(u => u.currentSessionStatus === 'checked_in');
-
-  // Weekly Trend
-  const getWeeklySalesTrend = () => {
-    const trend: { day: string; amount: number; count: number }[] = [];
+    const weeklySalesTrend: { day: string; amount: number; count: number }[] = [];
     for (let i = 6; i >= 0; i--) {
       const d = new Date();
       d.setDate(d.getDate() - i);
-      d.setHours(0,0,0,0);
-      
-      const dayOrders = allOrders.filter(o => {
+      d.setHours(0, 0, 0, 0);
+
+      const dayOrders = allOrders.filter((o) => {
         const orderDate = new Date(o.createdAt);
-        return orderDate.getFullYear() === d.getFullYear() &&
-               orderDate.getMonth() === d.getMonth() &&
-               orderDate.getDate() === d.getDate() &&
-               o.status !== 'Returned/Cancelled';
+        return (
+          orderDate.getFullYear() === d.getFullYear() &&
+          orderDate.getMonth() === d.getMonth() &&
+          orderDate.getDate() === d.getDate() &&
+          o.status !== 'Returned/Cancelled'
+        );
       });
-      
+
       const dayAmount = dayOrders.reduce((sum, o) => sum + o.totalAmount, 0);
       const dayName = d.toLocaleDateString([], { weekday: 'short' });
-      trend.push({
+      weeklySalesTrend.push({
         day: dayName,
         amount: dayAmount,
-        count: dayOrders.length
+        count: dayOrders.length,
       });
     }
-    return trend;
-  };
-  const weeklySalesTrend = getWeeklySalesTrend();
 
-  const getCategoryStockData = () => {
     const catMap: Record<string, number> = {};
-    products.forEach(p => {
-      if (p.archived || p.status !== 'approved') return;
+    approvedProducts.forEach((p) => {
       const cat = p.mainCategory || p.category || 'Uncategorized';
       const stock = p.variants.reduce((sum, v) => sum + (v.stock || 0), 0);
       catMap[cat] = (catMap[cat] || 0) + stock;
     });
-    return Object.entries(catMap).map(([name, value]) => ({ name, value }));
-  };
-  const categoryStockData = getCategoryStockData();
-  const COLORS = ['#D4AF37', '#10b981', '#3b82f6', '#f59e0b', '#8b5cf6', '#ec4899', '#008080'];
+    const categoryStockData = Object.entries(catMap).map(([name, value]) => ({ name, value }));
 
-  // Recent Orders (5)
-  const recentOrders = [...allOrders]
-    .sort((a, b) => b.createdAt - a.createdAt)
-    .slice(0, 5);
+    const recentOrders = [...allOrders]
+      .sort((a, b) => b.createdAt - a.createdAt)
+      .slice(0, 5);
+    const recentInvoices = [...allInvoices]
+      .sort((a, b) => b.generatedAt - a.generatedAt)
+      .slice(0, 5);
 
-  // Recent Invoices (5)
-  const recentInvoices = [...allInvoices]
-    .sort((a, b) => b.generatedAt - a.generatedAt)
-    .slice(0, 5);
+    return {
+      totalStockUnits,
+      totalStockValue,
+      lowStockCount,
+      todaySales,
+      todayOrdersCount,
+      vsYesterdayPercent,
+      totalDue,
+      collectionRate,
+      pendingProductsCount,
+      pendingUsersCount,
+      topSellingProducts,
+      subBrandSales,
+      activeStaff,
+      weeklySalesTrend,
+      categoryStockData,
+      recentOrders,
+      recentInvoices,
+    };
+  }, [products, allOrders, allInvoices, allUsers]);
+
+  const {
+    totalStockUnits,
+    totalStockValue,
+    lowStockCount,
+    todaySales,
+    todayOrdersCount,
+    vsYesterdayPercent,
+    totalDue,
+    collectionRate,
+    pendingProductsCount,
+    pendingUsersCount,
+    topSellingProducts,
+    subBrandSales,
+    activeStaff,
+    weeklySalesTrend,
+    categoryStockData,
+    recentOrders,
+    recentInvoices,
+  } = dashboardMetrics;
 
   const getSubBrandBadge = (subBrand: string) => {
     switch (subBrand?.toUpperCase()) {
@@ -732,24 +669,9 @@ export default function DashboardView({
           </div>
 
           <div className="h-72 w-full">
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={weeklySalesTrend} margin={{ top: 10, right: 10, left: -10, bottom: 0 }}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="#334155" opacity={0.15} />
-                <XAxis dataKey="day" stroke="#94a3b8" fontSize={12} tickLine={false} axisLine={false} />
-                <YAxis stroke="#94a3b8" fontSize={12} tickLine={false} axisLine={false} tickFormatter={(v) => `৳${v >= 1000 ? `${v/1000}k` : v}`} />
-                <Tooltip 
-                  contentStyle={{ 
-                    backgroundColor: '#0f172a', 
-                    borderColor: '#334155', 
-                    borderRadius: '0.75rem', 
-                    color: '#f8fafc',
-                    fontSize: '12px'
-                  }}
-                  formatter={(value: any) => [`৳ ${Number(value).toLocaleString()}`, 'Revenue']}
-                />
-                <Bar dataKey="amount" fill="#D4AF37" radius={[6, 6, 0, 0]} maxBarSize={48} />
-              </BarChart>
-            </ResponsiveContainer>
+            <Suspense fallback={<div className="h-full w-full rounded-xl bg-slate-100 dark:bg-slate-800/60 animate-pulse" />}>
+              <DashboardSalesTrendChart data={weeklySalesTrend} />
+            </Suspense>
           </div>
         </div>
 
@@ -765,32 +687,9 @@ export default function DashboardView({
 
           <div className="h-56 w-full my-4 flex items-center justify-center">
             {categoryStockData.length > 0 ? (
-              <ResponsiveContainer width="100%" height="100%">
-                <PieChart>
-                  <Pie
-                    data={categoryStockData}
-                    cx="50%"
-                    cy="50%"
-                    innerRadius={50}
-                    outerRadius={80}
-                    paddingAngle={4}
-                    dataKey="value"
-                  >
-                    {categoryStockData.map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                    ))}
-                  </Pie>
-                  <Tooltip 
-                    contentStyle={{ 
-                      backgroundColor: '#0f172a', 
-                      borderColor: '#334155', 
-                      borderRadius: '0.75rem', 
-                      color: '#f8fafc',
-                      fontSize: '12px'
-                    }} 
-                  />
-                </PieChart>
-              </ResponsiveContainer>
+              <Suspense fallback={<div className="h-full w-full rounded-xl bg-slate-100 dark:bg-slate-800/60 animate-pulse" />}>
+                <DashboardCategoryStockChart data={categoryStockData} />
+              </Suspense>
             ) : (
               <div className="text-xs text-slate-400 italic text-center">No category data available</div>
             )}

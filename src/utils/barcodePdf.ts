@@ -1,6 +1,3 @@
-import { jsPDF } from 'jspdf';
-import JsBarcode from 'jsbarcode';
-
 interface BarcodePrintItem {
   value: string;
   label: string;
@@ -16,6 +13,11 @@ export async function generateBarcodePDF(
   items: BarcodePrintItem[],
   title: string = "Barcode_Labels"
 ) {
+  const [{ jsPDF }, { default: JsBarcode }] = await Promise.all([
+    import('jspdf'),
+    import('jsbarcode'),
+  ]);
+
   const doc = new jsPDF({
     orientation: 'p',
     unit: 'mm',

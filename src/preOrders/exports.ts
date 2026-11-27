@@ -1,6 +1,3 @@
-import * as XLSX from 'xlsx';
-import html2canvas from 'html2canvas';
-import { jsPDF } from 'jspdf';
 import { ReportColumnMeta } from './reports';
 
 export interface ReportExportPermissions {
@@ -103,6 +100,7 @@ export async function exportReportToExcel(params: {
     }
   }
 
+  const XLSX = await import('xlsx');
   const ws = XLSX.utils.aoa_to_sheet(aoa);
   ws['!cols'] = permittedCols.map((c) => ({ wch: c.width || Math.max(14, c.header.length + 4) }));
   // Freeze title + filter metadata + header row
@@ -172,6 +170,11 @@ export async function exportReportToPdf(params: {
   // Strict A4 pixel canvas dimensions at 96dpi (~1122x794 landscape, 794x1122 portrait)
   const pageWidthPx = isLandscape ? 1120 : 790;
   const pageHeightPx = isLandscape ? 790 : 1120;
+
+  const [{ default: html2canvas }, { jsPDF }] = await Promise.all([
+    import('html2canvas'),
+    import('jspdf'),
+  ]);
 
   const pdf = new jsPDF({
     orientation,

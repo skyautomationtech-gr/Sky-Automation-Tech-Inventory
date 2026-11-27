@@ -7,7 +7,6 @@ import { EMAILJS_CONFIG } from '../config/emailjs';
  * @param name Recipient's name
  */
 export async function sendOTPEmail(email: string, otp: string, name: string = "User"): Promise<{ success: boolean; error?: string }> {
-  console.log(`[EmailJS Debug] sendOTPEmail called with email: "${email}", name: "${name}"`);
   if (!email || !email.trim()) {
     console.warn("[EmailJS Warning] Aborting sendOTPEmail: recipient email is empty!");
     return { success: false, error: "Recipient email is empty" };
@@ -51,7 +50,6 @@ export async function sendOTPEmail(email: string, otp: string, name: string = "U
     });
 
     if (response.ok) {
-      console.log(`[EmailJS] OTP sent successfully to ${cleanEmail}`);
       return { success: true };
     } else {
       const errText = await response.text();
@@ -76,7 +74,6 @@ export async function sendWelcomeEmail(
   employeeId: string,
   name: string = "Employee"
 ): Promise<{ success: boolean; error?: string }> {
-  console.log(`[EmailJS Debug] sendWelcomeEmail called with email: "${email}", employeeId: "${employeeId}", name: "${name}"`);
   if (!email || !email.trim()) {
     console.warn("[EmailJS Warning] Aborting sendWelcomeEmail: recipient email is empty!");
     return { success: false, error: "Recipient email is empty" };
@@ -126,7 +123,6 @@ export async function sendWelcomeEmail(
     });
 
     if (response.ok) {
-      console.log(`[EmailJS] Welcome email sent successfully to ${cleanEmail}`);
       return { success: true };
     } else {
       const errText = await response.text();
@@ -145,7 +141,6 @@ export async function sendCredentialsEmail(
   password: string, 
   name: string = "User"
 ): Promise<boolean> {
-  console.log(`[EmailJS] Credentials email skipped or handled in-app.`);
   return true;
 }
 
@@ -154,6 +149,5 @@ export async function sendRejectionEmail(
   reason: string,
   name: string = "Applicant"
 ): Promise<boolean> {
-  console.log(`[EmailJS] Rejection email skipped per user instruction (in-app only).`);
   return true;
 }

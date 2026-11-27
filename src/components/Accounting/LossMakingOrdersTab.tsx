@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { ShoppingBag, Search, AlertTriangle } from 'lucide-react';
 import { UserProfile, Order } from '../../types';
-import { subscribeToOrders } from '../../firebase/db';
+import { getOrders } from '../../firebase/db';
 
 interface LossMakingOrdersTabProps {
   user: UserProfile;
@@ -12,10 +12,15 @@ export const LossMakingOrdersTab: React.FC<LossMakingOrdersTabProps> = ({ user }
   const [searchTerm, setSearchTerm] = useState('');
 
   useEffect(() => {
-    const unsub = subscribeToOrders((list) => {
-      setOrders(list || []);
-    });
-    return () => unsub();
+    let active = true;
+    getOrders({ limitCount: 300 })
+      .then((list) => {
+        if (active) setOrders(list || []);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
   }, []);
 
   const lossOrders = (orders || []).map(o => {

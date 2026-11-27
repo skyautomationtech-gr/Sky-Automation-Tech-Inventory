@@ -21,7 +21,6 @@ import {
 import { Supplier, SupplierPayment, StockLog, UserProfile } from '../types';
 import { 
   getSuppliers, 
-  subscribeToSuppliers,
   addSupplier, 
   updateSupplier, 
   deleteSupplier, 
@@ -94,12 +93,7 @@ export default function SupplierManagement({ user, rolePermissions }: SupplierMa
   const hasManagePermission = isSuperAdmin || (rolePermissions && (rolePermissions.canManageSuppliers || rolePermissions.all));
 
   useEffect(() => {
-    setLoading(true);
-    const unsub = subscribeToSuppliers((list) => {
-      setSuppliers(list || []);
-      setLoading(false);
-    });
-    return () => unsub();
+    fetchSuppliers();
   }, []);
 
   const fetchSuppliers = async () => {

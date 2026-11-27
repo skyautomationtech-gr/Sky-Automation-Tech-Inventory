@@ -16,11 +16,14 @@ import {
   limit,
   onSnapshot,
   Unsubscribe,
-  arrayUnion
+  arrayUnion,
+  increment
 } from 'firebase/firestore';
 import { pushProductToReseller } from '../services/resellerSync';
 import { normalizeProductImages } from '../utils/productImageUpload';
 import { db, auth } from './config';
+import { perfTrackRead, perfTrackWrite, perfTrackListener } from '../utils/perfLogger';
+import { triggerPublicTrackingSync } from './trackingSyncBridge';
 import { 
   UserProfile, 
   Product, 
@@ -331,6 +334,7 @@ export async function getUserProfile(
     try {
       const docRef = doc(db, 'users', trimmedUid);
       const docSnap = await getDoc(docRef);
+      perfTrackRead('users/getUserProfile', 1);
       
       if (docSnap.exists()) {
         const data = docSnap.data();
@@ -364,7 +368,6 @@ export async function getUserProfile(
       const isQuota = isQuotaErrorMessage(error?.message || String(error));
       if (isQuota || attempts >= maxAttempts) {
         if (isQuota && cachedUser) {
-          console.log('getUserProfile: Using cached profile due to quota limit.');
           return cachedUser;
         }
         if (strict) {
@@ -404,6 +407,7 @@ export async function getAllUsers(): Promise<UserProfile[]> {
   try {
     const colRef = collection(db, 'users');
     const querySnapshot = await getDocs(colRef);
+    perfTrackRead('users/getAllUsers', querySnapshot.size || 1);
     const users: UserProfile[] = [];
     querySnapshot.forEach((doc) => {
       const data = doc.data();
@@ -419,6 +423,25 @@ export async function getAllUsers(): Promise<UserProfile[]> {
       return cached;
     }
     return [];
+  }
+}
+
+let pendingUsersCache: { ts: number; data: UserProfile[] } | null = null;
+export async function getPendingApprovalUsers(limitCount: number = 25, forceRefresh = false): Promise<UserProfile[]> {
+  if (!auth?.currentUser) return [];
+  if (!forceRefresh && pendingUsersCache && Date.now() - pendingUsersCache.ts < 60_000) {
+    return pendingUsersCache.data;
+  }
+  try {
+    const colRef = collection(db, 'users');
+    const q = query(colRef, where('status', '==', 'pending_approval'), limit(limitCount));
+    const snap = await getDocs(q);
+    perfTrackRead('users/pendingApproval', snap.size || 1);
+    const list: UserProfile[] = snap.docs.map((d) => ({ id: d.id, ...(d.data() as any) } as UserProfile));
+    pendingUsersCache = { ts: Date.now(), data: list };
+    return list;
+  } catch {
+    return pendingUsersCache?.data || [];
   }
 }
 
@@ -683,6 +706,7 @@ export async function getCompanySettings(): Promise<CompanySettings | null> {
   try {
     const docRef = doc(db, 'settings', 'company');
     const docSnap = await getDoc(docRef);
+    perfTrackRead('settings/company', 1);
     if (docSnap.exists()) {
       const settings = { ...defaultSettings, ...(docSnap.data() as CompanySettings) };
       dbCache.settings = settings;
@@ -1213,6 +1237,7 @@ export function normalizeProduct(id: string, data: any): Product {
     reorderThreshold,
     images,
     imageUrls,
+    imageThumbs: Array.isArray(data.imageThumbs) ? data.imageThumbs : undefined,
     variants,
     totalStock,
     reservedQty,
@@ -1259,6 +1284,7 @@ export async function getProducts(includeArchived: boolean = false): Promise<Pro
     qSnapshot.forEach((docSnap) => {
       products.push(normalizeProduct(docSnap.id, docSnap.data()));
     });
+    perfTrackRead(includeArchived ? 'products/all' : 'products/active', qSnapshot.size || 1);
     
     if (includeArchived) dbCache.productsArchived = products;
     else dbCache.products = products;
@@ -1285,12 +1311,14 @@ export function subscribeToProducts(
   try {
     const colRef = collection(db, 'products');
     const q = includeArchived ? colRef : query(colRef, where('archived', '==', false));
+    const releaseListener = perfTrackListener(includeArchived ? 'products/all' : 'products/active');
     
     const unsubscribe = onSnapshot(q, (qSnapshot) => {
       const products: Product[] = [];
       qSnapshot.forEach((docSnap) => {
         products.push(normalizeProduct(docSnap.id, docSnap.data()));
       });
+      perfTrackRead(includeArchived ? 'products/snapshotAll' : 'products/snapshotActive', qSnapshot.docChanges().length || 1);
       
       if (includeArchived) dbCache.productsArchived = products;
       else dbCache.products = products;
@@ -1304,7 +1332,10 @@ export function subscribeToProducts(
       getProducts(includeArchived).then(callback).catch(() => {});
     });
     
-    return unsubscribe;
+    return () => {
+      releaseListener();
+      unsubscribe();
+    };
   } catch (err) {
     console.warn('Failed to initialize subscribeToProducts:', err);
     getProducts(includeArchived).then(callback).catch(() => {});
@@ -1364,6 +1395,7 @@ export async function addProduct(product: Omit<Product, 'id'>, userId: string, u
       createdAt: product.createdAt || nowTs
     });
     const docRef = await addDoc(colRef, sanitizedProduct);
+    perfTrackWrite('products/addProduct', 1);
 
     // Create an initial stock log / opening stock entry for each variant that has quantity > 0
     if (totalQty > 0) {
@@ -1413,6 +1445,7 @@ export async function updateProduct(id: string, updatedFields: Partial<Product>)
     const docRef = doc(db, 'products', id);
     const sanitizedData = sanitizeData(payload);
     await updateDoc(docRef, sanitizedData);
+    perfTrackWrite('products/updateProduct', 1);
 
     // Auto Push Product-Only update to Sky Reseller App if Enabled
     const updatedObj = { id, ...payload } as Product;
@@ -1424,11 +1457,10 @@ export async function updateProduct(id: string, updatedFields: Partial<Product>)
 
 export async function archiveProduct(id: string): Promise<void> {
   dbCache.products = null; dbCache.productsArchived = null;
-  console.log(`[db.ts] archiveProduct called for id: ${id}. Setting archived: true (boolean).`);
   const docRef = doc(db, 'products', id);
   try {
     await updateDoc(docRef, { archived: true });
-    console.log(`[db.ts] archiveProduct successfully updated Firestore doc products/${id} with { archived: true }.`);
+    perfTrackWrite('products/archiveProduct', 1);
   } catch (error) {
     console.error(`[db.ts] archiveProduct failed for id: ${id}:`, error);
     throw error;
@@ -1473,7 +1505,6 @@ export function getUniqueBarcodeValue(prefix: string, products: Product[], gener
 
 export async function migrateProductBarcodes(): Promise<{ updated: number, total: number }> {
   try {
-    console.log('migrateProductBarcodes: Starting migration check...');
     const products = await getProducts(true);
     const generatedInSession = new Set<string>();
     
@@ -1516,19 +1547,12 @@ export async function migrateProductBarcodes(): Promise<{ updated: number, total
       });
 
       if (productChanged) {
-        console.log(`migrateProductBarcodes: Migrating product "${p.name}" [SKU: ${p.sku}] with new barcodes.`);
         await updateProduct(p.id, {
           barcodeValue: newProductBarcode,
           variants: updatedVariants
         });
         updatedCount++;
       }
-    }
-
-    if (updatedCount > 0) {
-      console.log(`migrateProductBarcodes: Successfully migrated ${updatedCount} products.`);
-    } else {
-      console.log('migrateProductBarcodes: All products up-to-date. No migration needed.');
     }
 
     return { updated: updatedCount, total: products.length };
@@ -1690,7 +1714,6 @@ export async function seedInitialDataIfEmpty(): Promise<void> {
           ...defaultPreOrderPerms.staff
         }
       });
-      console.log('Seeded rolePermissions default settings.');
     } else {
       const existing = rolePermsSnap.data() || {};
       const patch: Record<string, any> = {};
@@ -1765,7 +1788,6 @@ export async function seedInitialDataIfEmpty(): Promise<void> {
 }
 
 export async function clearSampleData(): Promise<void> {
-  console.log('Attempting to clear sample/demo data...');
   const collections = ['categories', 'brands', 'products', 'stockLogs', 'expenses', 'incomes'];
   for (const colName of collections) {
     try {
@@ -1785,7 +1807,6 @@ export async function clearSampleData(): Promise<void> {
       if (count > 0) {
         await batch.commit();
       }
-      console.log(`Cleared all documents in ${colName} collection.`);
     } catch (e) {
       console.error(`Error clearing ${colName}:`, e);
       throw e;
@@ -1797,7 +1818,6 @@ export async function clearSampleData(): Promise<void> {
   localStore.remove('brands');
   localStore.remove('expenses');
   localStore.remove('incomes');
-  console.log('Finished clearing sample data.');
 }
 
 export async function clearAllExpenses(): Promise<void> {
@@ -2248,7 +2268,6 @@ export async function deleteAttendanceRecord(id: string): Promise<void> {
  * Closes sessions that were left open when a newer one was started.
  */
 export async function cleanupDuplicateSessions(): Promise<number> {
-  console.log('Starting cleanup of duplicate open sessions...');
   const colRef = collection(db, 'attendance');
   // Simple query to avoid composite index errors
   const q = query(colRef, where('checkOutTime', '==', null));
@@ -2287,7 +2306,6 @@ export async function cleanupDuplicateSessions(): Promise<number> {
     }
   }
   
-  console.log(`Cleanup finished. Closed ${closedCount} orphan sessions.`);
   return closedCount;
 }
 
@@ -2421,26 +2439,35 @@ export async function getNextCustomerId(txn?: any): Promise<string> {
   }
 }
 
-export async function getCustomers(): Promise<Customer[]> {
-  if (dbCache.customers) return dbCache.customers;
+export async function getCustomers(options?: { limitCount?: number; forceRefresh?: boolean }): Promise<Customer[]> {
+  const limitCount = options?.limitCount;
+  if (!options?.forceRefresh && dbCache.customers) {
+    return limitCount ? dbCache.customers.slice(0, limitCount) : dbCache.customers;
+  }
   const cached = localStore.get<Customer[]>('customers');
-  if (!auth?.currentUser) return cached || [];
+  if (!auth?.currentUser) {
+    return limitCount && cached ? cached.slice(0, limitCount) : (cached || []);
+  }
   try {
     const colRef = collection(db, 'customers');
-    const q = query(colRef, orderBy('createdAt', 'desc'));
+    const q = limitCount
+      ? query(colRef, orderBy('createdAt', 'desc'), limit(limitCount))
+      : query(colRef, orderBy('createdAt', 'desc'));
     const snapshot = await getDocs(q);
+    perfTrackRead(`customers/getCustomers${limitCount ? `(${limitCount})` : ''}`, snapshot.size || 1);
     const list: Customer[] = [];
     snapshot.forEach(docSnap => {
       list.push({ id: docSnap.id, ...docSnap.data() } as Customer);
     });
-    dbCache.customers = list;
-    localStore.set('customers', list);
+    if (!limitCount) {
+      dbCache.customers = list;
+      localStore.set('customers', list);
+    }
     return list;
   } catch (error) {
     console.warn('Error fetching customers, returning local cache:', error);
     if (cached) {
-      dbCache.customers = cached;
-      return cached;
+      return limitCount ? cached.slice(0, limitCount) : cached;
     }
     return [];
   }
@@ -2521,27 +2548,36 @@ export async function migrateExistingCustomerIds(): Promise<{ totalMigrated: num
   }
 }
 
-export function subscribeToCustomers(callback: (customers: Customer[]) => void): () => void {
+export function subscribeToCustomers(callback: (customers: Customer[]) => void, limitCount?: number): () => void {
   if (!auth?.currentUser) return () => {};
   try {
     const colRef = collection(db, 'customers');
-    const q = query(colRef, orderBy('createdAt', 'desc'));
+    const q = limitCount
+      ? query(colRef, orderBy('createdAt', 'desc'), limit(limitCount))
+      : query(colRef, orderBy('createdAt', 'desc'));
+    const releaseListener = perfTrackListener('customers/subscribe');
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const list: Customer[] = [];
       snapshot.forEach(docSnap => {
         list.push({ id: docSnap.id, ...docSnap.data() } as Customer);
       });
-      dbCache.customers = list;
-      localStore.set('customers', list);
+      perfTrackRead('customers/snapshot', snapshot.docChanges().length || 1);
+      if (!limitCount) {
+        dbCache.customers = list;
+        localStore.set('customers', list);
+      }
       callback(list);
     }, (error) => {
       console.warn('subscribeToCustomers listener notice:', error);
-      getCustomers().then(callback).catch(() => {});
+      getCustomers({ limitCount }).then(callback).catch(() => {});
     });
-    return unsubscribe;
+    return () => {
+      releaseListener();
+      unsubscribe();
+    };
   } catch (err) {
     console.warn('Failed to attach subscribeToCustomers:', err);
-    getCustomers().then(callback).catch(() => {});
+    getCustomers({ limitCount }).then(callback).catch(() => {});
     return () => {};
   }
 }
@@ -2612,55 +2648,117 @@ export async function updateCustomer(id: string, customerData: Partial<Customer>
   }
 }
 
-export async function getOrders(): Promise<Order[]> {
-  if (dbCache.orders) return dbCache.orders;
+export async function getOrders(options?: { limitCount?: number; forceRefresh?: boolean }): Promise<Order[]> {
+  const limitCount = options?.limitCount;
+  if (!options?.forceRefresh && dbCache.orders) {
+    return limitCount ? dbCache.orders.slice(0, limitCount) : dbCache.orders;
+  }
   const cached = localStore.get<Order[]>('orders');
-  if (!auth?.currentUser) return cached || [];
+  if (!auth?.currentUser) {
+    return limitCount && cached ? cached.slice(0, limitCount) : (cached || []);
+  }
   try {
     const colRef = collection(db, 'orders');
-    const q = query(colRef, orderBy('createdAt', 'desc'));
+    const q = limitCount
+      ? query(colRef, orderBy('createdAt', 'desc'), limit(limitCount))
+      : query(colRef, orderBy('createdAt', 'desc'));
     const snapshot = await getDocs(q);
+    perfTrackRead(`orders/getOrders${limitCount ? `(${limitCount})` : ''}`, snapshot.size || 1);
     const list: Order[] = [];
     snapshot.forEach(docSnap => {
       list.push({ id: docSnap.id, ...docSnap.data() } as Order);
     });
-    dbCache.orders = list;
-    dbCache.invoices = list;
-    localStore.set('orders', list);
+    if (!limitCount) {
+      dbCache.orders = list;
+      localStore.set('orders', list);
+    }
     return list;
   } catch (error) {
     console.warn('Error fetching orders, returning cached:', error);
     if (cached) {
-      dbCache.orders = cached;
-      dbCache.invoices = cached;
-      return cached;
+      return limitCount ? cached.slice(0, limitCount) : cached;
     }
     return [];
   }
 }
 
-export function subscribeToOrders(callback: (orders: Order[]) => void): () => void {
+export async function getOrdersByCustomer(customerId: string, limitCount: number = 50): Promise<Order[]> {
+  if (!customerId) return [];
+  if (dbCache.orders) {
+    return dbCache.orders.filter((o) => o.customerId === customerId).slice(0, limitCount);
+  }
+  if (!auth?.currentUser) return [];
+  try {
+    const colRef = collection(db, 'orders');
+    const q = query(colRef, where('customerId', '==', customerId), limit(limitCount));
+    const snapshot = await getDocs(q);
+    perfTrackRead('orders/byCustomer', snapshot.size || 1);
+    const list: Order[] = snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as Order));
+    return list.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  } catch {
+    return [];
+  }
+}
+
+export async function getDueOrders(limitCount: number = 250): Promise<Order[]> {
+  if (!auth?.currentUser) return [];
+  try {
+    const colRef = collection(db, 'orders');
+    const q = query(colRef, where('amountDue', '>', 0), limit(limitCount));
+    const snapshot = await getDocs(q);
+    perfTrackRead('orders/getDueOrders', snapshot.size || 1);
+    const list: Order[] = snapshot.docs.map((d) => ({ id: d.id, ...d.data() } as Order));
+    return list.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+  } catch {
+    return getOrders({ limitCount });
+  }
+}
+
+export async function getOrderById(id: string): Promise<Order | null> {
+  if (!id) return null;
+  if (dbCache.orders) {
+    const hit = dbCache.orders.find((o) => o.id === id);
+    if (hit) return hit;
+  }
+  try {
+    const snap = await getDoc(doc(db, 'orders', id));
+    perfTrackRead('orders/getById', 1);
+    return snap.exists() ? ({ id: snap.id, ...snap.data() } as Order) : null;
+  } catch {
+    return null;
+  }
+}
+
+export function subscribeToOrders(callback: (orders: Order[]) => void, limitCount?: number): () => void {
   if (!auth?.currentUser) return () => {};
   try {
     const colRef = collection(db, 'orders');
-    const q = query(colRef, orderBy('createdAt', 'desc'));
+    const q = limitCount
+      ? query(colRef, orderBy('createdAt', 'desc'), limit(limitCount))
+      : query(colRef, orderBy('createdAt', 'desc'));
+    const releaseListener = perfTrackListener('orders/subscribe');
     const unsubscribe = onSnapshot(q, (snapshot) => {
       const list: Order[] = [];
       snapshot.forEach(docSnap => {
         list.push({ id: docSnap.id, ...docSnap.data() } as Order);
       });
-      dbCache.orders = list;
-      dbCache.invoices = list;
-      localStore.set('orders', list);
+      perfTrackRead('orders/snapshot', snapshot.docChanges().length || 1);
+      if (!limitCount) {
+        dbCache.orders = list;
+        localStore.set('orders', list);
+      }
       callback(list);
     }, (error) => {
       console.warn('subscribeToOrders listener notice:', error);
-      getOrders().then(callback).catch(() => {});
+      getOrders({ limitCount }).then(callback).catch(() => {});
     });
-    return unsubscribe;
+    return () => {
+      releaseListener();
+      unsubscribe();
+    };
   } catch (err) {
     console.warn('Failed to attach subscribeToOrders:', err);
-    getOrders().then(callback).catch(() => {});
+    getOrders({ limitCount }).then(callback).catch(() => {});
     return () => {};
   }
 }
@@ -2676,6 +2774,7 @@ export async function addOrder(orderData: Omit<Order, 'id'>): Promise<string> {
   try {
     const colRef = collection(db, 'orders');
     const docRef = await addDoc(colRef, sanitized);
+    perfTrackWrite('orders/addOrder', 1);
     const cached = localStore.get<Order[]>('orders') || [];
     localStore.set('orders', [{ id: docRef.id, ...sanitized } as Order, ...cached]);
     return docRef.id;
@@ -2694,6 +2793,7 @@ export async function deleteOrder(id: string): Promise<void> {
   try {
     const docRef = doc(db, 'orders', id);
     await deleteDoc(docRef);
+    perfTrackWrite('orders/deleteOrder', 1);
     const cached = localStore.get<Order[]>('orders') || [];
     localStore.set('orders', cached.filter(o => o.id !== id));
   } catch (error) {
@@ -2701,11 +2801,29 @@ export async function deleteOrder(id: string): Promise<void> {
   }
 }
 
-export async function recalculateCustomerStats(customerId: string): Promise<void> {
+export async function recalculateCustomerStats(
+  customerId: string,
+  delta?: { orderDelta?: number; ltvDelta?: number }
+): Promise<void> {
+  if (!customerId) return;
   try {
+    const customerRef = doc(db, 'customers', customerId);
+    if (delta && (delta.orderDelta !== undefined || delta.ltvDelta !== undefined)) {
+      const updates: Record<string, any> = {};
+      if (delta.orderDelta) updates.totalOrders = increment(delta.orderDelta);
+      if (delta.ltvDelta) updates.lifetimeValue = increment(delta.ltvDelta);
+      if (Object.keys(updates).length > 0) {
+        await updateDoc(customerRef, updates);
+        perfTrackWrite('customers/incrementalStats', 1);
+        dbCache.customers = null;
+      }
+      return;
+    }
+
     const ordersCol = collection(db, 'orders');
     const q = query(ordersCol, where('customerId', '==', customerId));
     const snapshot = await getDocs(q);
+    perfTrackRead('customers/recalculateStats', snapshot.size || 1);
     
     let totalOrders = 0;
     let lifetimeValue = 0;
@@ -2718,11 +2836,11 @@ export async function recalculateCustomerStats(customerId: string): Promise<void
       }
     });
     
-    const customerRef = doc(db, 'customers', customerId);
     await updateDoc(customerRef, {
       totalOrders,
       lifetimeValue
     });
+    perfTrackWrite('customers/recalculateStats', 1);
   } catch (err) {
     console.error('recalculateCustomerStats failed:', err);
   }
@@ -2778,7 +2896,6 @@ export async function updateOrderAndHandleStock(
       // --- ALL WRITES MUST GO HERE ---
       // 1. Handle stock updates and stock logs
       if (shouldDeduct) {
-        console.log(`Deducting stock for order ${orderId} during status change: ${oldStatus} -> ${newStatus}`);
         for (const item of updatedOrder.items) {
           const productSnap = productSnaps.get(item.productId);
           if (productSnap && productSnap.exists()) {
@@ -2829,7 +2946,6 @@ export async function updateOrderAndHandleStock(
           }
         }
       } else if (shouldRestore) {
-        console.log(`Restoring stock for order ${orderId} during status change: ${oldStatus} -> ${newStatus}`);
         for (const item of updatedOrder.items) {
           const productSnap = productSnaps.get(item.productId);
           if (productSnap && productSnap.exists()) {
@@ -2880,7 +2996,6 @@ export async function updateOrderAndHandleStock(
       
       // 2. Handle auto-invoice writes
       if (isAutoInvoice) {
-        console.log(`Auto-generating invoice for order ${orderId} on confirmation...`);
         const prefixes = companySettingsSnap && companySettingsSnap.exists() 
           ? companySettingsSnap.data().prefixes 
           : { SAT: 'SAT-INV', GZ: 'GZ-INV', RTX: 'RTX-INV' };
@@ -3139,14 +3254,22 @@ export async function updateOrderFullDetails(
 // INVOICE OPERATIONS
 // ==========================================
 
-export async function getInvoices(): Promise<Invoice[]> {
-  if (dbCache.invoices) return dbCache.invoices;
+export async function getInvoices(options?: { limitCount?: number; forceRefresh?: boolean }): Promise<Invoice[]> {
+  const limitCount = options?.limitCount;
+  if (!options?.forceRefresh && dbCache.invoices) {
+    return limitCount ? dbCache.invoices.slice(0, limitCount) : dbCache.invoices;
+  }
   const cached = localStore.get<Invoice[]>('invoices');
-  if (!auth?.currentUser) return cached || [];
+  if (!auth?.currentUser) {
+    return limitCount && cached ? cached.slice(0, limitCount) : (cached || []);
+  }
   try {
     const colRef = collection(db, 'invoices');
-    // Fetch all docs without orderBy to avoid excluding documents missing generatedAt field
-    const snapshot = await getDocs(colRef);
+    const q = limitCount
+      ? query(colRef, orderBy('generatedAt', 'desc'), limit(limitCount))
+      : colRef;
+    const snapshot = await getDocs(q);
+    perfTrackRead(`invoices/getInvoices${limitCount ? `(${limitCount})` : ''}`, snapshot.size || 1);
     const list: Invoice[] = [];
     snapshot.forEach(docSnap => {
       const data = docSnap.data();
@@ -3170,24 +3293,29 @@ export async function getInvoices(): Promise<Invoice[]> {
     });
     // Sort in memory by generatedAt desc
     list.sort((a, b) => (b.generatedAt || 0) - (a.generatedAt || 0));
-    dbCache.invoices = list;
-    localStore.set('invoices', list);
+    if (!limitCount) {
+      dbCache.invoices = list;
+      localStore.set('invoices', list);
+    }
     return list;
   } catch (error) {
     if (cached) {
-      dbCache.invoices = cached;
-      return cached;
+      return limitCount ? cached.slice(0, limitCount) : cached;
     }
     console.warn('Error fetching invoices, returning empty:', error);
     return [];
   }
 }
 
-export function subscribeToInvoices(callback: (invoices: Invoice[]) => void): () => void {
+export function subscribeToInvoices(callback: (invoices: Invoice[]) => void, limitCount?: number): () => void {
   if (!auth?.currentUser) return () => {};
   try {
     const colRef = collection(db, 'invoices');
-    const unsubscribe = onSnapshot(colRef, (snapshot) => {
+    const q = limitCount
+      ? query(colRef, orderBy('generatedAt', 'desc'), limit(limitCount))
+      : colRef;
+    const releaseListener = perfTrackListener('invoices/subscribe');
+    const unsubscribe = onSnapshot(q, (snapshot) => {
       const list: Invoice[] = [];
       snapshot.forEach(docSnap => {
         const data = docSnap.data();
@@ -3209,18 +3337,24 @@ export function subscribeToInvoices(callback: (invoices: Invoice[]) => void): ()
           ...data 
         } as Invoice);
       });
+      perfTrackRead('invoices/snapshot', snapshot.docChanges().length || 1);
       list.sort((a, b) => (b.generatedAt || 0) - (a.generatedAt || 0));
-      dbCache.invoices = list;
-      localStore.set('invoices', list);
+      if (!limitCount) {
+        dbCache.invoices = list;
+        localStore.set('invoices', list);
+      }
       callback(list);
     }, (error) => {
       console.warn('subscribeToInvoices listener notice:', error);
-      getInvoices().then(callback).catch(() => {});
+      getInvoices({ limitCount }).then(callback).catch(() => {});
     });
-    return unsubscribe;
+    return () => {
+      releaseListener();
+      unsubscribe();
+    };
   } catch (err) {
     console.warn('Failed to attach subscribeToInvoices:', err);
-    getInvoices().then(callback).catch(() => {});
+    getInvoices({ limitCount }).then(callback).catch(() => {});
     return () => {};
   }
 }
@@ -3512,11 +3646,10 @@ export async function recordOrderPayment(
     // Invalidate caches to ensure real-time accounting & dashboard sync
     dbCache.orders = null;
     dbCache.invoices = null;
+    perfTrackWrite('orders/recordPayment', 1);
 
     if (linkedPreOrderId) {
-      void import('./preOrderDb')
-        .then((m) => m.syncPublicTracking(linkedPreOrderId))
-        .catch(() => {});
+      void triggerPublicTrackingSync(linkedPreOrderId).catch(() => {});
     }
   } catch (error) {
     handleFirestoreError(error, OperationType.UPDATE, `orders/${orderId}/recordPayment`);
@@ -3626,11 +3759,10 @@ export async function deleteOrderPayment(
     }
     dbCache.orders = null;
     dbCache.invoices = null;
+    perfTrackWrite('orders/deletePayment', 1);
 
     if (linkedPreOrderId) {
-      void import('./preOrderDb')
-        .then((m) => m.syncPublicTracking(linkedPreOrderId))
-        .catch(() => {});
+      void triggerPublicTrackingSync(linkedPreOrderId).catch(() => {});
     }
 
     return updatedOrderResult!;
@@ -4243,6 +4375,7 @@ export async function getNotifications(throwOnError = false): Promise<AppNotific
     const colRef = collection(db, 'notifications');
     const q = query(colRef, orderBy('createdAt', 'desc'), limit(50));
     const snapshot = await getDocs(q);
+    perfTrackRead('notifications/get', snapshot.size || 1);
     const list: AppNotification[] = [];
     snapshot.forEach(docSnap => {
       list.push({ id: docSnap.id, ...docSnap.data() } as AppNotification);

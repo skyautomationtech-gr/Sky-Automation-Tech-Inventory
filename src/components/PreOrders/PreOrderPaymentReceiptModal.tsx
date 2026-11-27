@@ -1,6 +1,4 @@
 import React, { useEffect, useState } from 'react';
-import html2canvas from 'html2canvas';
-import { jsPDF } from 'jspdf';
 import { Download, Printer, X } from 'lucide-react';
 import { CompanySettings, PreOrder, PreOrderPayment } from '../../types';
 import { getCompanySettings } from '../../firebase/db';
@@ -139,7 +137,11 @@ export const PreOrderPaymentReceiptModal: React.FC<PreOrderPaymentReceiptModalPr
 
     setDownloading(true);
     try {
-      await new Promise((resolve) => setTimeout(resolve, 150));
+      const [{ default: html2canvas }, { jsPDF }] = await Promise.all([
+        import('html2canvas'),
+        import('jspdf'),
+        new Promise((resolve) => setTimeout(resolve, 150)),
+      ]);
 
       const canvas = await html2canvas(element, {
         scale: 2,

@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Trash2, Building, Calendar, CheckCircle2, AlertTriangle, X } from 'lucide-react';
 import { UserProfile, CompanyPurchase } from '../../types';
-import { subscribeToCompanyPurchases, addCompanyPurchase, deleteCompanyPurchase } from '../../firebase/db';
+import { getCompanyPurchases, addCompanyPurchase, deleteCompanyPurchase } from '../../firebase/db';
 
 interface CompanyPurchasesTabProps {
   user: UserProfile;
@@ -22,11 +22,13 @@ export const CompanyPurchasesTab: React.FC<CompanyPurchasesTabProps> = ({ user }
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
+  const loadPurchases = async () => {
+    const list = await getCompanyPurchases().catch(() => []);
+    setPurchases(list || []);
+  };
+
   useEffect(() => {
-    const unsub = subscribeToCompanyPurchases((list) => {
-      setPurchases(list || []);
-    });
-    return () => unsub();
+    loadPurchases();
   }, []);
 
   const totalAmount = (purchases || []).reduce((s, p) => s + (Number(p?.amount) || 0), 0);
@@ -64,6 +66,7 @@ export const CompanyPurchasesTab: React.FC<CompanyPurchasesTabProps> = ({ user }
       setShowForm(false);
       setNotification({ type: 'success', message: 'কোম্পানি কেনাকাটা সফলভাবে সংরক্ষণ হয়েছে।' });
       setTimeout(() => setNotification(null), 4000);
+      await loadPurchases();
     } catch (err: any) {
       setNotification({ type: 'error', message: 'সংরক্ষণ ব্যর্থ: ' + (err?.message || 'Error') });
     } finally {
@@ -75,6 +78,7 @@ export const CompanyPurchasesTab: React.FC<CompanyPurchasesTabProps> = ({ user }
     if (!deleteTargetId) return;
     try {
       await deleteCompanyPurchase(deleteTargetId);
+      setPurchases(prev => prev.filter(p => p.id !== deleteTargetId));
       setDeleteTargetId(null);
       setNotification({ type: 'success', message: 'কেনাকাটা রেকর্ড মুছে ফেলা হয়েছে।' });
       setTimeout(() => setNotification(null), 4000);

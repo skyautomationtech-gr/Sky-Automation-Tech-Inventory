@@ -162,6 +162,7 @@ export interface Product {
   reorderThreshold: number;
   images: string[]; // Storage download URLs or compact Data URLs
   imageUrls?: string[];
+  imageThumbs?: string[];
   variants: Variant[];
   totalStock?: number;
   reservedQty?: number;

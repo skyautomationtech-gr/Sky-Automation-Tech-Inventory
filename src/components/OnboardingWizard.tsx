@@ -37,7 +37,6 @@ export default function OnboardingWizard({ onComplete, userId }: OnboardingWizar
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
-    console.log('handleSubmit called, userId:', userId);
     if (!companyName.trim()) {
       setError('Company Name is required.');
       return;
@@ -58,14 +57,11 @@ export default function OnboardingWizard({ onComplete, userId }: OnboardingWizar
     };
 
     try {
-      console.log('Finalizing setup: saving company settings...');
       await saveCompanySettings(newSettings);
-      console.log('Finalizing setup: company settings saved. Updating user role...');
       await updateUserProfile(userId, { 
         role: 'superadmin',
         subBrandAccess: ['SAT', 'GZ', 'RTX']
       });
-      console.log('Finalizing setup: user role updated.');
       
       onComplete(newSettings);
     } catch (err: any) {

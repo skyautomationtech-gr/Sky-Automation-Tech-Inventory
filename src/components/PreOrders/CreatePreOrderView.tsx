@@ -682,14 +682,12 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
       toast.error(err);
       return;
     }
-    updateLine(itemId, { imageFile: file, uploadedImageUrl: '' });
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        updateLine(itemId, { imagePreview: reader.result });
-      }
-    };
-    reader.readAsDataURL(file);
+    const existing = lines.find((l) => l.itemId === itemId)?.imagePreview;
+    if (existing && existing.startsWith('blob:')) {
+      URL.revokeObjectURL(existing);
+    }
+    const blobUrl = URL.createObjectURL(file);
+    updateLine(itemId, { imageFile: file, uploadedImageUrl: '', imagePreview: blobUrl });
   };
 
   const handleReceiptSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -701,15 +699,12 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
       toast.error(err);
       return;
     }
+    if (receiptPreview && receiptPreview.startsWith('blob:')) {
+      URL.revokeObjectURL(receiptPreview);
+    }
     setReceiptFile(file);
     setUploadedReceiptUrl('');
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        setReceiptPreview(reader.result);
-      }
-    };
-    reader.readAsDataURL(file);
+    setReceiptPreview(URL.createObjectURL(file));
   };
 
   const handleCreateQuickSupplier = async (e: React.FormEvent) => {
@@ -845,30 +840,39 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
     try {
       const resolvedImageUrls: Record<string, string> = {};
       const linesNeedingUpload = lines.filter((l) => l.imageFile && !l.uploadedImageUrl);
+      const totalUploads = linesNeedingUpload.length + (parsedAdvance > 0 && receiptFile && !uploadedReceiptUrl ? 1 : 0);
+      let completedUploads = 0;
 
-      for (let i = 0; i < lines.length; i++) {
-        const line = lines[i];
-        if (line.imageFile && !line.uploadedImageUrl) {
-          setSubmitStatusText(
-            `Uploading product photo (${i + 1}/${lines.length}${
-              linesNeedingUpload.length > 1 ? '' : ''
-            })...`
-          );
-          const uploadRes = await uploadPreOrderImage(line.imageFile, 'products');
-          resolvedImageUrls[line.itemId] = uploadRes.url;
-          updateLine(line.itemId, { uploadedImageUrl: uploadRes.url });
-        } else {
-          resolvedImageUrls[line.itemId] = line.uploadedImageUrl || line.imagePreview || '';
-        }
+      if (totalUploads > 0) {
+        setSubmitStatusText(`Compressing & uploading ${totalUploads} photo${totalUploads > 1 ? 's' : ''} in parallel...`);
       }
+
+      const lineUploadPromise = Promise.all(
+        lines.map(async (line) => {
+          if (line.imageFile && !line.uploadedImageUrl) {
+            const uploadRes = await uploadPreOrderImage(line.imageFile, 'products');
+            resolvedImageUrls[line.itemId] = uploadRes.url;
+            updateLine(line.itemId, { uploadedImageUrl: uploadRes.url });
+            completedUploads += 1;
+            setSubmitStatusText(`Uploaded ${completedUploads}/${totalUploads} photos...`);
+          } else {
+            resolvedImageUrls[line.itemId] = line.uploadedImageUrl || line.imagePreview || '';
+          }
+        })
+      );
 
       let finalReceiptUrl = uploadedReceiptUrl;
-      if (parsedAdvance > 0 && receiptFile && !uploadedReceiptUrl) {
-        setSubmitStatusText('Uploading payment receipt...');
-        const receiptRes = await uploadPreOrderImage(receiptFile, 'receipts');
-        finalReceiptUrl = receiptRes.url;
-        setUploadedReceiptUrl(receiptRes.url);
-      }
+      const receiptUploadPromise =
+        parsedAdvance > 0 && receiptFile && !uploadedReceiptUrl
+          ? uploadPreOrderImage(receiptFile, 'receipts').then((receiptRes) => {
+              finalReceiptUrl = receiptRes.url;
+              setUploadedReceiptUrl(receiptRes.url);
+              completedUploads += 1;
+              setSubmitStatusText(`Uploaded ${completedUploads}/${totalUploads} photos...`);
+            })
+          : Promise.resolve();
+
+      await Promise.all([lineUploadPromise, receiptUploadPromise]);
 
       setSubmitStatusText('Saving multi-item pre-order transaction...');
       const selectedSupplier = suppliers.find((s) => s.id === supplierId);

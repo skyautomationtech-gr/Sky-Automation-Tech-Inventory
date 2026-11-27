@@ -215,7 +215,6 @@ export default function ProfileSettingsView({ user, onRefreshUser }: ProfileSett
                 key={tab.id}
                 type="button"
                 onClick={() => {
-                  console.log(`Switching to tab: ${tab.id}`);
                   setActiveTab(tab.id);
                 }}
                 className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-bold transition-all cursor-pointer relative z-20 ${

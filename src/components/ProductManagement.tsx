@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { createPortal } from 'react-dom';
 import { 
   Plus, 
@@ -45,7 +45,6 @@ import {
   normalizeProductImages,
   buildCategoryPathLabel,
 } from '../utils/productImageUpload';
-import JsBarcode from 'jsbarcode';
 import { Product, Category, Brand, UserProfile, StockLog, ProductColor, ProductModel, ProductEditHistoryEntry } from '../types';
 import { 
   updateProduct, 
@@ -114,12 +113,16 @@ function ProductThumbnail({
   showCountBadge?: boolean;
 }) {
   const images = normalizeProductImages(product);
-  const src = images[0];
+  const fullSrc = images[0];
+  const thumbSrc = Array.isArray(product.imageThumbs) && product.imageThumbs[0] ? product.imageThumbs[0] : fullSrc;
+  const [useFullFallback, setUseFullFallback] = useState(false);
   const [failed, setFailed] = useState(false);
+  const src = useFullFallback ? fullSrc : thumbSrc;
 
   useEffect(() => {
+    setUseFullFallback(false);
     setFailed(false);
-  }, [src]);
+  }, [thumbSrc, fullSrc]);
 
   if (!src || failed) {
     return (
@@ -134,8 +137,16 @@ function ProductThumbnail({
       <img
         src={src}
         alt={alt || product.name || 'Product'}
+        loading="lazy"
+        decoding="async"
         referrerPolicy="no-referrer"
-        onError={() => setFailed(true)}
+        onError={() => {
+          if (!useFullFallback && fullSrc && src !== fullSrc) {
+            setUseFullFallback(true);
+          } else {
+            setFailed(true);
+          }
+        }}
         className={className}
       />
       {showCountBadge && images.length > 1 && (
@@ -183,12 +194,24 @@ export default function ProductManagement({
 
   // List management states
   const [search, setSearch] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [filterCategory, setFilterCategory] = useState('');
   const [filterBrand, setFilterBrand] = useState('');
   const [filterSubBrand, setFilterSubBrand] = useState('');
   const [filterStockStatus, setFilterStockStatus] = useState<'all' | 'instock' | 'lowstock' | 'out'>('all');
   const [sortBy, setSortBy] = useState<'name' | 'stock' | 'price'>('name');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('asc');
+  const [currentPage, setCurrentPage] = useState(1);
+  const pageSize = 25;
+
+  useEffect(() => {
+    const t = setTimeout(() => setDebouncedSearch(search), 250);
+    return () => clearTimeout(t);
+  }, [search]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [debouncedSearch, filterCategory, filterBrand, filterSubBrand, filterStockStatus, sortBy, sortOrder, activeSubTab]);
 
   // Detail / Action States
   const [selectedProduct, setSelectedProduct] = useState<Product | null>(null);
@@ -407,7 +430,7 @@ export default function ProductManagement({
   const [selectedProductIds, setSelectedProductIds] = useState<string[]>([]);
 
   // Helper to download a single barcode as a PNG image using canvas
-  const downloadBarcodePng = (value: string, label: string, subLabel?: string) => {
+  const downloadBarcodePng = async (value: string, label: string, subLabel?: string) => {
     const canvas = document.createElement('canvas');
     canvas.width = 450;  // 1.5 inches @ 300 DPI
     canvas.height = 300; // 1.0 inches @ 300 DPI
@@ -415,6 +438,7 @@ export default function ProductManagement({
     if (!ctx) return;
 
     try {
+      const { default: JsBarcode } = await import('jsbarcode');
       // 1. White Background with adequate margin
       ctx.fillStyle = '#ffffff';
       ctx.fillRect(0, 0, 450, 300);
@@ -878,10 +902,9 @@ export default function ProductManagement({
 
   const checkProductReferences = async (productId: string): Promise<{ ordersCount: number, invoicesCount: number, logsCount: number }> => {
     try {
-      console.log(`[checkProductReferences] Checking references for product: ${productId}`);
       const [allOrders, allInvoices, allLogs] = await Promise.all([
-        getOrders(),
-        getInvoices(),
+        getOrders({ limitCount: 300 }),
+        getInvoices({ limitCount: 300 }),
         getStockLogs(productId)
       ]);
 
@@ -889,7 +912,6 @@ export default function ProductManagement({
       const invoicesCount = (allInvoices || []).filter(i => i.items?.some(item => item.productId === productId)).length;
       const logsCount = (allLogs || []).length;
 
-      console.log(`[checkProductReferences] product ${productId} referenced in: ${ordersCount} orders, ${invoicesCount} invoices, ${logsCount} stock logs.`);
       return { ordersCount, invoicesCount, logsCount };
     } catch (error) {
       console.error("[checkProductReferences] Error checking product references:", error);
@@ -899,7 +921,6 @@ export default function ProductManagement({
 
   const executePermanentDelete = async (product: Product, successCallback: () => void) => {
     try {
-      console.log(`[executePermanentDelete] Checking references for product: ${product.name} (${product.id})`);
       const { ordersCount, invoicesCount, logsCount } = await checkProductReferences(product.id);
       
       const isReferenced = ordersCount > 0 || invoicesCount > 0 || logsCount > 0;
@@ -917,7 +938,6 @@ export default function ProductManagement({
           warningMessage,
           async () => {
             try {
-              console.log("[executePermanentDelete] Super Admin confirmed delete despite warning.");
               await deleteProduct(product.id);
               successCallback();
             } catch (err: any) {
@@ -938,18 +958,14 @@ export default function ProductManagement({
   };
 
   const handleDeleteClick = (product: Product) => {
-    console.log("ARCHIVE DELETE CLICKED", product.id);
     if (requireCheckIn && !requireCheckIn()) {
-      console.log("[handleDeleteClick] requireCheckIn returned false, blocking deletion click.");
       return;
     }
-    console.log("[handleDeleteClick] checked in successfully. User role:", user?.role);
     if (user?.role === 'superadmin') {
       showConfirm(
         "Permanently Delete Product?",
         `Are you sure you want to permanently delete "${product.name}"? This action cannot be undone.`,
         async () => {
-          console.log("[handleDeleteClick] superadmin confirmed direct permanent delete of:", product.id);
           await executePermanentDelete(product, async () => {
             await onRefreshData();
             if (selectedProduct?.id === product.id) {
@@ -966,7 +982,6 @@ export default function ProductManagement({
         `Are you sure you want to submit a deletion request for "${product.name}"? This product will be marked as "Deletion Pending" until a Super Admin approves it.`,
         async () => {
           try {
-            console.log("[handleDeleteClick] admin confirmed submit deletion request for:", product.id);
             await updateProduct(product.id, { 
               deletionStatus: 'pending_approval',
               deletionRequestedBy: user?.name || user?.email || 'Admin',
@@ -1313,10 +1328,10 @@ export default function ProductManagement({
     reader.readAsText(file);
   };
 
-  // Filtering & Sorting Logic
-  const filteredProducts = products.filter((product) => {
+  // Filtering & Sorting Logic (memoized + 250ms debounced)
+  const filteredProducts = useMemo(() => products.filter((product) => {
     if (!product) return false;
-    const query = (search || '').toLowerCase().trim();
+    const query = (debouncedSearch || '').toLowerCase().trim();
     const pName = (product.name || '').toLowerCase();
     const pSku = (product.sku || '').toLowerCase();
     const pBrand = (product.brand || '').toLowerCase();
@@ -1349,10 +1364,10 @@ export default function ProductManagement({
     const matchesStockStatus = product.stockStatus !== 'out_of_stock';
     
     return matchesSearch && matchesCategory && matchesBrand && matchesSubBrand && matchesStock && matchesStatus && matchesArchived && matchesStockStatus;
-  });
+  }), [products, debouncedSearch, filterCategory, filterBrand, filterSubBrand, filterStockStatus]);
 
   // Sort
-  const sortedProducts = [...filteredProducts].sort((a, b) => {
+  const sortedProducts = useMemo(() => [...filteredProducts].sort((a, b) => {
     let factor = sortOrder === 'asc' ? 1 : -1;
     if (sortBy === 'name') {
       return a.name.localeCompare(b.name) * factor;
@@ -1364,7 +1379,14 @@ export default function ProductManagement({
       return (stockA - stockB) * factor;
     }
     return 0;
-  });
+  }), [filteredProducts, sortBy, sortOrder]);
+
+  const totalCatalogPages = Math.max(1, Math.ceil(sortedProducts.length / pageSize));
+  const safeCatalogPage = Math.min(currentPage, totalCatalogPages);
+  const paginatedProducts = useMemo(() => {
+    const start = (safeCatalogPage - 1) * pageSize;
+    return sortedProducts.slice(start, start + pageSize);
+  }, [sortedProducts, safeCatalogPage]);
 
   const toggleSort = (field: 'name' | 'stock' | 'price') => {
     if (sortBy === field) {
@@ -1807,14 +1829,14 @@ export default function ProductManagement({
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-slate-100 text-sm text-slate-600">
-                      {sortedProducts.length === 0 ? (
+                      {paginatedProducts.length === 0 ? (
                         <tr>
                           <td colSpan={7} className="py-10 text-center text-slate-400 italic">
                             No active gadget catalog records found.
                           </td>
                         </tr>
                       ) : (
-                        sortedProducts.map((product) => {
+                        paginatedProducts.map((product) => {
                           const totalQty = (product.variants || []).reduce((s, v) => s + (v.stock || 0), 0);
                           const reservedQty = Number(product.reservedQty) || 0;
                           const availQty = getProductAvailableStock(product);
@@ -1994,12 +2016,12 @@ export default function ProductManagement({
               ) : (
                 /* Desktop Grid View */
                 <div className="hidden md:grid grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4 p-4">
-                  {sortedProducts.length === 0 ? (
+                  {paginatedProducts.length === 0 ? (
                     <div className="col-span-full py-10 text-center text-slate-400 italic text-xs">
                       No active gadget catalog records found.
                     </div>
                   ) : (
-                    sortedProducts.map((product) => {
+                    paginatedProducts.map((product) => {
                       const totalQty = (product.variants || []).reduce((s, v) => s + (v.stock || 0), 0);
                       const reservedQty = Number(product.reservedQty) || 0;
                       const availQty = getProductAvailableStock(product);
@@ -2105,12 +2127,12 @@ export default function ProductManagement({
 
               {/* Mobile Compact 2-Column Card Grid (8-10px gaps, 8px padding, 1:1 square cover image, 34-36px buttons) */}
               <div className="md:hidden grid grid-cols-2 gap-2 p-2">
-                {sortedProducts.length === 0 ? (
+                {paginatedProducts.length === 0 ? (
                   <div className="col-span-full py-10 text-center text-slate-400 italic text-xs">
                     No active gadget catalog records found.
                   </div>
                 ) : (
-                  sortedProducts.map((product) => {
+                  paginatedProducts.map((product) => {
                     const totalQty = (product.variants || []).reduce((s, v) => s + (v.stock || 0), 0);
                     const reservedQty = Number(product.reservedQty) || 0;
                     const availQty = getProductAvailableStock(product);
@@ -2214,6 +2236,33 @@ export default function ProductManagement({
                   })
                 )}
               </div>
+
+              {sortedProducts.length > pageSize && (
+                <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 border-t border-slate-100 bg-slate-50/70 text-xs text-slate-600">
+                  <span>
+                    Showing {(safeCatalogPage - 1) * pageSize + 1}–{Math.min(safeCatalogPage * pageSize, sortedProducts.length)} of {sortedProducts.length} products
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={safeCatalogPage <= 1}
+                      onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                      className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white disabled:opacity-40 cursor-pointer font-semibold"
+                    >
+                      Prev
+                    </button>
+                    <span className="font-mono font-bold">Page {safeCatalogPage}/{totalCatalogPages}</span>
+                    <button
+                      type="button"
+                      disabled={safeCatalogPage >= totalCatalogPages}
+                      onClick={() => setCurrentPage(p => Math.min(totalCatalogPages, p + 1))}
+                      className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white disabled:opacity-40 cursor-pointer font-semibold"
+                    >
+                      Next
+                    </button>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Bulk Barcode Printing & CSV Export Floating Action Bar */}

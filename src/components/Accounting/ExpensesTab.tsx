@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Trash2, TrendingDown, Calendar, Search, CheckCircle2, AlertTriangle, X } from 'lucide-react';
 import { UserProfile, Expense, ExpenseCategory, ExpensePaymentMethod } from '../../types';
-import { subscribeToExpenses, addExpense, deleteExpense } from '../../firebase/db';
+import { getExpenses, addExpense, deleteExpense } from '../../firebase/db';
 
 interface ExpensesTabProps {
   user: UserProfile;
@@ -21,11 +21,13 @@ export const ExpensesTab: React.FC<ExpensesTabProps> = ({ user }) => {
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
+  const loadExpenses = async () => {
+    const list = await getExpenses().catch(() => []);
+    setExpenses(list || []);
+  };
+
   useEffect(() => {
-    const unsub = subscribeToExpenses((list) => {
-      setExpenses(list || []);
-    });
-    return () => unsub();
+    loadExpenses();
   }, []);
 
   const totalExpense = (expenses || []).reduce((s, e) => s + (Number(e?.amount) || 0), 0);
@@ -66,6 +68,7 @@ export const ExpensesTab: React.FC<ExpensesTabProps> = ({ user }) => {
       setShowForm(false);
       setNotification({ type: 'success', message: 'খরচের হিসাব সফলভাবে সংরক্ষিত হয়েছে।' });
       setTimeout(() => setNotification(null), 4000);
+      await loadExpenses();
     } catch (err: any) {
       setNotification({ type: 'error', message: 'খরচ সংরক্ষণ ব্যর্থ: ' + (err?.message || 'Error') });
     } finally {
@@ -77,6 +80,7 @@ export const ExpensesTab: React.FC<ExpensesTabProps> = ({ user }) => {
     if (!deleteTargetId) return;
     try {
       await deleteExpense(deleteTargetId);
+      setExpenses(prev => prev.filter(e => e.id !== deleteTargetId));
       setDeleteTargetId(null);
       setNotification({ type: 'success', message: 'খরচের রেকর্ড মুছে ফেলা হয়েছে।' });
       setTimeout(() => setNotification(null), 4000);

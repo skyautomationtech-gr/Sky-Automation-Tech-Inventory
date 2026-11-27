@@ -1,8 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Plus, Trash2, CreditCard, Edit2, CheckCircle2, AlertTriangle, X } from 'lucide-react';
 import { UserProfile, PaymentPlatformLedger } from '../../types';
 import { 
-  subscribeToPaymentPlatformLedger, 
+  getPaymentPlatformLedger, 
   addPaymentPlatformEntry, 
   updatePaymentPlatformEntry, 
   deletePaymentPlatformEntry 
@@ -26,12 +26,14 @@ export const PaymentPlatformTab: React.FC<PaymentPlatformTabProps> = ({ user }) 
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
-  useEffect(() => {
-    const unsub = subscribeToPaymentPlatformLedger((list) => {
-      setPlatforms(list || []);
-    });
-    return () => unsub();
+  const loadPlatforms = useCallback(async () => {
+    const list = await getPaymentPlatformLedger();
+    setPlatforms(list || []);
   }, []);
+
+  useEffect(() => {
+    loadPlatforms();
+  }, [loadPlatforms]);
 
   const totalBalance = (platforms || []).reduce((s, p) => s + (Number(p?.currentBalance) || 0), 0);
   const totalPending = (platforms || []).reduce((s, p) => s + (Number(p?.pendingSettlement) || 0), 0);
@@ -89,6 +91,7 @@ export const PaymentPlatformTab: React.FC<PaymentPlatformTabProps> = ({ user }) 
         setNotification({ type: 'success', message: 'নতুন গেটওয়ে অ্যাকাউন্ট যুক্ত হয়েছে।' });
       }
       handleCloseForm();
+      await loadPlatforms();
       setTimeout(() => setNotification(null), 4000);
     } catch (err: any) {
       setNotification({ type: 'error', message: 'সংরক্ষণ ব্যর্থ: ' + (err?.message || 'Error') });
@@ -99,8 +102,10 @@ export const PaymentPlatformTab: React.FC<PaymentPlatformTabProps> = ({ user }) 
 
   const handleConfirmDelete = async () => {
     if (!deleteTargetId) return;
+    const removedId = deleteTargetId;
     try {
-      await deletePaymentPlatformEntry(deleteTargetId);
+      await deletePaymentPlatformEntry(removedId);
+      setPlatforms((prev) => prev.filter((item) => item.id !== removedId));
       setDeleteTargetId(null);
       setNotification({ type: 'success', message: 'গেটওয়ে অ্যাকাউন্ট মুছে ফেলা হয়েছে।' });
       setTimeout(() => setNotification(null), 4000);

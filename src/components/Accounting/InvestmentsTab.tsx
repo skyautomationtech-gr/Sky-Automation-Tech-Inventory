@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Trash2, Briefcase, Calendar, CheckCircle2, AlertTriangle, X } from 'lucide-react';
 import { UserProfile, InvestmentEntry } from '../../types';
-import { subscribeToInvestments, addInvestment, deleteInvestment } from '../../firebase/db';
+import { getInvestments, addInvestment, deleteInvestment } from '../../firebase/db';
 
 interface InvestmentsTabProps {
   user: UserProfile;
@@ -18,11 +18,13 @@ export const InvestmentsTab: React.FC<InvestmentsTabProps> = ({ user }) => {
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
+  const loadInvestments = async () => {
+    const list = await getInvestments().catch(() => []);
+    setInvestments(list || []);
+  };
+
   useEffect(() => {
-    const unsub = subscribeToInvestments((list) => {
-      setInvestments(list || []);
-    });
-    return () => unsub();
+    loadInvestments();
   }, []);
 
   const totalInvested = (investments || []).reduce((s, i) => s + (Number(i?.amount) || 0), 0);
@@ -50,6 +52,7 @@ export const InvestmentsTab: React.FC<InvestmentsTabProps> = ({ user }) => {
       setShowForm(false);
       setNotification({ type: 'success', message: 'মূলধন বিনিয়োগ সফলভাবে সংরক্ষণ করা হয়েছে।' });
       setTimeout(() => setNotification(null), 4000);
+      await loadInvestments();
     } catch (err: any) {
       setNotification({ type: 'error', message: err?.message || 'মূলধন সংরক্ষণ করতে সমস্যা হয়েছে' });
     } finally {
@@ -61,6 +64,7 @@ export const InvestmentsTab: React.FC<InvestmentsTabProps> = ({ user }) => {
     if (!deleteTargetId) return;
     try {
       await deleteInvestment(deleteTargetId);
+      setInvestments(prev => prev.filter(i => i.id !== deleteTargetId));
       setDeleteTargetId(null);
       setNotification({ type: 'success', message: 'মূলধন রেকর্ড মুছে ফেলা হয়েছে।' });
       setTimeout(() => setNotification(null), 4000);

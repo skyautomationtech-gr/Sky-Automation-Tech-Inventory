@@ -5,16 +5,16 @@ import './index.css';
 import { ErrorBoundary } from './components/ErrorBoundary';
 import { registerSW } from 'virtual:pwa-register';
 
-// Register PWA service worker for offline support and asset caching
+// Register PWA service worker for offline support and clean updates
 if (typeof window !== 'undefined' && 'serviceWorker' in navigator) {
   try {
-    registerSW({
+    const updateSW = registerSW({
       immediate: true,
       onNeedRefresh() {
-        console.log('[PWA] New version ready.');
+        updateSW(true);
       },
       onOfflineReady() {
-        console.log('[PWA] App ready for offline use.');
+        // Ready for offline app-shell load
       },
     });
   } catch (e) {

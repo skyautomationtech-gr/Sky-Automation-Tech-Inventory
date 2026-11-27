@@ -1,5 +1,4 @@
 import React, { useEffect, useRef } from 'react';
-import JsBarcode from 'jsbarcode';
 
 interface BarcodeProps {
   value: string;
@@ -27,8 +26,11 @@ export default function Barcode({
   const svgRef = useRef<SVGSVGElement>(null);
 
   useEffect(() => {
-    if (svgRef.current && value) {
-      try {
+    let active = true;
+    if (!svgRef.current || !value) return;
+    import('jsbarcode')
+      .then(({ default: JsBarcode }) => {
+        if (!active || !svgRef.current) return;
         JsBarcode(svgRef.current, value, {
           format,
           width,
@@ -39,10 +41,13 @@ export default function Barcode({
           background,
           lineColor,
         });
-      } catch (err) {
+      })
+      .catch((err) => {
         console.error('Failed to render barcode:', err);
-      }
-    }
+      });
+    return () => {
+      active = false;
+    };
   }, [value, format, width, height, displayValue, fontSize, margin, background, lineColor]);
 
   return <svg ref={svgRef} className="max-w-full h-auto" />;

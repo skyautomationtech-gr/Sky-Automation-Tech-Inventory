@@ -1,118 +1,177 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { Suspense, lazy, useState, useEffect, useMemo } from 'react';
 import { onAuthStateChanged, signOut, EmailAuthProvider, reauthenticateWithCredential } from 'firebase/auth';
 import { auth, isFirebaseConfigured } from './firebase/config';
-import { 
-  getUserProfile, 
+import {
+  getUserProfile,
   findUserProfileByEmail,
   createUserProfile,
-  initializeUser,
-  getCompanySettings, 
-  getProducts, 
-  getCategories, 
+  getCompanySettings,
+  getProducts,
+  getCategories,
   getBrands,
   getProductColors,
   getProductModels,
   getProductAvailableStock,
-  getAllUsers,
+  getPendingApprovalUsers,
   subscribeToProducts,
-  subscribeToCategories,
-  subscribeToBrands,
-  subscribeToProductColors,
-  subscribeToProductModels,
   saveCompanySettings,
-  promoteUserToSuperAdmin,
   isPermanentSuperAdminEmail,
   ensurePermanentSuperAdminProfile,
   clearSampleData,
-  seedInitialDataIfEmpty,
-  syncProductStockStatuses,
   migrateProductBarcodes,
   migrateExistingCustomerIds,
   migrateExistingInvoices,
-  exportAllData,
+  addLoginHistory,
   localStore,
-  dbCache
+  dbCache,
 } from './firebase/db';
+import type {
+  UserProfile,
+  Product,
+  Category,
+  Brand,
+  CompanySettings,
+  ProductColor,
+  ProductModel,
+  RolePermissionsMap,
+} from './types';
 import {
-  exportProductsToCSV,
-  exportBrandsToCSV,
-  exportProductsToExcel,
-  exportOrdersToExcel,
-  exportInvoicesToExcel,
-  exportCustomersToExcel,
-  exportSuppliersToExcel,
-  exportStockLogsToExcel,
-  exportExpensesToExcel,
-  exportCategoriesBrandsToExcel,
-  exportUsersToExcel,
-  exportAttendanceToExcel,
-  exportEverythingWorkbook
-} from './utils/excelExport';
-import { UserProfile, Product, Category, Brand, CompanySettings, ProductColor, ProductModel, RolePermissionsMap } from './types';
-import { getPreOrderStatsSummary, getRolePermissions } from './firebase/preOrderDb';
-import { hasPermission, isPreOrderTab } from './preOrders/constants';
+  getCachedRolePermissionsSync,
+  getPreOrderStatsSummary,
+  getRolePermissions,
+} from './firebase/preOrderBootstrap';
+import { hasPermission } from './preOrders/constants';
 import { SidebarBadgeCounts, normalizeDefaultSubAction } from './navigation/sidebarConfig';
-import { EMAILJS_CONFIG } from './config/emailjs';
-import { sendOTPEmail } from './lib/emailjs';
-import { 
-  Menu, 
-  AlertTriangle, 
-  Sparkles, 
-  RefreshCw, 
-  ShieldAlert, 
-  Key, 
-  Mail, 
-  Eye, 
-  EyeOff, 
-  Lock, 
-  CheckCircle2, 
-  ShieldCheck, 
+import {
+  perfMarkDashboardVisible,
+  perfSetScreen,
+  perfTimeAsync,
+} from './utils/perfLogger';
+import {
+  AlertTriangle,
+  RefreshCw,
+  ShieldAlert,
+  Key,
+  Mail,
+  Eye,
+  EyeOff,
+  Lock,
+  CheckCircle2,
   AlertCircle,
-  Trash2,
   Send,
-  X
+  X,
 } from 'lucide-react';
 
-// Import Modular Components
-import SplashAndAuth from './components/SplashAndAuth';
-import OnboardingWizard from './components/OnboardingWizard';
-import Sidebar from './components/Sidebar';
-import DashboardView from './components/DashboardView';
-import ProductManagement, { ProductSubTab } from './components/ProductManagement';
-import StockOperations from './components/StockOperations';
-import UserManagement from './components/UserManagement';
-import AttendanceLog from './components/AttendanceLog';
-import CustomerManagement from './components/CustomerManagement';
-import OrderManagement from './components/OrderManagement';
-import InvoiceManagement from './components/InvoiceManagement';
-import DuePayments from './components/DuePayments';
-import FinancialOverview from './components/FinancialOverview';
-import { AccountingDesk } from './components/Accounting';
-import SupplierManagement from './components/SupplierManagement';
-import ReportsAnalytics from './components/ReportsAnalytics';
-import { AuditLogView } from './components/AuditLogView';
-import CompanySettingsView from './components/CompanySettingsView';
-import ProfileSettingsView from './components/ProfileSettingsView';
-import PreOrderOverviewView from './components/PreOrders/PreOrderOverviewView';
-import CreatePreOrderView from './components/PreOrders/CreatePreOrderView';
-import AllPreOrdersView from './components/PreOrders/AllPreOrdersView';
-import PaymentManagementView from './components/PreOrders/PaymentManagementView';
-import PreOrderSupplierManagementView from './components/PreOrders/PreOrderSupplierManagementView';
-import ShipmentTrackingView from './components/PreOrders/ShipmentTrackingView';
-import CustomerTrackingLinksView from './components/PreOrders/CustomerTrackingLinksView';
-import RemindersCenterView from './components/PreOrders/RemindersCenterView';
-import PreOrderReportsView from './components/PreOrders/PreOrderReportsView';
-import PreOrderHelpView from './components/PreOrders/PreOrderHelpView';
-import PublicTrackingPortal from './components/PreOrders/PublicTrackingPortal';
-import NotificationCenter from './components/NotificationCenter';
-import { PublicInvoiceVerification } from './components/PublicInvoiceVerification';
+import type { ProductSubTab } from './components/ProductManagement';
 import ErrorBoundary from './components/ErrorBoundary';
 import { OfflineIndicator } from './components/OfflineIndicator';
-import { LiveClockWidget } from './components/LiveClockWidget';
-import { TopBar } from './components/TopBar';
-import { Breadcrumbs } from './components/Breadcrumbs';
-import { WelcomeTour } from './components/WelcomeTour';
-import { ThemeProvider, ToastProvider, ThemeToggle, ConfirmDialog } from './design-system';
+import { ThemeProvider, ToastProvider, ConfirmDialog, useToast } from './design-system';
+
+// Lazy-loaded chrome & standalone portals (keeps initial login shell ultra-small)
+const SplashAndAuth = lazy(() => import('./components/SplashAndAuth'));
+const OnboardingWizard = lazy(() => import('./components/OnboardingWizard'));
+const Sidebar = lazy(() => import('./components/Sidebar'));
+const TopBar = lazy(() =>
+  import('./components/TopBar').then((m) => ({ default: m.TopBar }))
+);
+const WelcomeTour = lazy(() =>
+  import('./components/WelcomeTour').then((m) => ({ default: m.WelcomeTour }))
+);
+const PublicTrackingPortal = lazy(
+  () => import('./components/PreOrders/PublicTrackingPortal')
+);
+const PublicInvoiceVerification = lazy(() =>
+  import('./components/PublicInvoiceVerification').then((m) => ({
+    default: m.PublicInvoiceVerification,
+  }))
+);
+
+// Route-level lazy views (loaded only when user opens that module)
+const DashboardView = lazy(() => import('./components/DashboardView'));
+const ProductManagement = lazy(() => import('./components/ProductManagement'));
+const StockOperations = lazy(() => import('./components/StockOperations'));
+const UserManagement = lazy(() => import('./components/UserManagement'));
+const AttendanceLog = lazy(() => import('./components/AttendanceLog'));
+const CustomerManagement = lazy(() => import('./components/CustomerManagement'));
+const OrderManagement = lazy(() => import('./components/OrderManagement'));
+const InvoiceManagement = lazy(() => import('./components/InvoiceManagement'));
+const DuePayments = lazy(() => import('./components/DuePayments'));
+const FinancialOverview = lazy(() => import('./components/FinancialOverview'));
+const AccountingDesk = lazy(() =>
+  import('./components/Accounting').then((m) => ({ default: m.AccountingDesk }))
+);
+const SupplierManagement = lazy(() => import('./components/SupplierManagement'));
+const ReportsAnalytics = lazy(() => import('./components/ReportsAnalytics'));
+const AuditLogView = lazy(() =>
+  import('./components/AuditLogView').then((m) => ({ default: m.AuditLogView }))
+);
+const CompanySettingsView = lazy(() => import('./components/CompanySettingsView'));
+const ProfileSettingsView = lazy(() => import('./components/ProfileSettingsView'));
+const PreOrderOverviewView = lazy(
+  () => import('./components/PreOrders/PreOrderOverviewView')
+);
+const CreatePreOrderView = lazy(
+  () => import('./components/PreOrders/CreatePreOrderView')
+);
+const AllPreOrdersView = lazy(
+  () => import('./components/PreOrders/AllPreOrdersView')
+);
+const PaymentManagementView = lazy(
+  () => import('./components/PreOrders/PaymentManagementView')
+);
+const PreOrderSupplierManagementView = lazy(
+  () => import('./components/PreOrders/PreOrderSupplierManagementView')
+);
+const ShipmentTrackingView = lazy(
+  () => import('./components/PreOrders/ShipmentTrackingView')
+);
+const CustomerTrackingLinksView = lazy(
+  () => import('./components/PreOrders/CustomerTrackingLinksView')
+);
+const RemindersCenterView = lazy(
+  () => import('./components/PreOrders/RemindersCenterView')
+);
+const PreOrderReportsView = lazy(
+  () => import('./components/PreOrders/PreOrderReportsView')
+);
+const PreOrderHelpView = lazy(
+  () => import('./components/PreOrders/PreOrderHelpView')
+);
+
+const RouteSkeleton: React.FC = () => (
+  <div className="space-y-4 animate-pulse p-2">
+    <div className="h-8 w-56 bg-slate-200 dark:bg-slate-800 rounded-xl" />
+    <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
+      <div className="h-24 bg-slate-200 dark:bg-slate-800 rounded-2xl" />
+      <div className="h-24 bg-slate-200 dark:bg-slate-800 rounded-2xl" />
+      <div className="h-24 bg-slate-200 dark:bg-slate-800 rounded-2xl" />
+      <div className="h-24 bg-slate-200 dark:bg-slate-800 rounded-2xl" />
+    </div>
+    <div className="h-64 bg-slate-200 dark:bg-slate-800 rounded-2xl" />
+  </div>
+);
+
+const FullScreenLoader: React.FC<{ label?: string }> = ({ label = 'Loading...' }) => (
+  <div className="min-h-screen bg-slate-950 flex flex-col justify-center items-center">
+    <div className="w-10 h-10 border-4 border-amber-400 border-t-transparent rounded-full animate-spin mb-3" />
+    <p className="text-xs font-mono text-slate-400 uppercase tracking-widest">{label}</p>
+  </div>
+);
+
+const TrackingSyncWarningBridge: React.FC = () => {
+  const { showToast } = useToast();
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent<string>)?.detail;
+      if (detail) {
+        showToast(detail, 'warning');
+      }
+    };
+    window.addEventListener('preorder-tracking-sync-warning', handler);
+    return () => window.removeEventListener('preorder-tracking-sync-warning', handler);
+  }, [showToast]);
+  return null;
+};
 
 const parsePublicTrackingRoute = (): { isTrackingRoute: boolean; token: string } => {
   if (typeof window === 'undefined') return { isTrackingRoute: false, token: '' };
@@ -177,8 +236,10 @@ export default function App() {
     );
   };
   
-  // App structure states
-  const [companySettings, setCompanySettings] = useState<CompanySettings | null>(null);
+  // App structure states (hydrate from local cache immediately for instant first paint)
+  const [companySettings, setCompanySettings] = useState<CompanySettings | null>(() =>
+    localStore.get<CompanySettings>('company_settings')
+  );
   const [isOnboarding, setIsOnboarding] = useState(false);
   const [currentTab, setCurrentTab] = useState('dashboard');
   const [isSidebarOpen, setIsSidebarOpen] = useState(false);
@@ -197,14 +258,28 @@ export default function App() {
     }
   });
 
-  // Applet Data States
-  const [products, setProducts] = useState<Product[]>([]);
-  const [categories, setCategories] = useState<Category[]>([]);
-  const [brands, setBrands] = useState<Brand[]>([]);
-  const [productColors, setProductColors] = useState<ProductColor[]>([]);
-  const [productModels, setProductModels] = useState<ProductModel[]>([]);
-  const [rolePermissions, setRolePermissions] = useState<RolePermissionsMap | null>(null);
-  const [rolePermissionsLoaded, setRolePermissionsLoaded] = useState<boolean>(false);
+  // Applet Data States (instant hydration from localStore)
+  const [products, setProducts] = useState<Product[]>(
+    () => localStore.get<Product[]>('products_archived') || localStore.get<Product[]>('products_active') || []
+  );
+  const [categories, setCategories] = useState<Category[]>(
+    () => localStore.get<Category[]>('categories') || []
+  );
+  const [brands, setBrands] = useState<Brand[]>(
+    () => localStore.get<Brand[]>('brands') || []
+  );
+  const [productColors, setProductColors] = useState<ProductColor[]>(
+    () => localStore.get<ProductColor[]>('product_colors') || []
+  );
+  const [productModels, setProductModels] = useState<ProductModel[]>(
+    () => localStore.get<ProductModel[]>('product_models') || []
+  );
+  const [rolePermissions, setRolePermissions] = useState<RolePermissionsMap | null>(() =>
+    getCachedRolePermissionsSync()
+  );
+  const [rolePermissionsLoaded, setRolePermissionsLoaded] = useState<boolean>(() =>
+    Boolean(getCachedRolePermissionsSync())
+  );
   const [firebaseAuthed, setFirebaseAuthed] = useState<boolean>(() => Boolean(auth?.currentUser));
   const [dataLoading, setDataLoading] = useState(false);
   const [showCheckInModal, setShowCheckInModal] = useState(false);
@@ -392,10 +467,7 @@ export default function App() {
       return;
     }
 
-    console.log('App: Setting up onAuthStateChanged listener...');
-
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
-      console.log('App: onAuthStateChanged triggered. User:', firebaseUser ? firebaseUser.uid : 'null');
       if (!isMounted) return;
 
       try {
@@ -404,7 +476,6 @@ export default function App() {
           setAuthReady(true);
 
           // Fetch real Firestore user profile first (never restore session from cache alone)
-          console.log('App: Fetching user profile for UID:', firebaseUser.uid);
           let profile: UserProfile | null = null;
           try {
             profile = await getUserProfile(firebaseUser.uid, { strictFirestore: true });
@@ -418,7 +489,6 @@ export default function App() {
 
           // Fallback: Resolve legacy/migrated profile by email when authenticated
           if (!profile && firebaseUser.email) {
-            console.log('App: Profile not found by UID, searching by email:', firebaseUser.email);
             profile = await findUserProfileByEmail(firebaseUser.email);
             if (profile && profile.id !== firebaseUser.uid) {
               const healedProfile = { ...profile, id: firebaseUser.uid };
@@ -480,7 +550,6 @@ export default function App() {
           } catch {}
 
           if (!isOtpVerified) {
-            console.log('App: User signed in to Firebase Auth, awaiting OTP verification in SplashAndAuth...');
             setUser(null);
             setProfileLoaded(false);
             setAuthChecking(false);
@@ -515,7 +584,6 @@ export default function App() {
             }
           } catch {}
 
-          console.log('App: User session established:', profile.email, `[${profile.role}]`);
           try {
             sessionStorage.setItem('sat_otp_verified', 'true');
             localStorage.setItem('sat_otp_verified', 'true');
@@ -528,21 +596,39 @@ export default function App() {
           setUser(profile);
           setProfileLoaded(true);
 
-          // Check onboarding only after real Firebase Auth + loaded profile
-          try {
-            const settings = await getCompanySettings();
-            if (!isMounted) return;
-            if (settings && settings.onboarded) {
-              setCompanySettings(settings);
-              setIsOnboarding(false);
-            } else {
-              setIsOnboarding(true);
+          const cachedSettings = localStore.get<CompanySettings>('company_settings');
+          if (cachedSettings?.onboarded) {
+            setCompanySettings(cachedSettings);
+            setIsOnboarding(false);
+            setAuthChecking(false);
+            // SWR refresh settings in background without blocking dashboard render
+            getCompanySettings()
+              .then((settings) => {
+                if (!isMounted || !settings) return;
+                setCompanySettings(settings);
+                setIsOnboarding(!settings.onboarded);
+              })
+              .catch((settingsErr: any) => {
+                if (checkIfQuotaError(settingsErr)) {
+                  setIsQuotaExceeded(true);
+                }
+              });
+          } else {
+            try {
+              const settings = await getCompanySettings();
+              if (!isMounted) return;
+              if (settings && settings.onboarded) {
+                setCompanySettings(settings);
+                setIsOnboarding(false);
+              } else {
+                setIsOnboarding(true);
+              }
+            } catch (settingsErr: any) {
+              if (checkIfQuotaError(settingsErr)) {
+                setIsQuotaExceeded(true);
+              }
+              throw settingsErr;
             }
-          } catch (settingsErr: any) {
-            if (checkIfQuotaError(settingsErr)) {
-              setIsQuotaExceeded(true);
-            }
-            throw settingsErr;
           }
         } else {
           // Firebase Auth user is null: NEVER restore a cached local session without auth.currentUser.
@@ -622,18 +708,15 @@ export default function App() {
       if (modelsList && modelsList.length > 0) setProductModels(modelsList);
 
       if (user?.role === 'superadmin') {
-        getAllUsers()
-          .then((allUsers) => {
-            const count = (allUsers || []).filter(
-              (u) => u.status === 'pending_approval' || u.status === 'rejected'
-            ).length;
-            setPendingUsersCount(count);
+        getPendingApprovalUsers(25, true)
+          .then((pendingUsers) => {
+            setPendingUsersCount(pendingUsers.length);
           })
           .catch(() => {});
       }
 
       if (hasPermission(user, rolePermissions, 'preOrderView')) {
-        getPreOrderStatsSummary()
+        getPreOrderStatsSummary({ forceRefresh: true })
           .then((stats) => {
             setPendingPreOrderVerificationsCount(stats?.pendingPaymentCount || 0);
           })
@@ -673,61 +756,79 @@ export default function App() {
 
   useEffect(() => {
     if (!publicTrackingRoute.isTrackingRoute && authReady && user && firebaseAuthed && profileLoaded && !isOnboarding) {
-      getRolePermissions()
-        .then((perms) => {
+      perfMarkDashboardVisible();
+
+      // Load static lookup tables in one parallel batch (uses in-memory/local cache, 0 extra real-time listeners)
+      Promise.all([
+        getRolePermissions(),
+        getCategories(),
+        getBrands(),
+        getProductColors(),
+        getProductModels(),
+      ])
+        .then(([perms, cats, brs, cols, mods]) => {
           setRolePermissions(perms);
           setRolePermissionsLoaded(true);
-          if (hasPermission(user, perms, 'preOrderView')) {
-            getPreOrderStatsSummary()
-              .then((stats) => setPendingPreOrderVerificationsCount(stats?.pendingPaymentCount || 0))
-              .catch(() => {});
-          }
+          if (cats?.length) setCategories(cats);
+          if (brs?.length) setBrands(brs);
+          if (cols?.length) setProductColors(cols);
+          if (mods?.length) setProductModels(mods);
         })
         .catch(() => {
           setRolePermissionsLoaded(true);
         });
 
-      if (user.role === 'superadmin') {
-        getAllUsers()
-          .then((allUsers) => {
-            const count = (allUsers || []).filter(
-              (u) => u.status === 'pending_approval' || u.status === 'rejected'
-            ).length;
-            setPendingUsersCount(count);
-          })
-          .catch(() => {});
-      } else {
-        setPendingUsersCount(0);
-      }
-
-      // Note: Subscriptions immediately return the cached or latest snapshot,
-      // so we avoid an extra redundant batch of getDocs calls on mount.
+      // Keep ONE shared real-time listener for catalog products
       const unsubProducts = subscribeToProducts((prods) => {
         if (prods) setProducts(prods);
       }, true);
 
-      const unsubCategories = subscribeToCategories((cats) => {
-        if (cats) setCategories(cats);
-      });
+      // Defer secondary startup checks until after dashboard settles
+      const deferredTimer = window.setTimeout(() => {
+        if (user.role === 'superadmin') {
+          getPendingApprovalUsers(25)
+            .then((pendingUsers) => setPendingUsersCount(pendingUsers.length))
+            .catch(() => {});
+        } else {
+          setPendingUsersCount(0);
+        }
 
-      const unsubBrands = subscribeToBrands((brs) => {
-        if (brs) setBrands(brs);
-      });
+        const effectivePerms = rolePermissions || getCachedRolePermissionsSync();
+        if (hasPermission(user, effectivePerms, 'preOrderView')) {
+          getPreOrderStatsSummary()
+            .then((stats) => setPendingPreOrderVerificationsCount(stats?.pendingPaymentCount || 0))
+            .catch(() => {});
 
-      const unsubColors = subscribeToProductColors((cls) => {
-        if (cls) setProductColors(cls);
-      });
-
-      const unsubModels = subscribeToProductModels((mds) => {
-        if (mds) setProductModels(mds);
-      });
+          // Once-per-day background pre-order reminder sync (only loads preOrderDb on idle)
+          const todayIso = new Date().toISOString().split('T')[0];
+          const syncKey = `sat_reminder_sync_${user.id}_${todayIso}`;
+          try {
+            if (localStorage.getItem(syncKey) !== 'done') {
+              void import('./firebase/preOrderDb')
+                .then((m) =>
+                  m.syncDailyTimeBasedReminders({
+                    actor: {
+                      id: user.id,
+                      name: user.name,
+                      role: user.role,
+                    },
+                    allowedSubBrands: user.subBrandAccess,
+                  })
+                )
+                .then(() => {
+                  try {
+                    localStorage.setItem(syncKey, 'done');
+                  } catch {}
+                })
+                .catch(() => {});
+            }
+          } catch {}
+        }
+      }, 1200);
 
       return () => {
+        window.clearTimeout(deferredTimer);
         unsubProducts();
-        unsubCategories();
-        unsubBrands();
-        unsubColors();
-        unsubModels();
       };
     }
   }, [publicTrackingRoute.isTrackingRoute, authReady, user, firebaseAuthed, profileLoaded, isOnboarding]);
@@ -757,16 +858,14 @@ export default function App() {
       localStorage.setItem('sat_session_started_at', String(Date.now()));
       localStorage.setItem('sat_user_session', JSON.stringify(effectiveProfile));
       
-      // Track login only when Firebase Auth session is active
+      // Track login in background when Firebase Auth session is active
       if (auth?.currentUser) {
-        import('./firebase/db').then(({ addLoginHistory }) => {
-          addLoginHistory(effectiveProfile.id, {
-            timestamp: Date.now(),
-            userAgent: navigator.userAgent,
-            platform: navigator.platform,
-            status: 'success'
-          }).catch(() => {});
-        });
+        void addLoginHistory(effectiveProfile.id, {
+          timestamp: Date.now(),
+          userAgent: navigator.userAgent,
+          platform: navigator.platform,
+          status: 'success',
+        }).catch(() => {});
       }
     } catch (e) {}
     setSessionExpiredMessage('');
@@ -775,8 +874,39 @@ export default function App() {
     setAuthReady(true);
     setUser(effectiveProfile);
 
+    const cachedSettings = localStore.get<CompanySettings>('company_settings');
+    if (cachedSettings?.onboarded) {
+      setCompanySettings(cachedSettings);
+      setIsOnboarding(false);
+      // Parallel background refresh without blocking login transition
+      void Promise.all([
+        getCompanySettings()
+          .then((settings) => {
+            if (settings) {
+              setCompanySettings(settings);
+              setIsOnboarding(!settings.onboarded);
+            }
+          })
+          .catch(() => {}),
+        getRolePermissions()
+          .then((perms) => {
+            setRolePermissions(perms);
+            setRolePermissionsLoaded(true);
+          })
+          .catch(() => {}),
+      ]);
+      return;
+    }
+
     try {
-      const settings = await getCompanySettings();
+      const [settings, perms] = await Promise.all([
+        getCompanySettings(),
+        getRolePermissions().catch(() => null),
+      ]);
+      if (perms) {
+        setRolePermissions(perms);
+        setRolePermissionsLoaded(true);
+      }
       if (settings && settings.onboarded) {
         setCompanySettings(settings);
         setIsOnboarding(false);
@@ -861,6 +991,7 @@ export default function App() {
     }
 
     const normalizedSub = normalizeDefaultSubAction(resolvedTab, subAction);
+    perfSetScreen(resolvedTab);
     setCurrentTab(resolvedTab);
     setCurrentSubAction(normalizedSub);
 
@@ -1030,11 +1161,11 @@ export default function App() {
   const [exportingType, setExportingType] = useState<string | null>(null);
   const [exportMessage, setExportMessage] = useState<string | null>(null);
 
-  const handleRunExcelExport = async (typeName: string, exportFn: () => Promise<void>) => {
+  const handleRunExcelExport = async (typeName: string, loaderFn: () => Promise<any>) => {
     setExportingType(typeName);
     setExportMessage(null);
     try {
-      await exportFn();
+      await perfTimeAsync(`Excel Export (${typeName})`, loaderFn);
       const nowStr = new Date().toLocaleString('en-GB', { day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit' });
       setLastExportTime(nowStr);
       localStorage.setItem('last_backup_time', nowStr);
@@ -1061,6 +1192,7 @@ export default function App() {
     setClearDataOtpSuccessMsg('');
 
     try {
+      const { sendOTPEmail } = await import('./lib/emailjs');
       const res = await sendOTPEmail(targetEmail, code, user?.name || 'Super Admin');
       if (res.success) {
         setGeneratedClearDataOtp(code);
@@ -1207,7 +1339,9 @@ export default function App() {
   if (publicTrackingRoute.isTrackingRoute) {
     return (
       <ErrorBoundary fallbackTitle="Order Tracking Unavailable">
-        <PublicTrackingPortal token={publicTrackingRoute.token} />
+        <Suspense fallback={<FullScreenLoader label="Loading Order Tracking..." />}>
+          <PublicTrackingPortal token={publicTrackingRoute.token} />
+        </Suspense>
       </ErrorBoundary>
     );
   }
@@ -1215,37 +1349,32 @@ export default function App() {
   // If public verification requested via QR code scan
   if (isPublicVerification) {
     return (
-      <PublicInvoiceVerification 
-        onDismiss={() => {
-          setIsPublicVerification(false);
-          try {
-            const url = new URL(window.location.href);
-            url.searchParams.delete('verify_inv');
-            url.searchParams.delete('inv');
-            url.searchParams.delete('brand');
-            url.searchParams.delete('total');
-            url.searchParams.delete('due');
-            url.searchParams.delete('paid');
-            url.searchParams.delete('phone');
-            url.searchParams.delete('name');
-            url.searchParams.delete('date');
-            url.searchParams.delete('order');
-            window.history.replaceState({}, '', url.pathname + (url.search ? url.search : ''));
-          } catch (e) {}
-        }}
-      />
+      <Suspense fallback={<FullScreenLoader label="Verifying Invoice..." />}>
+        <PublicInvoiceVerification 
+          onDismiss={() => {
+            setIsPublicVerification(false);
+            try {
+              const url = new URL(window.location.href);
+              url.searchParams.delete('verify_inv');
+              url.searchParams.delete('inv');
+              url.searchParams.delete('brand');
+              url.searchParams.delete('total');
+              url.searchParams.delete('due');
+              url.searchParams.delete('paid');
+              url.searchParams.delete('phone');
+              url.searchParams.delete('name');
+              url.searchParams.delete('date');
+              url.searchParams.delete('order');
+              window.history.replaceState({}, '', url.pathname + (url.search ? url.search : ''));
+            } catch (e) {}
+          }}
+        />
+      </Suspense>
     );
   }
 
   if (authChecking) {
-    return (
-      <div className="min-h-screen bg-slate-950 flex flex-col justify-center items-center">
-        <div className="w-12 h-12 border-4 border-amber-400 border-t-transparent rounded-full animate-spin mb-4" />
-        <p className="text-sm font-mono text-slate-400 uppercase tracking-widest">
-          Authenticating Operator Session...
-        </p>
-      </div>
-    );
+    return <FullScreenLoader label="Authenticating Operator Session..." />;
   }
 
   if (!isFirebaseConfigured) {
@@ -1264,51 +1393,61 @@ export default function App() {
   // Auth Guard: Wait until both Firebase Auth user and Firestore profile doc are loaded
   if (!user || !profileLoaded || !firebaseAuthed) {
     return (
-      <SplashAndAuth
-        onAuthSuccess={handleAuthSuccess}
-        sessionExpiredMessage={sessionExpiredMessage}
-        onDismissSessionExpired={() => setSessionExpiredMessage('')}
-      />
+      <Suspense fallback={<FullScreenLoader label="Loading Sign-In..." />}>
+        <SplashAndAuth
+          onAuthSuccess={handleAuthSuccess}
+          sessionExpiredMessage={sessionExpiredMessage}
+          onDismissSessionExpired={() => setSessionExpiredMessage('')}
+        />
+      </Suspense>
     );
   }
 
   // Onboarding Wizard Guard
   if (isOnboarding) {
-    return <OnboardingWizard onComplete={handleOnboardingComplete} userId={user.id} />;
+    return (
+      <Suspense fallback={<FullScreenLoader label="Preparing Workspace Setup..." />}>
+        <OnboardingWizard onComplete={handleOnboardingComplete} userId={user.id} />
+      </Suspense>
+    );
   }
 
   return (
     <ThemeProvider userId={user.id} initialUserPreference={user.themePreference}>
       <ToastProvider>
+        <TrackingSyncWarningBridge />
         <div className="h-screen w-full max-w-full bg-slate-100 dark:bg-slate-950 text-slate-800 dark:text-slate-100 flex flex-col lg:flex-row transition-colors">
           
           {/* Sidebar Navigation */}
-          <Sidebar 
-            currentTab={currentTab} 
-            currentSubAction={currentSubAction}
-            setCurrentTab={navigateToTab} 
-            onNavigate={navigateToTab}
-            user={user} 
-            rolePermissions={rolePermissions}
-            badges={sidebarBadges}
-            onLogout={handleLogout}
-            isOpen={isSidebarOpen}
-            setIsOpen={setIsSidebarOpen}
-            companyName={companySettings?.companyName || 'Sky Automation Tech'}
-            logoUrl={companySettings?.logoUrl || '/sat_logo.jpg'}
-            isCollapsed={isSidebarCollapsed}
-            setIsCollapsed={(collapsed) => {
-              setIsSidebarCollapsed(collapsed);
-              try { localStorage.setItem('sat_sidebar_collapsed', String(collapsed)); } catch {}
-            }}
-          />
+          <Suspense fallback={<aside className="hidden lg:block w-64 shrink-0 bg-slate-900" />}>
+            <Sidebar 
+              currentTab={currentTab} 
+              currentSubAction={currentSubAction}
+              setCurrentTab={navigateToTab} 
+              onNavigate={navigateToTab}
+              user={user} 
+              rolePermissions={rolePermissions}
+              badges={sidebarBadges}
+              onLogout={handleLogout}
+              isOpen={isSidebarOpen}
+              setIsOpen={setIsSidebarOpen}
+              companyName={companySettings?.companyName || 'Sky Automation Tech'}
+              logoUrl={companySettings?.logoUrl || '/sat_logo.jpg'}
+              isCollapsed={isSidebarCollapsed}
+              setIsCollapsed={(collapsed) => {
+                setIsSidebarCollapsed(collapsed);
+                try { localStorage.setItem('sat_sidebar_collapsed', String(collapsed)); } catch {}
+              }}
+            />
+          </Suspense>
 
           {/* Main Content Workspace */}
           <div className="flex-1 flex flex-col h-full min-h-0 min-w-0 max-w-full bg-slate-50 dark:bg-slate-950">
             
             {/* Sticky Top Header Bar (Laptop & Mobile Glass Header) */}
-            <TopBar 
-              currentTab={currentTab}
+            <Suspense fallback={<div className="h-16 border-b border-slate-200 dark:border-slate-800" />}>
+              <TopBar 
+                currentTab={currentTab}
               currentSubAction={currentSubAction}
               onNavigate={navigateToTab}
               user={user}
@@ -1328,11 +1467,13 @@ export default function App() {
               onOpenMobileSidebar={() => setIsSidebarOpen(true)}
               dataLoading={dataLoading}
             />
+            </Suspense>
 
 
 
             {/* Scrollable Main Workspace */}
             <main className="flex-1 overflow-y-auto overflow-x-hidden p-4 md:p-6 lg:p-8 bg-slate-50 dark:bg-slate-950 w-full max-w-full min-w-0">
+              <Suspense fallback={<RouteSkeleton />}>
           
           {isQuotaExceeded && (
             <div className="mb-6 bg-amber-500/10 border border-amber-500/20 rounded-xl p-4 flex items-center justify-between gap-3">
@@ -1752,7 +1893,7 @@ export default function App() {
                     </div>
                     <button
                       type="button"
-                      onClick={() => handleRunExcelExport('All Collections (Multi-Sheet)', exportEverythingWorkbook)}
+                      onClick={() => handleRunExcelExport('All Collections (Multi-Sheet)', async () => (await import('./utils/excelExport')).exportEverythingWorkbook())}
                       disabled={exportingType !== null}
                       className="py-2.5 px-5 bg-slate-900 hover:bg-black text-white font-bold text-xs rounded-xl cursor-pointer disabled:opacity-50 shrink-0 shadow-xs flex items-center gap-2"
                     >
@@ -1763,7 +1904,7 @@ export default function App() {
                   <div className="pt-4 border-t border-slate-200/60 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
                     <button
                       type="button"
-                      onClick={() => handleRunExcelExport('Products (CSV)', () => exportProductsToCSV())}
+                      onClick={() => handleRunExcelExport('Products (CSV)', async () => (await import('./utils/excelExport')).exportProductsToCSV())}
                       disabled={exportingType !== null}
                       className="py-2.5 px-4 bg-emerald-50 hover:bg-emerald-100/80 border border-emerald-200 text-emerald-900 font-bold text-xs rounded-xl cursor-pointer disabled:opacity-50 text-left transition-colors flex items-center justify-between shadow-2xs"
                     >
@@ -1773,7 +1914,7 @@ export default function App() {
 
                     <button
                       type="button"
-                      onClick={() => handleRunExcelExport('Brands (CSV)', () => exportBrandsToCSV())}
+                      onClick={() => handleRunExcelExport('Brands (CSV)', async () => (await import('./utils/excelExport')).exportBrandsToCSV())}
                       disabled={exportingType !== null}
                       className="py-2.5 px-4 bg-emerald-50 hover:bg-emerald-100/80 border border-emerald-200 text-emerald-900 font-bold text-xs rounded-xl cursor-pointer disabled:opacity-50 text-left transition-colors flex items-center justify-between shadow-2xs"
                     >
@@ -1783,7 +1924,7 @@ export default function App() {
 
                     <button
                       type="button"
-                      onClick={() => handleRunExcelExport('Products', exportProductsToExcel)}
+                      onClick={() => handleRunExcelExport('Products', async () => (await import('./utils/excelExport')).exportProductsToExcel())}
                       disabled={exportingType !== null}
                       className="py-2.5 px-4 bg-white hover:bg-slate-100 border border-slate-200 text-slate-800 font-semibold text-xs rounded-xl cursor-pointer disabled:opacity-50 text-left transition-colors flex items-center justify-between"
                     >
@@ -1793,7 +1934,7 @@ export default function App() {
                     
                     <button
                       type="button"
-                      onClick={() => handleRunExcelExport('Orders', exportOrdersToExcel)}
+                      onClick={() => handleRunExcelExport('Orders', async () => (await import('./utils/excelExport')).exportOrdersToExcel())}
                       disabled={exportingType !== null}
                       className="py-2.5 px-4 bg-white hover:bg-slate-100 border border-slate-200 text-slate-800 font-semibold text-xs rounded-xl cursor-pointer disabled:opacity-50 text-left transition-colors flex items-center justify-between"
                     >
@@ -1803,7 +1944,7 @@ export default function App() {
 
                     <button
                       type="button"
-                      onClick={() => handleRunExcelExport('Invoices', exportInvoicesToExcel)}
+                      onClick={() => handleRunExcelExport('Invoices', async () => (await import('./utils/excelExport')).exportInvoicesToExcel())}
                       disabled={exportingType !== null}
                       className="py-2.5 px-4 bg-white hover:bg-slate-100 border border-slate-200 text-slate-800 font-semibold text-xs rounded-xl cursor-pointer disabled:opacity-50 text-left transition-colors flex items-center justify-between"
                     >
@@ -1813,7 +1954,7 @@ export default function App() {
 
                     <button
                       type="button"
-                      onClick={() => handleRunExcelExport('Customers', exportCustomersToExcel)}
+                      onClick={() => handleRunExcelExport('Customers', async () => (await import('./utils/excelExport')).exportCustomersToExcel())}
                       disabled={exportingType !== null}
                       className="py-2.5 px-4 bg-white hover:bg-slate-100 border border-slate-200 text-slate-800 font-semibold text-xs rounded-xl cursor-pointer disabled:opacity-50 text-left transition-colors flex items-center justify-between"
                     >
@@ -1823,7 +1964,7 @@ export default function App() {
 
                     <button
                       type="button"
-                      onClick={() => handleRunExcelExport('Suppliers', exportSuppliersToExcel)}
+                      onClick={() => handleRunExcelExport('Suppliers', async () => (await import('./utils/excelExport')).exportSuppliersToExcel())}
                       disabled={exportingType !== null}
                       className="py-2.5 px-4 bg-white hover:bg-slate-100 border border-slate-200 text-slate-800 font-semibold text-xs rounded-xl cursor-pointer disabled:opacity-50 text-left transition-colors flex items-center justify-between"
                     >
@@ -1833,7 +1974,7 @@ export default function App() {
 
                     <button
                       type="button"
-                      onClick={() => handleRunExcelExport('Stock Logs', exportStockLogsToExcel)}
+                      onClick={() => handleRunExcelExport('Stock Logs', async () => (await import('./utils/excelExport')).exportStockLogsToExcel())}
                       disabled={exportingType !== null}
                       className="py-2.5 px-4 bg-white hover:bg-slate-100 border border-slate-200 text-slate-800 font-semibold text-xs rounded-xl cursor-pointer disabled:opacity-50 text-left transition-colors flex items-center justify-between"
                     >
@@ -1843,7 +1984,7 @@ export default function App() {
 
                     <button
                       type="button"
-                      onClick={() => handleRunExcelExport('Expenses', exportExpensesToExcel)}
+                      onClick={() => handleRunExcelExport('Expenses', async () => (await import('./utils/excelExport')).exportExpensesToExcel())}
                       disabled={exportingType !== null}
                       className="py-2.5 px-4 bg-white hover:bg-slate-100 border border-slate-200 text-slate-800 font-semibold text-xs rounded-xl cursor-pointer disabled:opacity-50 text-left transition-colors flex items-center justify-between"
                     >
@@ -1853,7 +1994,7 @@ export default function App() {
 
                     <button
                       type="button"
-                      onClick={() => handleRunExcelExport('Categories & Brands', exportCategoriesBrandsToExcel)}
+                      onClick={() => handleRunExcelExport('Categories & Brands', async () => (await import('./utils/excelExport')).exportCategoriesBrandsToExcel())}
                       disabled={exportingType !== null}
                       className="py-2.5 px-4 bg-white hover:bg-slate-100 border border-slate-200 text-slate-800 font-semibold text-xs rounded-xl cursor-pointer disabled:opacity-50 text-left transition-colors flex items-center justify-between"
                     >
@@ -1863,7 +2004,7 @@ export default function App() {
 
                     <button
                       type="button"
-                      onClick={() => handleRunExcelExport('Users & Staff', exportUsersToExcel)}
+                      onClick={() => handleRunExcelExport('Users & Staff', async () => (await import('./utils/excelExport')).exportUsersToExcel())}
                       disabled={exportingType !== null}
                       className="py-2.5 px-4 bg-white hover:bg-slate-100 border border-slate-200 text-slate-800 font-semibold text-xs rounded-xl cursor-pointer disabled:opacity-50 text-left transition-colors flex items-center justify-between"
                     >
@@ -1873,7 +2014,7 @@ export default function App() {
 
                     <button
                       type="button"
-                      onClick={() => handleRunExcelExport('Attendance', exportAttendanceToExcel)}
+                      onClick={() => handleRunExcelExport('Attendance', async () => (await import('./utils/excelExport')).exportAttendanceToExcel())}
                       disabled={exportingType !== null}
                       className="py-2.5 px-4 bg-white hover:bg-slate-100 border border-slate-200 text-slate-800 font-semibold text-xs rounded-xl cursor-pointer disabled:opacity-50 text-left transition-colors flex items-center justify-between"
                     >
@@ -1959,6 +2100,7 @@ export default function App() {
 
 
 
+              </Suspense>
       </main>
 
       {/* Check In Guard Modal */}
@@ -2165,10 +2307,12 @@ export default function App() {
 
       {/* First-Run Welcome Tour Overlay for Approved Employees */}
       {showWelcomeTour && user && (
-        <WelcomeTour
-          userName={user.name}
-          onClose={() => setShowWelcomeTour(false)}
-        />
+        <Suspense fallback={null}>
+          <WelcomeTour
+            userName={user.name}
+            onClose={() => setShowWelcomeTour(false)}
+          />
+        </Suspense>
       )}
 
       {/* Unsaved Pre-Order Navigation Guard */}

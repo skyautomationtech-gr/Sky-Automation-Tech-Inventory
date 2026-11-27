@@ -1,5 +1,9 @@
 import React, { useState, useEffect } from 'react';
 import { motion } from 'motion/react';
+import { getApps, initializeApp } from 'firebase/app';
+import { createUserWithEmailAndPassword, getAuth } from 'firebase/auth';
+import { deleteDoc, doc } from 'firebase/firestore';
+import { db, firebaseConfig } from '../firebase/config';
 import { RolePermissionSet, RolePermissionsMap, UserProfile, UserRole } from '../types';
 import { 
   getAllUsers, 
@@ -366,10 +370,6 @@ export default function UserManagement({
       let newUid = '';
 
       try {
-        const { initializeApp, getApps } = await import('firebase/app');
-        const { getAuth, createUserWithEmailAndPassword } = await import('firebase/auth');
-        const { firebaseConfig } = await import('../firebase/config');
-
         let secondaryApp = getApps().find(app => app.name === 'SecondaryApp');
         if (!secondaryApp) {
           secondaryApp = initializeApp(firebaseConfig, 'SecondaryApp');
@@ -556,8 +556,6 @@ export default function UserManagement({
     setSuccess('');
     setLoading(true);
     try {
-      const { doc, deleteDoc } = await import('firebase/firestore');
-      const { db } = await import('../firebase/config');
       await deleteDoc(doc(db, 'users', targetUserId));
       setSuccess('Registration request deleted.');
       await fetchUsersList();

@@ -1,6 +1,7 @@
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import { ref, uploadBytesResumable, uploadBytes, getDownloadURL } from 'firebase/storage';
 import { storage } from '../firebase/config';
 import { Product, ProductEditChange, Variant } from '../types';
+import { perfEndTimer, perfStartTimer } from './perfLogger';
 
 const ALLOWED_IMAGE_TYPES = [
   'image/jpeg',
@@ -10,6 +11,7 @@ const ALLOWED_IMAGE_TYPES = [
   'image/gif',
 ];
 const MAX_RAW_SIZE_BYTES = 15 * 1024 * 1024; // 15MB raw upload limit prior to compression
+const TARGET_MAX_BYTES = 250 * 1024;
 
 export function isSafeImageSrc(src: unknown): src is string {
   if (typeof src !== 'string') return false;
@@ -87,74 +89,169 @@ export function validateProductImageFile(file: File): string | null {
   return null;
 }
 
-export async function compressProductImageFile(
-  file: File,
-  maxDimension: number = 1100,
-  quality: number = 0.8
-): Promise<{ blob: Blob; dataUrl: string; sizeBytes: number }> {
-  const validationErr = validateProductImageFile(file);
-  if (validationErr) throw new Error(validationErr);
+let cachedWebpSupport: boolean | null = null;
+function supportsWebpEncode(): boolean {
+  if (cachedWebpSupport !== null) return cachedWebpSupport;
+  try {
+    const c = document.createElement('canvas');
+    c.width = 2;
+    c.height = 2;
+    cachedWebpSupport = c.toDataURL('image/webp').startsWith('data:image/webp');
+  } catch {
+    cachedWebpSupport = false;
+  }
+  return cachedWebpSupport;
+}
 
-  return new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onerror = () => reject(new Error(`Failed to read "${file.name}".`));
-    reader.onload = () => {
-      const img = new Image();
-      img.onerror = () => reject(new Error(`"${file.name}" could not be decoded as an image.`));
-      img.onload = () => {
-        let { width, height } = img;
-        if (width > maxDimension || height > maxDimension) {
-          if (width >= height) {
-            height = Math.round((height * maxDimension) / width);
-            width = maxDimension;
-          } else {
-            width = Math.round((width * maxDimension) / height);
-            height = maxDimension;
-          }
-        }
-
-        const canvas = document.createElement('canvas');
-        canvas.width = Math.max(1, width);
-        canvas.height = Math.max(1, height);
-        const ctx = canvas.getContext('2d');
-        if (!ctx) {
-          reject(new Error('Image compression canvas is unavailable in this browser.'));
-          return;
-        }
-
-        ctx.fillStyle = '#FFFFFF';
-        ctx.fillRect(0, 0, canvas.width, canvas.height);
-        ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-
-        const dataUrl = canvas.toDataURL('image/jpeg', quality);
-        canvas.toBlob(
-          (blob) => {
-            if (!blob) {
-              reject(new Error('Failed to compress image.'));
-              return;
-            }
-            resolve({ blob, dataUrl, sizeBytes: blob.size });
-          },
-          'image/jpeg',
-          quality
-        );
+async function decodeProductImageSource(file: File): Promise<{
+  width: number;
+  height: number;
+  draw: (ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D, w: number, h: number) => void;
+  cleanup: () => void;
+}> {
+  if (typeof createImageBitmap === 'function') {
+    try {
+      const bitmap = await createImageBitmap(file);
+      return {
+        width: bitmap.width,
+        height: bitmap.height,
+        draw: (ctx, w, h) => ctx.drawImage(bitmap, 0, 0, w, h),
+        cleanup: () => {
+          try {
+            bitmap.close();
+          } catch {}
+        },
       };
-      img.src = String(reader.result);
+    } catch {
+      // Fallback to HTMLImageElement
+    }
+  }
+
+  const objectUrl = URL.createObjectURL(file);
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      resolve({
+        width: img.naturalWidth || img.width,
+        height: img.naturalHeight || img.height,
+        draw: (ctx, w, h) => ctx.drawImage(img, 0, 0, w, h),
+        cleanup: () => URL.revokeObjectURL(objectUrl),
+      });
     };
-    reader.readAsDataURL(file);
+    img.onerror = () => {
+      URL.revokeObjectURL(objectUrl);
+      reject(new Error(`"${file.name}" could not be decoded as an image.`));
+    };
+    img.src = objectUrl;
   });
 }
 
+function blobToDataUrl(blob: Blob): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = () => resolve(String(reader.result));
+    reader.onerror = () => reject(new Error('Failed to read encoded image.'));
+    reader.readAsDataURL(blob);
+  });
+}
+
+async function encodeProductCanvasBlob(
+  drawFn: (ctx: CanvasRenderingContext2D | OffscreenCanvasRenderingContext2D, w: number, h: number) => void,
+  width: number,
+  height: number,
+  mimeType: string,
+  quality: number
+): Promise<Blob> {
+  if (typeof OffscreenCanvas !== 'undefined') {
+    try {
+      const off = new OffscreenCanvas(width, height);
+      const ctx = off.getContext('2d');
+      if (ctx) {
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillRect(0, 0, width, height);
+        drawFn(ctx, width, height);
+        return await off.convertToBlob({ type: mimeType, quality });
+      }
+    } catch {
+      // Fallback to DOM canvas
+    }
+  }
+
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) {
+    throw new Error('Image compression canvas is unavailable in this browser.');
+  }
+  ctx.fillStyle = '#FFFFFF';
+  ctx.fillRect(0, 0, width, height);
+  drawFn(ctx, width, height);
+
+  return new Promise<Blob>((resolve, reject) => {
+    canvas.toBlob(
+      (b) => {
+        if (!b) reject(new Error('Failed to compress image.'));
+        else resolve(b);
+      },
+      mimeType,
+      quality
+    );
+  });
+}
+
+export async function compressProductImageFile(
+  file: File,
+  maxDimension: number = 1280,
+  quality: number = 0.8
+): Promise<{ blob: Blob; dataUrl: string; mimeType: string; sizeBytes: number }> {
+  const validationErr = validateProductImageFile(file);
+  if (validationErr) throw new Error(validationErr);
+
+  const decoded = await decodeProductImageSource(file);
+  try {
+    let { width, height } = decoded;
+    if (width > maxDimension || height > maxDimension) {
+      if (width >= height) {
+        height = Math.round((height * maxDimension) / width);
+        width = maxDimension;
+      } else {
+        width = Math.round((width * maxDimension) / height);
+        height = maxDimension;
+      }
+    }
+    width = Math.max(1, width);
+    height = Math.max(1, height);
+
+    const mimeType = supportsWebpEncode() ? 'image/webp' : 'image/jpeg';
+    let blob = await encodeProductCanvasBlob(decoded.draw, width, height, mimeType, quality);
+    if (blob.size > TARGET_MAX_BYTES && quality > 0.68) {
+      blob = await encodeProductCanvasBlob(decoded.draw, width, height, mimeType, 0.7);
+    }
+    const dataUrl = await blobToDataUrl(blob);
+    return { blob, dataUrl, mimeType, sizeBytes: blob.size };
+  } finally {
+    decoded.cleanup();
+  }
+}
+
 /**
- * Compresses the product photo and uploads to Firebase Storage (`products/{key}/...`).
- * Falls back cleanly to a compact JPEG data URL (<120KB) if Firebase Storage rules or
- * network block the bucket upload, preventing Firestore's 1 MiB document size overflow.
+ * Compresses the product photo (<= 1280px, WebP/JPEG ~0.8, target <250KB) plus a ~200px thumbnail,
+ * and uploads both to Firebase Storage (`products/{key}/...`) with progress reporting.
  */
 export async function uploadProductImage(
   file: File,
-  skuOrKey?: string
-): Promise<{ url: string; storageUploaded: boolean }> {
-  const compressed = await compressProductImageFile(file, 1100, 0.8);
+  skuOrKey?: string,
+  options?: { onProgress?: (pct: number) => void }
+): Promise<{ url: string; thumbUrl?: string; storageUploaded: boolean }> {
+  perfStartTimer('photo_upload_product');
+  options?.onProgress?.(10);
+
+  const [compressed, thumb] = await Promise.all([
+    compressProductImageFile(file, 1280, 0.8),
+    compressProductImageFile(file, 200, 0.72).catch(() => null),
+  ]);
+  options?.onProgress?.(35);
 
   if (storage) {
     try {
@@ -167,15 +264,60 @@ export async function uploadProductImage(
           .replace(/\.[^.]+$/, '')
           .replace(/[^a-zA-Z0-9_-]/g, '_')
           .slice(0, 40) || 'photo';
+      const ext = compressed.mimeType === 'image/webp' ? 'webp' : 'jpg';
+      const stamp = `${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
       const storageRef = ref(
         storage,
-        `products/${safeFolder}/${Date.now()}_${Math.random().toString(36).slice(2, 6)}_${safeName}.jpg`
+        `products/${safeFolder}/${stamp}_${safeName}.${ext}`
       );
-      const snap = await uploadBytes(storageRef, compressed.blob, {
-        contentType: 'image/jpeg',
+
+      const uploadTask = uploadBytesResumable(storageRef, compressed.blob, {
+        contentType: compressed.mimeType,
+        cacheControl: 'public,max-age=31536000',
       });
-      const downloadUrl = await getDownloadURL(snap.ref);
-      return { url: downloadUrl, storageUploaded: true };
+
+      const downloadUrl = await new Promise<string>((resolve, reject) => {
+        uploadTask.on(
+          'state_changed',
+          (snapshot) => {
+            if (snapshot.totalBytes > 0) {
+              const pct = 35 + Math.round((snapshot.bytesTransferred / snapshot.totalBytes) * 55);
+              options?.onProgress?.(Math.min(95, pct));
+            }
+          },
+          reject,
+          async () => {
+            try {
+              const dl = await getDownloadURL(uploadTask.snapshot.ref);
+              resolve(dl);
+            } catch (e) {
+              reject(e);
+            }
+          }
+        );
+      });
+
+      let thumbUrl: string | undefined;
+      if (thumb) {
+        try {
+          const thumbExt = thumb.mimeType === 'image/webp' ? 'webp' : 'jpg';
+          const thumbRef = ref(
+            storage,
+            `products/${safeFolder}/thumbs/${stamp}_${safeName}_thumb.${thumbExt}`
+          );
+          const thumbSnap = await uploadBytes(thumbRef, thumb.blob, {
+            contentType: thumb.mimeType,
+            cacheControl: 'public,max-age=31536000',
+          });
+          thumbUrl = await getDownloadURL(thumbSnap.ref);
+        } catch {
+          // Optional thumbnail upload failed safely
+        }
+      }
+
+      options?.onProgress?.(100);
+      perfEndTimer('photo_upload_product', `${(compressed.sizeBytes / 1024).toFixed(1)}KB`);
+      return { url: downloadUrl, thumbUrl, storageUploaded: true };
     } catch (storageErr) {
       console.warn('Product Storage upload fell back to compact inline image:', storageErr);
     }
@@ -191,7 +333,9 @@ export async function uploadProductImage(
       fallbackUrl = extraTight.dataUrl;
     }
   }
-  return { url: fallbackUrl, storageUploaded: false };
+  options?.onProgress?.(100);
+  perfEndTimer('photo_upload_product', 'inline-fallback');
+  return { url: fallbackUrl, thumbUrl: thumb?.dataUrl, storageUploaded: false };
 }
 
 export function buildCategoryPathLabel(product: {

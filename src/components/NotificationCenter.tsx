@@ -16,12 +16,13 @@ import {
 } from 'lucide-react';
 import {
   collection,
+  getDocs,
   limit,
   onSnapshot,
   orderBy,
   query,
 } from 'firebase/firestore';
-import {
+import type {
   AppNotification,
   PreOrderNotification,
   Product,
@@ -33,17 +34,12 @@ import {
   markNotificationRead,
   markAllNotificationsRead,
   getProducts,
-  getAllUsers,
+  getPendingApprovalUsers,
   getProductAvailableStock,
 } from '../firebase/db';
-import {
-  actorFromUser,
-  markAllPreOrderNotificationsRead,
-  queryPreOrderNotifications,
-  syncDailyTimeBasedReminders,
-} from '../firebase/preOrderDb';
 import { hasPermission } from '../preOrders/constants';
 import { auth, db } from '../firebase/config';
+import { perfTrackListener, perfTrackRead } from '../utils/perfLogger';
 
 interface NotificationCenterProps {
   user: UserProfile | null;
@@ -244,14 +240,9 @@ export default function NotificationCenter({
           }
         });
 
-      // 3. Pending Staff / Sign-up Approvals Check (Super Admin only)
+      // 3. Pending Staff / Sign-up Approvals Check (Super Admin only - bounded query cached 60s)
       if (isSuperAdmin) {
-        const usersList = await getAllUsers().catch(() => []);
-        const pendingUsers = usersList.filter(
-          (u) =>
-            u.status === 'pending_approval' ||
-            (u.role === 'staff' && (u as any).approved === false)
-        );
+        const pendingUsers = await getPendingApprovalUsers(20).catch(() => []);
         if (pendingUsers.length > 0 && !mergedMap.has('pending_users_alert')) {
           mergedMap.set('pending_users_alert', {
             id: 'pending_users_alert',
@@ -310,29 +301,28 @@ export default function NotificationCenter({
     setLoading(true);
     setFetchError(null);
     try {
-      // Non-blocking daily reminder check if user has Pre-Order access
-      if (canViewPreOrders) {
-        syncDailyTimeBasedReminders({
-          actor: actorFromUser(user),
-          allowedSubBrands,
-        }).catch(() => {});
-      }
-
-      const [dbNotifs, poNotifsRes] = await Promise.all([
+      const [dbNotifs, poSnap] = await Promise.all([
         getNotifications(true),
         canViewPreOrders
-          ? queryPreOrderNotifications({ limitCount: 15 })
-          : Promise.resolve({
-              items: [] as PreOrderNotification[],
-              lastDoc: null,
-              hasMore: false,
-            }),
+          ? getDocs(
+              query(
+                collection(db, 'preOrderNotifications'),
+                orderBy('createdAt', 'desc'),
+                limit(15)
+              )
+            )
+          : Promise.resolve(null),
       ]);
 
-      latestErpRef.current = dbNotifs;
-      latestPoRef.current = poNotifsRes.items;
+      const poItems: PreOrderNotification[] = poSnap
+        ? poSnap.docs.map((d) => ({ ...(d.data() as PreOrderNotification), id: d.id }))
+        : [];
+      if (poSnap) perfTrackRead('preOrderNotifications/manualFetch', poSnap.size || 1);
 
-      const compiled = await compileNotificationsList(dbNotifs, poNotifsRes.items);
+      latestErpRef.current = dbNotifs;
+      latestPoRef.current = poItems;
+
+      const compiled = await compileNotificationsList(dbNotifs, poItems);
       setNotifications(compiled);
       setHasLoadedOnce(true);
     } catch (err: any) {
@@ -346,14 +336,13 @@ export default function NotificationCenter({
     } finally {
       setLoading(false);
     }
-  }, [user, canViewPreOrders, allowedSubBrands, compileNotificationsList]);
+  }, [user?.id, canViewPreOrders, compileNotificationsList]);
 
-  // Real-time Firestore listeners (started ONLY after a real Firebase Auth user exists)
+  // Real-time Firestore listeners (single subscription pass without redundant initial getDocs)
   useEffect(() => {
     if (!auth?.currentUser || !user?.id) return;
 
-    fetchAndCompileNotifications();
-
+    const releaseErp = perfTrackListener('notifications/erp');
     const erpQuery = query(
       collection(db, 'notifications'),
       orderBy('createdAt', 'desc'),
@@ -362,6 +351,7 @@ export default function NotificationCenter({
     const unsubErp = onSnapshot(
       erpQuery,
       async (snapshot) => {
+        perfTrackRead('notifications/erpSnapshot', snapshot.docChanges().length || 1);
         const docs = snapshot.docs.map(
           (docSnap) => ({ id: docSnap.id, ...docSnap.data() } as AppNotification)
         );
@@ -382,7 +372,9 @@ export default function NotificationCenter({
     );
 
     let unsubPo: (() => void) | null = null;
+    let releasePo: (() => void) | null = null;
     if (canViewPreOrders) {
+      releasePo = perfTrackListener('notifications/preOrder');
       const poQuery = query(
         collection(db, 'preOrderNotifications'),
         orderBy('createdAt', 'desc'),
@@ -391,6 +383,7 @@ export default function NotificationCenter({
       unsubPo = onSnapshot(
         poQuery,
         async (snapshot) => {
+          perfTrackRead('notifications/poSnapshot', snapshot.docChanges().length || 1);
           const docs = snapshot.docs.map(
             (docSnap) =>
               ({ ...(docSnap.data() as PreOrderNotification), id: docSnap.id })
@@ -415,10 +408,12 @@ export default function NotificationCenter({
     }
 
     return () => {
+      releaseErp();
       unsubErp();
+      if (releasePo) releasePo();
       if (unsubPo) unsubPo();
     };
-  }, [user?.id, canViewPreOrders, fetchAndCompileNotifications, compileNotificationsList]);
+  }, [user?.id, canViewPreOrders, compileNotificationsList]);
 
   // Re-compile if products array changes locally
   useEffect(() => {
@@ -581,7 +576,9 @@ export default function NotificationCenter({
         ? markAllNotificationsRead(erpUnreadIds, user.id).catch(() => {})
         : Promise.resolve(),
       poUnreadIds.length > 0
-        ? markAllPreOrderNotificationsRead(poUnreadIds, user.id).catch(() => {})
+        ? import('../firebase/preOrderDb')
+            .then((m) => m.markAllPreOrderNotificationsRead(poUnreadIds, user.id))
+            .catch(() => {})
         : Promise.resolve(),
     ]);
   };
@@ -600,7 +597,9 @@ export default function NotificationCenter({
         )
       );
       if (notif.source === 'preorder') {
-        await markAllPreOrderNotificationsRead([notif.id], user.id).catch(() => {});
+        await import('../firebase/preOrderDb')
+          .then((m) => m.markAllPreOrderNotificationsRead([notif.id], user.id))
+          .catch(() => {});
       } else if (
         !notif.id.startsWith('low_stock') &&
         !notif.id.startsWith('pending')
@@ -881,7 +880,9 @@ export default function NotificationCenter({
         onClick={() => {
           const next = !isOpen;
           setIsOpen(next);
-          if (next) fetchAndCompileNotifications();
+          if (next && (!hasLoadedOnce || fetchError)) {
+            fetchAndCompileNotifications();
+          }
         }}
         aria-haspopup="dialog"
         aria-expanded={isOpen}

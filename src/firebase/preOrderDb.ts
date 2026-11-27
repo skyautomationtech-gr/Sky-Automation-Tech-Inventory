@@ -21,6 +21,14 @@ import {
   Transaction,
 } from 'firebase/firestore';
 import { auth, db } from './config';
+import { perfTrackRead, perfTrackWrite, perfTimeAsync } from '../utils/perfLogger';
+import { registerPublicTrackingSyncer } from './trackingSyncBridge';
+import {
+  getRolePermissions as bootstrapGetRolePermissions,
+  getPreOrderStatsSummary as bootstrapGetPreOrderStatsSummary,
+  invalidateRolePermissionsCache,
+  invalidatePreOrderStatsSummaryCache,
+} from './preOrderBootstrap';
 import {
   computeAvailableStockStatus,
   dbCache,
@@ -437,22 +445,7 @@ export async function getNextPreOrderNumber(txn?: Transaction): Promise<string> 
 // ROLE PERMISSIONS (/settings/rolePermissions)
 // ==========================================
 
-export async function getRolePermissions(): Promise<RolePermissionsMap> {
-  if (!auth?.currentUser) {
-    return mergeWithDefaultRolePermissions(null);
-  }
-  try {
-    const ref = doc(db, 'settings', 'rolePermissions');
-    const snap = await getDoc(ref);
-    if (snap.exists()) {
-      return mergeWithDefaultRolePermissions(snap.data() as RolePermissionsMap);
-    }
-    return mergeWithDefaultRolePermissions(null);
-  } catch (err) {
-    console.warn('getRolePermissions fallback to defaults:', err);
-    return mergeWithDefaultRolePermissions(null);
-  }
-}
+export const getRolePermissions = bootstrapGetRolePermissions;
 
 export async function saveRolePermissions(
   permissions: RolePermissionsMap,
@@ -469,6 +462,8 @@ export async function saveRolePermissions(
     }),
     { merge: true }
   );
+  perfTrackWrite('settings/rolePermissions', 1);
+  invalidateRolePermissionsCache();
   return merged;
 }
 
@@ -591,6 +586,7 @@ export async function createPreOrder(
   input: CreatePreOrderInput,
   actor: PreOrderActor
 ): Promise<CreatePreOrderResult> {
+  return perfTimeAsync('Create Pre-Order Save', async () => {
   const normalizedPhone = normalizeBdPhone(input.customerPhone);
   if (!isValidBdPhone(normalizedPhone)) {
     throw new Error('Please enter a valid Bangladesh phone number (01XXXXXXXXX).');
@@ -1145,9 +1141,11 @@ export async function createPreOrder(
     const prevCached = localStore.get<Customer[]>('customers') || [];
     localStore.set('customers', [createdNewCustomerRecord, ...prevCached]);
   }
+  perfTrackWrite('preOrders/createPreOrder', 3);
+  invalidatePreOrderStatsSummaryCache();
 
-  // Sync sanitized whitelisted snapshot to publicTracking/{token}
-  const syncRes = await syncPublicTracking(preOrderId, {
+  // Sync sanitized whitelisted snapshot to publicTracking/{token} in background so save returns immediately
+  queueBackgroundTrackingSync(preOrderId, {
     companySettings: input.companySettings,
   });
 
@@ -1157,8 +1155,9 @@ export async function createPreOrder(
     trackingToken: resolvedTrackingToken,
     customerId: resolvedCustomerDocId,
     customerCode: resolvedCustomerCode,
-    trackingSyncWarning: syncRes.ok ? undefined : syncRes.error,
+    trackingSyncWarning: undefined,
   };
+  });
 }
 
 // ==========================================
@@ -1425,14 +1424,32 @@ export async function getPreOrderById(preOrderId: string): Promise<PreOrder | nu
   return withNormalizedPreOrderItems({ ...(snap.data() as PreOrder), id: snap.id });
 }
 
+const privateCostCache = new Map<string, { data: PreOrderPrivateCost | null; ts: number }>();
+const PRIVATE_COST_CACHE_TTL_MS = 60_000;
+
+export function invalidatePreOrderPrivateCostCache(preOrderId?: string): void {
+  if (preOrderId) {
+    privateCostCache.delete(preOrderId);
+  } else {
+    privateCostCache.clear();
+  }
+}
+
 export async function getPreOrderPrivateCost(
-  preOrderId: string
+  preOrderId: string,
+  options?: { forceRefresh?: boolean }
 ): Promise<PreOrderPrivateCost | null> {
-  if (!auth?.currentUser) return null;
+  if (!auth?.currentUser || !preOrderId) return null;
+  const cached = privateCostCache.get(preOrderId);
+  if (!options?.forceRefresh && cached && Date.now() - cached.ts < PRIVATE_COST_CACHE_TTL_MS) {
+    return cached.data;
+  }
   try {
     const snap = await getDoc(doc(db, 'preOrders', preOrderId, 'private', 'cost'));
-    if (!snap.exists()) return null;
-    return snap.data() as PreOrderPrivateCost;
+    perfTrackRead('preOrders/privateCost', 1);
+    const val = snap.exists() ? (snap.data() as PreOrderPrivateCost) : null;
+    privateCostCache.set(preOrderId, { data: val, ts: Date.now() });
+    return val;
   } catch (err: any) {
     if (err?.code === 'permission-denied') return null;
     throw err;
@@ -1841,8 +1858,10 @@ export async function updatePreOrder(
     });
   });
 
-  const syncRes = await syncPublicTracking(preOrderId);
-  return { trackingSyncWarning: syncRes.ok ? undefined : syncRes.error };
+  invalidatePreOrderPrivateCostCache(preOrderId);
+  invalidatePreOrderStatsSummaryCache();
+  queueBackgroundTrackingSync(preOrderId);
+  return { trackingSyncWarning: undefined };
 }
 
 export async function updatePreOrderPrivateCost(
@@ -2478,11 +2497,12 @@ export async function collectPreOrderPayment(
     });
   });
 
-  const syncRes = await syncPublicTracking(preOrderId);
+  invalidatePreOrderStatsSummaryCache();
+  queueBackgroundTrackingSync(preOrderId);
   return {
     payment: resultPayment,
     order: resultOrder,
-    trackingSyncWarning: syncRes.ok ? undefined : syncRes.error,
+    trackingSyncWarning: undefined,
   };
 }
 
@@ -2790,10 +2810,8 @@ export async function verifyPreOrderPayment(
     );
   });
 
-  const syncRes = await syncPublicTracking(preOrderId);
-  if (!syncRes.ok) {
-    updatedOrder.trackingSyncWarning = syncRes.error;
-  }
+  invalidatePreOrderStatsSummaryCache();
+  queueBackgroundTrackingSync(preOrderId);
   return updatedOrder;
 }
 
@@ -3261,11 +3279,12 @@ export async function reversePreOrderPayment(
     });
   });
 
-  const syncRes = await syncPublicTracking(preOrderId);
+  invalidatePreOrderStatsSummaryCache();
+  queueBackgroundTrackingSync(preOrderId);
   return {
     payment: resultPayment,
     order: resultOrder,
-    trackingSyncWarning: syncRes.ok ? undefined : syncRes.error,
+    trackingSyncWarning: undefined,
   };
 }
 
@@ -3451,11 +3470,12 @@ export async function refundPreOrderPayment(
     });
   });
 
-  const syncRes = await syncPublicTracking(preOrderId);
+  invalidatePreOrderStatsSummaryCache();
+  queueBackgroundTrackingSync(preOrderId);
   return {
     payment: resultPayment,
     order: resultOrder,
-    trackingSyncWarning: syncRes.ok ? undefined : syncRes.error,
+    trackingSyncWarning: undefined,
   };
 }
 
@@ -3558,12 +3578,9 @@ export async function recalculatePreOrderFromLedger(
   });
 
   if (result.changed) {
-    const syncRes = await syncPublicTracking(preOrderId);
-    if (!syncRes.ok) {
-      result.trackingSyncWarning = syncRes.error;
-    }
+    invalidatePreOrderStatsSummaryCache();
+    queueBackgroundTrackingSync(preOrderId);
   }
-
   return result;
 }
 
@@ -4196,10 +4213,8 @@ export async function transitionPreOrderStatus(
     );
   });
 
-  const syncRes = await syncPublicTracking(preOrderId);
-  if (!syncRes.ok) {
-    updatedOrder.trackingSyncWarning = syncRes.error;
-  }
+  invalidatePreOrderStatsSummaryCache();
+  queueBackgroundTrackingSync(preOrderId);
   return updatedOrder;
 }
 
@@ -4463,11 +4478,7 @@ export async function upsertPreOrderShipment(
     };
   });
 
-  const syncRes = await syncPublicTracking(preOrderId);
-  if (!syncRes.ok) {
-    result.trackingSyncWarning = syncRes.error;
-  }
-
+  queueBackgroundTrackingSync(preOrderId);
   return result;
 }
 
@@ -4784,12 +4795,8 @@ export async function addPreOrderShipmentEvent(
   });
 
   if (createdEvent.showToCustomer) {
-    const syncRes = await syncPublicTracking(preOrderId);
-    if (!syncRes.ok) {
-      createdEvent.trackingSyncWarning = syncRes.error;
-    }
+    queueBackgroundTrackingSync(preOrderId);
   }
-
   return createdEvent;
 }
 
@@ -4982,6 +4989,40 @@ export async function batchUpdatePreOrderShipments(
 export interface SyncPublicTrackingResult {
   ok: boolean;
   error?: string;
+}
+
+export function queueBackgroundTrackingSync(
+  preOrderId: string,
+  options?: {
+    companySettings?: CompanySettings | null;
+    actor?: PreOrderActor;
+    logAudit?: boolean;
+  }
+): void {
+  if (!preOrderId) return;
+  const run = async () => {
+    const res = await syncPublicTracking(preOrderId, options).catch((err) => ({
+      ok: false as const,
+      error: err?.message || 'Public tracking sync failed.',
+    }));
+    if (!res.ok) {
+      await new Promise((r) => setTimeout(r, 1500));
+      const retry = await syncPublicTracking(preOrderId, options).catch((err) => ({
+        ok: false as const,
+        error: err?.message || 'Public tracking sync failed.',
+      }));
+      if (!retry.ok && typeof window !== 'undefined') {
+        window.dispatchEvent(
+          new CustomEvent('preorder-tracking-sync-warning', {
+            detail: retry.error || 'Public tracking page sync delayed.',
+          })
+        );
+      }
+    }
+  };
+  setTimeout(() => {
+    void run();
+  }, 0);
 }
 
 /**
@@ -6857,11 +6898,8 @@ export async function receivePreOrderStock(
   dbCache.products = null;
   dbCache.productsArchived = null;
 
-  const syncRes = await syncPublicTracking(preOrderId);
-  if (!syncRes.ok) {
-    result.trackingSyncWarning = syncRes.error;
-  }
-
+  invalidatePreOrderStatsSummaryCache();
+  queueBackgroundTrackingSync(preOrderId);
   return result;
 }
 
@@ -7465,11 +7503,8 @@ export async function convertPreOrderToSale(
   dbCache.productsArchived = null;
   dbCache.customers = null;
 
-  const syncRes = await syncPublicTracking(preOrderId);
-  if (!syncRes.ok) {
-    result.trackingSyncWarning = syncRes.error;
-  }
-
+  invalidatePreOrderStatsSummaryCache();
+  queueBackgroundTrackingSync(preOrderId);
   return result;
 }
 
@@ -8065,11 +8100,8 @@ export async function cancelAndReconcilePreOrder(
   dbCache.products = null;
   dbCache.productsArchived = null;
 
-  const syncRes = await syncPublicTracking(preOrderId);
-  if (!syncRes.ok) {
-    result.trackingSyncWarning = syncRes.error;
-  }
-
+  invalidatePreOrderStatsSummaryCache();
+  queueBackgroundTrackingSync(preOrderId);
   return result;
 }
 
@@ -8164,28 +8196,9 @@ export async function savePreOrderSettings(
   return merged;
 }
 
-export async function getPreOrderStatsSummary(): Promise<PreOrderStats | null> {
-  if (!auth?.currentUser) return null;
-  try {
-    const snap = await getDoc(doc(db, 'preOrderStats', 'summary'));
-    if (!snap.exists()) return null;
-    const base = createEmptyPreOrderStats();
-    const raw = snap.data() as Partial<PreOrderStats>;
-    return {
-      ...base,
-      ...raw,
-      statusCounts: { ...base.statusCounts, ...(raw.statusCounts || {}) },
-      subBrandStats: {
-        SAT: { ...base.subBrandStats.SAT, ...(raw.subBrandStats?.SAT || {}) },
-        GZ: { ...base.subBrandStats.GZ, ...(raw.subBrandStats?.GZ || {}) },
-        RTX: { ...base.subBrandStats.RTX, ...(raw.subBrandStats?.RTX || {}) },
-      },
-    };
-  } catch (err) {
-    console.warn('getPreOrderStatsSummary fallback:', err);
-    return null;
-  }
-}
+export const getPreOrderStatsSummary = bootstrapGetPreOrderStatsSummary;
+
+registerPublicTrackingSyncer(syncPublicTracking);
 
 export interface RebuildPreOrderStatsResult {
   before: PreOrderStats | null;
@@ -8228,6 +8241,7 @@ export async function rebuildPreOrderStats(
 
   const diffs = diffPreOrderStats(beforeStats, nextStats);
   await setDoc(doc(db, 'preOrderStats', 'summary'), sanitizeData(nextStats));
+  invalidatePreOrderStatsSummaryCache();
 
   const rebuildAuditId = generateId('AUD');
   await setDoc(
@@ -8502,9 +8516,10 @@ export async function loadPreOrderDashboardData(options: {
   }
 
   const privateCostsByOrder =
-    options.canViewProfit || options.canViewSupplier
-      ? await getPreOrderPrivateCostsMap(orders.slice(0, 120).map((o) => o.id))
+    options.canViewProfit || (!summaryDoc && options.canViewSupplier)
+      ? await getPreOrderPrivateCostsMap(orders.slice(0, 60).map((o) => o.id))
       : {};
+  perfTrackRead('preOrders/dashboardLoad', ordersSnap.size + (paymentsSnap?.size || 0));
 
   const activityDocs = auditSnap ? auditSnap.docs : [];
   const activityHasMore = activityDocs.length > 20;

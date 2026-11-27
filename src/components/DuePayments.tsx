@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import { 
   Coins, 
   Search, 
@@ -21,7 +21,7 @@ import {
   ShieldAlert
 } from 'lucide-react';
 import { Order, UserProfile } from '../types';
-import { getOrders, recordOrderPayment, deleteOrderPayment, subscribeToOrders } from '../firebase/db';
+import { getOrders, getDueOrders, recordOrderPayment, deleteOrderPayment } from '../firebase/db';
 
 interface DuePaymentsProps {
   user: UserProfile | null;
@@ -34,11 +34,14 @@ export default function DuePayments({ user, requireCheckIn }: DuePaymentsProps) 
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
 
-  // Filtering states
+  // Filtering & pagination states
   const [activeTab, setActiveTab] = useState<'still_due' | 'recently_settled'>('still_due');
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [subBrandFilter, setSubBrandFilter] = useState('');
   const [paymentStatusFilter, setPaymentStatusFilter] = useState('');
+  const [currentPage, setCurrentPage] = useState(1);
+  const pageSize = 25;
 
   // Modal / Drawer Interaction states
   const [selectedOrderForPayment, setSelectedOrderForPayment] = useState<Order | null>(null);
@@ -60,26 +63,29 @@ export default function DuePayments({ user, requireCheckIn }: DuePaymentsProps) 
   const [paymentMethod, setPaymentMethod] = useState<'Cash' | 'bKash' | 'Nagad' | 'Bank'>('Cash');
 
   useEffect(() => {
-    setLoading(true);
-    const unsub = subscribeToOrders((data) => {
-      const relevantOrders = (data || []).filter(o => 
-        o.amountDue > 0 || (o.amountDue === 0 && o.paymentHistory && o.paymentHistory.length > 0)
-      );
-      setOrders(relevantOrders);
-      setLoading(false);
-    });
-    return () => unsub();
-  }, []);
+    const timer = setTimeout(() => setDebouncedSearch(searchQuery), 250);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
+
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [activeTab, debouncedSearch, subBrandFilter, paymentStatusFilter]);
 
   const fetchData = async () => {
-    setLoading(true);
+    if (orders.length === 0) setLoading(true);
     setError('');
     try {
-      const data = await getOrders();
-      const relevantOrders = (data || []).filter(o => 
-        o.amountDue > 0 || (o.amountDue === 0 && o.paymentHistory && o.paymentHistory.length > 0)
-      );
-      setOrders(relevantOrders);
+      const [dueList, recentList] = await Promise.all([
+        getDueOrders(250),
+        getOrders({ limitCount: 150 })
+      ]);
+      const byId = new Map<string, Order>();
+      [...(dueList || []), ...(recentList || [])].forEach((o) => {
+        if (o && (o.amountDue > 0 || (o.amountDue === 0 && o.paymentHistory && o.paymentHistory.length > 0))) {
+          byId.set(o.id, o);
+        }
+      });
+      setOrders(Array.from(byId.values()));
     } catch (err: any) {
       console.error('DuePayments: Error fetching orders:', err);
       setError('Could not retrieve outstanding receivable registers.');
@@ -87,6 +93,10 @@ export default function DuePayments({ user, requireCheckIn }: DuePaymentsProps) 
       setLoading(false);
     }
   };
+
+  useEffect(() => {
+    fetchData();
+  }, []);
 
   const getDaysSinceOrder = (timestamp: number) => {
     const diffTime = Date.now() - timestamp;
@@ -156,10 +166,10 @@ export default function DuePayments({ user, requireCheckIn }: DuePaymentsProps) 
     }
   };
 
-  // Search and filter logic
-  const filteredOrders = orders.filter(o => {
+  // Search and filter logic (memoized + debounced)
+  const filteredOrders = useMemo(() => orders.filter(o => {
     if (!o) return false;
-    const queryLower = (searchQuery || '').toLowerCase().trim();
+    const queryLower = (debouncedSearch || '').toLowerCase().trim();
     const custName = (o.customerName || '').toLowerCase();
     const custPhone = o.customerPhone || '';
     const ordId = (o.id || '').toLowerCase();
@@ -184,21 +194,49 @@ export default function DuePayments({ user, requireCheckIn }: DuePaymentsProps) 
       return bLastPayment - aLastPayment;
     }
     return b.createdAt - a.createdAt;
-  });
+  }), [orders, debouncedSearch, subBrandFilter, paymentStatusFilter, activeTab]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredOrders.length / pageSize));
+  const safePage = Math.min(currentPage, totalPages);
+  const paginatedOrders = useMemo(() => {
+    const start = (safePage - 1) * pageSize;
+    return filteredOrders.slice(start, start + pageSize);
+  }, [filteredOrders, safePage]);
 
   // Calculate metrics (only based on still due orders)
-  const stillDueOrders = orders.filter(o => o.amountDue > 0);
-  const totalReceivable = stillDueOrders.reduce((sum, o) => sum + o.amountDue, 0);
-  const totalCollected = stillDueOrders.reduce((sum, o) => sum + o.amountPaid, 0);
-
-  // Aging Buckets
-  const aging0to30 = stillDueOrders.filter(o => getDaysSinceOrder(o.createdAt) <= 30);
-  const aging30to60 = stillDueOrders.filter(o => getDaysSinceOrder(o.createdAt) > 30 && getDaysSinceOrder(o.createdAt) <= 60);
-  const aging60Plus = stillDueOrders.filter(o => getDaysSinceOrder(o.createdAt) > 60);
-
-  const due0to30Amt = aging0to30.reduce((s, o) => s + o.amountDue, 0);
-  const due30to60Amt = aging30to60.reduce((s, o) => s + o.amountDue, 0);
-  const due60PlusAmt = aging60Plus.reduce((s, o) => s + o.amountDue, 0);
+  const {
+    stillDueOrders,
+    totalReceivable,
+    aging0to30,
+    aging30to60,
+    aging60Plus,
+    due0to30Amt,
+    due30to60Amt,
+    due60PlusAmt
+  } = useMemo(() => {
+    const due = orders.filter(o => o.amountDue > 0);
+    const a0: Order[] = [];
+    const a30: Order[] = [];
+    const a60: Order[] = [];
+    let totalRec = 0, d0 = 0, d30 = 0, d60 = 0;
+    for (const o of due) {
+      totalRec += o.amountDue;
+      const days = getDaysSinceOrder(o.createdAt);
+      if (days <= 30) { a0.push(o); d0 += o.amountDue; }
+      else if (days <= 60) { a30.push(o); d30 += o.amountDue; }
+      else { a60.push(o); d60 += o.amountDue; }
+    }
+    return {
+      stillDueOrders: due,
+      totalReceivable: totalRec,
+      aging0to30: a0,
+      aging30to60: a30,
+      aging60Plus: a60,
+      due0to30Amt: d0,
+      due30to60Amt: d30,
+      due60PlusAmt: d60
+    };
+  }, [orders]);
 
   return (
     <div className="space-y-6 w-full max-w-[1920px] mx-auto pb-10">
@@ -340,8 +378,8 @@ export default function DuePayments({ user, requireCheckIn }: DuePaymentsProps) 
                 <tr>
                   <td colSpan={7} className="py-12 text-center text-slate-400">Loading receivable registers...</td>
                 </tr>
-              ) : filteredOrders.length > 0 ? (
-                filteredOrders.map(order => {
+              ) : paginatedOrders.length > 0 ? (
+                paginatedOrders.map(order => {
                   const days = getDaysSinceOrder(order.createdAt);
                   return (
                     <tr key={order.id} className="hover:bg-slate-50 dark:hover:bg-slate-800/40 transition-colors">
@@ -404,6 +442,32 @@ export default function DuePayments({ user, requireCheckIn }: DuePaymentsProps) 
             </tbody>
           </table>
         </div>
+        {filteredOrders.length > pageSize && (
+          <div className="flex items-center justify-between gap-2 pt-4 mt-4 border-t border-slate-100 dark:border-slate-800 text-xs text-slate-600 dark:text-slate-400">
+            <span>
+              Showing {(safePage - 1) * pageSize + 1}–{Math.min(safePage * pageSize, filteredOrders.length)} of {filteredOrders.length}
+            </span>
+            <div className="flex items-center gap-2">
+              <button
+                type="button"
+                disabled={safePage <= 1}
+                onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                className="px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-700 disabled:opacity-40 cursor-pointer font-semibold"
+              >
+                Prev
+              </button>
+              <span className="font-mono font-bold">Page {safePage}/{totalPages}</span>
+              <button
+                type="button"
+                disabled={safePage >= totalPages}
+                onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                className="px-2.5 py-1 rounded-lg border border-slate-200 dark:border-slate-700 disabled:opacity-40 cursor-pointer font-semibold"
+              >
+                Next
+              </button>
+            </div>
+          </div>
+        )}
 
       </div>
 

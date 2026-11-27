@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { Plus, Trash2, AlertTriangle, CheckCircle2, X } from 'lucide-react';
 import { UserProfile, CompanyLoss } from '../../types';
-import { subscribeToCompanyLosses, addCompanyLoss, deleteCompanyLoss } from '../../firebase/db';
+import { getCompanyLosses, addCompanyLoss, deleteCompanyLoss } from '../../firebase/db';
 
 interface CompanyLossesTabProps {
   user: UserProfile;
@@ -20,11 +20,13 @@ export const CompanyLossesTab: React.FC<CompanyLossesTabProps> = ({ user }) => {
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
+  const loadLosses = async () => {
+    const list = await getCompanyLosses().catch(() => []);
+    setLosses(list || []);
+  };
+
   useEffect(() => {
-    const unsub = subscribeToCompanyLosses((list) => {
-      setLosses(list || []);
-    });
-    return () => unsub();
+    loadLosses();
   }, []);
 
   const totalLoss = (losses || []).reduce((s, l) => s + (Number(l?.amount) || 0), 0);
@@ -59,6 +61,7 @@ export const CompanyLossesTab: React.FC<CompanyLossesTabProps> = ({ user }) => {
       setShowForm(false);
       setNotification({ type: 'success', message: 'ক্ষতি ও অপচয়ের রেকর্ড সফলভাবে সংরক্ষিত হয়েছে।' });
       setTimeout(() => setNotification(null), 4000);
+      await loadLosses();
     } catch (err: any) {
       setNotification({ type: 'error', message: 'সংরক্ষণ ব্যর্থ: ' + (err?.message || 'Error') });
     } finally {
@@ -70,6 +73,7 @@ export const CompanyLossesTab: React.FC<CompanyLossesTabProps> = ({ user }) => {
     if (!deleteTargetId) return;
     try {
       await deleteCompanyLoss(deleteTargetId);
+      setLosses(prev => prev.filter(l => l.id !== deleteTargetId));
       setDeleteTargetId(null);
       setNotification({ type: 'success', message: 'ক্ষতির রেকর্ড মুছে ফেলা হয়েছে।' });
       setTimeout(() => setNotification(null), 4000);

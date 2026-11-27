@@ -27,9 +27,7 @@ import {
   addCustomer, 
   updateCustomer, 
   deleteCustomer, 
-  getOrders, 
-  subscribeToCustomers, 
-  subscribeToOrders,
+  getOrdersByCustomer,
   localStore
 } from '../firebase/db';
 import { getPreOrdersByCustomer } from '../firebase/preOrderDb';
@@ -52,17 +50,24 @@ export default function CustomerManagement({
 }: CustomerManagementProps) {
   // Initialize immediately from cache to prevent layout jumps
   const [customers, setCustomers] = useState<Customer[]>(() => localStore.get<Customer[]>('customers') || []);
-  const [orders, setOrders] = useState<Order[]>(() => localStore.get<Order[]>('orders') || []);
+  const [customerOrders, setCustomerOrders] = useState<Order[]>([]);
+  const [loadingOrders, setLoadingOrders] = useState(false);
   const [loading, setLoading] = useState<boolean>(() => {
     const cached = localStore.get<Customer[]>('customers');
     return !(cached && cached.length > 0);
   });
+  const [customerLimit, setCustomerLimit] = useState(200);
+  const [hasMoreCustomers, setHasMoreCustomers] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const pageSize = 25;
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [copiedPhone, setCopiedPhone] = useState<string | null>(null);
 
   // Filters, Search & Sort states
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [selectedSubBrandFilter, setSelectedSubBrandFilter] = useState('');
   const [sortBy, setSortBy] = useState<'createdAt' | 'name' | 'totalOrders' | 'lifetimeValue'>('createdAt');
   const [sortOrder, setSortOrder] = useState<'asc' | 'desc'>('desc');
@@ -89,31 +94,45 @@ export default function CustomerManagement({
     (user?.permissionOverrides?.manageOrders !== false && user?.role === 'admin');
 
   useEffect(() => {
-    const unsubCust = subscribeToCustomers((customersData) => {
-      setCustomers(customersData || []);
-      setLoading(false);
-    });
-    const unsubOrd = subscribeToOrders((ordersData) => {
-      setOrders(ordersData || []);
-    });
+    const timer = setTimeout(() => setDebouncedSearch(searchQuery), 250);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
 
-    return () => {
-      unsubCust();
-      unsubOrd();
-    };
-  }, []);
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [debouncedSearch, selectedSubBrandFilter, sortBy, sortOrder]);
 
-  const fetchData = async () => {
+  const fetchData = async (limitVal: number = customerLimit) => {
+    if (customers.length === 0) setLoading(true);
     try {
-      const customersData = await getCustomers();
-      const ordersData = await getOrders();
-      setCustomers(customersData || []);
-      setOrders(ordersData || []);
+      const customersData = await getCustomers({ limitCount: limitVal });
+      const list = customersData || [];
+      setCustomers(list);
+      setHasMoreCustomers(list.length >= limitVal);
     } catch (err: any) {
       console.error('CustomerManagement: Error fetching data:', err);
       setError('Could not retrieve customer logs. Please verify connection.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchData(200);
+  }, []);
+
+  const handleLoadMoreCustomers = async () => {
+    const nextLimit = customerLimit + 200;
+    setCustomerLimit(nextLimit);
+    setLoadingMore(true);
+    try {
+      const list = await getCustomers({ limitCount: nextLimit });
+      setCustomers(list || []);
+      setHasMoreCustomers((list || []).length >= nextLimit);
+    } catch (err) {
+      console.error('CustomerManagement: Load more failed:', err);
+    } finally {
+      setLoadingMore(false);
     }
   };
 
@@ -132,24 +151,31 @@ export default function CustomerManagement({
   useEffect(() => {
     if (!selectedCustomer) {
       setCustomerPreOrders([]);
+      setCustomerOrders([]);
       return;
     }
     let active = true;
     setLoadingPreOrders(true);
-    getPreOrdersByCustomer(selectedCustomer.id, selectedCustomer.phone)
-      .then((list) => {
-        if (active) setCustomerPreOrders(list);
-      })
-      .catch(() => {
-        if (active) setCustomerPreOrders([]);
+    setLoadingOrders(true);
+    Promise.all([
+      getPreOrdersByCustomer(selectedCustomer.id, selectedCustomer.phone).catch(() => []),
+      getOrdersByCustomer(selectedCustomer.id).catch(() => [])
+    ])
+      .then(([preList, ordList]) => {
+        if (!active) return;
+        setCustomerPreOrders(preList);
+        setCustomerOrders(ordList);
       })
       .finally(() => {
-        if (active) setLoadingPreOrders(false);
+        if (active) {
+          setLoadingPreOrders(false);
+          setLoadingOrders(false);
+        }
       });
     return () => {
       active = false;
     };
-  }, [selectedCustomer]);
+  }, [selectedCustomer?.id]);
 
   // Bangladesh format validation
   const validateBdPhone = (phone: string) => {
@@ -326,8 +352,8 @@ export default function CustomerManagement({
         return false;
       }
 
-      // 3. Search query
-      const query = searchQuery.toLowerCase().trim();
+      // 3. Search query (debounced)
+      const query = debouncedSearch.toLowerCase().trim();
       if (!query) return true;
       const matchSearch = 
         (customer.name || '').toLowerCase().includes(query) ||
@@ -337,7 +363,7 @@ export default function CustomerManagement({
       
       return matchSearch;
     });
-  }, [customers, searchQuery, selectedSubBrandFilter, isSuperAdmin, user]);
+  }, [customers, debouncedSearch, selectedSubBrandFilter, isSuperAdmin, user]);
 
   // Sorting
   const sortedCustomers = useMemo(() => {
@@ -356,6 +382,13 @@ export default function CustomerManagement({
     });
   }, [filteredCustomers, sortBy, sortOrder]);
 
+  const totalPages = Math.max(1, Math.ceil(sortedCustomers.length / pageSize));
+  const safePage = Math.min(currentPage, totalPages);
+  const paginatedCustomers = useMemo(() => {
+    const start = (safePage - 1) * pageSize;
+    return sortedCustomers.slice(start, start + pageSize);
+  }, [sortedCustomers, safePage]);
+
   const toggleSort = (field: typeof sortBy) => {
     if (sortBy === field) {
       setSortOrder(prev => prev === 'asc' ? 'desc' : 'asc');
@@ -373,11 +406,6 @@ export default function CustomerManagement({
   const totalOrdersCount = useMemo(() => {
     return customers.reduce((sum, c) => sum + (c.totalOrders || 0), 0);
   }, [customers]);
-
-  // Filter orders for the selected customer
-  const customerOrders = selectedCustomer 
-    ? orders.filter(o => o.customerId === selectedCustomer.id)
-    : [];
 
   return (
     <div className="w-full max-w-full space-y-3.5 pb-12 overflow-x-hidden select-text touch-pan-y">
@@ -523,7 +551,7 @@ export default function CustomerManagement({
           <>
             {/* 1. Mobile & Small Tablet Card Layout (100% full-width, zero horizontal wobble) */}
             <div className="block md:hidden space-y-2 w-full max-w-full">
-              {sortedCustomers.map((customer) => (
+              {paginatedCustomers.map((customer) => (
                 <div
                   key={customer.id}
                   onClick={() => {
@@ -679,7 +707,7 @@ export default function CustomerManagement({
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100 text-xs">
-                  {sortedCustomers.map((customer) => (
+                  {paginatedCustomers.map((customer) => (
                     <tr 
                       key={customer.id}
                       className="hover:bg-slate-50/70 transition-colors cursor-pointer"
@@ -804,6 +832,43 @@ export default function CustomerManagement({
                 </tbody>
               </table>
             </div>
+
+            {(sortedCustomers.length > pageSize || hasMoreCustomers) && (
+              <div className="flex flex-wrap items-center justify-between gap-2 px-3 py-2.5 bg-white rounded-xl border border-slate-200/80 text-xs text-slate-600 mt-2">
+                <span>
+                  Showing {(safePage - 1) * pageSize + 1}–{Math.min(safePage * pageSize, sortedCustomers.length)} of {sortedCustomers.length} customers
+                </span>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    disabled={safePage <= 1}
+                    onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                    className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white disabled:opacity-40 cursor-pointer font-semibold"
+                  >
+                    Prev
+                  </button>
+                  <span className="font-mono font-bold">Page {safePage}/{totalPages}</span>
+                  <button
+                    type="button"
+                    disabled={safePage >= totalPages}
+                    onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                    className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white disabled:opacity-40 cursor-pointer font-semibold"
+                  >
+                    Next
+                  </button>
+                  {hasMoreCustomers && (
+                    <button
+                      type="button"
+                      disabled={loadingMore}
+                      onClick={handleLoadMoreCustomers}
+                      className="px-2.5 py-1 rounded-lg bg-slate-900 text-amber-400 font-bold cursor-pointer disabled:opacity-50"
+                    >
+                      {loadingMore ? 'Loading...' : 'Load More (+200)'}
+                    </button>
+                  )}
+                </div>
+              </div>
+            )}
           </>
         )}
       </div>
@@ -1000,7 +1065,11 @@ export default function CustomerManagement({
                       </h4>
                     </div>
 
-                    {customerOrders.length === 0 ? (
+                    {loadingOrders ? (
+                      <div className="p-3 text-center text-slate-400 bg-slate-50 rounded-lg text-[11px] font-mono">
+                        Loading customer orders...
+                      </div>
+                    ) : customerOrders.length === 0 ? (
                       <div className="p-3 text-center text-slate-400 bg-slate-50 rounded-lg border border-dashed border-slate-200">
                         <p className="text-[11px] italic">No orders recorded yet.</p>
                       </div>

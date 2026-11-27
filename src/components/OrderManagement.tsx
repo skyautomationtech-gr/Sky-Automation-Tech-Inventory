@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useMemo } from 'react';
 import CatalogItemSelection from "./CatalogItemSelection";
 import { 
   Search, 
@@ -43,9 +43,6 @@ import {
   getOrders, 
   getCustomers, 
   getProducts, 
-  subscribeToOrders,
-  subscribeToCustomers,
-  subscribeToProducts,
   addOrder, 
   addCustomer, 
   updateOrderAndHandleStock, 
@@ -55,7 +52,8 @@ import {
   recordOrderPayment,
   deleteOrderPayment,
   updateOrderFullDetails,
-  getVariantAvailableStock
+  getVariantAvailableStock,
+  localStore
 } from '../firebase/db';
 
 interface OrderManagementProps {
@@ -78,17 +76,26 @@ export default function OrderManagement({
   onCreateModeChange
 }: OrderManagementProps) {
   // Lists
-  const [orders, setOrders] = useState<Order[]>([]);
-  const [customers, setCustomers] = useState<Customer[]>([]);
-  const [products, setProducts] = useState<Product[]>([]);
+  const [orders, setOrders] = useState<Order[]>(() => localStore.get<Order[]>('orders') || []);
+  const [customers, setCustomers] = useState<Customer[]>(() => localStore.get<Customer[]>('customers') || []);
+  const [products, setProducts] = useState<Product[]>(() => {
+    const cached = localStore.get<Product[]>('products') || [];
+    return cached.filter(p => p.status === 'approved' && !p.archived);
+  });
   
-  // Loading & states
-  const [loading, setLoading] = useState(true);
+  // Loading & pagination states
+  const [loading, setLoading] = useState<boolean>(() => !(localStore.get<Order[]>('orders')?.length));
+  const [orderLimit, setOrderLimit] = useState(100);
+  const [hasMoreOrders, setHasMoreOrders] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const pageSize = 25;
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
 
   // Search, Filter & Sort states
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [subBrandFilter, setSubBrandFilter] = useState('');
   const [salesChannelFilter, setSalesChannelFilter] = useState('');
@@ -189,34 +196,27 @@ export default function OrderManagement({
     (user?.permissionOverrides?.manageOrders !== false && user?.role === 'admin');
 
   useEffect(() => {
-    setLoading(true);
-    const unsubOrders = subscribeToOrders((ordersData) => {
-      setOrders(ordersData || []);
-      setLoading(false);
-    });
-    const unsubCustomers = subscribeToCustomers((customersData) => {
-      setCustomers(customersData || []);
-    });
-    const unsubProducts = subscribeToProducts((productsData) => {
-      const approvedProducts = (productsData || []).filter(p => p.status === 'approved' && !p.archived);
-      setProducts(approvedProducts);
-    });
-    return () => {
-      unsubOrders();
-      unsubCustomers();
-      unsubProducts();
-    };
-  }, []);
+    const timer = setTimeout(() => setDebouncedSearch(searchQuery), 250);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
 
-  const fetchData = async () => {
-    setLoading(true);
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [debouncedSearch, statusFilter, subBrandFilter, salesChannelFilter, courierFilter, paymentStatusFilter]);
+
+  const fetchData = async (limitCountVal: number = orderLimit) => {
+    if (orders.length === 0) setLoading(true);
     setError('');
     try {
-      const ordersData = await getOrders();
-      const customersData = await getCustomers();
-      const productsData = await getProducts();
+      const [ordersData, customersData, productsData] = await Promise.all([
+        getOrders({ limitCount: limitCountVal }),
+        getCustomers({ limitCount: 250 }),
+        getProducts(false)
+      ]);
       
-      setOrders(ordersData || []);
+      const list = ordersData || [];
+      setOrders(list);
+      setHasMoreOrders(list.length >= limitCountVal);
       setCustomers(customersData || []);
       
       // Exclude archived and non-approved products
@@ -227,6 +227,25 @@ export default function OrderManagement({
       setError('Could not retrieve active records. Verify Firestore rules.');
     } finally {
       setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    fetchData(100);
+  }, []);
+
+  const handleLoadMoreOrders = async () => {
+    const nextLimit = orderLimit + 100;
+    setOrderLimit(nextLimit);
+    setLoadingMore(true);
+    try {
+      const list = await getOrders({ limitCount: nextLimit });
+      setOrders(list || []);
+      setHasMoreOrders((list || []).length >= nextLimit);
+    } catch (err) {
+      console.error('OrderManagement: Load more orders failed:', err);
+    } finally {
+      setLoadingMore(false);
     }
   };
 
@@ -468,13 +487,20 @@ export default function OrderManagement({
 
       const newOrderId = await addOrder(orderPayload);
       
-      // Trigger instant recalculation of customer statistics (total orders, ltv)
-      await recalculateCustomerStats(finalCustomerId);
+      // Trigger fast incremental update of customer statistics (no extra collection scan)
+      await recalculateCustomerStats(finalCustomerId, { orderDelta: 1, ltvDelta: orderTotal });
+
+      const createdOrder: Order = { id: newOrderId, ...orderPayload };
+      setOrders(prev => [createdOrder, ...prev]);
+      setCustomers(prev => prev.map(c => c.id === finalCustomerId ? {
+        ...c,
+        totalOrders: (c.totalOrders || 0) + 1,
+        lifetimeValue: (c.lifetimeValue || 0) + orderTotal,
+      } : c));
 
       setSuccess(`Order #${newOrderId.substring(0, 8).toUpperCase()} placed successfully!`);
       setShowCreateModal(false);
       resetWizard();
-      await fetchData();
     } catch (err: any) {
       console.error('OrderManagement: Create order failed:', err);
       setError('Failed to record order inside Firestore database.');
@@ -484,10 +510,6 @@ export default function OrderManagement({
   };
 
   const handleAdvanceStatus = async (targetStatus: OrderStatus) => {
-    if (targetStatus === 'Delivered') {
-      console.log("CONFIRM DELIVERY CLICKED", selectedOrder?.id);
-    }
-
     if (requireCheckIn && !requireCheckIn()) return;
     if (!selectedOrder) return;
     if (!hasManageOrders) {
@@ -558,8 +580,8 @@ export default function OrderManagement({
 
           setSuccess(`Order successfully moved to "${targetStatus}"!`);
           setSelectedOrder(updatedOrder);
+          setOrders(prev => prev.map(o => o.id === updatedOrder.id ? updatedOrder : o));
           setEditingTracking(false);
-          await fetchData();
         } catch (err: any) {
           console.error('OrderManagement: Status advance failed:', err);
           setError(`Could not perform transactional state change: ${err.message || err}`);
@@ -588,9 +610,9 @@ export default function OrderManagement({
       );
       
       setSelectedOrder(updatedOrder);
+      setOrders(prev => prev.map(o => o.id === updatedOrder.id ? updatedOrder : o));
       setEditingTracking(false);
       setSuccess('Tracking number updated successfully!');
-      await fetchData();
     } catch (err) {
       console.error(err);
       setError('Failed to update tracking details.');
@@ -619,8 +641,8 @@ export default function OrderManagement({
             await recalculateCustomerStats(targetOrder.customerId);
           }
           setSelectedOrder(null);
+          setOrders(prev => prev.filter(o => o.id !== orderId));
           setSuccess('Order document permanently deleted.');
-          await fetchData();
         } catch (err: any) {
           console.error(err);
           setError(`Failed to delete order: ${err.message || err}`);
@@ -940,7 +962,6 @@ export default function OrderManagement({
       setOrders(prev => prev.map(o => o.id === updated.id ? updated : o));
       setShowEditModal(false);
       setEditingOrder(null);
-      await fetchData();
     } catch (err: any) {
       console.error('Error updating order:', err);
       setError(`Failed to update order: ${err.message || err}`);
@@ -979,8 +1000,16 @@ export default function OrderManagement({
     setOrderShippingCharge('');
   };
 
+  const productCostMap = useMemo(() => {
+    const map = new Map<string, number>();
+    products.forEach((p) => {
+      map.set(p.id, Number(p.costPrice) || 0);
+    });
+    return map;
+  }, [products]);
+
   // Filters
-  const filteredOrders = orders.filter(order => {
+  const filteredOrders = useMemo(() => orders.filter(order => {
     // 1. Sub brand access
     if (!isSuperAdmin && user?.subBrandAccess) {
       if (!user.subBrandAccess.includes(order.subBrand)) {
@@ -995,16 +1024,23 @@ export default function OrderManagement({
     if (courierFilter && order.courier !== courierFilter) return false;
     if (paymentStatusFilter && order.paymentStatus !== paymentStatusFilter) return false;
 
-    // 3. Search query
-    if (searchQuery.trim() !== '') {
-      const q = searchQuery.toLowerCase();
+    // 3. Search query (debounced)
+    if (debouncedSearch.trim() !== '') {
+      const q = debouncedSearch.toLowerCase();
       const matchCust = (order.customerName || '').toLowerCase().includes(q) || (order.customerPhone || '').includes(q);
       const matchId = (order.id || '').toLowerCase().includes(q);
       if (!matchCust && !matchId) return false;
     }
 
     return true;
-  });
+  }), [orders, isSuperAdmin, user?.subBrandAccess, statusFilter, subBrandFilter, salesChannelFilter, courierFilter, paymentStatusFilter, debouncedSearch]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredOrders.length / pageSize));
+  const safePage = Math.min(currentPage, totalPages);
+  const paginatedOrders = useMemo(() => {
+    const start = (safePage - 1) * pageSize;
+    return filteredOrders.slice(start, start + pageSize);
+  }, [filteredOrders, safePage]);
 
   return (
     <div className="space-y-6">
@@ -1163,8 +1199,13 @@ export default function OrderManagement({
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-50 text-sm">
-                    {filteredOrders.map((order) => {
+                    {paginatedOrders.map((order) => {
                       const itemCount = order.items.reduce((acc, i) => acc + i.qty, 0);
+                      let totalCost = 0;
+                      (order.items || []).forEach(it => {
+                        totalCost += (productCostMap.get(it.productId) || 0) * (Number(it.qty) || 1);
+                      });
+                      const profit = (Number(order.totalAmount) || 0) - totalCost;
                       return (
                         <tr
                           key={order.id}
@@ -1179,20 +1220,11 @@ export default function OrderManagement({
                             <div className="flex flex-col gap-0.5">
                               <div className="flex items-center gap-1.5">
                                 <span className="font-mono font-black text-slate-900 uppercase">#{order.id.substring(0, 8)}</span>
-                                {(() => {
-                                  let totalCost = 0;
-                                  (order.items || []).forEach(it => {
-                                    const p = products.find(prod => prod.id === it.productId);
-                                    const c = Number(p?.costPrice) || 0;
-                                    totalCost += c * (Number(it.qty) || 1);
-                                  });
-                                  const profit = (Number(order.totalAmount) || 0) - totalCost;
-                                  return profit < 0 ? (
-                                    <span className="px-1.5 py-0.2 rounded text-[9px] font-mono font-black bg-red-100 text-red-700 border border-red-300 uppercase">
-                                      Loss
-                                    </span>
-                                  ) : null;
-                                })()}
+                                {profit < 0 && (
+                                  <span className="px-1.5 py-0.2 rounded text-[9px] font-mono font-black bg-red-100 text-red-700 border border-red-300 uppercase">
+                                    Loss
+                                  </span>
+                                )}
                               </div>
                               <span className="text-sm text-slate-400 font-mono">{new Date(order.createdAt).toLocaleDateString()}</span>
                             </div>
@@ -1270,6 +1302,40 @@ export default function OrderManagement({
                     })}
                   </tbody>
                 </table>
+                <div className="flex flex-wrap items-center justify-between gap-2 px-4 py-3 border-t border-slate-100 bg-slate-50/50 text-xs text-slate-600">
+                  <span>
+                    Showing {(safePage - 1) * pageSize + 1}–{Math.min(safePage * pageSize, filteredOrders.length)} of {filteredOrders.length} orders
+                  </span>
+                  <div className="flex items-center gap-2">
+                    <button
+                      type="button"
+                      disabled={safePage <= 1}
+                      onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                      className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white disabled:opacity-40 cursor-pointer font-semibold"
+                    >
+                      Prev
+                    </button>
+                    <span className="font-mono font-bold">Page {safePage}/{totalPages}</span>
+                    <button
+                      type="button"
+                      disabled={safePage >= totalPages}
+                      onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                      className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white disabled:opacity-40 cursor-pointer font-semibold"
+                    >
+                      Next
+                    </button>
+                    {hasMoreOrders && (
+                      <button
+                        type="button"
+                        disabled={loadingMore}
+                        onClick={handleLoadMoreOrders}
+                        className="px-2.5 py-1 rounded-lg bg-slate-900 text-amber-400 font-bold cursor-pointer disabled:opacity-50"
+                      >
+                        {loadingMore ? 'Loading...' : 'Load Older (+100)'}
+                      </button>
+                    )}
+                  </div>
+                </div>
               </div>
             )}
           </div>
@@ -3022,7 +3088,7 @@ export default function OrderManagement({
                   await recalculateCustomerStats(selectedOrder.customerId);
                   setSuccess(`Order delivered with Admin override logged.`);
                   setSelectedOrder(updatedOrder);
-                  await fetchData();
+                  setOrders(prev => prev.map(o => o.id === updatedOrder.id ? updatedOrder : o));
                 } catch (err: any) {
                   setError(`Could not deliver order: ${err?.message || err}`);
                 } finally {

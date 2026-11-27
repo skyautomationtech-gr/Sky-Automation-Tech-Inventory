@@ -38,23 +38,23 @@ import {
   AccountingPosting
 } from '../../types';
 import { 
-  subscribeToAccountingBaselineSettings,
+  getAccountingBaselineSettings,
   saveAccountingBaselineSettings,
-  subscribeToCashTransactions,
+  getCashTransactions,
   addCashTransaction,
   deleteCashTransaction,
-  subscribeToInvestments, 
+  getInvestments, 
   addInvestment,
-  subscribeToCompanyPurchases, 
-  subscribeToCompanyLosses, 
-  subscribeToPaymentPlatformLedger, 
-  subscribeToOtherReceivables, 
-  subscribeToExpenses, 
-  subscribeToOrders,
+  getCompanyPurchases, 
+  getCompanyLosses, 
+  getPaymentPlatformLedger, 
+  getOtherReceivables, 
+  getExpenses, 
+  getOrders,
   clearAllAccountingData,
   DEFAULT_ACCOUNTING_BASELINE 
 } from '../../firebase/db';
-import { subscribeToAccountingPostings } from '../../firebase/preOrderDb';
+import { getPreOrderAccountingPostings } from '../../firebase/preOrderDb';
 import { summarizePreOrderAccounting } from '../../preOrders/accounting';
 
 interface AccountingOverviewProps {
@@ -109,43 +109,57 @@ export const AccountingOverview: React.FC<AccountingOverviewProps> = ({ user, on
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
-  // Subscriptions
-  useEffect(() => {
-    const unsubBase = subscribeToAccountingBaselineSettings(data => {
-      if (data) {
-        setBaseline(data);
+  const loadAccountingOverview = React.useCallback(async () => {
+    try {
+      const [
+        baseData,
+        cashData,
+        invData,
+        purData,
+        lossData,
+        platData,
+        recData,
+        expData,
+        ordData,
+        postData
+      ] = await Promise.all([
+        getAccountingBaselineSettings(),
+        getCashTransactions(),
+        getInvestments(),
+        getCompanyPurchases(),
+        getCompanyLosses(),
+        getPaymentPlatformLedger(),
+        getOtherReceivables(),
+        getExpenses(),
+        getOrders({ limitCount: 400 }),
+        getPreOrderAccountingPostings(undefined, 400).catch(() => [] as AccountingPosting[])
+      ]);
+      if (baseData) {
+        setBaseline(baseData);
         setSettingsForm({
-          baselineCash: Number(data.baselineCash) || 0,
-          baselineInvestment: Number(data.baselineInvestment) || 0,
-          cutoffDate: data.cutoffDate || new Date().toISOString().split('T')[0],
-          note: data.note || ''
+          baselineCash: Number(baseData.baselineCash) || 0,
+          baselineInvestment: Number(baseData.baselineInvestment) || 0,
+          cutoffDate: baseData.cutoffDate || new Date().toISOString().split('T')[0],
+          note: baseData.note || ''
         });
       }
-    });
-
-    const unsubCash = subscribeToCashTransactions(setCashTxns);
-    const unsubInv = subscribeToInvestments(setInvestments);
-    const unsubPur = subscribeToCompanyPurchases(setPurchases);
-    const unsubLoss = subscribeToCompanyLosses(setLosses);
-    const unsubPlat = subscribeToPaymentPlatformLedger(setPlatforms);
-    const unsubRec = subscribeToOtherReceivables(setReceivables);
-    const unsubExp = subscribeToExpenses(setExpenses);
-    const unsubOrd = subscribeToOrders(setOrders);
-    const unsubPoPostings = subscribeToAccountingPostings(setPoPostings, 500);
-
-    return () => {
-      unsubBase();
-      unsubCash();
-      unsubInv();
-      unsubPur();
-      unsubLoss();
-      unsubPlat();
-      unsubRec();
-      unsubExp();
-      unsubOrd();
-      unsubPoPostings();
-    };
+      setCashTxns(cashData || []);
+      setInvestments(invData || []);
+      setPurchases(purData || []);
+      setLosses(lossData || []);
+      setPlatforms(platData || []);
+      setReceivables(recData || []);
+      setExpenses(expData || []);
+      setOrders(ordData || []);
+      setPoPostings(postData || []);
+    } catch (err) {
+      console.error('AccountingOverview load failed:', err);
+    }
   }, []);
+
+  useEffect(() => {
+    loadAccountingOverview();
+  }, [loadAccountingOverview]);
 
   const cutoffTimestamp = baseline?.cutoffTimestamp || 0;
 
@@ -343,6 +357,7 @@ export const AccountingOverview: React.FC<AccountingOverviewProps> = ({ user, on
       setShowSettingsModal(false);
       setNotification({ type: 'success', message: 'অ্যাকাউন্টিং বেসলাইন সফলভাবে আপডেট করা হয়েছে।' });
       setTimeout(() => setNotification(null), 4000);
+      await loadAccountingOverview();
     } catch (err: any) {
       setNotification({ type: 'error', message: 'বেসলাইন সেভ করা যায়নি: ' + (err?.message || 'Error') });
     } finally {
@@ -383,6 +398,7 @@ export const AccountingOverview: React.FC<AccountingOverviewProps> = ({ user, on
           : `৳${amt.toLocaleString()} ক্যাশ উত্তোলন/খরচ রেকর্ড করা হয়েছে।` 
       });
       setTimeout(() => setNotification(null), 4000);
+      await loadAccountingOverview();
     } catch (err: any) {
       setNotification({ type: 'error', message: 'ক্যাশ রেকর্ড করা যায়নি: ' + (err?.message || 'Error') });
     } finally {
@@ -418,6 +434,7 @@ export const AccountingOverview: React.FC<AccountingOverviewProps> = ({ user, on
       setShowInvestmentModal(false);
       setNotification({ type: 'success', message: `৳${amt.toLocaleString()} নতুন মূলধন বিনিয়োগ হিসেবে যোগ করা হয়েছে।` });
       setTimeout(() => setNotification(null), 4000);
+      await loadAccountingOverview();
     } catch (err: any) {
       setNotification({ type: 'error', message: 'বিনিয়োগ যোগ করা যায়নি: ' + (err?.message || 'Error') });
     } finally {
@@ -752,6 +769,7 @@ export const AccountingOverview: React.FC<AccountingOverviewProps> = ({ user, on
                           onClick={async () => {
                             if (confirm('এই ক্যাশ লেনদেনটি মুছে ফেলতে চান?')) {
                               await deleteCashTransaction(txn.id);
+                              setCashTxns(prev => prev.filter(c => c.id !== txn.id));
                             }
                           }}
                           className="text-rose-500 hover:text-rose-700 text-xs font-semibold cursor-pointer"

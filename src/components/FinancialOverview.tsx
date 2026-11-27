@@ -35,14 +35,12 @@ import {
 } from 'lucide-react';
 import { 
   getExpenses, 
-  subscribeToExpenses,
   addExpense, 
   updateExpense, 
   deleteExpense, 
   clearAllExpenses,
   generateExpenseId,
   getIncomes,
-  subscribeToIncomes,
   addIncome,
   updateIncome,
   deleteIncome,
@@ -50,7 +48,6 @@ import {
   clearDemoFinancials,
   generateIncomeId,
   getOrders, 
-  subscribeToOrders,
   getStockLogs 
 } from '../firebase/db';
 import { storage } from '../firebase/config';
@@ -68,7 +65,7 @@ import {
   IncomePaymentMethod,
   AccountingPosting
 } from '../types';
-import { subscribeToAccountingPostings } from '../firebase/preOrderDb';
+import { getPreOrderAccountingPostings } from '../firebase/preOrderDb';
 
 interface FinancialOverviewProps {
   user: UserProfile;
@@ -275,21 +272,23 @@ export default function FinancialOverview({ user, products, onRefreshData, initi
   // File input ref
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Fetch all necessary financial information
+  // Fetch all necessary financial information (bounded reads instead of 4 continuous listeners)
   const loadFinancialData = async () => {
     setLoading(true);
     try {
-      const [allOrders, allLogs, allExpenses, allIncomes] = await Promise.all([
-        getOrders(),
+      const [allOrders, allLogs, allExpenses, allIncomes, postings] = await Promise.all([
+        getOrders({ limitCount: 400 }),
         getStockLogs(),
         getExpenses(),
-        getIncomes()
+        getIncomes(),
+        getPreOrderAccountingPostings(undefined, 400).catch(() => [] as AccountingPosting[])
       ]);
 
       setOrders(allOrders || []);
       setStockLogs(allLogs || []);
       setExpenses(allExpenses || []);
       setIncomes(allIncomes || []);
+      setPoPostings(postings || []);
     } catch (err: any) {
       console.error("[FinancialOverview] Error loading financial datasets:", err);
       setErrorMsg("Failed to load financial information. Please retry.");
@@ -299,27 +298,7 @@ export default function FinancialOverview({ user, products, onRefreshData, initi
   };
 
   useEffect(() => {
-    setLoading(true);
-    getStockLogs().then(logs => setStockLogs(logs || [])).catch(() => {});
-    const unsubExp = subscribeToExpenses((allExpenses) => {
-      setExpenses(allExpenses || []);
-      setLoading(false);
-    });
-    const unsubInc = subscribeToIncomes((allIncomes) => {
-      setIncomes(allIncomes || []);
-    });
-    const unsubOrd = subscribeToOrders((allOrders) => {
-      setOrders(allOrders || []);
-    });
-    const unsubPoPostings = subscribeToAccountingPostings((postings) => {
-      setPoPostings(postings || []);
-    }, 500);
-    return () => {
-      unsubExp();
-      unsubInc();
-      unsubOrd();
-      unsubPoPostings();
-    };
+    loadFinancialData();
   }, []);
 
   // Quick preset ranges

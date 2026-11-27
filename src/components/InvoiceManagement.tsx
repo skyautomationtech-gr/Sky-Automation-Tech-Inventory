@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useMemo } from 'react';
 import { QRCodeSVG } from 'qrcode.react';
 import { 
   Search, 
@@ -19,12 +19,9 @@ import {
   ExternalLink
 } from 'lucide-react';
 import { Invoice, UserProfile, Order, CompanySettings, Product } from '../types';
-import { getInvoices, voidInvoiceRecord, getOrders, getCompanySettings, getProducts, subscribeToInvoices, subscribeToOrders, subscribeToProducts } from '../firebase/db';
+import { getInvoices, voidInvoiceRecord, getOrders, getCompanySettings, getProducts, localStore } from '../firebase/db';
+import { getRolePermissions, getCachedRolePermissionsSync } from '../firebase/preOrderBootstrap';
 import { getBrandLogo, BRAND_NAMES, getSubBrandCompanyInfo } from '../utils/brandLogos';
-import { doc, getDoc } from 'firebase/firestore';
-import { db, auth } from '../firebase/config';
-import html2canvas from 'html2canvas';
-import { jsPDF } from 'jspdf';
 
 interface InvoiceManagementProps {
   user: UserProfile | null;
@@ -32,16 +29,22 @@ interface InvoiceManagementProps {
 }
 
 export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManagementProps) {
-  const [invoices, setInvoices] = useState<Invoice[]>([]);
-  const [orders, setOrders] = useState<Order[]>([]);
-  const [products, setProducts] = useState<Product[]>([]);
-  const [companySettings, setCompanySettings] = useState<CompanySettings | null>(null);
-  const [loading, setLoading] = useState(true);
+  const [invoices, setInvoices] = useState<Invoice[]>(() => localStore.get<Invoice[]>('invoices') || []);
+  const [orders, setOrders] = useState<Order[]>(() => localStore.get<Order[]>('orders') || []);
+  const [products, setProducts] = useState<Product[]>(() => localStore.get<Product[]>('products') || []);
+  const [companySettings, setCompanySettings] = useState<CompanySettings | null>(() => localStore.get<CompanySettings>('companySettings'));
+  const [loading, setLoading] = useState<boolean>(() => !(localStore.get<Invoice[]>('invoices')?.length));
+  const [invoiceLimit, setInvoiceLimit] = useState(100);
+  const [hasMoreInvoices, setHasMoreInvoices] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  const [currentPage, setCurrentPage] = useState(1);
+  const pageSize = 25;
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   
   // Search and Filter states
   const [searchQuery, setSearchQuery] = useState('');
+  const [debouncedSearch, setDebouncedSearch] = useState('');
   const [subBrandFilter, setSubBrandFilter] = useState('');
   const [paymentStatusFilter, setPaymentStatusFilter] = useState('');
   const [voidFilter, setVoidFilter] = useState('all'); // all, active, voided
@@ -51,49 +54,39 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
   const [selectedInvoice, setSelectedInvoice] = useState<Invoice | null>(null);
   const [showVoidModal, setShowVoidModal] = useState(false);
   const [voidReason, setVoidReason] = useState('');
-  const [rolePermissions, setRolePermissions] = useState<any>(null);
+  const [rolePermissions, setRolePermissions] = useState<any>(() => getCachedRolePermissionsSync());
 
   // Signature States
   const [isDrawing, setIsDrawing] = useState(false);
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
 
   useEffect(() => {
-    setLoading(true);
-    getCompanySettings().then(setCompanySettings).catch(() => {});
-    fetchRolePermissions();
+    const timer = setTimeout(() => setDebouncedSearch(searchQuery), 250);
+    return () => clearTimeout(timer);
+  }, [searchQuery]);
 
-    const unsubInv = subscribeToInvoices((invoicesData) => {
-      setInvoices(invoicesData || []);
-      setLoading(false);
-    });
-    const unsubOrd = subscribeToOrders((ordersData) => {
-      setOrders(ordersData || []);
-    });
-    const unsubProd = subscribeToProducts((productsData) => {
-      setProducts(productsData || []);
-    });
+  useEffect(() => {
+    setCurrentPage(1);
+  }, [debouncedSearch, subBrandFilter, paymentStatusFilter, voidFilter, sortOrder]);
 
-    return () => {
-      unsubInv();
-      unsubOrd();
-      unsubProd();
-    };
-  }, []);
-
-  const fetchData = async () => {
-    setLoading(true);
+  const fetchData = async (limitVal: number = invoiceLimit) => {
+    if (invoices.length === 0) setLoading(true);
     setError('');
     try {
-      const [invoicesData, ordersData, settingsData, productsData] = await Promise.all([
-        getInvoices(),
-        getOrders(),
+      const [invoicesData, ordersData, settingsData, productsData, permsData] = await Promise.all([
+        getInvoices({ limitCount: limitVal }),
+        getOrders({ limitCount: 100 }),
         getCompanySettings(),
-        getProducts()
+        getProducts(false),
+        getRolePermissions()
       ]);
+      const invList = invoicesData || [];
       setCompanySettings(settingsData);
-      setInvoices(invoicesData || []);
+      setInvoices(invList);
+      setHasMoreInvoices(invList.length >= limitVal);
       setOrders(ordersData || []);
       setProducts(productsData || []);
+      if (permsData) setRolePermissions(permsData);
     } catch (err: any) {
       console.error('InvoiceManagement: Error fetching data:', err);
       setError('Could not retrieve invoices. Verify your connection.');
@@ -102,16 +95,22 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
     }
   };
 
-  const fetchRolePermissions = async () => {
-    if (!auth?.currentUser) return;
+  useEffect(() => {
+    fetchData(100);
+  }, []);
+
+  const handleLoadMoreInvoices = async () => {
+    const nextLimit = invoiceLimit + 100;
+    setInvoiceLimit(nextLimit);
+    setLoadingMore(true);
     try {
-      const docRef = doc(db, 'settings', 'rolePermissions');
-      const docSnap = await getDoc(docRef);
-      if (docSnap.exists()) {
-        setRolePermissions(docSnap.data());
-      }
+      const invList = await getInvoices({ limitCount: nextLimit });
+      setInvoices(invList || []);
+      setHasMoreInvoices((invList || []).length >= nextLimit);
     } catch (err) {
-      console.warn('Error fetching role permissions:', err);
+      console.error('InvoiceManagement: Failed loading older invoices:', err);
+    } finally {
+      setLoadingMore(false);
     }
   };
 
@@ -131,9 +130,9 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
   };
 
   // Filter & Search Invoices
-  const filteredInvoices = invoices.filter(inv => {
+  const filteredInvoices = useMemo(() => invoices.filter(inv => {
     if (!inv) return false;
-    const queryLower = (searchQuery || '').toLowerCase().trim();
+    const queryLower = (debouncedSearch || '').toLowerCase().trim();
     const invNumber = (inv.invoiceNumber || '').toLowerCase();
     const custName = (inv.customerName || '').toLowerCase();
     const custPhone = inv.customerPhone || '';
@@ -158,12 +157,15 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
   }).sort((a, b) => {
     const timeA = a.generatedAt || 0;
     const timeB = b.generatedAt || 0;
-    if (sortOrder === 'desc') {
-      return timeB - timeA;
-    } else {
-      return timeA - timeB;
-    }
-  });
+    return sortOrder === 'desc' ? timeB - timeA : timeA - timeB;
+  }), [invoices, debouncedSearch, subBrandFilter, paymentStatusFilter, voidFilter, sortOrder]);
+
+  const totalPages = Math.max(1, Math.ceil(filteredInvoices.length / pageSize));
+  const safePage = Math.min(currentPage, totalPages);
+  const paginatedInvoices = useMemo(() => {
+    const start = (safePage - 1) * pageSize;
+    return filteredInvoices.slice(start, start + pageSize);
+  }, [filteredInvoices, safePage]);
 
   const handleVoidInvoice = async () => {
     if (requireCheckIn && !requireCheckIn()) return;
@@ -191,16 +193,15 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
       setShowVoidModal(false);
       setVoidReason('');
       
-      // Update local state
-      setSelectedInvoice(prev => prev ? { 
-        ...prev, 
-        voided: true, 
-        voidedReason: voidReason.trim(), 
-        voidedBy: user?.name || 'Operator', 
-        voidedAt: Date.now() 
-      } : null);
-      
-      await fetchData();
+      const voidPatch = {
+        voided: true,
+        voidedReason: voidReason.trim(),
+        voidedBy: user?.name || 'Operator',
+        voidedAt: Date.now()
+      };
+      // Update local state immediately
+      setSelectedInvoice(prev => prev ? { ...prev, ...voidPatch } : null);
+      setInvoices(prev => prev.map(i => i.id === selectedInvoice.id ? { ...i, ...voidPatch } : i));
     } catch (err: any) {
       console.error('Void invoice failed:', err);
       setError('Failed to void invoice. Please try again.');
@@ -290,8 +291,11 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
       setLoading(true);
       preparePrintSignature();
 
-      // Briefly wait to ensure canvas signature renders onto print image
-      await new Promise(resolve => setTimeout(resolve, 250));
+      const [{ default: html2canvas }, { jsPDF }] = await Promise.all([
+        import('html2canvas'),
+        import('jspdf'),
+        new Promise(resolve => setTimeout(resolve, 250)),
+      ]);
 
       const canvas = await html2canvas(element, {
         scale: 2, // 2x scale for crisp print quality
@@ -510,7 +514,7 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                 </tr>
               </thead>
               <tbody className="divide-y divide-slate-50 text-sm">
-                {filteredInvoices.map((inv) => (
+                {paginatedInvoices.map((inv) => (
                   <tr 
                     key={inv.id} 
                     className={`hover:bg-slate-50/50 transition-colors ${inv.voided ? 'bg-slate-50/30' : ''}`}
@@ -588,6 +592,40 @@ export default function InvoiceManagement({ user, requireCheckIn }: InvoiceManag
                 ))}
               </tbody>
             </table>
+            <div className="flex flex-wrap items-center justify-between gap-2 px-6 py-3 border-t border-slate-100 bg-slate-50/50 text-xs text-slate-600">
+              <span>
+                Showing {(safePage - 1) * pageSize + 1}–{Math.min(safePage * pageSize, filteredInvoices.length)} of {filteredInvoices.length} invoices
+              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  disabled={safePage <= 1}
+                  onClick={() => setCurrentPage(p => Math.max(1, p - 1))}
+                  className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white disabled:opacity-40 cursor-pointer font-semibold"
+                >
+                  Prev
+                </button>
+                <span className="font-mono font-bold">Page {safePage}/{totalPages}</span>
+                <button
+                  type="button"
+                  disabled={safePage >= totalPages}
+                  onClick={() => setCurrentPage(p => Math.min(totalPages, p + 1))}
+                  className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white disabled:opacity-40 cursor-pointer font-semibold"
+                >
+                  Next
+                </button>
+                {hasMoreInvoices && (
+                  <button
+                    type="button"
+                    disabled={loadingMore}
+                    onClick={handleLoadMoreInvoices}
+                    className="px-2.5 py-1 rounded-lg bg-slate-900 text-amber-400 font-bold cursor-pointer disabled:opacity-50"
+                  >
+                    {loadingMore ? 'Loading...' : 'Load Older (+100)'}
+                  </button>
+                )}
+              </div>
+            </div>
           </div>
         )}
       </div>

@@ -1,8 +1,8 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import { Plus, Trash2, Coins, CheckCircle, CheckCircle2, AlertTriangle, X } from 'lucide-react';
 import { UserProfile, OtherReceivable } from '../../types';
 import { 
-  subscribeToOtherReceivables, 
+  getOtherReceivables, 
   addOtherReceivable, 
   updateOtherReceivable, 
   deleteOtherReceivable 
@@ -29,12 +29,14 @@ export const OtherReceivablesTab: React.FC<OtherReceivablesTabProps> = ({ user }
   const [deleteTargetId, setDeleteTargetId] = useState<string | null>(null);
   const [notification, setNotification] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
-  useEffect(() => {
-    const unsub = subscribeToOtherReceivables((list) => {
-      setReceivables(list || []);
-    });
-    return () => unsub();
+  const loadReceivables = useCallback(async () => {
+    const list = await getOtherReceivables();
+    setReceivables(list || []);
   }, []);
+
+  useEffect(() => {
+    loadReceivables();
+  }, [loadReceivables]);
 
   const totalGiven = (receivables || []).reduce((s, r) => s + (Number(r?.amount) || 0), 0);
   const totalRecovered = (receivables || []).reduce((s, r) => s + (Number(r?.recoveredAmount) || 0), 0);
@@ -70,6 +72,7 @@ export const OtherReceivablesTab: React.FC<OtherReceivablesTabProps> = ({ user }
       setAmount('');
       setNotes('');
       setShowForm(false);
+      await loadReceivables();
       setNotification({ type: 'success', message: 'পাওনা / অগ্রিম রেকর্ড যুক্ত করা হয়েছে।' });
       setTimeout(() => setNotification(null), 4000);
     } catch (err: any) {
@@ -101,6 +104,7 @@ export const OtherReceivablesTab: React.FC<OtherReceivablesTabProps> = ({ user }
       });
       setRecoveringItem(null);
       setRecoveryAmountInput('');
+      await loadReceivables();
       setNotification({ type: 'success', message: 'আদায় রেকর্ড আপডেট হয়েছে।' });
       setTimeout(() => setNotification(null), 4000);
     } catch (err: any) {
@@ -110,8 +114,10 @@ export const OtherReceivablesTab: React.FC<OtherReceivablesTabProps> = ({ user }
 
   const handleConfirmDelete = async () => {
     if (!deleteTargetId) return;
+    const removedId = deleteTargetId;
     try {
-      await deleteOtherReceivable(deleteTargetId);
+      await deleteOtherReceivable(removedId);
+      setReceivables((prev) => prev.filter((item) => item.id !== removedId));
       setDeleteTargetId(null);
       setNotification({ type: 'success', message: 'রেকর্ড মুছে ফেলা হয়েছে।' });
       setTimeout(() => setNotification(null), 4000);

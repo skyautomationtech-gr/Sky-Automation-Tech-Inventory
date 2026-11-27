@@ -1,21 +1,29 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { 
   initializeUser, 
   getUserProfile,
-  findUserProfileByEmail,
+  createUserProfile,
   deleteUserProfile,
-  getBranches,
+  findUserProfileByEmail,
   isPermanentSuperAdminEmail,
   ensurePermanentSuperAdminProfile
 } from '../firebase/db';
 import { 
+  createUserWithEmailAndPassword,
   signInWithEmailAndPassword, 
   sendPasswordResetEmail,
   signOut
 } from 'firebase/auth';
-import { auth as firebaseAuth, authPersistenceReady, isFirebaseConfigured } from '../firebase/config';
+import { deleteDoc, doc, setDoc } from 'firebase/firestore';
+import { auth as firebaseAuth, authPersistenceReady, db, isFirebaseConfigured } from '../firebase/config';
 import { sendOTPEmail } from '../lib/emailjs';
 import { UserProfile, UserRole } from '../types';
+import {
+  perfMarkLoginClicked,
+  perfMarkLoginScreenVisible,
+  perfStartTimer,
+  perfEndTimer,
+} from '../utils/perfLogger';
 import { 
   ShieldCheck, 
   Mail, 
@@ -65,14 +73,8 @@ export default function SplashAndAuth({
   sessionExpiredMessage,
   onDismissSessionExpired,
 }: SplashAndAuthProps) {
-  const [showSplash, setShowSplash] = useState(() => {
-    if (sessionExpiredMessage) return false;
-    try {
-      return !sessionStorage.getItem('sat_splash_seen');
-    } catch {
-      return true;
-    }
-  });
+  const [showSplash, setShowSplash] = useState(false);
+  const verifiedProfileRef = useRef<UserProfile | null>(null);
   const [isLogin, setIsLogin] = useState(true);
   const [isForgotPassword, setIsForgotPassword] = useState(false);
   const [showPassword, setShowPassword] = useState(false);
@@ -162,24 +164,29 @@ export default function SplashAndAuth({
   const [infoMessage, setInfoMessage] = useState('');
 
   useEffect(() => {
-    getBranches().then(b => setBranchesList(b || [])).catch(() => {});
+    perfMarkLoginScreenVisible();
   }, []);
+
+  // Load branches lazily ONLY when user switches to Registration view (never on login mount)
+  useEffect(() => {
+    if (isLogin || branchesList.length > 0) return;
+    let active = true;
+    import('../firebase/db')
+      .then((m) => m.getBranches())
+      .then((b) => {
+        if (active) setBranchesList(b || []);
+      })
+      .catch(() => {});
+    return () => {
+      active = false;
+    };
+  }, [isLogin, branchesList.length]);
 
   useEffect(() => {
     if (sessionExpiredMessage) {
       setShowSplash(false);
     }
   }, [sessionExpiredMessage]);
-
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setShowSplash(false);
-      try {
-        sessionStorage.setItem('sat_splash_seen', 'true');
-      } catch (e) {}
-    }, 2800);
-    return () => clearTimeout(timer);
-  }, []);
 
   // Cooldown timers
   useEffect(() => {
@@ -311,7 +318,6 @@ export default function SplashAndAuth({
 
     setLoading(true);
     try {
-      const { createUserWithEmailAndPassword } = await import('firebase/auth');
       const userCredential = await createUserWithEmailAndPassword(firebaseAuth, email, password);
       const userId = userCredential.user.uid;
       
@@ -387,14 +393,14 @@ export default function SplashAndAuth({
       return;
     }
 
+    perfMarkLoginClicked();
+    perfStartTimer('auth_credentials_and_otp_send');
     setLoading(true);
 
     try {
       let userId = '';
       let profile: UserProfile | null = null;
       let isPasswordValid = false;
-
-      const { findUserProfileByEmail, getUserProfile, createUserProfile, deleteUserProfile } = await import('../firebase/db');
 
       // Ensure persistence is initialized before signing in
       await authPersistenceReady;
@@ -412,9 +418,6 @@ export default function SplashAndAuth({
         userId = userCredential.user.uid;
         isPasswordValid = true;
         resetLoginFailures();
-        try {
-          await userCredential.user.getIdToken(true);
-        } catch (tokenErr) {}
         profile =
           (await getUserProfile(userId, { strictFirestore: true }).catch(() => null)) ||
           (await findUserProfileByEmail(cleanEmail));
@@ -428,6 +431,7 @@ export default function SplashAndAuth({
             profile = ensured;
           }
         }
+        verifiedProfileRef.current = profile;
       } catch (authErr: any) {
         if (authErr?.code === 'auth/too-many-requests') {
           const until = Date.now() + LOGIN_LOCKOUT_MS;
@@ -525,8 +529,6 @@ export default function SplashAndAuth({
           return;
         }
         try {
-          const { setDoc, doc } = await import('firebase/firestore');
-          const { db } = await import('../firebase/config');
           await setDoc(doc(db, 'liveLoginCodes', profile.id), {
             staffUid: profile.id,
             staffName: profile.name,
@@ -566,6 +568,7 @@ export default function SplashAndAuth({
         setError('Authentication failed. Please check your credentials and try again.');
       }
     } finally {
+      perfEndTimer('auth_credentials_and_otp_send');
       setLoading(false);
     }
   };
@@ -597,11 +600,7 @@ export default function SplashAndAuth({
       setUserEnteredOtp('');
       setOtpSent(false);
       if (currentUser) {
-        try {
-          const { deleteDoc, doc } = await import('firebase/firestore');
-          const { db } = await import('../firebase/config');
-          await deleteDoc(doc(db, 'liveLoginCodes', tempUserId || currentUser.uid));
-        } catch {}
+        void deleteDoc(doc(db, 'liveLoginCodes', tempUserId || currentUser.uid)).catch(() => {});
         try { await signOut(firebaseAuth); } catch {}
       }
       setError('Verification code expired. Please sign in again.');
@@ -615,11 +614,7 @@ export default function SplashAndAuth({
       setUserEnteredOtp('');
       setOtpSent(false);
       if (currentUser) {
-        try {
-          const { deleteDoc, doc } = await import('firebase/firestore');
-          const { db } = await import('../firebase/config');
-          await deleteDoc(doc(db, 'liveLoginCodes', tempUserId || currentUser.uid));
-        } catch {}
+        void deleteDoc(doc(db, 'liveLoginCodes', tempUserId || currentUser.uid)).catch(() => {});
         try { await signOut(firebaseAuth); } catch {}
       }
       setError('Too many incorrect verification attempts. Please sign in again.');
@@ -632,20 +627,27 @@ export default function SplashAndAuth({
       setLoginOtpExpiresAt(null);
       setLoginOtpAttempts(0);
       setLoading(true);
+      perfMarkLoginClicked();
+      perfStartTimer('auth_otp_verify_to_workspace');
       try {
         const resolvedLookupId = currentUser?.uid || tempUserId;
-        let profile = await getUserProfile(resolvedLookupId, { strictFirestore: true }).catch(() => null);
+        let profile =
+          verifiedProfileRef.current &&
+          (verifiedProfileRef.current.id === resolvedLookupId ||
+            (email && verifiedProfileRef.current.email?.toLowerCase() === email.toLowerCase().trim()))
+            ? verifiedProfileRef.current
+            : await getUserProfile(resolvedLookupId, { strictFirestore: true }).catch(() => null);
         if (!profile && currentUser?.email) {
           profile = await findUserProfileByEmail(currentUser.email);
         }
         if (!profile && email) {
           profile = await findUserProfileByEmail(email.toLowerCase().trim());
         }
-        if (currentUser && isPermanentSuperAdminEmail(currentUser.email || email)) {
+        if (currentUser && !profile && isPermanentSuperAdminEmail(currentUser.email || email)) {
           const ensured = await ensurePermanentSuperAdminProfile(
             currentUser.uid,
             currentUser.email || email,
-            currentUser.displayName || profile?.name
+            currentUser.displayName || undefined
           );
           if (ensured) {
             profile = ensured;
@@ -675,14 +677,12 @@ export default function SplashAndAuth({
         } catch (e) {}
 
         if (profile.role === 'staff' && currentUser) {
-          try {
-            const { deleteDoc, doc } = await import('firebase/firestore');
-            const { db } = await import('../firebase/config');
-            await deleteDoc(doc(db, 'liveLoginCodes', tempUserId || profile.id));
-          } catch (e) {}
+          void deleteDoc(doc(db, 'liveLoginCodes', tempUserId || profile.id)).catch(() => {});
         }
+        verifiedProfileRef.current = null;
         onDismissSessionExpired?.();
         onAuthSuccess(profile);
+        perfEndTimer('auth_otp_verify_to_workspace');
       } catch (err: any) {
         setError(err.message || 'Error initializing profile after OTP.');
       } finally {
@@ -698,11 +698,7 @@ export default function SplashAndAuth({
         setUserEnteredOtp('');
         setOtpSent(false);
         if (currentUser) {
-          try {
-            const { deleteDoc, doc } = await import('firebase/firestore');
-            const { db } = await import('../firebase/config');
-            await deleteDoc(doc(db, 'liveLoginCodes', tempUserId || currentUser.uid));
-          } catch {}
+          void deleteDoc(doc(db, 'liveLoginCodes', tempUserId || currentUser.uid)).catch(() => {});
           try { await signOut(firebaseAuth); } catch {}
         }
         setError('Too many incorrect verification attempts. Please sign in again.');
@@ -1032,11 +1028,7 @@ export default function SplashAndAuth({
                       setError('');
                       setInfoMessage('');
                       if (firebaseAuth.currentUser) {
-                        try {
-                          const { deleteDoc, doc } = await import('firebase/firestore');
-                          const { db } = await import('../firebase/config');
-                          await deleteDoc(doc(db, 'liveLoginCodes', tempUserId || firebaseAuth.currentUser.uid));
-                        } catch {}
+                        void deleteDoc(doc(db, 'liveLoginCodes', tempUserId || firebaseAuth.currentUser.uid)).catch(() => {});
                         try { await signOut(firebaseAuth); } catch {}
                       }
                     }}

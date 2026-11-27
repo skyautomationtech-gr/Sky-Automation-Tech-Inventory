@@ -1,4 +1,4 @@
-import * as XLSX from 'xlsx';
+import type { WorkBook } from 'xlsx';
 import type { Product, Brand, Category } from '../types';
 import { 
   getProducts, 
@@ -14,6 +14,10 @@ import {
   getAllAttendanceRecords 
 } from '../firebase/db';
 
+async function loadXlsx() {
+  return import('xlsx');
+}
+
 function formatDate(ts: any): string {
   if (!ts) return '';
   const date = typeof ts === 'number' ? new Date(ts) : ts instanceof Date ? ts : ts.toDate ? ts.toDate() : new Date(ts);
@@ -27,7 +31,7 @@ function formatDate(ts: any): string {
   });
 }
 
-function downloadWorkbook(workbook: XLSX.WorkBook, filename: string) {
+function downloadWorkbook(XLSX: typeof import('xlsx'), workbook: WorkBook, filename: string) {
   XLSX.writeFile(workbook, filename);
 }
 
@@ -195,7 +199,10 @@ export async function exportCategoriesToCSV(categoriesList?: Category[], product
 }
 
 export async function exportProductsToExcel(productsList?: Product[]) {
-  const products = productsList || await getProducts(true);
+  const [XLSX, products] = await Promise.all([
+    loadXlsx(),
+    productsList ? Promise.resolve(productsList) : getProducts(true)
+  ]);
   const data = products.map(p => ({
     'Product ID': p.id,
     'SKU': p.sku || '',
@@ -215,11 +222,11 @@ export async function exportProductsToExcel(productsList?: Product[]) {
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, 'Products');
   const dateStr = new Date().toISOString().split('T')[0];
-  downloadWorkbook(workbook, `products-export-${dateStr}.xlsx`);
+  downloadWorkbook(XLSX, workbook, `products-export-${dateStr}.xlsx`);
 }
 
 export async function exportOrdersToExcel() {
-  const orders = await getOrders();
+  const [XLSX, orders] = await Promise.all([loadXlsx(), getOrders()]);
   const data = orders.map(o => ({
     'Order ID': o.id,
     'Customer Name': o.customerName || '',
@@ -241,11 +248,11 @@ export async function exportOrdersToExcel() {
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, 'Orders');
   const dateStr = new Date().toISOString().split('T')[0];
-  downloadWorkbook(workbook, `orders-export-${dateStr}.xlsx`);
+  downloadWorkbook(XLSX, workbook, `orders-export-${dateStr}.xlsx`);
 }
 
 export async function exportInvoicesToExcel() {
-  const invoices = await getInvoices();
+  const [XLSX, invoices] = await Promise.all([loadXlsx(), getInvoices()]);
   const data = invoices.map(i => ({
     'Invoice ID': i.id,
     'Invoice Number': i.invoiceNumber || '',
@@ -264,11 +271,11 @@ export async function exportInvoicesToExcel() {
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, 'Invoices');
   const dateStr = new Date().toISOString().split('T')[0];
-  downloadWorkbook(workbook, `invoices-export-${dateStr}.xlsx`);
+  downloadWorkbook(XLSX, workbook, `invoices-export-${dateStr}.xlsx`);
 }
 
 export async function exportCustomersToExcel() {
-  const customers = await getCustomers();
+  const [XLSX, customers] = await Promise.all([loadXlsx(), getCustomers()]);
   const data = customers.map(c => ({
     'Customer ID': c.customerId || c.id,
     'Name': c.name || '',
@@ -284,11 +291,11 @@ export async function exportCustomersToExcel() {
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, 'Customers');
   const dateStr = new Date().toISOString().split('T')[0];
-  downloadWorkbook(workbook, `customers-export-${dateStr}.xlsx`);
+  downloadWorkbook(XLSX, workbook, `customers-export-${dateStr}.xlsx`);
 }
 
 export async function exportSuppliersToExcel() {
-  const suppliers = await getSuppliers();
+  const [XLSX, suppliers] = await Promise.all([loadXlsx(), getSuppliers()]);
   const data = suppliers.map(s => ({
     'Supplier ID': s.id,
     'Name': s.name || '',
@@ -305,11 +312,11 @@ export async function exportSuppliersToExcel() {
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, 'Suppliers');
   const dateStr = new Date().toISOString().split('T')[0];
-  downloadWorkbook(workbook, `suppliers-export-${dateStr}.xlsx`);
+  downloadWorkbook(XLSX, workbook, `suppliers-export-${dateStr}.xlsx`);
 }
 
 export async function exportStockLogsToExcel() {
-  const logs = await getStockLogs();
+  const [XLSX, logs] = await Promise.all([loadXlsx(), getStockLogs()]);
   const data = logs.map(l => ({
     'Log ID': l.id,
     'Product ID': l.productId || '',
@@ -326,11 +333,11 @@ export async function exportStockLogsToExcel() {
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, 'Stock Logs');
   const dateStr = new Date().toISOString().split('T')[0];
-  downloadWorkbook(workbook, `stock-logs-export-${dateStr}.xlsx`);
+  downloadWorkbook(XLSX, workbook, `stock-logs-export-${dateStr}.xlsx`);
 }
 
 export async function exportExpensesToExcel() {
-  const expenses = await getExpenses();
+  const [XLSX, expenses] = await Promise.all([loadXlsx(), getExpenses()]);
   const data = expenses.map(e => ({
     'Expense ID': e.id,
     'Category': e.category || '',
@@ -345,12 +352,11 @@ export async function exportExpensesToExcel() {
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, 'Expenses');
   const dateStr = new Date().toISOString().split('T')[0];
-  downloadWorkbook(workbook, `expenses-export-${dateStr}.xlsx`);
+  downloadWorkbook(XLSX, workbook, `expenses-export-${dateStr}.xlsx`);
 }
 
 export async function exportCategoriesBrandsToExcel() {
-  const categories = await getCategories();
-  const brands = await getBrands();
+  const [XLSX, categories, brands] = await Promise.all([loadXlsx(), getCategories(), getBrands()]);
   
   const catData = categories.map(c => ({
     'Category ID': c.id,
@@ -370,11 +376,11 @@ export async function exportCategoriesBrandsToExcel() {
   XLSX.utils.book_append_sheet(workbook, wsBrand, 'Brands');
   
   const dateStr = new Date().toISOString().split('T')[0];
-  downloadWorkbook(workbook, `categories-brands-export-${dateStr}.xlsx`);
+  downloadWorkbook(XLSX, workbook, `categories-brands-export-${dateStr}.xlsx`);
 }
 
 export async function exportUsersToExcel() {
-  const users = await getAllUsers();
+  const [XLSX, users] = await Promise.all([loadXlsx(), getAllUsers()]);
   const data = users.map(u => ({
     'User ID': u.id,
     'Name': u.name || '',
@@ -389,11 +395,11 @@ export async function exportUsersToExcel() {
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, 'Users & Staff');
   const dateStr = new Date().toISOString().split('T')[0];
-  downloadWorkbook(workbook, `users-export-${dateStr}.xlsx`);
+  downloadWorkbook(XLSX, workbook, `users-export-${dateStr}.xlsx`);
 }
 
 export async function exportAttendanceToExcel() {
-  const attendance = await getAllAttendanceRecords();
+  const [XLSX, attendance] = await Promise.all([loadXlsx(), getAllAttendanceRecords()]);
   const data = attendance.map(a => ({
     'Record ID': a.id,
     'User ID': a.userId || '',
@@ -409,10 +415,11 @@ export async function exportAttendanceToExcel() {
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, 'Attendance');
   const dateStr = new Date().toISOString().split('T')[0];
-  downloadWorkbook(workbook, `attendance-export-${dateStr}.xlsx`);
+  downloadWorkbook(XLSX, workbook, `attendance-export-${dateStr}.xlsx`);
 }
 
 export async function exportEverythingWorkbook() {
+  const XLSX = await loadXlsx();
   const workbook = XLSX.utils.book_new();
   
   try {
@@ -538,5 +545,5 @@ export async function exportEverythingWorkbook() {
   } catch (e) { console.error(e); }
 
   const dateStr = new Date().toISOString().split('T')[0];
-  downloadWorkbook(workbook, `complete-inventory-backup-${dateStr}.xlsx`);
+  downloadWorkbook(XLSX, workbook, `complete-inventory-backup-${dateStr}.xlsx`);
 }
