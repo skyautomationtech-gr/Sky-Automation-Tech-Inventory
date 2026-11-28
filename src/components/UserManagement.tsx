@@ -1,9 +1,9 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { motion } from 'motion/react';
 import { getApps, initializeApp } from 'firebase/app';
 import { createUserWithEmailAndPassword, getAuth } from 'firebase/auth';
 import { deleteDoc, doc } from 'firebase/firestore';
-import { db, firebaseConfig } from '../firebase/config';
+import { db, firebaseConfig, auth } from '../firebase/config';
 import { RolePermissionSet, RolePermissionsMap, SubBrand, UserProfile, UserRole } from '../types';
 import {
   formatBrandBadgeMeta,
@@ -65,8 +65,13 @@ import {
   CheckCircle2,
   X
 } from 'lucide-react';
-import { storage, auth } from '../firebase/config';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import {
+  deleteMediaObject,
+  formatBytesCompact,
+  MediaUploadResult,
+  uploadImageAsset,
+  validateImageUploadFile,
+} from '../utils/mediaUpload';
 import { sendCredentialsEmail, sendWelcomeEmail } from '../lib/emailjs';
 
 const CORE_PERMISSION_KEYS: Array<{ key: keyof RolePermissionSet; label: string }> = [
@@ -147,6 +152,16 @@ export default function UserManagement({
   const [phoneNumber, setPhoneNumber] = useState('');
   const [photoFile, setPhotoFile] = useState<File | null>(null);
   const [photoPreview, setPhotoPreview] = useState<string | null>(null);
+  const [uploadedPhotoUrl, setUploadedPhotoUrl] = useState('');
+  const [photoStoragePath, setPhotoStoragePath] = useState<string | undefined>(undefined);
+  const [photoStatus, setPhotoStatus] = useState<'idle' | 'preparing' | 'uploading' | 'done' | 'failed'>('idle');
+  const [photoProgress, setPhotoProgress] = useState(0);
+  const [photoError, setPhotoError] = useState<string | undefined>(undefined);
+  const [photoBytes, setPhotoBytes] = useState<number | undefined>(undefined);
+  const photoAbortRef = useRef<AbortController | null>(null);
+  const photoPromiseRef = useRef<Promise<MediaUploadResult | null> | null>(null);
+  const sessionPhotoPathRef = useRef<string | undefined>(undefined);
+  const photoSavedRef = useRef(false);
 
   const activeSellingBrands = React.useMemo(
     () => getSellingSubBrands(externalSubBrands?.length ? externalSubBrands : registrySubBrands, { includeInactive: false }),
@@ -297,16 +312,124 @@ export default function UserManagement({
     setTempPassword(password);
   };
 
-  const handlePhotoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      const file = e.target.files[0];
-      setPhotoFile(file);
-      const reader = new FileReader();
-      reader.onloadend = () => {
-        setPhotoPreview(reader.result as string);
-      };
-      reader.readAsDataURL(file);
+  const cleanupOperatorPhoto = (deleteStorageObj: boolean) => {
+    photoAbortRef.current?.abort();
+    photoAbortRef.current = null;
+    photoPromiseRef.current = null;
+    if (photoPreview && photoPreview.startsWith('blob:')) {
+      URL.revokeObjectURL(photoPreview);
     }
+    if (deleteStorageObj && sessionPhotoPathRef.current) {
+      void deleteMediaObject(sessionPhotoPathRef.current);
+      sessionPhotoPathRef.current = undefined;
+    }
+  };
+
+  useEffect(() => {
+    if (!showAddForm && !photoSavedRef.current) {
+      cleanupOperatorPhoto(true);
+      setPhotoFile(null);
+      setPhotoPreview(null);
+      setUploadedPhotoUrl('');
+      setPhotoStoragePath(undefined);
+      setPhotoStatus('idle');
+      setPhotoProgress(0);
+      setPhotoError(undefined);
+      setPhotoBytes(undefined);
+    }
+  }, [showAddForm]);
+
+  const startOperatorPhotoUpload = (file: File) => {
+    photoAbortRef.current?.abort();
+    const controller = new AbortController();
+    photoAbortRef.current = controller;
+    setPhotoStatus('preparing');
+    setPhotoProgress(5);
+    setPhotoError(undefined);
+
+    const p = uploadImageAsset(file, {
+      folderPath: 'operator_avatars',
+      maxDimension: 1280,
+      quality: 0.8,
+      generateThumb: false,
+      signal: controller.signal,
+      onPhase: (phase) => {
+        if (!controller.signal.aborted) {
+          setPhotoStatus(phase === 'preparing' ? 'preparing' : 'uploading');
+        }
+      },
+      onProgress: (pct) => {
+        if (!controller.signal.aborted) {
+          setPhotoStatus(pct < 18 ? 'preparing' : 'uploading');
+          setPhotoProgress(pct);
+        }
+      },
+    })
+      .then((res) => {
+        if (controller.signal.aborted) {
+          if (res.storagePath) void deleteMediaObject(res.storagePath);
+          return null;
+        }
+        if (res.storagePath) {
+          sessionPhotoPathRef.current = res.storagePath;
+        }
+        setUploadedPhotoUrl(res.url);
+        setPhotoStoragePath(res.storagePath);
+        setPhotoBytes(res.sizeBytes);
+        setPhotoStatus('done');
+        setPhotoProgress(100);
+        return res;
+      })
+      .catch((err: any) => {
+        if (controller.signal.aborted || err?.code === 'storage/canceled') return null;
+        const code = err?.code || 'upload-failed';
+        const message = err?.message || 'Avatar upload failed.';
+        console.error('[UserManagement] Avatar upload failed:', code, err);
+        setPhotoStatus('failed');
+        setPhotoProgress(0);
+        setPhotoError(`${code}: ${message}`);
+        return null;
+      })
+      .finally(() => {
+        if (photoAbortRef.current === controller) {
+          photoAbortRef.current = null;
+        }
+      });
+
+    photoPromiseRef.current = p;
+    return p;
+  };
+
+  const handlePhotoChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    const validationErr = validateImageUploadFile(file);
+    if (validationErr) {
+      setError(validationErr);
+      return;
+    }
+    cleanupOperatorPhoto(true);
+    photoSavedRef.current = false;
+    setError('');
+    setPhotoFile(file);
+    setUploadedPhotoUrl('');
+    setPhotoStoragePath(undefined);
+    setPhotoBytes(undefined);
+    setPhotoPreview(URL.createObjectURL(file));
+    void startOperatorPhotoUpload(file);
+  };
+
+  const handleClearOperatorPhoto = () => {
+    cleanupOperatorPhoto(true);
+    setPhotoFile(null);
+    setPhotoPreview(null);
+    setUploadedPhotoUrl('');
+    setPhotoStoragePath(undefined);
+    setPhotoStatus('idle');
+    setPhotoProgress(0);
+    setPhotoError(undefined);
+    setPhotoBytes(undefined);
   };
 
   const handleToggleBrandAccess = (brand: string, isEditing: boolean = false) => {
@@ -427,16 +550,20 @@ export default function UserManagement({
         }
       }
 
-      let photoUrl = '';
-      if (photoFile) {
-        try {
-          const storageRef = ref(storage, `operator_avatars/${newUid}_${Date.now()}`);
-          const uploadRes = await uploadBytes(storageRef, photoFile);
-          photoUrl = await getDownloadURL(uploadRes.ref);
-        } catch (imgErr) {
-          console.warn('Avatar upload failed:', imgErr);
-        }
+      if (photoStatus === 'failed') {
+        throw new Error('Operator photo upload failed. Please click Retry or Remove the photo.');
       }
+
+      let photoUrl = uploadedPhotoUrl;
+      if (photoFile && !photoUrl) {
+        const waited = await (photoPromiseRef.current || startOperatorPhotoUpload(photoFile));
+        if (!waited) {
+          throw new Error('Operator photo upload failed. Please Retry or Remove the photo.');
+        }
+        photoUrl = waited.url;
+      }
+      photoSavedRef.current = true;
+      sessionPhotoPathRef.current = undefined;
 
       const employeeId = await getNextEmployeeId();
 
@@ -491,6 +618,12 @@ export default function UserManagement({
       setPhoneNumber('');
       setPhotoFile(null);
       setPhotoPreview(null);
+      setUploadedPhotoUrl('');
+      setPhotoStoragePath(undefined);
+      setPhotoStatus('idle');
+      setPhotoProgress(0);
+      setPhotoError(undefined);
+      setPhotoBytes(undefined);
       setSelectedRole('staff');
       setBrandAccess(allSellingBrandIds.length > 0 ? allSellingBrandIds : ['GZ', 'RTX']);
       setPermissionOverrides({});
@@ -959,10 +1092,56 @@ export default function UserManagement({
                       </div>
                       <label className="absolute -bottom-1 -right-1 bg-slate-900 text-white p-1 rounded-lg cursor-pointer shadow-sm hover:bg-amber-500 hover:text-slate-950 transition-all">
                         <PlusCircle size={13} />
-                        <input type="file" accept="image/*" className="hidden" onChange={handlePhotoChange} />
+                        <input
+                          type="file"
+                          accept="image/jpeg,image/png,image/webp,image/gif,image/heic,image/heif"
+                          className="hidden"
+                          onChange={handlePhotoChange}
+                        />
                       </label>
+                      {photoPreview && (
+                        <button
+                          type="button"
+                          onClick={handleClearOperatorPhoto}
+                          className="absolute -top-1 -right-1 bg-rose-600 text-white p-0.5 rounded-full cursor-pointer shadow"
+                          title="Remove photo"
+                        >
+                          <X size={10} />
+                        </button>
+                      )}
                     </div>
-                    <span className="text-[10px] font-bold text-slate-400 uppercase">Photo</span>
+                    <span className="text-[10px] font-bold text-slate-400 uppercase">
+                      {photoStatus === 'preparing'
+                        ? 'Compressing...'
+                        : photoStatus === 'uploading'
+                        ? `${photoProgress}%`
+                        : photoStatus === 'done' && photoBytes
+                        ? formatBytesCompact(photoBytes)
+                        : 'Photo'}
+                    </span>
+                    {photoStatus === 'failed' && photoFile && (
+                      <div className="flex items-center gap-1 text-[10px]">
+                        <button
+                          type="button"
+                          onClick={() => void startOperatorPhotoUpload(photoFile)}
+                          className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 font-bold cursor-pointer"
+                        >
+                          Retry
+                        </button>
+                        <button
+                          type="button"
+                          onClick={handleClearOperatorPhoto}
+                          className="px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 font-bold cursor-pointer"
+                        >
+                          Remove
+                        </button>
+                      </div>
+                    )}
+                    {photoError && (
+                      <span className="text-[9px] text-rose-600 max-w-[110px] text-center truncate" title={photoError}>
+                        {photoError}
+                      </span>
+                    )}
                   </div>
 
                   {/* Fields */}

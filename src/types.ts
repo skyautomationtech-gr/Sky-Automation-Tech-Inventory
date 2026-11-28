@@ -876,6 +876,7 @@ export interface PreOrderItem {
   linkedVariantId?: string;
   productName: string;
   imageUrl?: string;
+  thumbUrl?: string;
   imageUrls?: string[];
   category?: string;
   sku?: string;
@@ -927,6 +928,7 @@ export interface PreOrder {
   productUrl?: string;
   productSpecs?: string;
   productImage?: string;
+  productThumb?: string;
   linkedProductId?: string;
   linkedVariantId?: string;
   qty: number;

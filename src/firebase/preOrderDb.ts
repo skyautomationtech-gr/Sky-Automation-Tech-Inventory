@@ -561,6 +561,7 @@ export interface CreatePreOrderInput {
   productUrl?: string;
   productSpecs?: string;
   productImage?: string;
+  productThumb?: string;
   linkedProductId?: string;
   linkedVariantId?: string;
   items?: PreOrderItem[];
@@ -634,6 +635,7 @@ export async function createPreOrder(
             linkedVariantId: it.linkedVariantId?.trim() || '',
             productName: it.productName?.trim() || '',
             imageUrl: it.imageUrl || '',
+            thumbUrl: it.thumbUrl || '',
             imageUrls: Array.isArray(it.imageUrls) ? it.imageUrls.filter(Boolean) : it.imageUrl ? [it.imageUrl] : [],
             category: it.category?.trim() || '',
             sku: it.sku?.trim() || '',
@@ -661,6 +663,7 @@ export async function createPreOrder(
             linkedVariantId: input.linkedVariantId?.trim() || '',
             productName: input.productName?.trim() || '',
             imageUrl: input.productImage || '',
+            thumbUrl: input.productThumb || '',
             imageUrls: input.productImage ? [input.productImage] : [],
             category: input.category?.trim() || '',
             sku: input.sku?.trim() || '',
@@ -942,6 +945,7 @@ export async function createPreOrder(
       productUrl: primaryItem?.productUrl || input.productUrl?.trim() || '',
       productSpecs: primaryItem?.productSpecs || input.productSpecs?.trim() || '',
       productImage: legacySummary.productImage,
+      productThumb: legacySummary.productThumb,
       linkedProductId: legacySummary.linkedProductId,
       linkedVariantId: legacySummary.linkedVariantId,
       qty: totalQty,
@@ -1552,6 +1556,7 @@ export type UpdatePreOrderInput = Partial<
     | 'productUrl'
     | 'productSpecs'
     | 'productImage'
+    | 'productThumb'
     | 'linkedProductId'
     | 'linkedVariantId'
     | 'qty'
@@ -1636,6 +1641,7 @@ export async function updatePreOrder(
           variant: it.variant?.trim() || '',
           color: it.color?.trim() || '',
           imageUrl: it.imageUrl || existingItem?.imageUrl || '',
+          thumbUrl: it.thumbUrl || existingItem?.thumbUrl || '',
           linkedProductId: it.linkedProductId?.trim() || existingItem?.linkedProductId || '',
           linkedVariantId: it.linkedVariantId?.trim() || existingItem?.linkedVariantId || '',
           qty: itemQty,
@@ -1679,6 +1685,7 @@ export async function updatePreOrder(
           variant: updates.variant !== undefined ? updates.variant : first.variant,
           color: updates.color !== undefined ? updates.color : first.color,
           imageUrl: updates.productImage !== undefined ? updates.productImage : first.imageUrl,
+          thumbUrl: updates.productThumb !== undefined ? updates.productThumb : first.thumbUrl,
           linkedProductId:
             updates.linkedProductId !== undefined ? updates.linkedProductId : first.linkedProductId,
           linkedVariantId:
@@ -1800,6 +1807,7 @@ export async function updatePreOrder(
       variant: legacySummary.variant,
       color: legacySummary.color,
       productImage: legacySummary.productImage,
+      productThumb: legacySummary.productThumb,
       linkedProductId: legacySummary.linkedProductId,
       linkedVariantId: legacySummary.linkedVariantId,
       qty: legacySummary.totalQty,

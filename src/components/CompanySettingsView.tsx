@@ -1,7 +1,14 @@
-import React, { useState, useEffect, useMemo } from 'react';
+import React, { useState, useEffect, useMemo, useRef } from 'react';
 import { doc, getDoc } from 'firebase/firestore';
 import { CompanySettings, SubBrand, UserProfile } from '../types';
 import { db } from '../firebase/config';
+import {
+  deleteMediaObject,
+  formatBytesCompact,
+  MediaUploadResult,
+  uploadImageAsset,
+  validateImageUploadFile,
+} from '../utils/mediaUpload';
 import {
   Building2,
   Tag,
@@ -38,6 +45,8 @@ import {
   X,
   ArrowRight,
   Info,
+  Loader2,
+  RotateCcw,
 } from 'lucide-react';
 import { getAccountingBaselineSettings, saveAccountingBaselineSettings } from '../firebase/db';
 import {
@@ -190,6 +199,26 @@ export default function CompanySettingsView({
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
   const [logoUrl, setLogoUrl] = useState('');
+  const [logoFile, setLogoFile] = useState<File | null>(null);
+  const [logoPreview, setLogoPreview] = useState('');
+  const [logoStatus, setLogoStatus] = useState<'idle' | 'preparing' | 'uploading' | 'done' | 'failed'>('idle');
+  const [logoProgress, setLogoProgress] = useState(0);
+  const [logoError, setLogoError] = useState<string | undefined>(undefined);
+  const [logoBytes, setLogoBytes] = useState<number | undefined>(undefined);
+  const mainLogoAbortRef = useRef<AbortController | null>(null);
+  const mainLogoPromiseRef = useRef<Promise<MediaUploadResult | null> | null>(null);
+  const mainLogoPathRef = useRef<string | undefined>(undefined);
+
+  const [brandLogoFile, setBrandLogoFile] = useState<File | null>(null);
+  const [brandLogoPreview, setBrandLogoPreview] = useState('');
+  const [brandLogoStatus, setBrandLogoStatus] = useState<'idle' | 'preparing' | 'uploading' | 'done' | 'failed'>('idle');
+  const [brandLogoProgress, setBrandLogoProgress] = useState(0);
+  const [brandLogoError, setBrandLogoError] = useState<string | undefined>(undefined);
+  const [brandLogoBytes, setBrandLogoBytes] = useState<number | undefined>(undefined);
+  const brandLogoAbortRef = useRef<AbortController | null>(null);
+  const brandLogoPromiseRef = useRef<Promise<MediaUploadResult | null> | null>(null);
+  const brandLogoPathRef = useRef<string | undefined>(undefined);
+
   const [parentCreditLine, setParentCreditLine] = useState(DEFAULT_PARENT_CREDIT_LINE);
   const [showParentCreditLine, setShowParentCreditLine] = useState(true);
 
@@ -420,27 +449,128 @@ export default function CompanySettingsView({
     }
   };
 
+  const cleanupMainLogoUpload = (deleteStorageObj: boolean) => {
+    mainLogoAbortRef.current?.abort();
+    mainLogoAbortRef.current = null;
+    mainLogoPromiseRef.current = null;
+    if (logoPreview && logoPreview.startsWith('blob:')) {
+      URL.revokeObjectURL(logoPreview);
+    }
+    if (deleteStorageObj && mainLogoPathRef.current) {
+      void deleteMediaObject(mainLogoPathRef.current);
+      mainLogoPathRef.current = undefined;
+    }
+  };
+
+  const cleanupBrandLogoUpload = (deleteStorageObj: boolean) => {
+    brandLogoAbortRef.current?.abort();
+    brandLogoAbortRef.current = null;
+    brandLogoPromiseRef.current = null;
+    if (brandLogoPreview && brandLogoPreview.startsWith('blob:')) {
+      URL.revokeObjectURL(brandLogoPreview);
+    }
+    if (deleteStorageObj && brandLogoPathRef.current) {
+      void deleteMediaObject(brandLogoPathRef.current);
+      brandLogoPathRef.current = undefined;
+    }
+  };
+
+  useEffect(() => {
+    return () => {
+      cleanupMainLogoUpload(true);
+      cleanupBrandLogoUpload(true);
+    };
+  }, []);
+
+  const startMainLogoUpload = (file: File) => {
+    mainLogoAbortRef.current?.abort();
+    const controller = new AbortController();
+    mainLogoAbortRef.current = controller;
+    setLogoStatus('preparing');
+    setLogoProgress(5);
+    setLogoError(undefined);
+
+    const p = uploadImageAsset(file, {
+      folderPath: 'logos/company',
+      maxDimension: 800,
+      quality: 0.85,
+      generateThumb: false,
+      signal: controller.signal,
+      onPhase: (phase) => {
+        if (!controller.signal.aborted) {
+          setLogoStatus(phase === 'preparing' ? 'preparing' : 'uploading');
+        }
+      },
+      onProgress: (pct) => {
+        if (!controller.signal.aborted) {
+          setLogoStatus(pct < 18 ? 'preparing' : 'uploading');
+          setLogoProgress(pct);
+        }
+      },
+    })
+      .then((res) => {
+        if (controller.signal.aborted) {
+          if (res.storagePath) void deleteMediaObject(res.storagePath);
+          return null;
+        }
+        if (res.storagePath) mainLogoPathRef.current = res.storagePath;
+        setLogoUrl(res.url);
+        setLogoBytes(res.sizeBytes);
+        setLogoStatus('done');
+        setLogoProgress(100);
+        setSuccessMsg(
+          res.fallbackUsed
+            ? 'Compact logo preview ready (Storage bucket unavailable). Click "Save Settings" to apply.'
+            : `Main logo uploaded (${formatBytesCompact(res.sizeBytes)}). Click "Save Settings" to apply.`
+        );
+        return res;
+      })
+      .catch((err: any) => {
+        if (controller.signal.aborted || err?.code === 'storage/canceled') return null;
+        const code = err?.code || 'upload-failed';
+        const message = err?.message || 'Logo upload failed.';
+        console.error('[CompanySettingsView] Main logo upload failed:', code, err);
+        setLogoStatus('failed');
+        setLogoProgress(0);
+        setLogoError(`${code}: ${message}`);
+        return null;
+      })
+      .finally(() => {
+        if (mainLogoAbortRef.current === controller) {
+          mainLogoAbortRef.current = null;
+        }
+      });
+
+    mainLogoPromiseRef.current = p;
+    return p;
+  };
+
   // Handle Logo Upload for Main Parent Company
   const handleMainLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    e.target.value = '';
     if (!file) return;
-    if (file.size > 2 * 1024 * 1024) {
-      setErrorMsg('Image file size must be less than 2MB.');
+    const err = validateImageUploadFile(file);
+    if (err) {
+      setErrorMsg(err);
       return;
     }
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        setLogoUrl(reader.result);
-        setSuccessMsg('Main logo uploaded. Click "Save Settings" to apply.');
-        setTimeout(() => setSuccessMsg(''), 3000);
-      }
-    };
-    reader.readAsDataURL(file);
+    cleanupMainLogoUpload(true);
+    setErrorMsg('');
+    setLogoFile(file);
+    setLogoPreview(URL.createObjectURL(file));
+    void startMainLogoUpload(file);
   };
 
   // Open Create Sub-Brand Modal
   const openCreateBrandModal = () => {
+    cleanupBrandLogoUpload(true);
+    setBrandLogoFile(null);
+    setBrandLogoPreview('');
+    setBrandLogoStatus('idle');
+    setBrandLogoProgress(0);
+    setBrandLogoError(undefined);
+    setBrandLogoBytes(undefined);
     setBrandModalError('');
     setBrandForm({
       ...EMPTY_SUB_BRAND_FORM,
@@ -454,6 +584,13 @@ export default function CompanySettingsView({
 
   // Open Edit Sub-Brand Modal
   const openEditBrandModal = (brand: SubBrand) => {
+    cleanupBrandLogoUpload(true);
+    setBrandLogoFile(null);
+    setBrandLogoPreview('');
+    setBrandLogoStatus('idle');
+    setBrandLogoProgress(0);
+    setBrandLogoError(undefined);
+    setBrandLogoBytes(undefined);
     setBrandModalError('');
     setBrandForm({
       mode: 'edit',
@@ -482,20 +619,78 @@ export default function CompanySettingsView({
     setBrandModalOpen(true);
   };
 
+  const startBrandLogoUpload = (file: File) => {
+    brandLogoAbortRef.current?.abort();
+    const controller = new AbortController();
+    brandLogoAbortRef.current = controller;
+    setBrandLogoStatus('preparing');
+    setBrandLogoProgress(5);
+    setBrandLogoError(undefined);
+
+    const p = uploadImageAsset(file, {
+      folderPath: 'logos/subBrands',
+      maxDimension: 800,
+      quality: 0.85,
+      generateThumb: false,
+      signal: controller.signal,
+      onPhase: (phase) => {
+        if (!controller.signal.aborted) {
+          setBrandLogoStatus(phase === 'preparing' ? 'preparing' : 'uploading');
+        }
+      },
+      onProgress: (pct) => {
+        if (!controller.signal.aborted) {
+          setBrandLogoStatus(pct < 18 ? 'preparing' : 'uploading');
+          setBrandLogoProgress(pct);
+        }
+      },
+    })
+      .then((res) => {
+        if (controller.signal.aborted) {
+          if (res.storagePath) void deleteMediaObject(res.storagePath);
+          return null;
+        }
+        if (res.storagePath) brandLogoPathRef.current = res.storagePath;
+        setBrandForm((prev) => ({ ...prev, logoUrl: res.url }));
+        setBrandLogoBytes(res.sizeBytes);
+        setBrandLogoStatus('done');
+        setBrandLogoProgress(100);
+        return res;
+      })
+      .catch((err: any) => {
+        if (controller.signal.aborted || err?.code === 'storage/canceled') return null;
+        const code = err?.code || 'upload-failed';
+        const message = err?.message || 'Brand logo upload failed.';
+        console.error('[CompanySettingsView] Brand logo upload failed:', code, err);
+        setBrandLogoStatus('failed');
+        setBrandLogoProgress(0);
+        setBrandLogoError(`${code}: ${message}`);
+        return null;
+      })
+      .finally(() => {
+        if (brandLogoAbortRef.current === controller) {
+          brandLogoAbortRef.current = null;
+        }
+      });
+
+    brandLogoPromiseRef.current = p;
+    return p;
+  };
+
   const handleModalLogoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
+    e.target.value = '';
     if (!file) return;
-    if (file.size > 1500 * 1024) {
-      setBrandModalError('Logo image must be under 1.5MB.');
+    const err = validateImageUploadFile(file);
+    if (err) {
+      setBrandModalError(err);
       return;
     }
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        setBrandForm((prev) => ({ ...prev, logoUrl: reader.result as string }));
-      }
-    };
-    reader.readAsDataURL(file);
+    cleanupBrandLogoUpload(true);
+    setBrandModalError('');
+    setBrandLogoFile(file);
+    setBrandLogoPreview(URL.createObjectURL(file));
+    void startBrandLogoUpload(file);
   };
 
   const handleSaveSubBrandModal = async (e: React.FormEvent) => {
@@ -508,9 +703,23 @@ export default function CompanySettingsView({
       setBrandModalError('Accent color must be a valid 6-digit hex code (#RRGGBB).');
       return;
     }
+    if (brandLogoStatus === 'failed') {
+      setBrandModalError('Brand logo upload failed. Click Retry or Clear the logo.');
+      return;
+    }
 
     setSavingBrand(true);
     try {
+      let resolvedBrandLogo = brandForm.logoUrl;
+      if (brandLogoFile && brandLogoStatus !== 'done') {
+        const waited = await (brandLogoPromiseRef.current || startBrandLogoUpload(brandLogoFile));
+        if (!waited) {
+          setBrandModalError('Brand logo upload failed. Click Retry or Clear the logo.');
+          return;
+        }
+        resolvedBrandLogo = waited.url;
+      }
+
       const socialLinks = {
         facebook: brandForm.facebook.trim() || undefined,
         instagram: brandForm.instagram.trim() || undefined,
@@ -524,7 +733,7 @@ export default function CompanySettingsView({
           shortCode: brandForm.shortCode,
           invoicePrefix: brandForm.invoicePrefix,
           skuPrefix: brandForm.skuPrefix || brandForm.shortCode,
-          logoUrl: brandForm.logoUrl,
+          logoUrl: resolvedBrandLogo,
           accentColor: cleanAccent,
           phone: brandForm.phone,
           whatsapp: brandForm.whatsapp,
@@ -544,7 +753,7 @@ export default function CompanySettingsView({
           name: brandForm.name,
           invoicePrefix: brandForm.invoicePrefix,
           skuPrefix: brandForm.skuPrefix || brandForm.shortCode,
-          logoUrl: brandForm.logoUrl,
+          logoUrl: resolvedBrandLogo,
           accentColor: cleanAccent,
           phone: brandForm.phone,
           whatsapp: brandForm.whatsapp,
@@ -561,6 +770,8 @@ export default function CompanySettingsView({
         setSuccessMsg(`Updated selling sub-brand "${brandForm.name.trim()}".`);
       }
 
+      brandLogoPathRef.current = undefined;
+      setBrandLogoFile(null);
       const fresh = await getSubBrands({ forceRefresh: true, companySettings });
       setSubBrandsList(fresh);
       onSubBrandsUpdated?.(fresh);
@@ -694,11 +905,27 @@ export default function CompanySettingsView({
       }
     }
 
+    if (logoStatus === 'failed') {
+      setErrorMsg('Main company logo upload failed. Click Retry or Reset Default before saving.');
+      setActiveTab('profile');
+      return;
+    }
+
     setSaving(true);
     setErrorMsg('');
     setSuccessMsg('');
 
     try {
+      let resolvedMainLogo = logoUrl;
+      if (logoFile && logoStatus !== 'done') {
+        const waited = await (mainLogoPromiseRef.current || startMainLogoUpload(logoFile));
+        if (!waited) {
+          setErrorMsg('Main company logo upload failed. Click Retry or Reset Default.');
+          return;
+        }
+        resolvedMainLogo = waited.url;
+      }
+
       const nextPrefixes: Record<string, string> = {};
       const nextSubBrandDetails: CompanySettings['subBrandDetails'] = {};
 
@@ -743,7 +970,7 @@ export default function CompanySettingsView({
         address: address.trim(),
         phone: phone.trim(),
         email: email.trim(),
-        logoUrl,
+        logoUrl: resolvedMainLogo,
         invoiceTerms: invoiceTerms.trim(),
         paymentMethodsInfo: {
           bkashNagad: bkashNagad.trim(),
@@ -779,6 +1006,8 @@ export default function CompanySettingsView({
       };
 
       await onSave(payload);
+      mainLogoPathRef.current = undefined;
+      setLogoFile(null);
       setSuccessMsg('Settings updated and published successfully across all terminals!');
       setTimeout(() => setSuccessMsg(''), 4000);
     } catch (err: any) {
@@ -1128,7 +1357,7 @@ export default function CompanySettingsView({
                   <div className="flex flex-col sm:flex-row items-center gap-4 bg-white dark:bg-slate-900 p-3.5 rounded-xl border border-slate-200 dark:border-slate-700">
                     <div className="w-20 h-20 bg-slate-950 rounded-xl p-2 flex items-center justify-center shrink-0 border border-slate-800 shadow-2xs">
                       <img
-                        src={logoUrl || '/sat_logo.jpg'}
+                        src={logoPreview || logoUrl || '/sat_logo.jpg'}
                         alt="Logo Preview"
                         className="w-full h-full object-contain"
                         onError={(e) => {
@@ -1146,7 +1375,7 @@ export default function CompanySettingsView({
                             Upload New Logo
                             <input
                               type="file"
-                              accept="image/*"
+                              accept="image/jpeg,image/png,image/webp,image/gif,image/heic,image/heif"
                               onChange={handleMainLogoUpload}
                               className="hidden"
                             />
@@ -1155,13 +1384,49 @@ export default function CompanySettingsView({
                         {logoUrl && (
                           <button
                             type="button"
-                            onClick={() => setLogoUrl('/sat_logo.jpg')}
+                            onClick={() => {
+                              cleanupMainLogoUpload(true);
+                              setLogoFile(null);
+                              setLogoPreview('');
+                              setLogoStatus('idle');
+                              setLogoProgress(0);
+                              setLogoError(undefined);
+                              setLogoUrl('/sat_logo.jpg');
+                            }}
                             className="text-xs text-slate-500 hover:text-red-500 font-semibold px-2 py-1 cursor-pointer"
                           >
                             Reset Default
                           </button>
                         )}
                       </div>
+                      {(logoStatus === 'preparing' || logoStatus === 'uploading') && (
+                        <div className="flex items-center gap-2 text-[11px] font-semibold text-amber-600 dark:text-amber-400">
+                          <Loader2 size={12} className="animate-spin" />
+                          <span>{logoStatus === 'preparing' ? 'Compressing...' : `Uploading ${logoProgress}%`}</span>
+                          <div className="w-24 h-1.5 rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden">
+                            <div className="h-full bg-[#D4AF37]" style={{ width: `${Math.max(8, logoProgress)}%` }} />
+                          </div>
+                        </div>
+                      )}
+                      {logoStatus === 'done' && logoBytes && (
+                        <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-600 dark:text-emerald-400">
+                          <CheckCircle2 size={12} /> Ready ({formatBytesCompact(logoBytes)})
+                        </span>
+                      )}
+                      {logoStatus === 'failed' && (
+                        <div className="flex items-center gap-2 text-[11px] text-rose-600">
+                          <span>{logoError}</span>
+                          {logoFile && (
+                            <button
+                              type="button"
+                              onClick={() => void startMainLogoUpload(logoFile)}
+                              className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-100 text-amber-800 font-bold cursor-pointer"
+                            >
+                              <RotateCcw size={10} /> Retry
+                            </button>
+                          )}
+                        </div>
+                      )}
                       <p className="text-[11px] text-slate-400">
                         Used in the ERP sidebar, login screen, and parent importer header.
                       </p>
@@ -2523,9 +2788,9 @@ export default function CompanySettingsView({
               {/* Logo Upload + URL */}
               <div className="p-3.5 bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-700 rounded-xl flex flex-col sm:flex-row items-center gap-3">
                 <div className="w-14 h-14 rounded-xl bg-slate-950 p-1.5 flex items-center justify-center shrink-0">
-                  {brandForm.logoUrl ? (
+                  {(brandLogoPreview || brandForm.logoUrl) ? (
                     <img
-                      src={brandForm.logoUrl}
+                      src={brandLogoPreview || brandForm.logoUrl}
                       alt="Brand Logo"
                       className="w-full h-full object-contain bg-white rounded"
                     />
@@ -2540,18 +2805,55 @@ export default function CompanySettingsView({
                     <label className="cursor-pointer bg-slate-900 text-amber-400 font-bold text-xs px-3 py-1.5 rounded-lg inline-flex items-center gap-1.5">
                       <Upload size={12} />
                       <span>Upload Logo</span>
-                      <input type="file" accept="image/*" onChange={handleModalLogoUpload} className="hidden" />
+                      <input
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp,image/gif,image/heic,image/heif"
+                        onChange={handleModalLogoUpload}
+                        className="hidden"
+                      />
                     </label>
-                    {brandForm.logoUrl && (
+                    {(brandLogoPreview || brandForm.logoUrl) && (
                       <button
                         type="button"
-                        onClick={() => setBrandForm((p) => ({ ...p, logoUrl: '' }))}
+                        onClick={() => {
+                          cleanupBrandLogoUpload(true);
+                          setBrandLogoFile(null);
+                          setBrandLogoPreview('');
+                          setBrandLogoStatus('idle');
+                          setBrandLogoProgress(0);
+                          setBrandLogoError(undefined);
+                          setBrandLogoBytes(undefined);
+                          setBrandForm((p) => ({ ...p, logoUrl: '' }));
+                        }}
                         className="text-xs text-rose-500 font-semibold cursor-pointer"
                       >
                         Clear
                       </button>
                     )}
+                    {(brandLogoStatus === 'preparing' || brandLogoStatus === 'uploading') && (
+                      <span className="inline-flex items-center gap-1 text-[11px] text-amber-600 font-semibold">
+                        <Loader2 size={11} className="animate-spin" />
+                        {brandLogoStatus === 'preparing' ? 'Compressing...' : `${brandLogoProgress}%`}
+                      </span>
+                    )}
+                    {brandLogoStatus === 'done' && brandLogoBytes && (
+                      <span className="inline-flex items-center gap-1 text-[11px] text-emerald-600 font-semibold">
+                        <CheckCircle2 size={11} /> {formatBytesCompact(brandLogoBytes)}
+                      </span>
+                    )}
+                    {brandLogoStatus === 'failed' && brandLogoFile && (
+                      <button
+                        type="button"
+                        onClick={() => void startBrandLogoUpload(brandLogoFile)}
+                        className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-100 text-amber-800 text-[11px] font-bold cursor-pointer"
+                      >
+                        <RotateCcw size={10} /> Retry
+                      </button>
+                    )}
                   </div>
+                  {brandLogoError && (
+                    <p className="text-[11px] text-rose-600">{brandLogoError}</p>
+                  )}
                   <input
                     type="text"
                     value={brandForm.logoUrl}

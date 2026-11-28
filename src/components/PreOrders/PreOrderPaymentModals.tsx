@@ -4,6 +4,7 @@ import {
   AlertTriangle,
   Banknote,
   CheckCircle2,
+  Loader2,
   Receipt,
   RotateCcw,
   ShieldAlert,
@@ -29,7 +30,12 @@ import {
   roundMoney,
   toPaisa,
 } from '../../preOrders/calculations';
-import { uploadPreOrderImage, validateImageFile } from '../../preOrders/imageUpload';
+import {
+  deleteMediaObject,
+  uploadPreOrderImage,
+  validateImageFile,
+} from '../../preOrders/imageUpload';
+import { formatBytesCompact, MediaUploadResult } from '../../utils/mediaUpload';
 import {
   actorFromUser,
   collectPreOrderPayment,
@@ -96,15 +102,42 @@ export const CollectPaymentModal: React.FC<CollectPaymentModalProps> = ({
 
   const [receiptFile, setReceiptFile] = useState<File | null>(null);
   const [receiptPreview, setReceiptPreview] = useState('');
+  const [uploadedReceiptUrl, setUploadedReceiptUrl] = useState('');
+  const [receiptStoragePath, setReceiptStoragePath] = useState<string | undefined>(undefined);
+  const [receiptStatus, setReceiptStatus] = useState<'idle' | 'preparing' | 'uploading' | 'done' | 'failed'>('idle');
+  const [receiptProgress, setReceiptProgress] = useState(0);
+  const [receiptError, setReceiptError] = useState<string | undefined>(undefined);
+  const [receiptErrorCode, setReceiptErrorCode] = useState<string | undefined>(undefined);
+  const [receiptBytes, setReceiptBytes] = useState<number | undefined>(undefined);
+  const [receiptFallback, setReceiptFallback] = useState(false);
 
   const [duplicateNeedsOverride, setDuplicateNeedsOverride] = useState(false);
   const [duplicateOverrideReason, setDuplicateOverrideReason] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [submitStatusText, setSubmitStatusText] = useState('');
   const submitInFlightRef = useRef(false);
+  const receiptAbortRef = useRef<AbortController | null>(null);
+  const receiptPromiseRef = useRef<Promise<MediaUploadResult | null> | null>(null);
+  const sessionReceiptPathRef = useRef<string | undefined>(undefined);
+  const receiptSavedRef = useRef(false);
+
+  const cleanupReceipt = (deleteStorageObj: boolean) => {
+    receiptAbortRef.current?.abort();
+    receiptAbortRef.current = null;
+    receiptPromiseRef.current = null;
+    if (receiptPreview && receiptPreview.startsWith('blob:')) {
+      URL.revokeObjectURL(receiptPreview);
+    }
+    if (deleteStorageObj && sessionReceiptPathRef.current) {
+      void deleteMediaObject(sessionReceiptPathRef.current);
+      sessionReceiptPathRef.current = undefined;
+    }
+  };
 
   useEffect(() => {
     if (isOpen && order) {
+      receiptSavedRef.current = false;
       setIdempotencyKey(makeIdempotencyKey());
       setType((order.advancePaid || 0) > 0 ? 'installment' : 'advance');
       setAmount(order.dueAmount > 0 ? String(order.dueAmount) : '');
@@ -113,11 +146,24 @@ export const CollectPaymentModal: React.FC<CollectPaymentModalProps> = ({
       setReceivedAt(getLocalDateTimeValue());
       setNote('');
       setAutoVerify(false);
+      cleanupReceipt(true);
       setReceiptFile(null);
       setReceiptPreview('');
+      setUploadedReceiptUrl('');
+      setReceiptStoragePath(undefined);
+      setReceiptStatus('idle');
+      setReceiptProgress(0);
+      setReceiptError(undefined);
+      setReceiptErrorCode(undefined);
+      setReceiptBytes(undefined);
+      setReceiptFallback(false);
       setDuplicateNeedsOverride(false);
       setDuplicateOverrideReason('');
       setErrorMsg('');
+      setSubmitStatusText('');
+    }
+    if (!isOpen && !receiptSavedRef.current) {
+      cleanupReceipt(true);
     }
   }, [isOpen, order]);
 
@@ -134,6 +180,76 @@ export const CollectPaymentModal: React.FC<CollectPaymentModalProps> = ({
   const parsedAmount = roundMoney(amount || 0);
   const exceedsDue = toPaisa(parsedAmount) > toPaisa(order.dueAmount);
 
+  const startReceiptUpload = (file: File) => {
+    receiptAbortRef.current?.abort();
+    const controller = new AbortController();
+    receiptAbortRef.current = controller;
+
+    setReceiptStatus('preparing');
+    setReceiptProgress(5);
+    setReceiptError(undefined);
+    setReceiptErrorCode(undefined);
+
+    const p = uploadPreOrderImage(file, 'receipts', {
+      signal: controller.signal,
+      generateThumb: false,
+      onPhase: (phase) => {
+        if (!controller.signal.aborted) {
+          setReceiptStatus(phase === 'preparing' ? 'preparing' : 'uploading');
+        }
+      },
+      onProgress: (pct) => {
+        if (!controller.signal.aborted) {
+          setReceiptStatus(pct < 18 ? 'preparing' : 'uploading');
+          setReceiptProgress(pct);
+        }
+      },
+    })
+      .then((res) => {
+        if (controller.signal.aborted) {
+          if (res.storagePath) void deleteMediaObject(res.storagePath);
+          return null;
+        }
+        if (res.storagePath) {
+          sessionReceiptPathRef.current = res.storagePath;
+        }
+        if (res.fallbackUsed) {
+          toast.warning(
+            'Firebase Storage bucket is unavailable — saved a compact 40 KB receipt preview instead.'
+          );
+        }
+        setUploadedReceiptUrl(res.url);
+        setReceiptStoragePath(res.storagePath);
+        setReceiptBytes(res.sizeBytes);
+        setReceiptFallback(res.fallbackUsed);
+        setReceiptStatus('done');
+        setReceiptProgress(100);
+        return res;
+      })
+      .catch((err: any) => {
+        if (controller.signal.aborted || err?.code === 'storage/canceled') {
+          return null;
+        }
+        const code = err?.code || 'upload-failed';
+        const message = err?.message || 'Receipt upload failed.';
+        console.error('[CollectPaymentModal] Receipt upload failed:', code, err);
+        setReceiptStatus('failed');
+        setReceiptProgress(0);
+        setReceiptError(message);
+        setReceiptErrorCode(code);
+        toast.error(`Receipt upload failed (${code}): ${message}`);
+        return null;
+      })
+      .finally(() => {
+        if (receiptAbortRef.current === controller) {
+          receiptAbortRef.current = null;
+        }
+      });
+
+    receiptPromiseRef.current = p;
+    return p;
+  };
+
   const handleFileSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = '';
@@ -143,12 +259,28 @@ export const CollectPaymentModal: React.FC<CollectPaymentModalProps> = ({
       toast.error(err);
       return;
     }
+    cleanupReceipt(true);
     setReceiptFile(file);
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') setReceiptPreview(reader.result);
-    };
-    reader.readAsDataURL(file);
+    setUploadedReceiptUrl('');
+    setReceiptStoragePath(undefined);
+    setReceiptBytes(undefined);
+    setReceiptFallback(false);
+    setReceiptPreview(URL.createObjectURL(file));
+    void startReceiptUpload(file);
+  };
+
+  const handleClearReceipt = () => {
+    cleanupReceipt(true);
+    setReceiptFile(null);
+    setReceiptPreview('');
+    setUploadedReceiptUrl('');
+    setReceiptStoragePath(undefined);
+    setReceiptStatus('idle');
+    setReceiptProgress(0);
+    setReceiptError(undefined);
+    setReceiptErrorCode(undefined);
+    setReceiptBytes(undefined);
+    setReceiptFallback(false);
   };
 
   const handleSubmit = async (e: React.FormEvent) => {
@@ -177,15 +309,27 @@ export const CollectPaymentModal: React.FC<CollectPaymentModalProps> = ({
       return;
     }
 
+    if (receiptStatus === 'failed') {
+      setErrorMsg('Receipt photo upload failed. Click Retry or Remove on the receipt.');
+      return;
+    }
+
     submitInFlightRef.current = true;
     setSubmitting(true);
+    setSubmitStatusText('');
     try {
-      let receiptUrl = '';
-      if (receiptFile) {
-        const uploaded = await uploadPreOrderImage(receiptFile, 'receipts');
-        receiptUrl = uploaded.url;
+      let receiptUrl = uploadedReceiptUrl;
+      if (receiptFile && !receiptUrl) {
+        setSubmitStatusText('Finishing photo upload...');
+        const waitRes = await (receiptPromiseRef.current || startReceiptUpload(receiptFile));
+        if (!waitRes) {
+          setErrorMsg('Receipt photo upload failed. Please Retry or Remove the receipt.');
+          return;
+        }
+        receiptUrl = waitRes.url;
       }
 
+      setSubmitStatusText('Saving payment...');
       const receivedTs = receivedAt ? new Date(receivedAt).getTime() : Date.now();
       const res = await collectPreOrderPayment(
         order.id,
@@ -204,6 +348,8 @@ export const CollectPaymentModal: React.FC<CollectPaymentModalProps> = ({
         actorFromUser(user)
       );
 
+      receiptSavedRef.current = true;
+      sessionReceiptPathRef.current = undefined;
       toast.success(
         res.payment.status === 'verified'
           ? `Collected & verified ${formatBDT(res.payment.amount)} on ${order.preOrderNumber}.`
@@ -233,6 +379,7 @@ export const CollectPaymentModal: React.FC<CollectPaymentModalProps> = ({
     } finally {
       submitInFlightRef.current = false;
       setSubmitting(false);
+      setSubmitStatusText('');
     }
   };
 
@@ -333,20 +480,73 @@ export const CollectPaymentModal: React.FC<CollectPaymentModalProps> = ({
           </FormField>
 
           <FormField label="Receipt Image (Optional)">
-            <div className="flex items-center gap-2.5">
+            <div className="flex flex-wrap items-center gap-2.5">
               {receiptPreview ? (
-                <div className="relative w-11 h-11 rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700 shrink-0">
-                  <img src={receiptPreview} alt="Receipt" className="w-full h-full object-cover" />
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setReceiptFile(null);
-                      setReceiptPreview('');
-                    }}
-                    className="absolute top-0.5 right-0.5 w-4 h-4 rounded bg-rose-600 text-white flex items-center justify-center cursor-pointer"
-                  >
-                    <Trash2 className="w-2.5 h-2.5" />
-                  </button>
+                <div className="flex items-center gap-2 p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900">
+                  <div className="relative w-11 h-11 rounded overflow-hidden shrink-0">
+                    <img src={receiptPreview} alt="Receipt" className="w-full h-full object-cover" />
+                    <button
+                      type="button"
+                      onClick={handleClearReceipt}
+                      className="absolute top-0.5 right-0.5 w-4 h-4 rounded bg-rose-600 text-white flex items-center justify-center cursor-pointer"
+                      title="Remove receipt"
+                    >
+                      <Trash2 className="w-2.5 h-2.5" />
+                    </button>
+                  </div>
+                  <div className="min-w-[105px] max-w-[170px] space-y-1 text-[10px]">
+                    {(receiptStatus === 'preparing' || receiptStatus === 'uploading') && (
+                      <>
+                        <div className="flex items-center gap-1 font-semibold text-amber-700 dark:text-amber-300">
+                          <Loader2 className="w-2.5 h-2.5 animate-spin" />
+                          <span>
+                            {receiptStatus === 'preparing'
+                              ? 'Compressing...'
+                              : `${receiptProgress}%`}
+                          </span>
+                        </div>
+                        <div className="w-full h-1 rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden">
+                          <div
+                            className="h-full bg-[#D4AF37] transition-all duration-150"
+                            style={{ width: `${Math.max(8, receiptProgress)}%` }}
+                          />
+                        </div>
+                      </>
+                    )}
+                    {receiptStatus === 'done' && (
+                      <span className="inline-flex items-center gap-1 font-semibold text-emerald-700 dark:text-emerald-400">
+                        <CheckCircle2 className="w-3 h-3" />
+                        {receiptFallback
+                          ? `Compact ${formatBytesCompact(receiptBytes)}`
+                          : formatBytesCompact(receiptBytes)}
+                      </span>
+                    )}
+                    {receiptStatus === 'failed' && (
+                      <div className="space-y-1">
+                        <div className="text-rose-600 font-semibold truncate">
+                          Failed ({receiptErrorCode || 'err'})
+                        </div>
+                        <div className="flex items-center gap-1">
+                          {receiptFile && (
+                            <button
+                              type="button"
+                              onClick={() => void startReceiptUpload(receiptFile)}
+                              className="px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 font-bold cursor-pointer"
+                            >
+                              Retry
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={handleClearReceipt}
+                            className="px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 font-bold cursor-pointer"
+                          >
+                            Remove
+                          </button>
+                        </div>
+                      </div>
+                    )}
+                  </div>
                 </div>
               ) : (
                 <label className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-dashed border-slate-300 dark:border-slate-700 hover:border-[#D4AF37] text-xs font-semibold cursor-pointer">
@@ -354,7 +554,7 @@ export const CollectPaymentModal: React.FC<CollectPaymentModalProps> = ({
                   Upload Receipt
                   <input
                     type="file"
-                    accept="image/jpeg,image/png,image/webp"
+                    accept="image/jpeg,image/png,image/webp,image/gif,image/heic,image/heif"
                     className="hidden"
                     onChange={handleFileSelect}
                   />
@@ -417,19 +617,30 @@ export const CollectPaymentModal: React.FC<CollectPaymentModalProps> = ({
           </div>
         )}
 
-        <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-100 dark:border-slate-800">
-          <Button type="button" variant="secondary" disabled={submitting} onClick={onClose}>
-            Cancel
-          </Button>
-          <Button
-            type="submit"
-            variant="primary"
-            isLoading={submitting}
-            disabled={submitting || exceedsDue || parsedAmount <= 0 || order.dueAmount <= 0}
-            leftIcon={<Banknote className="w-4 h-4" />}
-          >
-            Record Payment
-          </Button>
+        <div className="flex items-center justify-between gap-2.5 pt-3 border-t border-slate-100 dark:border-slate-800">
+          <div className="text-xs text-[#93741E] dark:text-[#E2C255]">
+            {submitStatusText && (
+              <span className="inline-flex items-center gap-1.5">
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                {submitStatusText}
+                {receiptProgress > 0 && receiptProgress < 100 ? ` (${receiptProgress}%)` : ''}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2.5 ml-auto">
+            <Button type="button" variant="secondary" disabled={submitting} onClick={onClose}>
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              variant="primary"
+              isLoading={submitting}
+              disabled={submitting || exceedsDue || parsedAmount <= 0 || order.dueAmount <= 0}
+              leftIcon={<Banknote className="w-4 h-4" />}
+            >
+              Record Payment
+            </Button>
+          </div>
         </div>
       </form>
     </Modal>

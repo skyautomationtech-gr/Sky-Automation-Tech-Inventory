@@ -11,14 +11,19 @@ import {
   Button, Input, Textarea, ToggleSwitch, Select, SelectOption, 
   Card, Badge, useToast, ThemeToggle, DataTable 
 } from '../design-system';
-import { 
-  updateUserProfile, getLoginHistory, revokeAllSessions, 
-  sanitizeData 
+import {
+  updateUserProfile, getLoginHistory, revokeAllSessions,
+  sanitizeData
 } from '../firebase/db';
-import { storage, auth } from '../firebase/config';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
-import { 
-  updatePassword, EmailAuthProvider, reauthenticateWithCredential 
+import { auth } from '../firebase/config';
+import {
+  deleteMediaObject,
+  formatBytesCompact,
+  uploadImageAsset,
+  validateImageUploadFile,
+} from '../utils/mediaUpload';
+import {
+  updatePassword, EmailAuthProvider, reauthenticateWithCredential
 } from 'firebase/auth';
 
 interface ProfileSettingsViewProps {
@@ -42,7 +47,21 @@ export default function ProfileSettingsView({ user, onRefreshUser }: ProfileSett
   const [gender, setGender] = useState(user.gender || '');
   const [photoUrl, setPhotoUrl] = useState(user.photoUrl || '');
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const [photoProgress, setPhotoProgress] = useState(0);
+  const [photoError, setPhotoError] = useState<string | null>(null);
+  const [pendingPhotoFile, setPendingPhotoFile] = useState<File | null>(null);
+  const photoAbortRef = useRef<AbortController | null>(null);
+  const previewBlobRef = useRef<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  useEffect(() => {
+    return () => {
+      photoAbortRef.current?.abort();
+      if (previewBlobRef.current) {
+        URL.revokeObjectURL(previewBlobRef.current);
+      }
+    };
+  }, []);
 
   // Security State
   const [currentPassword, setCurrentPassword] = useState('');
@@ -95,31 +114,76 @@ export default function ProfileSettingsView({ user, onRefreshUser }: ProfileSett
     }
   };
 
-  const handlePhotoUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
+  const runPhotoUpload = async (file: File) => {
+    photoAbortRef.current?.abort();
+    const controller = new AbortController();
+    photoAbortRef.current = controller;
 
-    if (file.size > 2 * 1024 * 1024) {
-      toastError('Image size should be less than 2MB');
-      return;
+    if (previewBlobRef.current) {
+      URL.revokeObjectURL(previewBlobRef.current);
     }
-
+    const blobUrl = URL.createObjectURL(file);
+    previewBlobRef.current = blobUrl;
+    setPhotoUrl(blobUrl);
+    setPendingPhotoFile(file);
     setUploadingPhoto(true);
+    setPhotoProgress(5);
+    setPhotoError(null);
+
     try {
-      const storageRef = ref(storage, `profilePhotos/${user.id}/${Date.now()}_${file.name}`);
-      const snapshot = await uploadBytes(storageRef, file);
-      const url = await getDownloadURL(snapshot.ref);
-      
-      await updateUserProfile(user.id, { photoUrl: url });
-      setPhotoUrl(url);
+      const uploaded = await uploadImageAsset(file, {
+        folderPath: `profilePhotos/${user.id}`,
+        maxDimension: 1280,
+        quality: 0.8,
+        generateThumb: false,
+        signal: controller.signal,
+        onProgress: (pct) => {
+          if (!controller.signal.aborted) setPhotoProgress(pct);
+        },
+      });
+      if (controller.signal.aborted) {
+        if (uploaded.storagePath) void deleteMediaObject(uploaded.storagePath);
+        return;
+      }
+
+      await updateUserProfile(user.id, { photoUrl: uploaded.url });
+      if (previewBlobRef.current === blobUrl) {
+        URL.revokeObjectURL(blobUrl);
+        previewBlobRef.current = null;
+      }
+      setPhotoUrl(uploaded.url);
+      setPendingPhotoFile(null);
+      setPhotoProgress(100);
       await onRefreshUser();
-      toastSuccess('Profile photo updated successfully!');
+      if (uploaded.fallbackUsed) {
+        toastSuccess('Profile photo saved as compact preview (Storage bucket unavailable).');
+      } else {
+        toastSuccess(`Profile photo updated (${formatBytesCompact(uploaded.sizeBytes)})!`);
+      }
     } catch (err: any) {
-      console.error('Photo upload failed:', err);
-      toastError(err.message || 'Failed to upload photo');
+      if (controller.signal.aborted || err?.code === 'storage/canceled') return;
+      const code = err?.code || 'upload-failed';
+      const msg = err?.message || 'Failed to upload photo';
+      console.error('Photo upload failed:', code, err);
+      setPhotoError(`${code}: ${msg}`);
+      toastError(`Photo upload failed (${code}): ${msg}`);
     } finally {
+      if (photoAbortRef.current === controller) {
+        photoAbortRef.current = null;
+      }
       setUploadingPhoto(false);
     }
+  };
+
+  const handlePhotoUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const err = validateImageUploadFile(file);
+    if (err) {
+      toastError(err);
+      return;
+    }
+    void runPhotoUpload(file);
   };
 
   const handleUpdateProfile = async () => {
@@ -269,13 +333,35 @@ export default function ProfileSettingsView({ user, onRefreshUser }: ProfileSett
                       ref={fileInputRef} 
                       onChange={handlePhotoUpload} 
                       className="hidden" 
-                      accept="image/*" 
+                      accept="image/jpeg,image/png,image/webp,image/gif,image/heic,image/heif" 
                       onClick={(e) => { (e.target as any).value = null; }} // Reset to allow same file re-upload
                     />
                   </div>
-                  <div>
+                  <div className="space-y-1">
                     <h4 className="text-sm font-bold text-slate-900 dark:text-white">Profile Photo</h4>
-                    <p className="text-[11px] text-slate-400 mt-1 max-w-[240px]">JPG, GIF or PNG. Max size 2MB. This will be visible to your team.</p>
+                    <p className="text-[11px] text-slate-400 max-w-[260px]">JPG, PNG, WebP, GIF, or HEIC up to 8 MB. Auto-compressed before upload.</p>
+                    {uploadingPhoto && (
+                      <div className="flex items-center gap-2 text-[11px] font-semibold text-amber-600 dark:text-amber-400">
+                        <span>{photoProgress < 18 ? 'Compressing...' : `Uploading ${photoProgress}%`}</span>
+                        <div className="w-24 h-1.5 rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden">
+                          <div className="h-full bg-[#D4AF37]" style={{ width: `${Math.max(8, photoProgress)}%` }} />
+                        </div>
+                      </div>
+                    )}
+                    {photoError && (
+                      <div className="flex items-center gap-2 text-[11px] text-rose-600 dark:text-rose-400">
+                        <span>{photoError}</span>
+                        {pendingPhotoFile && (
+                          <button
+                            type="button"
+                            onClick={() => void runPhotoUpload(pendingPhotoFile)}
+                            className="px-2 py-0.5 rounded bg-amber-100 text-amber-800 font-bold cursor-pointer"
+                          >
+                            Retry
+                          </button>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </div>
 

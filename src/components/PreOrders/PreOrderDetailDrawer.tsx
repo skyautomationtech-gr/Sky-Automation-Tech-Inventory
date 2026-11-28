@@ -20,6 +20,7 @@ import {
   History,
   ImagePlus,
   Link2,
+  Loader2,
   Lock,
   MessageCircle,
   Minus,
@@ -92,7 +93,12 @@ import {
   roundMoney,
   toPaisa,
 } from '../../preOrders/calculations';
-import { uploadPreOrderImage, validateImageFile } from '../../preOrders/imageUpload';
+import {
+  deleteMediaObject,
+  uploadPreOrderImage,
+  validateImageFile,
+} from '../../preOrders/imageUpload';
+import { formatBytesCompact, MediaUploadResult } from '../../utils/mediaUpload';
 import {
   buildPublicTrackingUrl,
   isSafeTrackingTokenFormat,
@@ -190,7 +196,17 @@ interface DraftDrawerItem {
   sellingUnitPrice: string;
   chinaUnitCost: string;
   imageUrl: string;
+  thumbUrl?: string;
   imageFile: File | null;
+  uploadedUrl?: string;
+  storagePath?: string;
+  thumbStoragePath?: string;
+  uploadStatus?: 'idle' | 'preparing' | 'uploading' | 'done' | 'failed';
+  uploadProgress?: number;
+  uploadError?: string;
+  uploadErrorCode?: string;
+  compressedBytes?: number;
+  fallbackUsed?: boolean;
   receivedQty: number;
   damagedQty: number;
 }
@@ -309,6 +325,13 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
   // Edit mode state
   const [isEditing, setIsEditing] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [saveStatusText, setSaveStatusText] = useState('');
+  const [saveWaitPercent, setSaveWaitPercent] = useState(0);
+  const editItemsRef = useRef<DraftDrawerItem[]>([]);
+  const itemUploadPromisesRef = useRef<Map<string, Promise<MediaUploadResult | null>>>(new Map());
+  const itemAbortControllersRef = useRef<Map<string, AbortController>>(new Map());
+  const drawerUploadedPathsRef = useRef<Array<{ storagePath?: string; thumbStoragePath?: string }>>([]);
+  const drawerBucketWarnedRef = useRef(false);
 
   // Editable fields
   const [editCustomerName, setEditCustomerName] = useState('');
@@ -351,7 +374,11 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
           sellingUnitPrice: String(it.sellingUnitPrice ?? 0),
           chinaUnitCost: String(costMap[it.itemId]?.chinaUnitCost ?? priv?.chinaUnitCost ?? 0),
           imageUrl: it.imageUrl || '',
+          thumbUrl: it.thumbUrl || '',
+          uploadedUrl: it.imageUrl || '',
           imageFile: null,
+          uploadStatus: it.imageUrl ? 'done' : 'idle',
+          uploadProgress: it.imageUrl ? 100 : 0,
           receivedQty: Math.max(
             0,
             Number(it.receivedQty ?? (normalized.length === 1 ? ord.stockReceivedQty : 0)) || 0
@@ -376,6 +403,35 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
     },
     []
   );
+
+  editItemsRef.current = editItems;
+
+  const cleanupDrawerUploads = useCallback((deleteStorageObjects: boolean) => {
+    itemAbortControllersRef.current.forEach((ctrl) => ctrl.abort());
+    itemAbortControllersRef.current.clear();
+    itemUploadPromisesRef.current.clear();
+    editItemsRef.current.forEach((it) => {
+      if (it.imageUrl && it.imageUrl.startsWith('blob:')) {
+        URL.revokeObjectURL(it.imageUrl);
+      }
+    });
+    if (deleteStorageObjects) {
+      drawerUploadedPathsRef.current.forEach((entry) => {
+        void deleteMediaObject(entry.storagePath, entry.thumbStoragePath);
+      });
+    }
+    drawerUploadedPathsRef.current = [];
+  }, []);
+
+  useEffect(() => {
+    if (!isOpen) {
+      cleanupDrawerUploads(true);
+    }
+  }, [isOpen, cleanupDrawerUploads]);
+
+  useEffect(() => {
+    return () => cleanupDrawerUploads(true);
+  }, [cleanupDrawerUploads]);
 
   useEffect(() => {
     if (products) setLocalProducts(products);
@@ -650,6 +706,25 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
     ]);
   };
 
+  const cleanupEditItemMedia = (itemId: string) => {
+    itemAbortControllersRef.current.get(itemId)?.abort();
+    itemAbortControllersRef.current.delete(itemId);
+    itemUploadPromisesRef.current.delete(itemId);
+    const existing = editItemsRef.current.find((it) => it.itemId === itemId);
+    if (!existing) return;
+    if (existing.imageUrl && existing.imageUrl.startsWith('blob:')) {
+      URL.revokeObjectURL(existing.imageUrl);
+    }
+    if (existing.storagePath) {
+      const sharedElsewhere = editItemsRef.current.some(
+        (it) => it.itemId !== itemId && it.storagePath === existing.storagePath
+      );
+      if (!sharedElsewhere) {
+        void deleteMediaObject(existing.storagePath, existing.thumbStoragePath);
+      }
+    }
+  };
+
   const handleRemoveEditItem = (item: DraftDrawerItem) => {
     if (financialFieldsLocked) return;
     if (editItems.length <= 1) {
@@ -660,7 +735,94 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
       toast.error(`Cannot remove "${item.productName}" because stock was already received for it.`);
       return;
     }
+    cleanupEditItemMedia(item.itemId);
     setEditItems((prev) => prev.filter((it) => it.itemId !== item.itemId));
+  };
+
+  const startEditItemBackgroundUpload = (itemId: string, file: File) => {
+    itemAbortControllersRef.current.get(itemId)?.abort();
+    const controller = new AbortController();
+    itemAbortControllersRef.current.set(itemId, controller);
+
+    updateEditItem(itemId, {
+      uploadStatus: 'preparing',
+      uploadProgress: 5,
+      uploadError: undefined,
+      uploadErrorCode: undefined,
+    });
+
+    const p = uploadPreOrderImage(file, 'products', {
+      signal: controller.signal,
+      generateThumb: true,
+      onPhase: (phase) => {
+        if (!controller.signal.aborted) {
+          updateEditItem(itemId, { uploadStatus: phase === 'preparing' ? 'preparing' : 'uploading' });
+        }
+      },
+      onProgress: (pct) => {
+        if (!controller.signal.aborted) {
+          updateEditItem(itemId, {
+            uploadStatus: pct < 18 ? 'preparing' : 'uploading',
+            uploadProgress: pct,
+          });
+        }
+      },
+    })
+      .then((res) => {
+        if (controller.signal.aborted) {
+          if (res.storagePath) void deleteMediaObject(res.storagePath, res.thumbStoragePath);
+          return null;
+        }
+        if (res.storagePath) {
+          drawerUploadedPathsRef.current.push({
+            storagePath: res.storagePath,
+            thumbStoragePath: res.thumbStoragePath,
+          });
+        }
+        if (res.fallbackUsed && !drawerBucketWarnedRef.current) {
+          drawerBucketWarnedRef.current = true;
+          toast.warning(
+            'Firebase Storage bucket is unavailable — saved a compact 40 KB preview instead.'
+          );
+        }
+        updateEditItem(itemId, {
+          uploadStatus: 'done',
+          uploadProgress: 100,
+          uploadedUrl: res.url,
+          thumbUrl: res.thumbUrl || '',
+          storagePath: res.storagePath,
+          thumbStoragePath: res.thumbStoragePath,
+          compressedBytes: res.sizeBytes,
+          fallbackUsed: res.fallbackUsed,
+          uploadError: undefined,
+          uploadErrorCode: undefined,
+        });
+        return res;
+      })
+      .catch((err: any) => {
+        if (controller.signal.aborted || err?.code === 'storage/canceled') {
+          return null;
+        }
+        const code = err?.code || 'upload-failed';
+        const message = err?.message || 'Photo upload failed.';
+        console.error('[PreOrderDetailDrawer] Item image upload failed:', code, err);
+        updateEditItem(itemId, {
+          uploadStatus: 'failed',
+          uploadProgress: 0,
+          uploadError: message,
+          uploadErrorCode: code,
+        });
+        toast.error(`Item photo failed (${code}): ${message}`);
+        return null;
+      })
+      .finally(() => {
+        if (itemAbortControllersRef.current.get(itemId) === controller) {
+          itemAbortControllersRef.current.delete(itemId);
+        }
+      });
+
+    itemUploadPromisesRef.current.set(itemId, p);
+    return p;
   };
 
   const handleEditItemImageSelect = (
@@ -675,13 +837,41 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
       toast.error(err);
       return;
     }
-    const reader = new FileReader();
-    reader.onload = () => {
-      if (typeof reader.result === 'string') {
-        updateEditItem(itemId, { imageFile: file, imageUrl: reader.result });
-      }
-    };
-    reader.readAsDataURL(file);
+    cleanupEditItemMedia(itemId);
+    const blobUrl = URL.createObjectURL(file);
+    updateEditItem(itemId, {
+      imageFile: file,
+      imageUrl: blobUrl,
+      uploadedUrl: '',
+      thumbUrl: '',
+      storagePath: undefined,
+      thumbStoragePath: undefined,
+      uploadStatus: 'preparing',
+      uploadProgress: 5,
+      uploadError: undefined,
+      uploadErrorCode: undefined,
+      compressedBytes: undefined,
+      fallbackUsed: false,
+    });
+    void startEditItemBackgroundUpload(itemId, file);
+  };
+
+  const handleClearEditItemImage = (itemId: string) => {
+    cleanupEditItemMedia(itemId);
+    updateEditItem(itemId, {
+      imageFile: null,
+      imageUrl: '',
+      uploadedUrl: '',
+      thumbUrl: '',
+      storagePath: undefined,
+      thumbStoragePath: undefined,
+      uploadStatus: 'idle',
+      uploadProgress: 0,
+      uploadError: undefined,
+      uploadErrorCode: undefined,
+      compressedBytes: undefined,
+      fallbackUsed: false,
+    });
   };
 
   const handleSaveEdits = async () => {
@@ -761,27 +951,62 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
     }
 
     setSaving(true);
+    setSaveWaitPercent(0);
+    setSaveStatusText('');
     try {
-      const resolvedUrls = await Promise.all(
-        editItems.map(async (it) => {
-          if (it.imageFile) {
-            const uploaded = await uploadPreOrderImage(it.imageFile, 'products');
-            return uploaded.url;
+      const initialFailed = editItemsRef.current.filter((it) => it.uploadStatus === 'failed');
+      if (initialFailed.length > 0) {
+        toast.error('One or more photos failed to upload. Click Retry or Remove on the failed photo.');
+        return;
+      }
+
+      const activePromises: Array<Promise<any>> = [];
+      editItemsRef.current.forEach((it) => {
+        if (it.imageFile && !it.uploadedUrl) {
+          const existingP = itemUploadPromisesRef.current.get(it.itemId);
+          activePromises.push(existingP || startEditItemBackgroundUpload(it.itemId, it.imageFile));
+        }
+      });
+
+      if (activePromises.length > 0) {
+        setSaveStatusText('Finishing photo upload...');
+        const timer = setInterval(() => {
+          const active = editItemsRef.current.filter((it) => it.imageFile && !it.uploadedUrl);
+          if (active.length > 0) {
+            const avg = active.reduce((s, it) => s + (it.uploadProgress || 0), 0) / active.length;
+            setSaveWaitPercent(Math.min(99, Math.round(avg)));
           }
-          return it.imageUrl;
-        })
-      );
+        }, 120);
+        try {
+          await Promise.all(activePromises);
+        } finally {
+          clearInterval(timer);
+        }
+      }
+
+      const latestItems = editItemsRef.current;
+      const postFailed = latestItems.filter((it) => it.uploadStatus === 'failed');
+      if (postFailed.length > 0) {
+        toast.error('Photo upload failed while saving. Click Retry or Remove on the highlighted photo.');
+        return;
+      }
+
+      setSaveWaitPercent(100);
+      setSaveStatusText('Saving changes...');
 
       const originalItemsById = new Map<string, PreOrderItem>(
         orderItems.map((o) => [o.itemId, o])
       );
-      const nextItems: PreOrderItem[] = editItems.map((it, idx) => {
+      const nextItems: PreOrderItem[] = latestItems.map((it) => {
         const orig = originalItemsById.get(it.itemId);
         const safeQty = financialFieldsLocked && orig ? orig.qty : Math.round(Number(it.qty) || 1);
         const safePrice =
           financialFieldsLocked && orig
             ? orig.sellingUnitPrice
             : roundMoney(Number(it.sellingUnitPrice || 0));
+        const finalUrl =
+          it.uploadedUrl ||
+          (it.imageUrl && !it.imageUrl.startsWith('blob:') ? it.imageUrl : '');
         return {
           ...orig,
           itemId: it.itemId,
@@ -793,7 +1018,8 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
           model: it.model.trim(),
           variant: it.variant.trim(),
           color: it.color.trim(),
-          imageUrl: resolvedUrls[idx] || '',
+          imageUrl: finalUrl,
+          thumbUrl: it.thumbUrl || orig?.thumbUrl || '',
           qty: safeQty,
           sellingUnitPrice: safePrice,
           lineTotal: roundMoney(safeQty * safePrice),
@@ -882,6 +1108,7 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
         }
       }
 
+      drawerUploadedPathsRef.current = [];
       toast.success(`${order.preOrderNumber} updated successfully.`);
       if (updateRes.trackingSyncWarning) {
         setLastTrackingSyncWarning(updateRes.trackingSyncWarning);
@@ -897,6 +1124,8 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
       toast.error(err?.message || 'Failed to save changes.');
     } finally {
       setSaving(false);
+      setSaveStatusText('');
+      setSaveWaitPercent(0);
     }
   };
 
@@ -1232,28 +1461,46 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
         }
         footer={
           isEditing ? (
-            <>
-              <Button
-                type="button"
-                variant="secondary"
-                disabled={saving}
-                onClick={() => {
-                  if (order) hydrateEditForm(order, privateCost);
-                  setIsEditing(false);
-                }}
-              >
-                Cancel
-              </Button>
-              <Button
-                type="button"
-                variant="primary"
-                isLoading={saving}
-                leftIcon={<Save className="w-4 h-4" />}
-                onClick={handleSaveEdits}
-              >
-                Save Changes
-              </Button>
-            </>
+            <div className="flex flex-wrap items-center justify-between w-full gap-3">
+              <div className="text-xs text-[#93741E] dark:text-[#E2C255] flex items-center gap-2">
+                {saveStatusText ? (
+                  <>
+                    <span>{saveStatusText}</span>
+                    {saveWaitPercent > 0 && saveWaitPercent < 100 && (
+                      <div className="w-24 h-1.5 rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden">
+                        <div
+                          className="h-full bg-[#D4AF37] transition-all duration-150"
+                          style={{ width: `${saveWaitPercent}%` }}
+                        />
+                      </div>
+                    )}
+                  </>
+                ) : null}
+              </div>
+              <div className="flex items-center gap-2 ml-auto">
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={saving}
+                  onClick={() => {
+                    cleanupDrawerUploads(true);
+                    if (order) hydrateEditForm(order, privateCost);
+                    setIsEditing(false);
+                  }}
+                >
+                  Cancel
+                </Button>
+                <Button
+                  type="button"
+                  variant="primary"
+                  isLoading={saving}
+                  leftIcon={<Save className="w-4 h-4" />}
+                  onClick={handleSaveEdits}
+                >
+                  Save Changes
+                </Button>
+              </div>
+            </div>
           ) : (
             <div className="flex flex-wrap items-center justify-between w-full gap-3">
               <div className="text-xs text-slate-500 dark:text-slate-400">
@@ -1964,26 +2211,82 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
                               )}
 
                               <FormField label="Item Photo" className="sm:col-span-2">
-                                <div className="flex items-center gap-3">
+                                <div className="flex flex-wrap items-center gap-3">
                                   {it.imageUrl ? (
-                                    <div className="relative w-14 h-14 rounded-lg overflow-hidden border border-slate-200 dark:border-slate-700">
-                                      <img
-                                        src={it.imageUrl}
-                                        alt={it.productName}
-                                        className="w-full h-full object-cover"
-                                      />
-                                      <button
-                                        type="button"
-                                        onClick={() =>
-                                          updateEditItem(it.itemId, {
-                                            imageFile: null,
-                                            imageUrl: '',
-                                          })
-                                        }
-                                        className="absolute top-0.5 right-0.5 w-5 h-5 rounded bg-rose-600 text-white flex items-center justify-center cursor-pointer"
-                                      >
-                                        <Trash2 className="w-3 h-3" />
-                                      </button>
+                                    <div className="flex items-center gap-2.5 p-1.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900">
+                                      <div className="relative w-14 h-14 rounded-lg overflow-hidden bg-slate-100 dark:bg-slate-800 shrink-0">
+                                        <img
+                                          src={it.imageUrl}
+                                          alt={it.productName}
+                                          className="w-full h-full object-cover"
+                                        />
+                                        <button
+                                          type="button"
+                                          onClick={() => handleClearEditItemImage(it.itemId)}
+                                          className="absolute top-0.5 right-0.5 w-5 h-5 rounded bg-rose-600 text-white flex items-center justify-center cursor-pointer shadow"
+                                          title="Remove photo"
+                                        >
+                                          <Trash2 className="w-3 h-3" />
+                                        </button>
+                                      </div>
+                                      <div className="min-w-[120px] max-w-[200px] space-y-1 text-[11px]">
+                                        {(it.uploadStatus === 'preparing' || it.uploadStatus === 'uploading') && (
+                                          <>
+                                            <div className="flex items-center gap-1 font-semibold text-amber-700 dark:text-amber-300">
+                                              <Loader2 className="w-3 h-3 animate-spin" />
+                                              <span>
+                                                {it.uploadStatus === 'preparing'
+                                                  ? 'Compressing...'
+                                                  : `Uploading ${it.uploadProgress || 0}%`}
+                                              </span>
+                                            </div>
+                                            <div className="w-full h-1.5 rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden">
+                                              <div
+                                                className="h-full bg-[#D4AF37] transition-all duration-150"
+                                                style={{ width: `${Math.max(8, it.uploadProgress || 0)}%` }}
+                                              />
+                                            </div>
+                                          </>
+                                        )}
+                                        {it.uploadStatus === 'done' && (
+                                          <div className="flex items-center gap-1 font-semibold text-emerald-700 dark:text-emerald-400">
+                                            <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                                            <span>
+                                              {it.fallbackUsed
+                                                ? `Compact (${formatBytesCompact(it.compressedBytes)})`
+                                                : it.compressedBytes
+                                                ? `Uploaded • ${formatBytesCompact(it.compressedBytes)}`
+                                                : 'Ready'}
+                                            </span>
+                                          </div>
+                                        )}
+                                        {it.uploadStatus === 'failed' && (
+                                          <div className="space-y-1">
+                                            <div className="font-semibold text-rose-600 dark:text-rose-400 truncate">
+                                              Failed ({it.uploadErrorCode || 'error'})
+                                            </div>
+                                            <div className="flex items-center gap-1.5">
+                                              {it.imageFile && (
+                                                <button
+                                                  type="button"
+                                                  onClick={() => void startEditItemBackgroundUpload(it.itemId, it.imageFile!)}
+                                                  className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 text-[10px] font-bold cursor-pointer"
+                                                >
+                                                  <RotateCcw className="w-2.5 h-2.5" />
+                                                  Retry
+                                                </button>
+                                              )}
+                                              <button
+                                                type="button"
+                                                onClick={() => handleClearEditItemImage(it.itemId)}
+                                                className="px-1.5 py-0.5 rounded bg-rose-100 text-rose-700 text-[10px] font-bold cursor-pointer"
+                                              >
+                                                Remove
+                                              </button>
+                                            </div>
+                                          </div>
+                                        )}
+                                      </div>
                                     </div>
                                   ) : (
                                     <label className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-dashed border-slate-300 dark:border-slate-700 text-xs font-semibold cursor-pointer">
@@ -1991,7 +2294,7 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
                                       Upload Image
                                       <input
                                         type="file"
-                                        accept="image/jpeg,image/png,image/webp"
+                                        accept="image/jpeg,image/png,image/webp,image/gif,image/heic,image/heif"
                                         className="hidden"
                                         onChange={(e) =>
                                           handleEditItemImageSelect(it.itemId, e)
@@ -2019,15 +2322,18 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
                             it.receivedQty ??
                               (orderItems.length === 1 ? order.stockReceivedQty : 0)
                           ) || 0;
+                        const displayThumb = it.thumbUrl || it.imageUrl;
                         return (
                           <div
                             key={it.itemId}
                             className="p-3 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 flex flex-col sm:flex-row gap-3 text-xs"
                           >
-                            {it.imageUrl ? (
+                            {displayThumb ? (
                               <img
-                                src={it.imageUrl}
+                                src={displayThumb}
                                 alt={it.productName}
+                                loading="lazy"
+                                decoding="async"
                                 className="w-16 h-16 rounded-lg object-cover border border-slate-200 dark:border-slate-700 shrink-0"
                               />
                             ) : (

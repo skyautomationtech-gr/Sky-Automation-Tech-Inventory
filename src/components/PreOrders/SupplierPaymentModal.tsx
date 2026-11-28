@@ -1,8 +1,9 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   AlertCircle,
   Banknote,
   CheckCircle2,
+  Loader2,
   Paperclip,
   RotateCcw,
   Trash2,
@@ -22,7 +23,13 @@ import {
   normalizePreOrderItems,
 } from '../../preOrders/constants';
 import { fromPaisa, roundMoney, toPaisa } from '../../preOrders/calculations';
-import { uploadPreOrderDocument, validatePreOrderDocumentFile } from '../../preOrders/imageUpload';
+import {
+  deleteMediaObject,
+  uploadPreOrderDocument,
+  UploadedPreOrderDocument,
+  validatePreOrderDocumentFile,
+} from '../../preOrders/imageUpload';
+import { formatBytesCompact } from '../../utils/mediaUpload';
 import {
   actorFromUser,
   addPreOrderSupplierPayment,
@@ -88,11 +95,24 @@ export const RecordSupplierPaymentModal: React.FC<RecordSupplierPaymentModalProp
   const [note, setNote] = useState('');
   const [receiptFile, setReceiptFile] = useState<File | null>(null);
   const [receiptName, setReceiptName] = useState('');
+  const [receiptPreviewUrl, setReceiptPreviewUrl] = useState('');
+  const [uploadedReceiptDoc, setUploadedReceiptDoc] = useState<UploadedPreOrderDocument | null>(null);
+  const [receiptStatus, setReceiptStatus] = useState<'idle' | 'preparing' | 'uploading' | 'done' | 'failed'>('idle');
+  const [receiptProgress, setReceiptProgress] = useState(0);
+  const [receiptError, setReceiptError] = useState<string | undefined>(undefined);
+  const [receiptErrorCode, setReceiptErrorCode] = useState<string | undefined>(undefined);
+
   const [allowUnallocated, setAllowUnallocated] = useState(false);
   const [allocMap, setAllocMap] = useState<Record<string, string>>({});
   const [sessionIdempotencyKey, setSessionIdempotencyKey] = useState('');
   const [submitting, setSubmitting] = useState(false);
+  const [submitStatusText, setSubmitStatusText] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
+
+  const receiptAbortRef = useRef<AbortController | null>(null);
+  const receiptPromiseRef = useRef<Promise<UploadedPreOrderDocument | null> | null>(null);
+  const sessionReceiptPathRef = useRef<string | undefined>(undefined);
+  const savedReceiptRef = useRef(false);
 
   const allocatableOrders = useMemo(
     () =>
@@ -102,8 +122,22 @@ export const RecordSupplierPaymentModal: React.FC<RecordSupplierPaymentModalProp
     [supplierOrders]
   );
 
+  const cleanupReceipt = (deleteStorageObj: boolean) => {
+    receiptAbortRef.current?.abort();
+    receiptAbortRef.current = null;
+    receiptPromiseRef.current = null;
+    if (receiptPreviewUrl && receiptPreviewUrl.startsWith('blob:')) {
+      URL.revokeObjectURL(receiptPreviewUrl);
+    }
+    if (deleteStorageObj && sessionReceiptPathRef.current) {
+      void deleteMediaObject(sessionReceiptPathRef.current);
+      sessionReceiptPathRef.current = undefined;
+    }
+  };
+
   useEffect(() => {
     if (isOpen && supplier) {
+      savedReceiptRef.current = false;
       setSessionIdempotencyKey(
         `SP_${supplier.id.slice(0, 8)}_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`
       );
@@ -116,9 +150,17 @@ export const RecordSupplierPaymentModal: React.FC<RecordSupplierPaymentModalProp
       setReferenceNo('');
       setDate(getTodayIsoDate());
       setNote('');
+      cleanupReceipt(true);
       setReceiptFile(null);
       setReceiptName('');
+      setReceiptPreviewUrl('');
+      setUploadedReceiptDoc(null);
+      setReceiptStatus('idle');
+      setReceiptProgress(0);
+      setReceiptError(undefined);
+      setReceiptErrorCode(undefined);
       setErrorMsg('');
+      setSubmitStatusText('');
 
       if (preSelectedOrderId) {
         setAllowUnallocated(false);
@@ -127,6 +169,9 @@ export const RecordSupplierPaymentModal: React.FC<RecordSupplierPaymentModalProp
         setAllowUnallocated(allocatableOrders.length === 0);
         setAllocMap({});
       }
+    }
+    if (!isOpen && !savedReceiptRef.current) {
+      cleanupReceipt(true);
     }
   }, [isOpen, supplier, preSelectedOrderId, suggestedAmountBdt, allocatableOrders.length]);
 
@@ -201,6 +246,76 @@ export const RecordSupplierPaymentModal: React.FC<RecordSupplierPaymentModalProp
     setErrorMsg('');
   };
 
+  if (!supplier) return null;
+
+  const startReceiptUpload = (file: File) => {
+    receiptAbortRef.current?.abort();
+    const controller = new AbortController();
+    receiptAbortRef.current = controller;
+
+    setReceiptStatus('preparing');
+    setReceiptProgress(5);
+    setReceiptError(undefined);
+    setReceiptErrorCode(undefined);
+    setUploadedReceiptDoc(null);
+
+    const uploadTarget =
+      selectedOrderIds.length === 1 ? selectedOrderIds[0] : `supplier_${supplier.id}`;
+
+    const p = uploadPreOrderDocument(uploadTarget, file, {
+      signal: controller.signal,
+      onPhase: (phase) => {
+        if (!controller.signal.aborted) {
+          setReceiptStatus(phase === 'preparing' ? 'preparing' : 'uploading');
+        }
+      },
+      onProgress: (pct) => {
+        if (!controller.signal.aborted) {
+          setReceiptStatus(pct < 18 ? 'preparing' : 'uploading');
+          setReceiptProgress(pct);
+        }
+      },
+    })
+      .then((uploaded) => {
+        if (controller.signal.aborted) {
+          if (uploaded.storagePath) void deleteMediaObject(uploaded.storagePath);
+          return null;
+        }
+        if (uploaded.storagePath) {
+          sessionReceiptPathRef.current = uploaded.storagePath;
+        }
+        if (uploaded.fallbackUsed) {
+          toast.warning('Storage bucket unavailable — saved compact 40 KB receipt preview.');
+        }
+        setUploadedReceiptDoc(uploaded);
+        setReceiptStatus('done');
+        setReceiptProgress(100);
+        return uploaded;
+      })
+      .catch((err: any) => {
+        if (controller.signal.aborted || err?.code === 'storage/canceled') {
+          return null;
+        }
+        const code = err?.code || 'upload-failed';
+        const message = err?.message || 'Receipt upload failed.';
+        console.error('[SupplierPaymentModal] Receipt upload failed:', code, err);
+        setReceiptStatus('failed');
+        setReceiptProgress(0);
+        setReceiptError(message);
+        setReceiptErrorCode(code);
+        toast.error(`Receipt upload failed (${code}): ${message}`);
+        return null;
+      })
+      .finally(() => {
+        if (receiptAbortRef.current === controller) {
+          receiptAbortRef.current = null;
+        }
+      });
+
+    receiptPromiseRef.current = p;
+    return p;
+  };
+
   const handleReceiptSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = '';
@@ -210,12 +325,29 @@ export const RecordSupplierPaymentModal: React.FC<RecordSupplierPaymentModalProp
       setErrorMsg(err);
       return;
     }
+    cleanupReceipt(true);
     setReceiptFile(file);
     setReceiptName(file.name);
+    if (file.type.startsWith('image/')) {
+      setReceiptPreviewUrl(URL.createObjectURL(file));
+    } else {
+      setReceiptPreviewUrl('');
+    }
     setErrorMsg('');
+    void startReceiptUpload(file);
   };
 
-  if (!supplier) return null;
+  const handleClearReceipt = () => {
+    cleanupReceipt(true);
+    setReceiptFile(null);
+    setReceiptName('');
+    setReceiptPreviewUrl('');
+    setUploadedReceiptDoc(null);
+    setReceiptStatus('idle');
+    setReceiptProgress(0);
+    setReceiptError(undefined);
+    setReceiptErrorCode(undefined);
+  };
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -264,16 +396,26 @@ export const RecordSupplierPaymentModal: React.FC<RecordSupplierPaymentModalProp
       }
     }
 
+    if (receiptStatus === 'failed') {
+      setErrorMsg('Receipt upload failed. Click Retry or Remove on the receipt.');
+      return;
+    }
+
     setSubmitting(true);
+    setSubmitStatusText('');
     try {
-      let receiptUrl = '';
-      if (receiptFile) {
-        const uploadTarget =
-          allocations.length === 1 ? allocations[0].preOrderId : `supplier_${supplier.id}`;
-        const uploaded = await uploadPreOrderDocument(uploadTarget, receiptFile);
-        receiptUrl = uploaded.url;
+      let receiptUrl = uploadedReceiptDoc?.url || '';
+      if (receiptFile && !receiptUrl) {
+        setSubmitStatusText('Finishing receipt upload...');
+        const waitRes = await (receiptPromiseRef.current || startReceiptUpload(receiptFile));
+        if (!waitRes) {
+          setErrorMsg('Receipt upload failed. Please Retry or Remove it.');
+          return;
+        }
+        receiptUrl = waitRes.url;
       }
 
+      setSubmitStatusText('Saving supplier payment...');
       await addPreOrderSupplierPayment(
         {
           supplierId: supplier.id,
@@ -293,6 +435,8 @@ export const RecordSupplierPaymentModal: React.FC<RecordSupplierPaymentModalProp
         actorFromUser(user)
       );
 
+      savedReceiptRef.current = true;
+      sessionReceiptPathRef.current = undefined;
       toast.success(
         `Recorded supplier payment of ${formatBDT(bdtVal)} to ${supplier.name}.`
       );
@@ -304,6 +448,7 @@ export const RecordSupplierPaymentModal: React.FC<RecordSupplierPaymentModalProp
       toast.error(msg);
     } finally {
       setSubmitting(false);
+      setSubmitStatusText('');
     }
   };
 
@@ -524,29 +669,72 @@ export const RecordSupplierPaymentModal: React.FC<RecordSupplierPaymentModalProp
 
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
           <FormField label="Receipt / Slip Upload (Optional, <=5MB)">
-            <div className="flex items-center gap-2">
-              <label className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-dashed border-slate-300 dark:border-slate-700 text-xs font-medium cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/60 flex-1 truncate">
-                <Paperclip className="w-3.5 h-3.5 text-[#D4AF37] shrink-0" />
-                <span className="truncate">{receiptName || 'Attach JPG/PNG/PDF'}</span>
-                <input
-                  type="file"
-                  accept="image/jpeg,image/png,image/webp,application/pdf"
-                  className="hidden"
-                  onChange={handleReceiptSelect}
-                />
-              </label>
+            <div className="space-y-2">
+              <div className="flex items-center gap-2">
+                {receiptPreviewUrl && (
+                  <img
+                    src={receiptPreviewUrl}
+                    alt="Receipt preview"
+                    className="w-10 h-10 rounded-lg object-cover border border-slate-200 dark:border-slate-700 shrink-0"
+                  />
+                )}
+                <label className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg border border-dashed border-slate-300 dark:border-slate-700 text-xs font-medium cursor-pointer hover:bg-slate-50 dark:hover:bg-slate-800/60 flex-1 truncate">
+                  <Paperclip className="w-3.5 h-3.5 text-[#D4AF37] shrink-0" />
+                  <span className="truncate">{receiptName || 'Attach JPG/PNG/HEIC/PDF'}</span>
+                  <input
+                    type="file"
+                    accept="image/jpeg,image/png,image/webp,image/gif,image/heic,image/heif,application/pdf"
+                    className="hidden"
+                    onChange={handleReceiptSelect}
+                  />
+                </label>
+                {receiptFile && (
+                  <button
+                    type="button"
+                    onClick={handleClearReceipt}
+                    className="p-2 rounded-lg text-rose-600 hover:bg-rose-50 cursor-pointer"
+                    title="Remove receipt"
+                  >
+                    <Trash2 className="w-3.5 h-3.5" />
+                  </button>
+                )}
+              </div>
               {receiptFile && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    setReceiptFile(null);
-                    setReceiptName('');
-                  }}
-                  className="p-2 rounded-lg text-rose-600 hover:bg-rose-50 cursor-pointer"
-                  title="Remove receipt"
-                >
-                  <Trash2 className="w-3.5 h-3.5" />
-                </button>
+                <div className="text-[11px]">
+                  {(receiptStatus === 'preparing' || receiptStatus === 'uploading') && (
+                    <div className="flex items-center gap-2 text-amber-700 dark:text-amber-300">
+                      <Loader2 className="w-3 h-3 animate-spin" />
+                      <span>
+                        {receiptStatus === 'preparing'
+                          ? 'Compressing...'
+                          : `Uploading ${receiptProgress}%`}
+                      </span>
+                    </div>
+                  )}
+                  {receiptStatus === 'done' && uploadedReceiptDoc && (
+                    <span className="inline-flex items-center gap-1 text-emerald-700 dark:text-emerald-400 font-semibold">
+                      <CheckCircle2 className="w-3 h-3" />
+                      {uploadedReceiptDoc.fallbackUsed
+                        ? `Compact preview (${formatBytesCompact(uploadedReceiptDoc.fileSize)})`
+                        : `Uploaded • ${formatBytesCompact(uploadedReceiptDoc.fileSize)}`}
+                    </span>
+                  )}
+                  {receiptStatus === 'failed' && (
+                    <div className="flex items-center gap-2 text-rose-600 dark:text-rose-400">
+                      <span className="truncate">
+                        Failed ({receiptErrorCode || 'err'}): {receiptError}
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => void startReceiptUpload(receiptFile)}
+                        className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-amber-100 text-amber-800 font-bold shrink-0 cursor-pointer"
+                      >
+                        <RotateCcw className="w-2.5 h-2.5" />
+                        Retry
+                      </button>
+                    </div>
+                  )}
+                </div>
               )}
             </div>
           </FormField>
@@ -567,18 +755,29 @@ export const RecordSupplierPaymentModal: React.FC<RecordSupplierPaymentModalProp
           </div>
         )}
 
-        <div className="flex items-center justify-end gap-2.5 pt-3 border-t border-slate-100 dark:border-slate-800">
-          <Button type="button" variant="secondary" disabled={submitting} onClick={onClose}>
-            Cancel
-          </Button>
-          <Button
-            type="submit"
-            variant="primary"
-            isLoading={submitting}
-            leftIcon={<Banknote className="w-4 h-4" />}
-          >
-            Save Supplier Payment
-          </Button>
+        <div className="flex items-center justify-between gap-2.5 pt-3 border-t border-slate-100 dark:border-slate-800">
+          <div className="text-xs text-[#93741E] dark:text-[#E2C255]">
+            {submitStatusText && (
+              <span className="inline-flex items-center gap-1.5">
+                <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                {submitStatusText}
+                {receiptProgress > 0 && receiptProgress < 100 ? ` (${receiptProgress}%)` : ''}
+              </span>
+            )}
+          </div>
+          <div className="flex items-center gap-2.5">
+            <Button type="button" variant="secondary" disabled={submitting} onClick={onClose}>
+              Cancel
+            </Button>
+            <Button
+              type="submit"
+              variant="primary"
+              isLoading={submitting}
+              leftIcon={<Banknote className="w-4 h-4" />}
+            >
+              Save Supplier Payment
+            </Button>
+          </div>
         </div>
       </form>
     </Modal>

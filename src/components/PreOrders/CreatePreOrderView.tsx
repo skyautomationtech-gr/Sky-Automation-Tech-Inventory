@@ -12,12 +12,14 @@ import {
   GitMerge,
   ImagePlus,
   Link2,
+  Loader2,
   Lock,
   Minus,
   Package,
   Phone,
   Plus,
   Receipt,
+  RotateCcw,
   Sparkles,
   Trash2,
   UserCheck,
@@ -58,7 +60,12 @@ import {
   roundMoney,
   toPaisa,
 } from '../../preOrders/calculations';
-import { uploadPreOrderImage, validateImageFile } from '../../preOrders/imageUpload';
+import {
+  deleteMediaObject,
+  uploadPreOrderImage,
+  validateImageFile,
+} from '../../preOrders/imageUpload';
+import { formatBytesCompact, MediaUploadResult } from '../../utils/mediaUpload';
 import { addSupplier, getSuppliers } from '../../firebase/db';
 import {
   CreatePreOrderResult,
@@ -111,6 +118,15 @@ interface DraftPreOrderLine {
   imageFile: File | null;
   imagePreview: string;
   uploadedImageUrl: string;
+  uploadedThumbUrl: string;
+  storagePath?: string;
+  thumbStoragePath?: string;
+  uploadStatus: 'idle' | 'preparing' | 'uploading' | 'done' | 'failed';
+  uploadProgress: number;
+  uploadError?: string;
+  uploadErrorCode?: string;
+  compressedBytes?: number;
+  fallbackUsed?: boolean;
 }
 
 function getLocalDateTimeInputValue(date = new Date()): string {
@@ -145,6 +161,9 @@ function createEmptyLine(itemId: string): DraftPreOrderLine {
     imageFile: null,
     imagePreview: '',
     uploadedImageUrl: '',
+    uploadedThumbUrl: '',
+    uploadStatus: 'idle',
+    uploadProgress: 0,
   };
 }
 
@@ -252,6 +271,24 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
   const [receiptFile, setReceiptFile] = useState<File | null>(null);
   const [receiptPreview, setReceiptPreview] = useState('');
   const [uploadedReceiptUrl, setUploadedReceiptUrl] = useState('');
+  const [receiptStoragePath, setReceiptStoragePath] = useState<string | undefined>(undefined);
+  const [receiptUploadStatus, setReceiptUploadStatus] = useState<'idle' | 'preparing' | 'uploading' | 'done' | 'failed'>('idle');
+  const [receiptUploadProgress, setReceiptUploadProgress] = useState(0);
+  const [receiptUploadError, setReceiptUploadError] = useState<string | undefined>(undefined);
+  const [receiptUploadErrorCode, setReceiptUploadErrorCode] = useState<string | undefined>(undefined);
+  const [receiptCompressedBytes, setReceiptCompressedBytes] = useState<number | undefined>(undefined);
+  const [receiptFallbackUsed, setReceiptFallbackUsed] = useState(false);
+
+  const lineUploadPromisesRef = useRef<Map<string, Promise<MediaUploadResult | null>>>(new Map());
+  const lineAbortControllersRef = useRef<Map<string, AbortController>>(new Map());
+  const receiptUploadPromiseRef = useRef<Promise<MediaUploadResult | null> | null>(null);
+  const receiptAbortRef = useRef<AbortController | null>(null);
+  const linesRef = useRef<DraftPreOrderLine[]>(lines);
+  linesRef.current = lines;
+  const sessionUploadedPathsRef = useRef<Array<{ storagePath?: string; thumbStoragePath?: string }>>([]);
+  const bucketWarningShownRef = useRef(false);
+  const savedSuccessRef = useRef(false);
+  const [submitWaitPercent, setSubmitWaitPercent] = useState(0);
 
   // Section 5 — Supplier & Dates
   const [suppliers, setSuppliers] = useState<Supplier[]>([]);
@@ -373,6 +410,25 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
     window.addEventListener('beforeunload', handleBeforeUnload);
     return () => window.removeEventListener('beforeunload', handleBeforeUnload);
   }, [isDirty, submitting]);
+
+  // Cleanup any in-flight uploads & orphaned newly uploaded Storage objects if form is abandoned
+  useEffect(() => {
+    return () => {
+      lineAbortControllersRef.current.forEach((ctrl) => ctrl.abort());
+      lineAbortControllersRef.current.clear();
+      receiptAbortRef.current?.abort();
+      if (!savedSuccessRef.current) {
+        sessionUploadedPathsRef.current.forEach((entry) => {
+          void deleteMediaObject(entry.storagePath, entry.thumbStoragePath);
+        });
+      }
+      linesRef.current.forEach((l) => {
+        if (l.imagePreview && l.imagePreview.startsWith('blob:')) {
+          URL.revokeObjectURL(l.imagePreview);
+        }
+      });
+    };
+  }, []);
 
   // Automatic Customer Phone Lookup
   useEffect(() => {
@@ -587,12 +643,14 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
     if (target && isLineTouched(target)) {
       setPendingRemoveLineId(itemId);
     } else {
+      cleanupLineMedia(itemId);
       setLines((prev) => prev.filter((l) => l.itemId !== itemId));
     }
   };
 
   const confirmRemoveLine = () => {
     if (!pendingRemoveLineId) return;
+    cleanupLineMedia(pendingRemoveLineId);
     setLines((prev) => (prev.length > 1 ? prev.filter((l) => l.itemId !== pendingRemoveLineId) : prev));
     setPendingRemoveLineId(null);
   };
@@ -671,9 +729,17 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
       patch.chinaUnitCost = String(found.purchasePrice);
     }
     if (found.imageUrl) {
+      cleanupLineMedia(itemId);
       patch.imageFile = null;
-      patch.imagePreview = found.imageUrl;
+      patch.imagePreview = found.imageThumbs?.[0] || found.imageUrl;
       patch.uploadedImageUrl = found.imageUrl;
+      patch.uploadedThumbUrl = found.imageThumbs?.[0] || '';
+      patch.uploadStatus = 'done';
+      patch.uploadProgress = 100;
+      patch.uploadError = undefined;
+      patch.uploadErrorCode = undefined;
+      patch.storagePath = undefined;
+      patch.thumbStoragePath = undefined;
     }
     updateLine(itemId, patch);
   };
@@ -707,6 +773,110 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
     updateLine(itemId, { sku: `PO-${subBrand}-${base}-${index + 1}${suffix.slice(-2)}` });
   };
 
+  const cleanupLineMedia = (itemId: string) => {
+    lineAbortControllersRef.current.get(itemId)?.abort();
+    lineAbortControllersRef.current.delete(itemId);
+    lineUploadPromisesRef.current.delete(itemId);
+    const existing = linesRef.current.find((l) => l.itemId === itemId);
+    if (!existing) return;
+    if (existing.imagePreview && existing.imagePreview.startsWith('blob:')) {
+      URL.revokeObjectURL(existing.imagePreview);
+    }
+    // Only delete Storage object if no sibling cloned line shares the same storagePath
+    if (existing.storagePath) {
+      const stillUsedElsewhere = linesRef.current.some(
+        (l) => l.itemId !== itemId && l.storagePath === existing.storagePath
+      );
+      if (!stillUsedElsewhere) {
+        void deleteMediaObject(existing.storagePath, existing.thumbStoragePath);
+      }
+    }
+  };
+
+  const startLineBackgroundUpload = (itemId: string, file: File) => {
+    lineAbortControllersRef.current.get(itemId)?.abort();
+    const controller = new AbortController();
+    lineAbortControllersRef.current.set(itemId, controller);
+
+    updateLine(itemId, {
+      uploadStatus: 'preparing',
+      uploadProgress: 5,
+      uploadError: undefined,
+      uploadErrorCode: undefined,
+    });
+
+    const uploadPromise = uploadPreOrderImage(file, 'products', {
+      signal: controller.signal,
+      generateThumb: true,
+      onPhase: (phase) => {
+        if (controller.signal.aborted) return;
+        updateLine(itemId, { uploadStatus: phase === 'preparing' ? 'preparing' : 'uploading' });
+      },
+      onProgress: (pct) => {
+        if (controller.signal.aborted) return;
+        updateLine(itemId, {
+          uploadStatus: pct < 18 ? 'preparing' : 'uploading',
+          uploadProgress: pct,
+        });
+      },
+    })
+      .then((res) => {
+        if (controller.signal.aborted) {
+          if (res.storagePath) void deleteMediaObject(res.storagePath, res.thumbStoragePath);
+          return null;
+        }
+        if (res.storagePath) {
+          sessionUploadedPathsRef.current.push({
+            storagePath: res.storagePath,
+            thumbStoragePath: res.thumbStoragePath,
+          });
+        }
+        if (res.fallbackUsed && !bucketWarningShownRef.current) {
+          bucketWarningShownRef.current = true;
+          toast.warning(
+            'Firebase Storage bucket is unavailable — saved a compact 40 KB preview instead.'
+          );
+        }
+        updateLine(itemId, {
+          uploadStatus: 'done',
+          uploadProgress: 100,
+          uploadedImageUrl: res.url,
+          uploadedThumbUrl: res.thumbUrl || '',
+          storagePath: res.storagePath,
+          thumbStoragePath: res.thumbStoragePath,
+          compressedBytes: res.sizeBytes,
+          fallbackUsed: res.fallbackUsed,
+          uploadError: undefined,
+          uploadErrorCode: undefined,
+        });
+        return res;
+      })
+      .catch((err: any) => {
+        if (controller.signal.aborted || err?.code === 'storage/canceled') {
+          return null;
+        }
+        const code = err?.code || 'upload-failed';
+        const message = err?.message || 'Photo upload failed.';
+        console.error('[CreatePreOrderView] Line image upload failed:', code, err);
+        updateLine(itemId, {
+          uploadStatus: 'failed',
+          uploadProgress: 0,
+          uploadError: message,
+          uploadErrorCode: code,
+        });
+        toast.error(`Item photo failed (${code}): ${message}`);
+        return null;
+      })
+      .finally(() => {
+        if (lineAbortControllersRef.current.get(itemId) === controller) {
+          lineAbortControllersRef.current.delete(itemId);
+        }
+      });
+
+    lineUploadPromisesRef.current.set(itemId, uploadPromise);
+    return uploadPromise;
+  };
+
   const handleLineImageSelect = (itemId: string, e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
     e.target.value = '';
@@ -716,12 +886,124 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
       toast.error(err);
       return;
     }
-    const existing = lines.find((l) => l.itemId === itemId)?.imagePreview;
-    if (existing && existing.startsWith('blob:')) {
-      URL.revokeObjectURL(existing);
-    }
+    cleanupLineMedia(itemId);
     const blobUrl = URL.createObjectURL(file);
-    updateLine(itemId, { imageFile: file, uploadedImageUrl: '', imagePreview: blobUrl });
+    updateLine(itemId, {
+      imageFile: file,
+      uploadedImageUrl: '',
+      uploadedThumbUrl: '',
+      storagePath: undefined,
+      thumbStoragePath: undefined,
+      imagePreview: blobUrl,
+      uploadStatus: 'preparing',
+      uploadProgress: 5,
+      uploadError: undefined,
+      uploadErrorCode: undefined,
+      compressedBytes: undefined,
+      fallbackUsed: false,
+    });
+    void startLineBackgroundUpload(itemId, file);
+  };
+
+  const handleClearLineImage = (itemId: string) => {
+    cleanupLineMedia(itemId);
+    updateLine(itemId, {
+      imageFile: null,
+      imagePreview: '',
+      uploadedImageUrl: '',
+      uploadedThumbUrl: '',
+      storagePath: undefined,
+      thumbStoragePath: undefined,
+      uploadStatus: 'idle',
+      uploadProgress: 0,
+      uploadError: undefined,
+      uploadErrorCode: undefined,
+      compressedBytes: undefined,
+      fallbackUsed: false,
+    });
+  };
+
+  const cleanupReceiptMedia = () => {
+    receiptAbortRef.current?.abort();
+    receiptAbortRef.current = null;
+    receiptUploadPromiseRef.current = null;
+    if (receiptPreview && receiptPreview.startsWith('blob:')) {
+      URL.revokeObjectURL(receiptPreview);
+    }
+    if (receiptStoragePath) {
+      void deleteMediaObject(receiptStoragePath);
+    }
+  };
+
+  const startReceiptBackgroundUpload = (file: File) => {
+    receiptAbortRef.current?.abort();
+    const controller = new AbortController();
+    receiptAbortRef.current = controller;
+
+    setReceiptUploadStatus('preparing');
+    setReceiptUploadProgress(5);
+    setReceiptUploadError(undefined);
+    setReceiptUploadErrorCode(undefined);
+
+    const p = uploadPreOrderImage(file, 'receipts', {
+      signal: controller.signal,
+      generateThumb: false,
+      onPhase: (phase) => {
+        if (!controller.signal.aborted) {
+          setReceiptUploadStatus(phase === 'preparing' ? 'preparing' : 'uploading');
+        }
+      },
+      onProgress: (pct) => {
+        if (!controller.signal.aborted) {
+          setReceiptUploadStatus(pct < 18 ? 'preparing' : 'uploading');
+          setReceiptUploadProgress(pct);
+        }
+      },
+    })
+      .then((res) => {
+        if (controller.signal.aborted) {
+          if (res.storagePath) void deleteMediaObject(res.storagePath);
+          return null;
+        }
+        if (res.storagePath) {
+          sessionUploadedPathsRef.current.push({ storagePath: res.storagePath });
+        }
+        if (res.fallbackUsed && !bucketWarningShownRef.current) {
+          bucketWarningShownRef.current = true;
+          toast.warning(
+            'Firebase Storage bucket is unavailable — saved a compact 40 KB receipt preview instead.'
+          );
+        }
+        setUploadedReceiptUrl(res.url);
+        setReceiptStoragePath(res.storagePath);
+        setReceiptCompressedBytes(res.sizeBytes);
+        setReceiptFallbackUsed(res.fallbackUsed);
+        setReceiptUploadStatus('done');
+        setReceiptUploadProgress(100);
+        return res;
+      })
+      .catch((err: any) => {
+        if (controller.signal.aborted || err?.code === 'storage/canceled') {
+          return null;
+        }
+        const code = err?.code || 'upload-failed';
+        const message = err?.message || 'Receipt upload failed.';
+        console.error('[CreatePreOrderView] Receipt upload failed:', code, err);
+        setReceiptUploadStatus('failed');
+        setReceiptUploadProgress(0);
+        setReceiptUploadError(message);
+        setReceiptUploadErrorCode(code);
+        toast.error(`Receipt upload failed (${code}): ${message}`);
+        return null;
+      })
+      .finally(() => {
+        if (receiptAbortRef.current === controller) {
+          receiptAbortRef.current = null;
+        }
+      });
+
+    receiptUploadPromiseRef.current = p;
+    return p;
   };
 
   const handleReceiptSelect = (e: React.ChangeEvent<HTMLInputElement>) => {
@@ -733,12 +1015,28 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
       toast.error(err);
       return;
     }
-    if (receiptPreview && receiptPreview.startsWith('blob:')) {
-      URL.revokeObjectURL(receiptPreview);
-    }
+    cleanupReceiptMedia();
     setReceiptFile(file);
     setUploadedReceiptUrl('');
+    setReceiptStoragePath(undefined);
+    setReceiptCompressedBytes(undefined);
+    setReceiptFallbackUsed(false);
     setReceiptPreview(URL.createObjectURL(file));
+    void startReceiptBackgroundUpload(file);
+  };
+
+  const handleClearReceipt = () => {
+    cleanupReceiptMedia();
+    setReceiptFile(null);
+    setReceiptPreview('');
+    setUploadedReceiptUrl('');
+    setReceiptStoragePath(undefined);
+    setReceiptUploadStatus('idle');
+    setReceiptUploadProgress(0);
+    setReceiptUploadError(undefined);
+    setReceiptUploadErrorCode(undefined);
+    setReceiptCompressedBytes(undefined);
+    setReceiptFallbackUsed(false);
   };
 
   const handleCreateQuickSupplier = async (e: React.FormEvent) => {
@@ -871,59 +1169,81 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
 
     submitInFlightRef.current = true;
     setSubmitting(true);
+    setSubmitWaitPercent(0);
     try {
-      const resolvedImageUrls: Record<string, string> = {};
-      const linesNeedingUpload = lines.filter((l) => l.imageFile && !l.uploadedImageUrl);
-      const totalUploads = linesNeedingUpload.length + (parsedAdvance > 0 && receiptFile && !uploadedReceiptUrl ? 1 : 0);
-      let completedUploads = 0;
-
-      if (totalUploads > 0) {
-        setSubmitStatusText(`Compressing & uploading ${totalUploads} photo${totalUploads > 1 ? 's' : ''} in parallel...`);
+      const failedLines = linesRef.current.filter((l) => l.uploadStatus === 'failed');
+      if (failedLines.length > 0 || (parsedAdvance > 0 && receiptUploadStatus === 'failed')) {
+        toast.error(
+          'One or more photos failed to upload. Please click Retry or Remove on the failed photo(s).'
+        );
+        return;
       }
 
-      const lineUploadPromise = Promise.all(
-        lines.map(async (line) => {
-          if (line.imageFile && !line.uploadedImageUrl) {
-            const uploadRes = await uploadPreOrderImage(line.imageFile, 'products');
-            resolvedImageUrls[line.itemId] = uploadRes.url;
-            updateLine(line.itemId, { uploadedImageUrl: uploadRes.url });
-            completedUploads += 1;
-            setSubmitStatusText(`Uploaded ${completedUploads}/${totalUploads} photos...`);
-          } else {
-            resolvedImageUrls[line.itemId] = line.uploadedImageUrl || line.imagePreview || '';
+      const activePromises: Array<Promise<any>> = [];
+      linesRef.current.forEach((l) => {
+        if (l.imageFile && !l.uploadedImageUrl) {
+          const existingP = lineUploadPromisesRef.current.get(l.itemId);
+          activePromises.push(existingP || startLineBackgroundUpload(l.itemId, l.imageFile));
+        }
+      });
+      if (parsedAdvance > 0 && receiptFile && !uploadedReceiptUrl) {
+        activePromises.push(
+          receiptUploadPromiseRef.current || startReceiptBackgroundUpload(receiptFile)
+        );
+      }
+
+      if (activePromises.length > 0) {
+        setSubmitStatusText('Finishing photo upload...');
+        const progressTimer = setInterval(() => {
+          const currentLines = linesRef.current;
+          const activeItems = currentLines.filter((l) => l.imageFile && !l.uploadedImageUrl);
+          const pctSum =
+            activeItems.reduce((s, l) => s + l.uploadProgress, 0) +
+            (parsedAdvance > 0 && receiptFile && !uploadedReceiptUrl ? receiptUploadProgress : 0);
+          const denom =
+            activeItems.length + (parsedAdvance > 0 && receiptFile && !uploadedReceiptUrl ? 1 : 0);
+          if (denom > 0) {
+            setSubmitWaitPercent(Math.min(99, Math.round(pctSum / denom)));
           }
-        })
-      );
+        }, 120);
+        try {
+          await Promise.all(activePromises);
+        } finally {
+          clearInterval(progressTimer);
+        }
+      }
 
-      let finalReceiptUrl = uploadedReceiptUrl;
-      const receiptUploadPromise =
-        parsedAdvance > 0 && receiptFile && !uploadedReceiptUrl
-          ? uploadPreOrderImage(receiptFile, 'receipts').then((receiptRes) => {
-              finalReceiptUrl = receiptRes.url;
-              setUploadedReceiptUrl(receiptRes.url);
-              completedUploads += 1;
-              setSubmitStatusText(`Uploaded ${completedUploads}/${totalUploads} photos...`);
-            })
-          : Promise.resolve();
+      // Re-check latest refs after awaiting uploads
+      const latestLines = linesRef.current;
+      const postWaitFailed = latestLines.filter((l) => l.uploadStatus === 'failed');
+      if (postWaitFailed.length > 0 || (parsedAdvance > 0 && receiptUploadStatus === 'failed')) {
+        toast.error(
+          'Photo upload failed while saving. Click Retry or Remove on the highlighted photo.'
+        );
+        return;
+      }
 
-      await Promise.all([lineUploadPromise, receiptUploadPromise]);
-
+      setSubmitWaitPercent(100);
       setSubmitStatusText('Saving multi-item pre-order transaction...');
       const selectedSupplier = suppliers.find((s) => s.id === supplierId);
       const parsedReceivedTs = paymentReceivedAt
         ? new Date(paymentReceivedAt).getTime()
         : Date.now();
 
-      const itemsPayload: PreOrderItem[] = lines.map((line, idx) => {
+      const itemsPayload: PreOrderItem[] = latestLines.map((line, idx) => {
         const q = Math.max(1, Math.round(Number(line.qty) || 1));
         const sp = roundMoney(Number(line.sellingUnitPrice) || 0);
         const chinaCost = canViewChinaCost ? roundMoney(Number(line.chinaUnitCost) || 0) : 0;
+        const resolvedUrl =
+          line.uploadedImageUrl ||
+          (line.imagePreview && !line.imagePreview.startsWith('blob:') ? line.imagePreview : '');
         return {
           itemId: `item-${idx + 1}`,
           linkedProductId: line.linkedProductId || undefined,
           linkedVariantId: line.linkedVariantId || undefined,
           productName: line.productName.trim(),
-          imageUrl: resolvedImageUrls[line.itemId] || '',
+          imageUrl: resolvedUrl,
+          thumbUrl: line.uploadedThumbUrl || undefined,
           category: line.category.trim(),
           sku: line.sku.trim(),
           model: line.model.trim(),
@@ -946,6 +1266,10 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
             )
           : 0;
 
+      const finalReceiptUrl =
+        uploadedReceiptUrl ||
+        (receiptPreview && !receiptPreview.startsWith('blob:') ? receiptPreview : '');
+
       const result = await createPreOrder(
         {
           subBrand,
@@ -966,6 +1290,7 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
           variant: primary.variant || '',
           color: primary.color || '',
           productImage: primary.imageUrl || '',
+          productThumb: primary.thumbUrl || '',
           linkedProductId: primary.linkedProductId,
           linkedVariantId: primary.linkedVariantId,
           qty: totalQty,
@@ -999,6 +1324,7 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
         actorFromUser(user)
       );
 
+      savedSuccessRef.current = true;
       onDirtyChange?.(false);
       toast.success(
         `Pre-Order ${result.preOrderNumber} created (${itemsPayload.length} item${
@@ -1578,26 +1904,85 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
                       >
                         <div className="flex flex-wrap items-center gap-3">
                           {line.imagePreview ? (
-                            <div className="relative w-16 h-16 rounded-xl border border-slate-200 dark:border-slate-700 overflow-hidden bg-slate-100 dark:bg-slate-800 shrink-0">
-                              <img
-                                src={line.imagePreview}
-                                alt={line.productName || 'Item preview'}
-                                className="w-full h-full object-cover"
-                              />
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  updateLine(line.itemId, {
-                                    imageFile: null,
-                                    imagePreview: '',
-                                    uploadedImageUrl: '',
-                                  })
-                                }
-                                className="absolute top-0.5 right-0.5 w-5 h-5 rounded bg-rose-600 text-white flex items-center justify-center hover:bg-rose-700 cursor-pointer shadow"
-                                title="Remove image"
-                              >
-                                <Trash2 className="w-3 h-3" />
-                              </button>
+                            <div className="flex items-center gap-3 p-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900">
+                              <div className="relative w-16 h-16 rounded-lg overflow-hidden bg-slate-100 dark:bg-slate-800 shrink-0">
+                                <img
+                                  src={line.imagePreview}
+                                  alt={line.productName || 'Item preview'}
+                                  className="w-full h-full object-cover"
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => handleClearLineImage(line.itemId)}
+                                  className="absolute top-0.5 right-0.5 w-5 h-5 rounded bg-rose-600 text-white flex items-center justify-center hover:bg-rose-700 cursor-pointer shadow"
+                                  title="Remove image"
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                </button>
+                              </div>
+                              <div className="min-w-[140px] max-w-[240px] space-y-1">
+                                {(line.uploadStatus === 'preparing' || line.uploadStatus === 'uploading') && (
+                                  <>
+                                    <div className="flex items-center gap-1.5 text-[11px] font-semibold text-amber-700 dark:text-amber-300">
+                                      <Loader2 className="w-3 h-3 animate-spin" />
+                                      <span>
+                                        {line.uploadStatus === 'preparing'
+                                          ? 'Compressing...'
+                                          : `Uploading ${line.uploadProgress}%`}
+                                      </span>
+                                    </div>
+                                    <div className="w-full h-1.5 rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden">
+                                      <div
+                                        className="h-full bg-[#D4AF37] transition-all duration-150"
+                                        style={{ width: `${Math.max(8, line.uploadProgress)}%` }}
+                                      />
+                                    </div>
+                                  </>
+                                )}
+                                {line.uploadStatus === 'done' && (
+                                  <div className="flex items-center gap-1.5 text-[11px] font-semibold text-emerald-700 dark:text-emerald-400">
+                                    <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                                    <span>
+                                      {line.fallbackUsed
+                                        ? `Compact preview (${formatBytesCompact(line.compressedBytes)})`
+                                        : line.compressedBytes
+                                        ? `Uploaded • ${formatBytesCompact(line.compressedBytes)}`
+                                        : 'Ready'}
+                                    </span>
+                                  </div>
+                                )}
+                                {line.uploadStatus === 'failed' && (
+                                  <div className="space-y-1">
+                                    <div className="text-[11px] font-semibold text-rose-600 dark:text-rose-400 truncate">
+                                      Failed ({line.uploadErrorCode || 'error'})
+                                    </div>
+                                    <div className="flex items-center gap-1.5">
+                                      {line.imageFile && (
+                                        <button
+                                          type="button"
+                                          onClick={() => void startLineBackgroundUpload(line.itemId, line.imageFile!)}
+                                          className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-100 dark:bg-amber-900/50 text-amber-800 dark:text-amber-200 text-[10px] font-bold hover:bg-amber-200 cursor-pointer"
+                                        >
+                                          <RotateCcw className="w-2.5 h-2.5" />
+                                          Retry
+                                        </button>
+                                      )}
+                                      <button
+                                        type="button"
+                                        onClick={() => handleClearLineImage(line.itemId)}
+                                        className="px-2 py-0.5 rounded bg-rose-100 dark:bg-rose-900/40 text-rose-700 dark:text-rose-300 text-[10px] font-bold hover:bg-rose-200 cursor-pointer"
+                                      >
+                                        Remove
+                                      </button>
+                                    </div>
+                                  </div>
+                                )}
+                                {line.imageFile && (
+                                  <div className="text-[10px] text-slate-400 truncate">
+                                    {line.imageFile.name}
+                                  </div>
+                                )}
+                              </div>
                             </div>
                           ) : (
                             <label className="inline-flex items-center gap-2 px-3 py-2 rounded-xl border border-dashed border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 hover:border-[#D4AF37] text-xs font-semibold text-slate-700 dark:text-slate-200 cursor-pointer transition-colors">
@@ -1605,16 +1990,11 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
                               Upload Photo
                               <input
                                 type="file"
-                                accept="image/jpeg,image/png,image/webp"
+                                accept="image/jpeg,image/png,image/webp,image/gif,image/heic,image/heif"
                                 className="hidden"
                                 onChange={(e) => handleLineImageSelect(line.itemId, e)}
                               />
                             </label>
-                          )}
-                          {line.imageFile && (
-                            <span className="text-[11px] text-slate-500 dark:text-slate-400">
-                              {line.imageFile.name} ({Math.round(line.imageFile.size / 1024)} KB)
-                            </span>
                           )}
                         </div>
                       </FormField>
@@ -1825,29 +2205,90 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
 
                   <FormField
                     label="Payment Receipt (Optional)"
-                    hint="Screenshot or bank slip (compressed before upload)"
+                    hint="Instant preview • compressed & uploaded in background"
                     className="sm:col-span-2"
                   >
                     <div className="flex flex-wrap items-center gap-3">
                       {receiptPreview ? (
-                        <div className="relative w-20 h-20 rounded-lg border border-slate-200 dark:border-slate-700 overflow-hidden bg-slate-100 dark:bg-slate-800">
-                          <img
-                            src={receiptPreview}
-                            alt="Receipt preview"
-                            className="w-full h-full object-cover"
-                          />
-                          <button
-                            type="button"
-                            onClick={() => {
-                              setReceiptFile(null);
-                              setReceiptPreview('');
-                              setUploadedReceiptUrl('');
-                            }}
-                            className="absolute top-1 right-1 w-5 h-5 rounded bg-rose-600 text-white flex items-center justify-center cursor-pointer"
-                            title="Remove receipt"
-                          >
-                            <Trash2 className="w-3 h-3" />
-                          </button>
+                        <div className="flex items-center gap-3 p-2 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900">
+                          <div className="relative w-16 h-16 rounded-lg overflow-hidden bg-slate-100 dark:bg-slate-800 shrink-0">
+                            <img
+                              src={receiptPreview}
+                              alt="Receipt preview"
+                              className="w-full h-full object-cover"
+                            />
+                            <button
+                              type="button"
+                              onClick={handleClearReceipt}
+                              className="absolute top-0.5 right-0.5 w-5 h-5 rounded bg-rose-600 text-white flex items-center justify-center cursor-pointer shadow"
+                              title="Remove receipt"
+                            >
+                              <Trash2 className="w-3 h-3" />
+                            </button>
+                          </div>
+                          <div className="min-w-[140px] max-w-[240px] space-y-1">
+                            {(receiptUploadStatus === 'preparing' || receiptUploadStatus === 'uploading') && (
+                              <>
+                                <div className="flex items-center gap-1.5 text-[11px] font-semibold text-amber-700 dark:text-amber-300">
+                                  <Loader2 className="w-3 h-3 animate-spin" />
+                                  <span>
+                                    {receiptUploadStatus === 'preparing'
+                                      ? 'Compressing...'
+                                      : `Uploading ${receiptUploadProgress}%`}
+                                  </span>
+                                </div>
+                                <div className="w-full h-1.5 rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden">
+                                  <div
+                                    className="h-full bg-[#D4AF37] transition-all duration-150"
+                                    style={{ width: `${Math.max(8, receiptUploadProgress)}%` }}
+                                  />
+                                </div>
+                              </>
+                            )}
+                            {receiptUploadStatus === 'done' && (
+                              <div className="flex items-center gap-1.5 text-[11px] font-semibold text-emerald-700 dark:text-emerald-400">
+                                <CheckCircle2 className="w-3.5 h-3.5 shrink-0" />
+                                <span>
+                                  {receiptFallbackUsed
+                                    ? `Compact preview (${formatBytesCompact(receiptCompressedBytes)})`
+                                    : receiptCompressedBytes
+                                    ? `Uploaded • ${formatBytesCompact(receiptCompressedBytes)}`
+                                    : 'Uploaded'}
+                                </span>
+                              </div>
+                            )}
+                            {receiptUploadStatus === 'failed' && (
+                              <div className="space-y-1">
+                                <div className="text-[11px] font-semibold text-rose-600 dark:text-rose-400">
+                                  Failed ({receiptUploadErrorCode || 'error'}): {receiptUploadError}
+                                </div>
+                                <div className="flex items-center gap-1.5">
+                                  {receiptFile && (
+                                    <button
+                                      type="button"
+                                      onClick={() => void startReceiptBackgroundUpload(receiptFile)}
+                                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-100 dark:bg-amber-900/50 text-amber-800 dark:text-amber-200 text-[10px] font-bold cursor-pointer"
+                                    >
+                                      <RotateCcw className="w-2.5 h-2.5" />
+                                      Retry
+                                    </button>
+                                  )}
+                                  <button
+                                    type="button"
+                                    onClick={handleClearReceipt}
+                                    className="px-2 py-0.5 rounded bg-rose-100 dark:bg-rose-900/40 text-rose-700 dark:text-rose-300 text-[10px] font-bold cursor-pointer"
+                                  >
+                                    Remove
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                            {receiptFile && (
+                              <div className="text-[10px] text-slate-400 truncate">
+                                {receiptFile.name}
+                              </div>
+                            )}
+                          </div>
                         </div>
                       ) : (
                         <label className="inline-flex items-center gap-2 px-3.5 py-2 rounded-lg border border-dashed border-slate-300 dark:border-slate-700 hover:border-[#D4AF37] text-xs font-semibold text-slate-700 dark:text-slate-200 cursor-pointer">
@@ -1855,16 +2296,11 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
                           Attach Receipt Image
                           <input
                             type="file"
-                            accept="image/jpeg,image/png,image/webp"
+                            accept="image/jpeg,image/png,image/webp,image/gif,image/heic,image/heif"
                             className="hidden"
                             onChange={handleReceiptSelect}
                           />
                         </label>
-                      )}
-                      {receiptFile && (
-                        <span className="text-xs text-slate-500 dark:text-slate-400">
-                          {receiptFile.name}
-                        </span>
                       )}
                     </div>
                   </FormField>
@@ -2183,11 +2619,21 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
 
       {/* Sticky Bottom Action Bar */}
       <div className="sticky bottom-0 z-30 -mx-4 md:-mx-6 lg:-mx-8 px-4 md:px-6 lg:px-8 py-3.5 bg-white/95 dark:bg-slate-900/95 backdrop-blur-md border-t border-slate-200 dark:border-slate-800 flex flex-wrap items-center justify-between gap-3 shadow-lg">
-        <div className="flex items-center gap-2 text-xs text-slate-500 dark:text-slate-400">
+        <div className="flex items-center gap-3 text-xs text-slate-500 dark:text-slate-400">
           {submitStatusText ? (
-            <span className="font-medium text-[#93741E] dark:text-[#E2C255]">
-              {submitStatusText}
-            </span>
+            <div className="flex items-center gap-2.5">
+              <span className="font-medium text-[#93741E] dark:text-[#E2C255]">
+                {submitStatusText}
+              </span>
+              {submitWaitPercent > 0 && submitWaitPercent < 100 && (
+                <div className="w-28 h-1.5 rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden">
+                  <div
+                    className="h-full bg-[#D4AF37] transition-all duration-150"
+                    style={{ width: `${submitWaitPercent}%` }}
+                  />
+                </div>
+              )}
+            </div>
           ) : isDirty ? (
             <span className="inline-flex items-center gap-1.5 text-amber-700 dark:text-amber-400 font-medium">
               <span className="w-2 h-2 rounded-full bg-amber-500" />

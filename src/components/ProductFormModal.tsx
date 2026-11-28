@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { createPortal } from 'react-dom';
 import {
   Plus,
@@ -15,6 +15,8 @@ import {
   ImageOff,
   Loader2,
   Star,
+  RefreshCw,
+  GripVertical,
 } from 'lucide-react';
 import { motion } from 'motion/react';
 import Barcode from './Barcode';
@@ -41,10 +43,17 @@ import {
 } from '../firebase/db';
 import {
   uploadProductImage,
+  deleteMediaObject,
   buildProductFieldDiff,
   buildCategoryPathLabel,
   normalizeProductImages,
 } from '../utils/productImageUpload';
+import {
+  formatBytesCompact,
+  MediaUploadError,
+  validateImageUploadFile,
+} from '../utils/mediaUpload';
+import { useToast } from '../design-system';
 import {
   formatBrandBadgeMeta,
   getSellingSubBrands,
@@ -118,14 +127,56 @@ export default function ProductFormModal({
   const [formCostPrice, setFormCostPrice] = useState<number | ''>('');
   const [formSellingPrice, setFormSellingPrice] = useState<number | ''>('');
   const [formReorderThreshold, setFormReorderThreshold] = useState<number | ''>(5);
+  const toast = useToast();
   const [formImages, setFormImages] = useState<string[]>([]);
   const [formImageThumbs, setFormImageThumbs] = useState<string[]>([]);
-  const [pendingPreviews, setPendingPreviews] = useState<Array<{ id: string; previewUrl: string; progress: number }>>([]);
+  type PhotoUploadStatus = 'preparing' | 'uploading' | 'done' | 'failed';
+  interface ProductPhotoItem {
+    id: string;
+    previewUrl: string;
+    url: string;
+    thumbUrl?: string;
+    storagePath?: string;
+    thumbStoragePath?: string;
+    isExisting: boolean;
+    status: PhotoUploadStatus;
+    progress: number;
+    sizeBytes?: number;
+    originalSizeBytes?: number;
+    fallbackUsed?: boolean;
+    errorCode?: string;
+    errorMessage?: string;
+    file?: File;
+    abortController?: AbortController;
+  }
+  const [photoItems, setPhotoItems] = useState<ProductPhotoItem[]>([]);
+  const photoItemsRef = useRef<ProductPhotoItem[]>([]);
+  const uploadPromisesRef = useRef<Map<string, Promise<ProductPhotoItem | null>>>(new Map());
+  const sessionBucketWarnedRef = useRef(false);
+  const [dragPhotoIdx, setDragPhotoIdx] = useState<number | null>(null);
+  const [waitingForUploads, setWaitingForUploads] = useState(false);
+  const [photoFallbackNotice, setPhotoFallbackNotice] = useState('');
   const [brokenImgIndexes, setBrokenImgIndexes] = useState<Record<number, boolean>>({});
-  const [uploadingImages, setUploadingImages] = useState(false);
   const [formVariants, setFormVariants] = useState<Variant[]>([
     { id: '1', color: 'Default', model: 'Standard', stock: 10 },
   ]);
+
+  const uploadingImages = photoItems.some(
+    (p) => p.status === 'preparing' || p.status === 'uploading'
+  );
+  const hasFailedImages = photoItems.some((p) => p.status === 'failed');
+
+  const commitPhotoItems = (updater: (prev: ProductPhotoItem[]) => ProductPhotoItem[]) => {
+    const next = updater(photoItemsRef.current);
+    photoItemsRef.current = next;
+    setPhotoItems(next);
+    const completedUrls = next.filter((p) => p.status === 'done' && p.url).map((p) => p.url);
+    const completedThumbs = next
+      .filter((p) => p.status === 'done' && p.url)
+      .map((p) => p.thumbUrl || p.url);
+    setFormImages(completedUrls);
+    setFormImageThumbs(completedThumbs);
+  };
 
   const [isSkuDirty, setIsSkuDirty] = useState(false);
   const [wizardStep, setWizardStep] = useState<number>(1);
@@ -192,10 +243,25 @@ export default function ProductFormModal({
     setStepErrors({});
     setBrokenImgIndexes({});
     setShowDiscardConfirm(false);
+    setWaitingForUploads(false);
+    setPhotoFallbackNotice('');
+    setDragPhotoIdx(null);
+    sessionBucketWarnedRef.current = false;
     setCustomColorValue({});
     setCustomSizeValue({});
     setIsCustomColorMode({});
     setIsCustomSizeMode({});
+
+    // Abort & revoke any lingering uploads from prior modal session
+    photoItemsRef.current.forEach((p) => {
+      try {
+        p.abortController?.abort();
+      } catch {}
+      if (p.previewUrl.startsWith('blob:')) {
+        URL.revokeObjectURL(p.previewUrl);
+      }
+    });
+    uploadPromisesRef.current.clear();
 
     if (editModeProduct) {
       setIsSkuDirty(true);
@@ -213,8 +279,21 @@ export default function ProductFormModal({
       setFormCostPrice(editModeProduct.costPrice ?? 0);
       setFormSellingPrice(editModeProduct.sellingPrice ?? '');
       setFormReorderThreshold(editModeProduct.reorderThreshold ?? 5);
-      setFormImages(normalizeProductImages(editModeProduct));
-      setFormImageThumbs(Array.isArray(editModeProduct.imageThumbs) ? [...editModeProduct.imageThumbs] : []);
+      const existingUrls = normalizeProductImages(editModeProduct);
+      const existingThumbs = Array.isArray(editModeProduct.imageThumbs) ? editModeProduct.imageThumbs : [];
+      const seededItems: ProductPhotoItem[] = existingUrls.map((url, idx) => ({
+        id: `existing-${idx}-${Math.random().toString(36).slice(2, 6)}`,
+        previewUrl: url,
+        url,
+        thumbUrl: existingThumbs[idx] || url,
+        isExisting: true,
+        status: 'done',
+        progress: 100,
+      }));
+      photoItemsRef.current = seededItems;
+      setPhotoItems(seededItems);
+      setFormImages(existingUrls);
+      setFormImageThumbs(existingUrls.map((u, idx) => existingThumbs[idx] || u));
       setFormVariants(
         editModeProduct.variants && editModeProduct.variants.length > 0
           ? editModeProduct.variants.map((v) => ({ ...v }))
@@ -239,6 +318,8 @@ export default function ProductFormModal({
       setFormCostPrice(isStaff ? 0 : '');
       setFormSellingPrice('');
       setFormReorderThreshold(5);
+      photoItemsRef.current = [];
+      setPhotoItems([]);
       setFormImages([]);
       setFormImageThumbs([]);
       setFormVariants([{ id: Date.now().toString(), color: 'Default', model: 'Standard', stock: 10 }]);
@@ -381,6 +462,22 @@ export default function ProductFormModal({
     }
   };
 
+  const cleanupUnsavedSessionUploads = async () => {
+    const items = [...photoItemsRef.current];
+    for (const p of items) {
+      try {
+        p.abortController?.abort();
+      } catch {}
+      if (p.previewUrl.startsWith('blob:')) {
+        URL.revokeObjectURL(p.previewUrl);
+      }
+      if (!p.isExisting && (p.storagePath || p.thumbStoragePath)) {
+        void deleteMediaObject(p.storagePath, p.thumbStoragePath);
+      }
+    }
+    uploadPromisesRef.current.clear();
+  };
+
   const handleCancelForm = () => {
     const isDirty = editModeProduct
       ? formName !== editModeProduct.name ||
@@ -395,11 +492,12 @@ export default function ProductFormModal({
         (!isStaff && Number(formCostPrice) !== Number(editModeProduct.costPrice)) ||
         Number(formSellingPrice) !== Number(editModeProduct.sellingPrice) ||
         Number(formReorderThreshold) !== Number(editModeProduct.reorderThreshold) ||
+        photoItemsRef.current.some((p) => !p.isExisting) ||
         JSON.stringify(formImages) !== JSON.stringify(normalizeProductImages(editModeProduct)) ||
         JSON.stringify(formVariants) !== JSON.stringify(editModeProduct.variants || [])
       : formName.trim() !== '' ||
         Number(formSellingPrice) > 0 ||
-        formImages.length > 0 ||
+        photoItemsRef.current.length > 0 ||
         formDescription.trim() !== '' ||
         formNotes.trim() !== '' ||
         formVariants.some((v) => v.color !== 'Default' || v.model !== 'Standard');
@@ -407,6 +505,7 @@ export default function ProductFormModal({
     if (isDirty) {
       setShowDiscardConfirm(true);
     } else {
+      void cleanupUnsavedSessionUploads();
       onClose();
     }
   };
@@ -464,87 +563,194 @@ export default function ProductFormModal({
     }
   };
 
-  const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+  const startUploadForPhotoItem = (item: ProductPhotoItem): Promise<ProductPhotoItem | null> => {
+    const file = item.file;
+    if (!file) return Promise.resolve(item);
+    const controller = item.abortController || new AbortController();
+
+    const promise = (async (): Promise<ProductPhotoItem | null> => {
+      try {
+        const res = await uploadProductImage(file, formSku || formName || 'product', {
+          signal: controller.signal,
+          onPhase: (phase) => {
+            commitPhotoItems((prev) =>
+              prev.map((p) => (p.id === item.id ? { ...p, status: phase } : p))
+            );
+          },
+          onProgress: (pct) => {
+            commitPhotoItems((prev) =>
+              prev.map((p) => (p.id === item.id ? { ...p, progress: pct } : p))
+            );
+          },
+        });
+
+        if (controller.signal.aborted || !photoItemsRef.current.some((p) => p.id === item.id)) {
+          if (res.storageUploaded && (res.storagePath || res.thumbStoragePath)) {
+            void deleteMediaObject(res.storagePath, res.thumbStoragePath);
+          }
+          return null;
+        }
+
+        if (res.fallbackUsed && res.errorMessage) {
+          setPhotoFallbackNotice(res.errorMessage);
+          if (!sessionBucketWarnedRef.current) {
+            sessionBucketWarnedRef.current = true;
+            toast.warning(res.errorMessage);
+          }
+        }
+
+        let updatedEntry: ProductPhotoItem | null = null;
+        commitPhotoItems((prev) =>
+          prev.map((p) => {
+            if (p.id !== item.id) return p;
+            updatedEntry = {
+              ...p,
+              url: res.url,
+              thumbUrl: res.thumbUrl || res.url,
+              storagePath: res.storagePath,
+              thumbStoragePath: res.thumbStoragePath,
+              status: 'done',
+              progress: 100,
+              sizeBytes: res.sizeBytes,
+              originalSizeBytes: res.originalSizeBytes,
+              fallbackUsed: res.fallbackUsed,
+              errorCode: undefined,
+              errorMessage: undefined,
+            };
+            return updatedEntry;
+          })
+        );
+        return updatedEntry;
+      } catch (err: any) {
+        if (controller.signal.aborted || err?.code === 'storage/canceled') {
+          return null;
+        }
+        const errCode = err instanceof MediaUploadError ? err.code : String(err?.code || 'upload-failed');
+        const errMsg = err?.message || `Failed to upload "${file.name}".`;
+        console.error('[ProductFormModal] Photo upload failed:', { id: item.id, errCode, errMsg, err });
+        toast.error(`Photo upload failed (${errCode}): ${errMsg}`);
+        commitPhotoItems((prev) =>
+          prev.map((p) =>
+            p.id === item.id
+              ? {
+                  ...p,
+                  status: 'failed',
+                  errorCode: errCode,
+                  errorMessage: errMsg,
+                }
+              : p
+          )
+        );
+        return null;
+      } finally {
+        uploadPromisesRef.current.delete(item.id);
+      }
+    })();
+
+    uploadPromisesRef.current.set(item.id, promise);
+    return promise;
+  };
+
+  const handleImageUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
     const files = Array.from(e.target.files || []) as File[];
     e.target.value = '';
     if (files.length === 0) return;
 
     setFormError('');
-    setUploadingImages(true);
+    const rejectedErrors: string[] = [];
+    const acceptedEntries: ProductPhotoItem[] = [];
 
-    // Immediate instant previews via URL.createObjectURL while compressing + uploading in parallel
-    const batch = files.map((file, idx) => ({
-      id: `${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
-      file,
-      previewUrl: URL.createObjectURL(file),
-    }));
-    setPendingPreviews((prev) => [
-      ...prev,
-      ...batch.map((b) => ({ id: b.id, previewUrl: b.previewUrl, progress: 5 })),
-    ]);
+    files.forEach((file, idx) => {
+      const validationErr = validateImageUploadFile(file);
+      if (validationErr) {
+        rejectedErrors.push(validationErr);
+        return;
+      }
+      const controller = new AbortController();
+      const previewUrl = URL.createObjectURL(file);
+      acceptedEntries.push({
+        id: `${Date.now()}-${idx}-${Math.random().toString(36).slice(2, 6)}`,
+        previewUrl,
+        url: '',
+        isExisting: false,
+        status: 'preparing',
+        progress: 5,
+        originalSizeBytes: file.size,
+        file,
+        abortController: controller,
+      });
+    });
 
-    const errors: string[] = [];
-    const results = await Promise.all(
-      batch.map(async (item) => {
-        try {
-          const res = await uploadProductImage(item.file, formSku || formName || 'product', {
-            onProgress: (pct) => {
-              setPendingPreviews((prev) =>
-                prev.map((p) => (p.id === item.id ? { ...p, progress: pct } : p))
-              );
-            },
-          });
-          return res;
-        } catch (err: any) {
-          errors.push(err?.message || `Failed to process "${item.file.name}".`);
-          return null;
-        } finally {
-          URL.revokeObjectURL(item.previewUrl);
-          setPendingPreviews((prev) => prev.filter((p) => p.id !== item.id));
-        }
+    if (rejectedErrors.length > 0) {
+      const msg = rejectedErrors.join(' ');
+      setFormError(msg);
+      toast.error(msg);
+    }
+
+    if (acceptedEntries.length === 0) return;
+
+    // Instant preview immediately; Continue & Save stay enabled while uploading in background
+    commitPhotoItems((prev) => [...prev, ...acceptedEntries]);
+    acceptedEntries.forEach((entry) => {
+      void startUploadForPhotoItem(entry);
+    });
+  };
+
+  const retryPhotoUpload = (photoId: string) => {
+    const target = photoItemsRef.current.find((p) => p.id === photoId);
+    if (!target || !target.file) return;
+    const nextController = new AbortController();
+    let restarted: ProductPhotoItem | null = null;
+    commitPhotoItems((prev) =>
+      prev.map((p) => {
+        if (p.id !== photoId) return p;
+        restarted = {
+          ...p,
+          status: 'preparing',
+          progress: 5,
+          errorCode: undefined,
+          errorMessage: undefined,
+          abortController: nextController,
+        };
+        return restarted;
       })
     );
-
-    const valid = results.filter((r): r is NonNullable<typeof r> => r !== null);
-    if (valid.length > 0) {
-      setFormImages((prev) => [...prev, ...valid.map((v) => v.url)]);
-      setFormImageThumbs((prev) => {
-        const padded = formImages.map((u, idx) => prev[idx] || u);
-        return [...padded, ...valid.map((v) => v.thumbUrl || v.url)];
-      });
+    if (restarted) {
+      void startUploadForPhotoItem(restarted);
     }
-    if (errors.length > 0) {
-      setFormError(errors.join(' '));
-    }
-    setUploadingImages(false);
   };
 
   const moveImage = (fromIdx: number, toIdx: number) => {
-    if (toIdx < 0 || toIdx >= formImages.length || fromIdx === toIdx) return;
-    setFormImages((prev) => {
+    const len = photoItemsRef.current.length;
+    if (toIdx < 0 || toIdx >= len || fromIdx === toIdx) return;
+    commitPhotoItems((prev) => {
       const next = [...prev];
       const [moved] = next.splice(fromIdx, 1);
       next.splice(toIdx, 0, moved);
-      return next;
-    });
-    setFormImageThumbs((prev) => {
-      if (prev.length === 0) return prev;
-      const next = [...prev];
-      const [moved] = next.splice(fromIdx, 1);
-      next.splice(toIdx, 0, moved || '');
       return next;
     });
     setBrokenImgIndexes({});
   };
 
   const setAsPrimaryImage = (idx: number) => {
-    if (idx <= 0 || idx >= formImages.length) return;
+    if (idx <= 0 || idx >= photoItemsRef.current.length) return;
     moveImage(idx, 0);
   };
 
   const removeImage = (idx: number) => {
-    setFormImages((prev) => prev.filter((_, i) => i !== idx));
-    setFormImageThumbs((prev) => prev.filter((_, i) => i !== idx));
+    const target = photoItemsRef.current[idx];
+    if (!target) return;
+    try {
+      target.abortController?.abort();
+    } catch {}
+    uploadPromisesRef.current.delete(target.id);
+    if (target.previewUrl.startsWith('blob:')) {
+      URL.revokeObjectURL(target.previewUrl);
+    }
+    if (!target.isExisting && (target.storagePath || target.thumbStoragePath)) {
+      void deleteMediaObject(target.storagePath, target.thumbStoragePath);
+    }
+    commitPhotoItems((prev) => prev.filter((_, i) => i !== idx));
     setBrokenImgIndexes({});
   };
 
@@ -560,7 +766,7 @@ export default function ProductFormModal({
       return;
     }
 
-    if (submitting || uploadingImages) return;
+    if (submitting || waitingForUploads) return;
     setFormError('');
     setFormSuccess('');
 
@@ -609,6 +815,35 @@ export default function ProductFormModal({
         setWizardStep(3);
         return;
       }
+    }
+
+    // Block only failed photos; if background uploads are still running, wait cleanly for them
+    const currentFailed = photoItemsRef.current.filter((p) => p.status === 'failed');
+    if (currentFailed.length > 0) {
+      setFormError(
+        `${currentFailed.length} photo(s) failed to upload (${currentFailed[0].errorCode || 'error'}). Please Retry or Remove the failed photo(s) before saving.`
+      );
+      setWizardStep(4);
+      return;
+    }
+
+    const pendingPromises = Array.from(uploadPromisesRef.current.values());
+    if (pendingPromises.length > 0) {
+      setWaitingForUploads(true);
+      try {
+        await Promise.all(pendingPromises);
+      } finally {
+        setWaitingForUploads(false);
+      }
+    }
+
+    const postWaitFailed = photoItemsRef.current.filter((p) => p.status === 'failed');
+    if (postWaitFailed.length > 0) {
+      setFormError(
+        `${postWaitFailed.length} photo(s) failed to upload (${postWaitFailed[0].errorCode || 'error'}). Please Retry or Remove the failed photo(s) before saving.`
+      );
+      setWizardStep(4);
+      return;
     }
 
     setSubmitting(true);
@@ -683,10 +918,9 @@ export default function ProductFormModal({
     const effectiveCostPrice = isStaff
       ? Number(editModeProduct?.costPrice ?? 0)
       : Number(formCostPrice || 0);
-    const cleanImages = formImages.filter(Boolean);
-    const cleanThumbs = formImageThumbs
-      .slice(0, cleanImages.length)
-      .filter(Boolean);
+    const finalizedPhotos = photoItemsRef.current.filter((p) => p.status === 'done' && p.url);
+    const cleanImages = finalizedPhotos.map((p) => p.url);
+    const cleanThumbs = finalizedPhotos.map((p) => p.thumbUrl || p.url);
     const nowTs = Date.now();
 
     const basePayload: Omit<Product, 'id'> = {
@@ -830,6 +1064,11 @@ export default function ProductFormModal({
       }
 
       setFormSuccess(successMsg);
+      photoItemsRef.current.forEach((p) => {
+        if (p.previewUrl.startsWith('blob:')) {
+          URL.revokeObjectURL(p.previewUrl);
+        }
+      });
       await onRefreshData();
       onSaved?.({ message: successMsg, productId: targetProductId, status: finalStatus });
       setSubmitting(false);
@@ -1582,128 +1821,202 @@ export default function ProductFormModal({
               className="bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 p-5 rounded-2xl space-y-4"
             >
               <div>
-                <div className="flex items-center justify-between mb-2">
+                <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
                   <div>
                     <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300">
-                      Product Photos ({formImages.length})
+                      Product Photos ({photoItems.length})
                     </label>
                     <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                      First photo is used as the cover thumbnail. Use arrows to reorder.
+                      Drag or use arrows to reorder. First photo is Cover. Continue stays unlocked while uploading.
                     </p>
                   </div>
-                  {uploadingImages && (
-                    <span className="inline-flex items-center gap-1.5 text-xs font-semibold text-amber-600 dark:text-amber-400">
-                      <Loader2 size={14} className="animate-spin" />
-                      Uploading...
-                    </span>
-                  )}
+                  <div className="flex items-center gap-2 text-[11px]">
+                    {(() => {
+                      const totalCompressedBytes = photoItems.reduce((s, p) => s + (p.sizeBytes || 0), 0);
+                      return totalCompressedBytes > 0 ? (
+                        <span className="px-2 py-0.5 rounded-md bg-slate-200/80 dark:bg-slate-800 font-mono font-bold text-slate-700 dark:text-slate-300">
+                          {formatBytesCompact(totalCompressedBytes)} uploaded
+                        </span>
+                      ) : null;
+                    })()}
+                    {uploadingImages && (
+                      <span className="inline-flex items-center gap-1.5 font-semibold text-amber-600 dark:text-amber-400">
+                        <Loader2 size={13} className="animate-spin" />
+                        Uploading in background...
+                      </span>
+                    )}
+                  </div>
                 </div>
 
+                {photoFallbackNotice && (
+                  <div className="mb-3 p-2.5 rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800/70 text-[11px] text-amber-800 dark:text-amber-300 flex items-start gap-2">
+                    <AlertCircle size={14} className="shrink-0 mt-0.5" />
+                    <span>{photoFallbackNotice}</span>
+                  </div>
+                )}
+
                 <div className="grid grid-cols-3 sm:grid-cols-4 gap-3">
-                  {formImages.map((img, idx) => (
-                    <div
-                      key={`${idx}-${img.slice(0, 24)}`}
-                      className="relative group aspect-square rounded-xl overflow-hidden border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-900"
-                    >
-                      {brokenImgIndexes[idx] ? (
-                        <div className="w-full h-full flex flex-col items-center justify-center p-2 text-center bg-slate-100 dark:bg-slate-800 text-slate-400">
-                          <ImageOff size={18} />
-                          <span className="text-[10px] mt-1 font-semibold">Load error</span>
-                        </div>
-                      ) : (
-                        <img
-                          src={img}
-                          alt={`Product ${idx + 1}`}
-                          className="w-full h-full object-cover"
-                          referrerPolicy="no-referrer"
-                          onError={() =>
-                            setBrokenImgIndexes((prev) => ({ ...prev, [idx]: true }))
+                  {photoItems.map((item, idx) => {
+                    const displaySrc = item.previewUrl || item.url;
+                    const isActiveUpload = item.status === 'preparing' || item.status === 'uploading';
+                    const isFailed = item.status === 'failed';
+                    return (
+                      <div
+                        key={item.id}
+                        draggable={!submitting}
+                        onDragStart={() => setDragPhotoIdx(idx)}
+                        onDragOver={(e) => e.preventDefault()}
+                        onDrop={() => {
+                          if (dragPhotoIdx !== null && dragPhotoIdx !== idx) {
+                            moveImage(dragPhotoIdx, idx);
                           }
-                        />
-                      )}
+                          setDragPhotoIdx(null);
+                        }}
+                        onDragEnd={() => setDragPhotoIdx(null)}
+                        className={`relative group aspect-square rounded-xl overflow-hidden border bg-white dark:bg-slate-900 transition-all ${
+                          isFailed
+                            ? 'border-rose-500 ring-2 ring-rose-500/30'
+                            : isActiveUpload
+                            ? 'border-amber-400'
+                            : dragPhotoIdx === idx
+                            ? 'border-amber-500 opacity-60 scale-95'
+                            : 'border-slate-200 dark:border-slate-700'
+                        }`}
+                      >
+                        {brokenImgIndexes[idx] ? (
+                          <div className="w-full h-full flex flex-col items-center justify-center p-2 text-center bg-slate-100 dark:bg-slate-800 text-slate-400">
+                            <ImageOff size={18} />
+                            <span className="text-[10px] mt-1 font-semibold">Load error</span>
+                          </div>
+                        ) : (
+                          <img
+                            src={displaySrc}
+                            alt={`Product ${idx + 1}`}
+                            className={`w-full h-full object-cover ${isActiveUpload ? 'opacity-80' : ''}`}
+                            referrerPolicy="no-referrer"
+                            onError={() =>
+                              setBrokenImgIndexes((prev) => ({ ...prev, [idx]: true }))
+                            }
+                          />
+                        )}
 
-                      {idx === 0 && (
-                        <span className="absolute top-1.5 left-1.5 px-1.5 py-0.5 rounded bg-amber-400 text-slate-950 text-[9px] font-black uppercase">
-                          Cover
-                        </span>
-                      )}
+                        {idx === 0 && (
+                          <span className="absolute top-1.5 left-1.5 px-1.5 py-0.5 rounded bg-amber-400 text-slate-950 text-[9px] font-black uppercase shadow-xs">
+                            Cover
+                          </span>
+                        )}
 
-                      <div className="absolute inset-x-0 bottom-0 p-1 bg-slate-950/75 flex items-center justify-between gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
-                        <div className="flex items-center gap-0.5">
-                          <button
-                            type="button"
-                            disabled={idx === 0}
-                            onClick={() => moveImage(idx, idx - 1)}
-                            title="Move Left"
-                            className="p-1 rounded text-white hover:bg-white/20 disabled:opacity-30 cursor-pointer"
+                        {!isActiveUpload && !isFailed && (
+                          <span
+                            title={item.fallbackUsed ? 'Compact <=40KB fallback' : 'Upload complete'}
+                            className={`absolute top-1.5 right-1.5 px-1.5 py-0.5 rounded text-[9px] font-bold flex items-center gap-0.5 shadow-xs ${
+                              item.fallbackUsed
+                                ? 'bg-amber-500/90 text-slate-950'
+                                : 'bg-emerald-600/90 text-white'
+                            }`}
                           >
-                            <ChevronLeft size={13} />
-                          </button>
-                          <button
-                            type="button"
-                            disabled={idx === formImages.length - 1}
-                            onClick={() => moveImage(idx, idx + 1)}
-                            title="Move Right"
-                            className="p-1 rounded text-white hover:bg-white/20 disabled:opacity-30 cursor-pointer"
-                          >
-                            <ChevronRight size={13} />
-                          </button>
-                          {idx > 0 && (
+                            <Check size={10} />
+                            {item.sizeBytes ? formatBytesCompact(item.sizeBytes) : item.fallbackUsed ? '40KB' : 'Done'}
+                          </span>
+                        )}
+
+                        {isActiveUpload && (
+                          <div className="absolute inset-x-0 top-7 mx-1.5 px-2 py-1 rounded-lg bg-slate-950/80 text-white text-[10px] font-mono font-bold text-center shadow">
+                            <div className="w-full h-1 bg-slate-700 rounded-full overflow-hidden mb-1">
+                              <div
+                                className="h-full bg-amber-400 transition-all duration-150"
+                                style={{ width: `${item.progress}%` }}
+                              />
+                            </div>
+                            {item.status === 'preparing' ? 'Compressing...' : `Uploading ${item.progress}%`}
+                          </div>
+                        )}
+
+                        {isFailed && (
+                          <div className="absolute inset-0 bg-slate-950/80 p-2 flex flex-col items-center justify-center text-center text-white gap-1.5">
+                            <AlertCircle size={16} className="text-rose-400 shrink-0" />
+                            <span className="text-[9px] font-mono text-rose-300 leading-tight line-clamp-2">
+                              {item.errorCode || 'Failed'}
+                            </span>
+                            <div className="flex items-center gap-1 mt-0.5">
+                              <button
+                                type="button"
+                                onClick={() => retryPhotoUpload(item.id)}
+                                className="px-2 py-1 rounded bg-amber-400 hover:bg-amber-500 text-slate-950 text-[10px] font-black inline-flex items-center gap-1 cursor-pointer"
+                              >
+                                <RefreshCw size={10} /> Retry
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => removeImage(idx)}
+                                className="px-2 py-1 rounded bg-rose-600 hover:bg-rose-700 text-white text-[10px] font-bold cursor-pointer"
+                              >
+                                Remove
+                              </button>
+                            </div>
+                          </div>
+                        )}
+
+                        {!isFailed && (
+                          <div className="absolute inset-x-0 bottom-0 p-1 bg-slate-950/75 flex items-center justify-between gap-1 opacity-100 sm:opacity-0 sm:group-hover:opacity-100 transition-opacity">
+                            <div className="flex items-center gap-0.5">
+                              <span className="p-0.5 text-slate-300 cursor-grab hidden sm:inline-flex" title="Drag to reorder">
+                                <GripVertical size={12} />
+                              </span>
+                              <button
+                                type="button"
+                                disabled={idx === 0}
+                                onClick={() => moveImage(idx, idx - 1)}
+                                title="Move Left"
+                                className="p-1 rounded text-white hover:bg-white/20 disabled:opacity-30 cursor-pointer"
+                              >
+                                <ChevronLeft size={13} />
+                              </button>
+                              <button
+                                type="button"
+                                disabled={idx === photoItems.length - 1}
+                                onClick={() => moveImage(idx, idx + 1)}
+                                title="Move Right"
+                                className="p-1 rounded text-white hover:bg-white/20 disabled:opacity-30 cursor-pointer"
+                              >
+                                <ChevronRight size={13} />
+                              </button>
+                              {idx > 0 && (
+                                <button
+                                  type="button"
+                                  onClick={() => setAsPrimaryImage(idx)}
+                                  title="Make Cover Photo"
+                                  className="p-1 rounded text-amber-300 hover:bg-white/20 cursor-pointer"
+                                >
+                                  <Star size={12} />
+                                </button>
+                              )}
+                            </div>
                             <button
                               type="button"
-                              onClick={() => setAsPrimaryImage(idx)}
-                              title="Make Cover Photo"
-                              className="p-1 rounded text-amber-300 hover:bg-white/20 cursor-pointer"
+                              onClick={() => removeImage(idx)}
+                              title="Remove Photo"
+                              className="p-1 rounded text-rose-400 hover:bg-rose-500/30 cursor-pointer"
                             >
-                              <Star size={12} />
+                              <Trash2 size={13} />
                             </button>
-                          )}
-                        </div>
-                        <button
-                          type="button"
-                          onClick={() => removeImage(idx)}
-                          title="Remove Photo"
-                          className="p-1 rounded text-rose-400 hover:bg-rose-500/30 cursor-pointer"
-                        >
-                          <Trash2 size={13} />
-                        </button>
+                          </div>
+                        )}
                       </div>
-                    </div>
-                  ))}
-
-                  {pendingPreviews.map((p) => (
-                    <div
-                      key={p.id}
-                      className="relative aspect-square rounded-xl overflow-hidden border border-amber-400 bg-slate-900"
-                    >
-                      <img
-                        src={p.previewUrl}
-                        alt="Uploading preview"
-                        className="w-full h-full object-cover opacity-70"
-                      />
-                      <div className="absolute inset-x-0 bottom-0 p-1.5 bg-slate-950/80 text-white text-[10px] font-mono font-bold text-center">
-                        <div className="w-full h-1 bg-slate-700 rounded-full overflow-hidden mb-1">
-                          <div
-                            className="h-full bg-amber-400 transition-all duration-150"
-                            style={{ width: `${p.progress}%` }}
-                          />
-                        </div>
-                        Uploading {p.progress}%
-                      </div>
-                    </div>
-                  ))}
+                    );
+                  })}
 
                   <label className="aspect-square rounded-xl border-2 border-dashed border-slate-300 dark:border-slate-700 hover:border-amber-400 hover:bg-amber-50/50 dark:hover:bg-amber-950/20 flex flex-col items-center justify-center text-slate-500 dark:text-slate-400 cursor-pointer transition-colors">
-                    {uploadingImages ? <Loader2 size={18} className="animate-spin" /> : <Upload size={18} />}
+                    <Upload size={18} />
                     <span className="text-[10px] font-bold mt-1 uppercase tracking-wider">
-                      {uploadingImages ? 'Uploading...' : 'Add Photo'}
+                      Add Photo
                     </span>
+                    <span className="text-[9px] text-slate-400 mt-0.5">Max 8 MB</span>
                     <input
                       type="file"
                       className="hidden"
-                      accept="image/*"
+                      accept="image/*,.heic,.heif"
                       multiple
-                      disabled={uploadingImages}
                       onChange={handleImageUpload}
                     />
                   </label>
@@ -1826,21 +2139,71 @@ export default function ProductFormModal({
                 </div>
               </div>
 
-              {formImages.length > 0 && (
+              {photoItems.length > 0 && (
                 <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-700 space-y-2">
-                  <h4 className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
-                    Photos ({formImages.length})
-                  </h4>
+                  <div className="flex items-center justify-between gap-2">
+                    <h4 className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
+                      Photos ({photoItems.length})
+                    </h4>
+                    {uploadingImages && (
+                      <span className="text-[11px] font-semibold text-amber-600 dark:text-amber-400 flex items-center gap-1">
+                        <Loader2 size={12} className="animate-spin" />
+                        Uploading in background...
+                      </span>
+                    )}
+                    {hasFailedImages && (
+                      <span className="text-[11px] font-bold text-rose-600 dark:text-rose-400">
+                        Failed photo must be retried or removed
+                      </span>
+                    )}
+                  </div>
                   <div className="flex gap-2 overflow-x-auto py-1">
-                    {formImages.map((img, idx) => (
-                      <img
-                        key={idx}
-                        src={img}
-                        alt={`Thumb ${idx + 1}`}
-                        className="w-12 h-12 object-cover rounded-lg border border-slate-200 dark:border-slate-700 shrink-0"
-                        referrerPolicy="no-referrer"
-                      />
+                    {photoItems.map((p, idx) => (
+                      <div key={p.id} className="relative shrink-0">
+                        <img
+                          src={p.previewUrl || p.url}
+                          alt={`Thumb ${idx + 1}`}
+                          className="w-12 h-12 object-cover rounded-lg border border-slate-200 dark:border-slate-700"
+                          referrerPolicy="no-referrer"
+                        />
+                        {(p.status === 'preparing' || p.status === 'uploading') && (
+                          <span className="absolute inset-x-0 bottom-0 bg-slate-950/80 text-amber-300 text-[9px] font-mono text-center rounded-b-lg">
+                            {p.progress}%
+                          </span>
+                        )}
+                        {p.status === 'failed' && (
+                          <span className="absolute inset-0 bg-rose-950/80 text-rose-200 text-[9px] font-bold flex items-center justify-center rounded-lg">
+                            ERR
+                          </span>
+                        )}
+                      </div>
                     ))}
+                  </div>
+                </div>
+              )}
+
+              {waitingForUploads && (
+                <div className="bg-amber-50 dark:bg-amber-950/40 border border-amber-200 dark:border-amber-800 rounded-xl p-3 space-y-1.5">
+                  <div className="flex items-center justify-between text-xs font-bold text-amber-800 dark:text-amber-300">
+                    <span className="flex items-center gap-1.5">
+                      <Loader2 size={14} className="animate-spin" />
+                      Finishing photo upload...
+                    </span>
+                    <span className="font-mono">
+                      {Math.round(
+                        photoItems.reduce((s, p) => s + p.progress, 0) / Math.max(1, photoItems.length)
+                      )}%
+                    </span>
+                  </div>
+                  <div className="w-full h-1.5 bg-amber-200/70 dark:bg-amber-900 rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-amber-500 transition-all duration-150"
+                      style={{
+                        width: `${Math.round(
+                          photoItems.reduce((s, p) => s + p.progress, 0) / Math.max(1, photoItems.length)
+                        )}%`,
+                      }}
+                    />
                   </div>
                 </div>
               )}
@@ -1853,18 +2216,18 @@ export default function ProductFormModal({
           {wizardStep > 1 ? (
             <button
               type="button"
-              disabled={submitting}
+              disabled={submitting || waitingForUploads}
               onClick={handlePrevStep}
-              className="px-4 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 font-bold rounded-xl text-xs hover:bg-slate-100 dark:hover:bg-slate-700 flex items-center gap-1.5 cursor-pointer"
+              className="px-4 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 font-bold rounded-xl text-xs hover:bg-slate-100 dark:hover:bg-slate-700 flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
             >
               <ArrowLeft size={14} /> Back
             </button>
           ) : (
             <button
               type="button"
-              disabled={submitting}
+              disabled={submitting || waitingForUploads}
               onClick={handleCancelForm}
-              className="px-4 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 font-bold rounded-xl text-xs hover:bg-slate-100 dark:hover:bg-slate-700 cursor-pointer"
+              className="px-4 py-2.5 bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-300 font-bold rounded-xl text-xs hover:bg-slate-100 dark:hover:bg-slate-700 cursor-pointer disabled:opacity-50"
             >
               Cancel
             </button>
@@ -1874,19 +2237,28 @@ export default function ProductFormModal({
             {editModeProduct && wizardStep < 5 && (
               <button
                 type="button"
-                disabled={submitting || uploadingImages}
+                disabled={submitting || waitingForUploads || hasFailedImages}
                 onClick={(e) => handleFormSubmit(e as any)}
                 className="px-4 py-2.5 bg-teal-600 hover:bg-teal-700 text-white font-bold rounded-xl text-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
               >
-                <Check size={14} />
-                <span>{submitting ? 'Saving...' : 'Save Changes'}</span>
+                {waitingForUploads ? (
+                  <>
+                    <Loader2 size={14} className="animate-spin" />
+                    <span>Finishing photo upload...</span>
+                  </>
+                ) : (
+                  <>
+                    <Check size={14} />
+                    <span>{submitting ? 'Saving...' : 'Save Changes'}</span>
+                  </>
+                )}
               </button>
             )}
 
             {wizardStep < 5 ? (
               <button
                 type="button"
-                disabled={submitting || uploadingImages}
+                disabled={submitting}
                 onClick={handleNextStep}
                 className="px-5 py-2.5 bg-slate-900 dark:bg-slate-100 hover:bg-slate-800 dark:hover:bg-white text-white dark:text-slate-950 font-bold rounded-xl text-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
               >
@@ -1895,11 +2267,16 @@ export default function ProductFormModal({
             ) : (
               <button
                 type="button"
-                disabled={submitting || uploadingImages}
+                disabled={submitting || waitingForUploads || hasFailedImages}
                 onClick={(e) => handleFormSubmit(e as any)}
                 className="px-5 py-2.5 bg-amber-400 hover:bg-amber-500 text-slate-950 font-bold rounded-xl text-xs flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
               >
-                {submitting ? (
+                {waitingForUploads ? (
+                  <>
+                    <Loader2 size={14} className="animate-spin" />
+                    <span>Finishing photo upload...</span>
+                  </>
+                ) : submitting ? (
                   <>
                     <Loader2 size={14} className="animate-spin" />
                     <span>Saving...</span>
@@ -1951,6 +2328,7 @@ export default function ProductFormModal({
                 type="button"
                 onClick={() => {
                   setShowDiscardConfirm(false);
+                  void cleanupUnsavedSessionUploads();
                   onClose();
                 }}
                 className="px-4 py-2 bg-rose-600 hover:bg-rose-700 text-white rounded-xl text-xs font-bold cursor-pointer"

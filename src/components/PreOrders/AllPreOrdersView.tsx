@@ -788,7 +788,11 @@ export const AllPreOrdersView: React.FC<AllPreOrdersViewProps> = ({
                   );
                   const rowItems = normalizePreOrderItems(row);
                   const primaryItem = rowItems[0];
-                  const thumbUrl = primaryItem?.imageUrl || row.productImage;
+                  const thumbUrl =
+                    primaryItem?.thumbUrl ||
+                    row.productThumb ||
+                    primaryItem?.imageUrl ||
+                    row.productImage;
                   const totalQty = row.totalQty ?? rowItems.reduce((s, it) => s + (Number(it.qty) || 0), 0);
                   const totalReceived = rowItems.reduce(
                     (s, it) => s + (Number(it.receivedQty) || 0),
@@ -832,6 +836,8 @@ export const AllPreOrdersView: React.FC<AllPreOrdersViewProps> = ({
                             <img
                               src={thumbUrl}
                               alt={primaryItem?.productName || row.productName}
+                              loading="lazy"
+                              decoding="async"
                               className="w-8 h-8 rounded-lg object-cover border border-slate-200 dark:border-slate-700 shrink-0"
                             />
                           ) : (

@@ -556,7 +556,7 @@ export const PublicTrackingPortal: React.FC<PublicTrackingPortalProps> = ({ toke
                   {Array.isArray(record.items) && record.items.length > 0 ? (
                     <div className="space-y-2.5">
                       {record.items.map((item, idx) => {
-                        const itemImg = sanitizePublicImageUrl(item.imageUrl, '');
+                        const itemImg = sanitizePublicImageUrl(item.thumbUrl || item.imageUrl, '');
                         return (
                           <div
                             key={`${item.productName}-${idx}`}
@@ -566,6 +566,8 @@ export const PublicTrackingPortal: React.FC<PublicTrackingPortalProps> = ({ toke
                               <img
                                 src={itemImg}
                                 alt={item.productName}
+                                loading="lazy"
+                                decoding="async"
                                 className="w-14 h-14 rounded-lg object-cover border border-slate-200 dark:border-slate-700 shrink-0 bg-white dark:bg-slate-900"
                                 onError={(e) => {
                                   e.currentTarget.style.display = 'none';

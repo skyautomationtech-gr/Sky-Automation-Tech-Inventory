@@ -61,6 +61,7 @@ interface DraftReceiveLine {
   color: string;
   category: string;
   imageUrl: string;
+  thumbUrl?: string;
   orderedQty: number;
   prevGood: number;
   prevDamaged: number;
@@ -197,6 +198,7 @@ export const ReceiveStockModal: React.FC<ReceiveStockModalProps> = ({
           color: it.color || '',
           category: it.category || '',
           imageUrl: it.imageUrl || '',
+          thumbUrl: it.thumbUrl || '',
           orderedQty: it.qty,
           prevGood: pGood,
           prevDamaged: pDmg,
@@ -497,10 +499,12 @@ export const ReceiveStockModal: React.FC<ReceiveStockModalProps> = ({
               >
                 <div className="flex flex-wrap items-start justify-between gap-2">
                   <div className="flex items-center gap-2.5 min-w-0">
-                    {line.imageUrl && (
+                    {(line.thumbUrl || line.imageUrl) && (
                       <img
-                        src={line.imageUrl}
+                        src={line.thumbUrl || line.imageUrl}
                         alt={line.productName}
+                        loading="lazy"
+                        decoding="async"
                         className="w-9 h-9 rounded-lg object-cover border border-slate-200 dark:border-slate-700 shrink-0"
                       />
                     )}

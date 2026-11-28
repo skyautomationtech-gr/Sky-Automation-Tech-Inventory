@@ -1172,64 +1172,6 @@ export default function App() {
     performNavigate(tab, subAction, initialId);
   };
 
-  // Settings prefix & logo updates form
-  const [settingsLogoUrl, setSettingsLogoUrl] = useState<string>('');
-
-  useEffect(() => {
-    if (companySettings?.logoUrl) {
-      setSettingsLogoUrl(companySettings.logoUrl);
-    }
-  }, [companySettings]);
-
-  const handleLogoFileUpload = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      if (file.size > 2 * 1024 * 1024) {
-        alert('Image file size should be less than 2MB.');
-        return;
-      }
-      const reader = new FileReader();
-      reader.onload = () => {
-        if (typeof reader.result === 'string') {
-          setSettingsLogoUrl(reader.result);
-        }
-      };
-      reader.readAsDataURL(file);
-    }
-  };
-
-  const handleSaveCompanySettings = async (
-    e: React.FormEvent, 
-    extraData: any
-  ) => {
-    e.preventDefault();
-
-    if (user?.role !== 'superadmin' && user?.role !== 'super_admin') {
-      alert('Access Restricted: Only Super Admin can modify Company and Invoice Settings.');
-      return;
-    }
-
-    const updated = {
-      ...(companySettings || {
-        companyName: 'Sky Automation Tech',
-        isParent: true,
-        isSellingBrand: false,
-        subBrands: getSellingSubBrands(subBrands).map((s) => s.shortCode),
-        onboarded: true
-      }),
-      ...extraData
-    };
-
-    try {
-      await saveCompanySettings(updated);
-      setCompanySettings(updated);
-      alert('Invoice & Company Settings updated successfully!');
-    } catch (err) {
-      console.error(err);
-      alert('Failed to save company settings.');
-    }
-  };
-
   const handleMigrateBarcodes = async () => {
     if (user?.role !== 'superadmin' && user?.role !== 'super_admin') return;
     setIsMigratingBarcodes(true);

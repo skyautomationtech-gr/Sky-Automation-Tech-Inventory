@@ -706,6 +706,7 @@ export function sanitizePreOrderItemsForDoc(items: PreOrderItem[]): PreOrderItem
     if (item.linkedProductId) cleaned.linkedProductId = item.linkedProductId;
     if (item.linkedVariantId) cleaned.linkedVariantId = item.linkedVariantId;
     if (item.imageUrl) cleaned.imageUrl = item.imageUrl;
+    if (item.thumbUrl) cleaned.thumbUrl = item.thumbUrl;
     if (item.category) cleaned.category = item.category;
     if (item.sku) cleaned.sku = item.sku;
     if (item.model) cleaned.model = item.model;
@@ -756,6 +757,7 @@ export function normalizePreOrderItems(order?: Partial<PreOrder> | null): PreOrd
   if (order.linkedProductId) legacyItem.linkedProductId = order.linkedProductId;
   if (order.linkedVariantId) legacyItem.linkedVariantId = order.linkedVariantId;
   if (order.productImage) legacyItem.imageUrl = order.productImage;
+  if (order.productThumb) legacyItem.thumbUrl = order.productThumb;
   if (order.category) legacyItem.category = order.category;
   if (order.sku) legacyItem.sku = order.sku;
   if (order.model) legacyItem.model = order.model;
@@ -829,6 +831,7 @@ export function summarizePreOrderItemsLegacyFields(items: PreOrderItem[]) {
     variant: first?.variant || '',
     color: first?.color || '',
     productImage: first?.imageUrl || '',
+    productThumb: first?.thumbUrl || '',
     linkedProductId: first?.linkedProductId || '',
     linkedVariantId: first?.linkedVariantId || '',
     qty: totalQty || 1,

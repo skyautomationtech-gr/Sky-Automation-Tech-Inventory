@@ -92,7 +92,17 @@ export const db = firestoreDb;
 // Safe Storage initialization
 let storageInstance: any = null;
 try {
-  storageInstance = getStorage(app);
+  if (app) {
+    const cleanBucket = (firebaseConfig.storageBucket || '').trim().replace(/^gs:\/\//, '');
+    storageInstance = cleanBucket
+      ? getStorage(app, `gs://${cleanBucket}`)
+      : getStorage(app);
+    if (storageInstance) {
+      // Prevent default 600s silent SDK retry stalls; our mediaUpload layer controls 15s stall & 3x retry
+      storageInstance.maxUploadRetryTime = 15000;
+      storageInstance.maxOperationRetryTime = 20000;
+    }
+  }
 } catch (error) {
   console.warn("Firebase Storage service is not available in this environment:", error);
 }

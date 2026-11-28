@@ -11,7 +11,7 @@ export interface PerfStatsSnapshot {
   timings: Record<string, number[]>;
 }
 
-const IS_DEV = import.meta.env.DEV;
+const IS_DEV = Boolean((import.meta as any)?.env?.DEV);
 
 let currentScreen = 'startup';
 let loginClickTime: number | null = null;

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from 'react';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   AlertCircle,
   AlertTriangle,
@@ -8,10 +8,12 @@ import {
   ExternalLink,
   FileText,
   History,
+  Loader2,
   Lock,
   Paperclip,
   Plane,
   Plus,
+  RotateCcw,
   Save,
   Ship,
   Trash2,
@@ -35,7 +37,13 @@ import {
   isPreOrderAdminRole,
 } from '../../preOrders/constants';
 import { calculateActualShippingCost, fromPaisa, toPaisa } from '../../preOrders/calculations';
-import { uploadPreOrderDocument, validatePreOrderDocumentFile } from '../../preOrders/imageUpload';
+import {
+  deleteMediaObject,
+  uploadPreOrderDocument,
+  UploadedPreOrderDocument,
+  validatePreOrderDocumentFile,
+} from '../../preOrders/imageUpload';
+import { formatBytesCompact } from '../../utils/mediaUpload';
 import {
   actorFromUser,
   addPreOrderShipmentDoc,
@@ -142,6 +150,8 @@ export const PreOrderShipmentTab: React.FC<PreOrderShipmentTabProps> = ({
   const [localReceiptUrl, setLocalReceiptUrl] = useState('');
   const [handlingReceiptUrl, setHandlingReceiptUrl] = useState('');
   const [uploadingExpKey, setUploadingExpKey] = useState<string | null>(null);
+  const [expUploadProgress, setExpUploadProgress] = useState<Record<string, number>>({});
+  const [expUploadErrors, setExpUploadErrors] = useState<Record<string, string>>({});
   const [savingExpenses, setSavingExpenses] = useState(false);
 
   // Document Upload State
@@ -149,9 +159,30 @@ export const PreOrderShipmentTab: React.FC<PreOrderShipmentTabProps> = ({
   const [docFile, setDocFile] = useState<File | null>(null);
   const [docNote, setDocNote] = useState('');
   const [uploadingDoc, setUploadingDoc] = useState(false);
+  const [docUploadStatus, setDocUploadStatus] = useState<'idle' | 'preparing' | 'uploading' | 'done' | 'failed'>('idle');
+  const [docUploadProgress, setDocUploadProgress] = useState(0);
+  const [docUploadError, setDocUploadError] = useState<string | undefined>(undefined);
+  const [docUploadErrorCode, setDocUploadErrorCode] = useState<string | undefined>(undefined);
+  const [uploadedDocMeta, setUploadedDocMeta] = useState<UploadedPreOrderDocument | null>(null);
   const [deleteTargetDoc, setDeleteTargetDoc] = useState<PreOrderShipmentDoc | null>(null);
   const [deleteReason, setDeleteReason] = useState('');
   const [deletingDoc, setDeletingDoc] = useState(false);
+
+  const docAbortRef = useRef<AbortController | null>(null);
+  const docPromiseRef = useRef<Promise<UploadedPreOrderDocument | null> | null>(null);
+  const sessionDocStorageRef = useRef<string | undefined>(undefined);
+  const expAbortRef = useRef<Map<string, AbortController>>(new Map());
+  const sessionExpPathsRef = useRef<Record<string, string>>({});
+
+  useEffect(() => {
+    return () => {
+      docAbortRef.current?.abort();
+      if (sessionDocStorageRef.current) {
+        void deleteMediaObject(sessionDocStorageRef.current);
+      }
+      expAbortRef.current.forEach((ctrl) => ctrl.abort());
+    };
+  }, []);
 
   // Manual Shipment Event State
   const [eventText, setEventText] = useState('');
@@ -264,18 +295,59 @@ export const PreOrderShipmentTab: React.FC<PreOrderShipmentTabProps> = ({
       toast.error(err);
       return;
     }
+    expAbortRef.current.get(key)?.abort();
+    const controller = new AbortController();
+    expAbortRef.current.set(key, controller);
+    if (sessionExpPathsRef.current[key]) {
+      void deleteMediaObject(sessionExpPathsRef.current[key]);
+      delete sessionExpPathsRef.current[key];
+    }
+
     setUploadingExpKey(key);
+    setExpUploadProgress((prev) => ({ ...prev, [key]: 5 }));
+    setExpUploadErrors((prev) => {
+      const next = { ...prev };
+      delete next[key];
+      return next;
+    });
+
     try {
-      const uploaded = await uploadPreOrderDocument(order.id, file);
+      const uploaded = await uploadPreOrderDocument(order.id, file, {
+        signal: controller.signal,
+        onProgress: (pct) => {
+          if (!controller.signal.aborted) {
+            setExpUploadProgress((prev) => ({ ...prev, [key]: pct }));
+          }
+        },
+      });
+      if (controller.signal.aborted) {
+        if (uploaded.storagePath) void deleteMediaObject(uploaded.storagePath);
+        return;
+      }
+      if (uploaded.storagePath) {
+        sessionExpPathsRef.current[key] = uploaded.storagePath;
+      }
       if (key === 'freight') setFreightReceiptUrl(uploaded.url);
       if (key === 'customs') setCustomsReceiptUrl(uploaded.url);
       if (key === 'local') setLocalReceiptUrl(uploaded.url);
       if (key === 'handling') setHandlingReceiptUrl(uploaded.url);
-      toast.success('Expense receipt attached. Click "Save Shipping Expenses" to persist.');
+      if (uploaded.fallbackUsed) {
+        toast.warning('Storage bucket unavailable — saved compact 40 KB receipt preview.');
+      } else {
+        toast.success('Expense receipt attached. Click "Save Shipping Expenses" to persist.');
+      }
     } catch (uploadErr: any) {
-      toast.error(uploadErr?.message || 'Failed to upload receipt.');
+      if (controller.signal.aborted || uploadErr?.code === 'storage/canceled') return;
+      const code = uploadErr?.code || 'upload-failed';
+      const msg = uploadErr?.message || 'Failed to upload receipt.';
+      console.error('[PreOrderShipmentTab] Expense receipt upload failed:', code, uploadErr);
+      setExpUploadErrors((prev) => ({ ...prev, [key]: `${code}: ${msg}` }));
+      toast.error(`Receipt upload failed (${code}): ${msg}`);
     } finally {
-      setUploadingExpKey(null);
+      if (expAbortRef.current.get(key) === controller) {
+        expAbortRef.current.delete(key);
+      }
+      setUploadingExpKey((curr) => (curr === key ? null : curr));
     }
   };
 
@@ -305,6 +377,7 @@ export const PreOrderShipmentTab: React.FC<PreOrderShipmentTabProps> = ({
         handlingReceiptUrl,
       };
       await updatePreOrderShippingExpenses(order.id, breakdown, actorFromUser(user));
+      sessionExpPathsRef.current = {};
       toast.success('Shipping expense breakdown saved to restricted cost record.');
       await onRefreshParent();
     } catch (err: any) {
@@ -314,22 +387,110 @@ export const PreOrderShipmentTab: React.FC<PreOrderShipmentTabProps> = ({
     }
   };
 
+  const cleanupDocUpload = (deleteStorageObj: boolean) => {
+    docAbortRef.current?.abort();
+    docAbortRef.current = null;
+    docPromiseRef.current = null;
+    if (deleteStorageObj && sessionDocStorageRef.current) {
+      void deleteMediaObject(sessionDocStorageRef.current);
+      sessionDocStorageRef.current = undefined;
+    }
+  };
+
+  const startDocBackgroundUpload = (file: File) => {
+    docAbortRef.current?.abort();
+    const controller = new AbortController();
+    docAbortRef.current = controller;
+    setDocUploadStatus('preparing');
+    setDocUploadProgress(5);
+    setDocUploadError(undefined);
+    setDocUploadErrorCode(undefined);
+    setUploadedDocMeta(null);
+
+    const p = uploadPreOrderDocument(order.id, file, {
+      signal: controller.signal,
+      onPhase: (phase) => {
+        if (!controller.signal.aborted) {
+          setDocUploadStatus(phase === 'preparing' ? 'preparing' : 'uploading');
+        }
+      },
+      onProgress: (pct) => {
+        if (!controller.signal.aborted) {
+          setDocUploadStatus(pct < 18 ? 'preparing' : 'uploading');
+          setDocUploadProgress(pct);
+        }
+      },
+    })
+      .then((uploaded) => {
+        if (controller.signal.aborted) {
+          if (uploaded.storagePath) void deleteMediaObject(uploaded.storagePath);
+          return null;
+        }
+        if (uploaded.storagePath) {
+          sessionDocStorageRef.current = uploaded.storagePath;
+        }
+        if (uploaded.fallbackUsed) {
+          toast.warning('Storage bucket unavailable — saved compact 40 KB preview.');
+        }
+        setUploadedDocMeta(uploaded);
+        setDocUploadStatus('done');
+        setDocUploadProgress(100);
+        return uploaded;
+      })
+      .catch((uploadErr: any) => {
+        if (controller.signal.aborted || uploadErr?.code === 'storage/canceled') {
+          return null;
+        }
+        const code = uploadErr?.code || 'upload-failed';
+        const message = uploadErr?.message || 'Failed to upload shipment document.';
+        console.error('[PreOrderShipmentTab] Shipment doc upload failed:', code, uploadErr);
+        setDocUploadStatus('failed');
+        setDocUploadProgress(0);
+        setDocUploadError(message);
+        setDocUploadErrorCode(code);
+        toast.error(`Document upload failed (${code}): ${message}`);
+        return null;
+      })
+      .finally(() => {
+        if (docAbortRef.current === controller) {
+          docAbortRef.current = null;
+        }
+      });
+
+    docPromiseRef.current = p;
+    return p;
+  };
+
+  const handleClearDocSelection = () => {
+    cleanupDocUpload(true);
+    setDocFile(null);
+    setUploadedDocMeta(null);
+    setDocUploadStatus('idle');
+    setDocUploadProgress(0);
+    setDocUploadError(undefined);
+    setDocUploadErrorCode(undefined);
+  };
+
   const handleUploadDoc = async (e: React.FormEvent) => {
     e.preventDefault();
     if (!canManageTracking || uploadingDoc) return;
     if (!docFile) {
-      toast.error('Choose a JPG, PNG, WebP, or PDF file (<= 5MB).');
+      toast.error('Choose a JPG, PNG, WebP, or PDF file.');
       return;
     }
-    const err = validatePreOrderDocumentFile(docFile);
-    if (err) {
-      toast.error(err);
+    if (docUploadStatus === 'failed') {
+      toast.error('Document upload failed. Click Retry or choose a different file.');
       return;
     }
 
     setUploadingDoc(true);
     try {
-      const uploaded = await uploadPreOrderDocument(order.id, docFile);
+      const uploaded =
+        uploadedDocMeta ||
+        (await (docPromiseRef.current || startDocBackgroundUpload(docFile)));
+      if (!uploaded) {
+        return;
+      }
       await addPreOrderShipmentDoc(
         order.id,
         {
@@ -343,13 +504,17 @@ export const PreOrderShipmentTab: React.FC<PreOrderShipmentTabProps> = ({
         },
         actorFromUser(user)
       );
+      sessionDocStorageRef.current = undefined;
       toast.success(`Uploaded "${docFile.name}".`);
       setDocFile(null);
+      setUploadedDocMeta(null);
+      setDocUploadStatus('idle');
+      setDocUploadProgress(0);
       setDocNote('');
       await hydrateFromPropsAndFetch();
       await onRefreshParent();
     } catch (uploadErr: any) {
-      toast.error(uploadErr?.message || 'Failed to upload shipment document.');
+      toast.error(uploadErr?.message || 'Failed to save shipment document.');
     } finally {
       setUploadingDoc(false);
     }
@@ -714,10 +879,14 @@ export const PreOrderShipmentTab: React.FC<PreOrderShipmentTabProps> = ({
                       title="Upload receipt (optional)"
                     >
                       <Paperclip className="w-3 h-3 text-[#D4AF37]" />
-                      {uploadingExpKey === item.key ? '...' : item.receiptUrl ? 'Replace' : 'Receipt'}
+                      {uploadingExpKey === item.key
+                        ? `${expUploadProgress[item.key] || 0}%`
+                        : item.receiptUrl
+                        ? 'Replace'
+                        : 'Receipt'}
                       <input
                         type="file"
-                        accept="image/jpeg,image/png,image/webp,application/pdf"
+                        accept="image/jpeg,image/png,image/webp,image/gif,image/heic,image/heif,application/pdf"
                         className="hidden"
                         onChange={(e) => {
                           const f = e.target.files?.[0];
@@ -739,6 +908,11 @@ export const PreOrderShipmentTab: React.FC<PreOrderShipmentTabProps> = ({
                     )}
                   </div>
                 </FormField>
+                {expUploadErrors[item.key] && (
+                  <p className="text-[11px] text-rose-600 dark:text-rose-400">
+                    {expUploadErrors[item.key]}
+                  </p>
+                )}
               </div>
             ))}
           </div>
@@ -785,54 +959,114 @@ export const PreOrderShipmentTab: React.FC<PreOrderShipmentTabProps> = ({
         </div>
 
         {canManageTracking && (
-          <form onSubmit={handleUploadDoc} className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-end">
-            <div className="sm:col-span-4">
-              <FormField label="Document Type">
-                <Select
-                  options={DOC_TYPES}
-                  value={docType}
-                  onChange={(val) => setDocType(val as PreOrderShipmentDocType)}
-                  searchable={false}
-                />
-              </FormField>
-            </div>
-            <div className="sm:col-span-5">
-              <FormField label="Select File (<= 5MB)">
-                <label className="flex items-center gap-2 px-3 h-9 rounded-lg border border-dashed border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs cursor-pointer truncate">
-                  <Upload className="w-3.5 h-3.5 text-[#D4AF37] shrink-0" />
-                  <span className="truncate">{docFile ? docFile.name : 'Choose PDF or Image...'}</span>
-                  <input
-                    type="file"
-                    accept="image/jpeg,image/png,image/webp,application/pdf"
-                    className="hidden"
-                    onChange={(e) => {
-                      const f = e.target.files?.[0];
-                      e.target.value = '';
-                      if (!f) return;
-                      const err = validatePreOrderDocumentFile(f);
-                      if (err) {
-                        toast.error(err);
-                        return;
-                      }
-                      setDocFile(f);
-                    }}
+          <form onSubmit={handleUploadDoc} className="space-y-2.5">
+            <div className="grid grid-cols-1 sm:grid-cols-12 gap-2.5 items-end">
+              <div className="sm:col-span-4">
+                <FormField label="Document Type">
+                  <Select
+                    options={DOC_TYPES}
+                    value={docType}
+                    onChange={(val) => setDocType(val as PreOrderShipmentDocType)}
+                    searchable={false}
                   />
-                </label>
-              </FormField>
+                </FormField>
+              </div>
+              <div className="sm:col-span-5">
+                <FormField label="Select File (JPG/PNG/WebP/HEIC or PDF <=5MB)">
+                  <div className="flex items-center gap-1.5">
+                    <label className="flex-1 flex items-center gap-2 px-3 h-9 rounded-lg border border-dashed border-slate-300 dark:border-slate-700 bg-white dark:bg-slate-900 text-xs cursor-pointer truncate">
+                      <Upload className="w-3.5 h-3.5 text-[#D4AF37] shrink-0" />
+                      <span className="truncate">{docFile ? docFile.name : 'Choose PDF or Image...'}</span>
+                      <input
+                        type="file"
+                        accept="image/jpeg,image/png,image/webp,image/gif,image/heic,image/heif,application/pdf"
+                        className="hidden"
+                        onChange={(e) => {
+                          const f = e.target.files?.[0];
+                          e.target.value = '';
+                          if (!f) return;
+                          const err = validatePreOrderDocumentFile(f);
+                          if (err) {
+                            toast.error(err);
+                            return;
+                          }
+                          cleanupDocUpload(true);
+                          setDocFile(f);
+                          void startDocBackgroundUpload(f);
+                        }}
+                      />
+                    </label>
+                    {docFile && (
+                      <button
+                        type="button"
+                        onClick={handleClearDocSelection}
+                        className="p-2 rounded-lg text-rose-600 hover:bg-rose-50 cursor-pointer shrink-0"
+                        title="Remove file"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                    )}
+                  </div>
+                </FormField>
+              </div>
+              <div className="sm:col-span-3">
+                <Button
+                  type="submit"
+                  variant="primary"
+                  size="sm"
+                  isLoading={uploadingDoc}
+                  disabled={!docFile || docUploadStatus === 'failed'}
+                  leftIcon={<Plus className="w-3.5 h-3.5" />}
+                  className="w-full"
+                >
+                  {uploadingDoc ? 'Saving...' : 'Upload Doc'}
+                </Button>
+              </div>
             </div>
-            <div className="sm:col-span-3">
-              <Button
-                type="submit"
-                variant="primary"
-                size="sm"
-                isLoading={uploadingDoc}
-                disabled={!docFile}
-                leftIcon={<Plus className="w-3.5 h-3.5" />}
-                className="w-full"
-              >
-                Upload Doc
-              </Button>
-            </div>
+
+            {docFile && (
+              <div className="flex flex-wrap items-center gap-3 px-3 py-2 rounded-lg bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 text-xs">
+                {(docUploadStatus === 'preparing' || docUploadStatus === 'uploading') && (
+                  <>
+                    <Loader2 className="w-3.5 h-3.5 animate-spin text-[#D4AF37]" />
+                    <span className="text-amber-700 dark:text-amber-300 font-semibold">
+                      {docUploadStatus === 'preparing'
+                        ? 'Compressing...'
+                        : `Uploading ${docUploadProgress}%`}
+                    </span>
+                    <div className="w-28 h-1.5 rounded-full bg-slate-200 dark:bg-slate-700 overflow-hidden">
+                      <div
+                        className="h-full bg-[#D4AF37] transition-all duration-150"
+                        style={{ width: `${Math.max(8, docUploadProgress)}%` }}
+                      />
+                    </div>
+                  </>
+                )}
+                {docUploadStatus === 'done' && uploadedDocMeta && (
+                  <span className="inline-flex items-center gap-1.5 text-emerald-700 dark:text-emerald-400 font-semibold">
+                    <CheckCircle2 className="w-3.5 h-3.5" />
+                    {uploadedDocMeta.fallbackUsed
+                      ? `Compact preview (${formatBytesCompact(uploadedDocMeta.fileSize)})`
+                      : `Ready • ${formatBytesCompact(uploadedDocMeta.fileSize)}`}
+                  </span>
+                )}
+                {docUploadStatus === 'failed' && (
+                  <div className="flex items-center gap-2 text-rose-600 dark:text-rose-400">
+                    <span className="font-semibold">
+                      Failed ({docUploadErrorCode || 'error'}): {docUploadError}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => void startDocBackgroundUpload(docFile)}
+                      className="inline-flex items-center gap-1 px-2 py-0.5 rounded bg-amber-100 text-amber-800 text-[11px] font-bold cursor-pointer"
+                    >
+                      <RotateCcw className="w-3 h-3" />
+                      Retry
+                    </button>
+                  </div>
+                )}
+              </div>
+            )}
           </form>
         )}
 

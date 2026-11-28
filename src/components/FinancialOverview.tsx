@@ -31,7 +31,9 @@ import {
   Tag,
   Package,
   Layers,
-  Check
+  Check,
+  Loader2,
+  RotateCcw,
 } from 'lucide-react';
 import { 
   getExpenses, 
@@ -50,8 +52,14 @@ import {
   getOrders, 
   getStockLogs 
 } from '../firebase/db';
-import { storage } from '../firebase/config';
-import { ref, uploadBytes, getDownloadURL } from 'firebase/storage';
+import {
+  deleteMediaObject,
+  formatBytesCompact,
+  MediaUploadError,
+  MediaUploadResult,
+  uploadImageAsset,
+  validateImageUploadFile,
+} from '../utils/mediaUpload';
 import { NetProfitBreakdownModal } from './NetProfitBreakdownModal';
 import { 
   UserProfile, 
@@ -284,9 +292,45 @@ export default function FinancialOverview({
   const [expenseFormNotes, setExpenseFormNotes] = useState('');
   const [expenseReceiptFile, setExpenseReceiptFile] = useState<File | null>(null);
   const [expenseReceiptUrl, setExpenseReceiptUrl] = useState('');
+  const [expenseReceiptPreview, setExpenseReceiptPreview] = useState('');
+  const [expenseUploadStatus, setExpenseUploadStatus] = useState<'idle' | 'preparing' | 'uploading' | 'done' | 'failed'>('idle');
+  const [expenseUploadProgress, setExpenseUploadProgress] = useState(0);
+  const [expenseUploadError, setExpenseUploadError] = useState<string | undefined>(undefined);
+  const [expenseUploadBytes, setExpenseUploadBytes] = useState<number | undefined>(undefined);
   const [isSubmittingExpense, setIsSubmittingExpense] = useState(false);
+  const [expenseSubmitText, setExpenseSubmitText] = useState('');
   const [errorMsg, setErrorMsg] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
+
+  const expenseAbortRef = useRef<AbortController | null>(null);
+  const expensePromiseRef = useRef<Promise<MediaUploadResult | null> | null>(null);
+  const sessionExpensePathRef = useRef<string | undefined>(undefined);
+  const expenseSavedRef = useRef(false);
+
+  const cleanupExpenseReceipt = (deleteStorageObj: boolean) => {
+    expenseAbortRef.current?.abort();
+    expenseAbortRef.current = null;
+    expensePromiseRef.current = null;
+    if (expenseReceiptPreview && expenseReceiptPreview.startsWith('blob:')) {
+      URL.revokeObjectURL(expenseReceiptPreview);
+    }
+    if (deleteStorageObj && sessionExpensePathRef.current) {
+      void deleteMediaObject(sessionExpensePathRef.current);
+      sessionExpensePathRef.current = undefined;
+    }
+  };
+
+  useEffect(() => {
+    if (!showAddExpenseModal && !expenseSavedRef.current) {
+      cleanupExpenseReceipt(true);
+      setExpenseReceiptFile(null);
+      setExpenseReceiptPreview('');
+      setExpenseUploadStatus('idle');
+      setExpenseUploadProgress(0);
+      setExpenseUploadError(undefined);
+      setExpenseUploadBytes(undefined);
+    }
+  }, [showAddExpenseModal]);
 
   // Confirmation Modal State (replaces browser confirm)
   const [confirmDialog, setConfirmDialog] = useState<{
@@ -1253,7 +1297,14 @@ export default function FinancialOverview({
     setExpenseFormSubBrand(expense.subBrand || SHARED_ACCOUNTING_TAG);
     setExpenseFormNotes(expense.notes || '');
     setExpenseReceiptUrl(expense.receiptUrl || '');
+    cleanupExpenseReceipt(true);
+    expenseSavedRef.current = false;
     setExpenseReceiptFile(null);
+    setExpenseReceiptPreview('');
+    setExpenseUploadStatus(expense.receiptUrl ? 'done' : 'idle');
+    setExpenseUploadProgress(expense.receiptUrl ? 100 : 0);
+    setExpenseUploadError(undefined);
+    setExpenseUploadBytes(undefined);
     setShowAddExpenseModal(true);
   };
 
@@ -1286,6 +1337,71 @@ export default function FinancialOverview({
     });
   };
 
+  const startExpenseReceiptUpload = async (file: File): Promise<MediaUploadResult | null> => {
+    expenseAbortRef.current?.abort();
+    const controller = new AbortController();
+    expenseAbortRef.current = controller;
+
+    setExpenseUploadStatus('preparing');
+    setExpenseUploadProgress(0);
+    setExpenseUploadError(undefined);
+    setExpenseUploadBytes(undefined);
+
+    const uploadPromise = (async (): Promise<MediaUploadResult | null> => {
+      try {
+        const res = await uploadImageAsset(file, {
+          folderPath: 'receipts',
+          maxDimension: 1280,
+          quality: 0.8,
+          generateThumb: false,
+          signal: controller.signal,
+          onPhase: (phase) => {
+            if (controller.signal.aborted) return;
+            setExpenseUploadStatus(phase === 'preparing' ? 'preparing' : 'uploading');
+          },
+          onProgress: (progress) => {
+            if (controller.signal.aborted) return;
+            setExpenseUploadProgress(progress);
+          },
+        });
+        if (controller.signal.aborted) {
+          if (res.storagePath) void deleteMediaObject(res.storagePath);
+          return null;
+        }
+        if (sessionExpensePathRef.current && sessionExpensePathRef.current !== res.storagePath) {
+          void deleteMediaObject(sessionExpensePathRef.current);
+        }
+        sessionExpensePathRef.current = res.storagePath || undefined;
+        setExpenseReceiptUrl(res.url);
+        setExpenseUploadStatus('done');
+        setExpenseUploadProgress(100);
+        setExpenseUploadBytes(res.sizeBytes);
+        if (res.fallbackUsed && res.errorMessage) {
+          setErrorMsg(res.errorMessage);
+        }
+        return res;
+      } catch (err: any) {
+        if (controller.signal.aborted || err?.code === 'storage/canceled') {
+          return null;
+        }
+        const msg = err instanceof MediaUploadError
+          ? err.message
+          : `${err?.code ? `[${err.code}] ` : ''}${err?.message || 'Receipt upload failed'}`;
+        setExpenseUploadStatus('failed');
+        setExpenseUploadError(msg);
+        return null;
+      } finally {
+        if (expenseAbortRef.current === controller) {
+          expenseAbortRef.current = null;
+        }
+        expensePromiseRef.current = null;
+      }
+    })();
+
+    expensePromiseRef.current = uploadPromise;
+    return uploadPromise;
+  };
+
   // Submit Expense Form (Modal & Form)
   const handleExpenseFormSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -1294,40 +1410,36 @@ export default function FinancialOverview({
       setErrorMsg("Please enter a valid expense amount greater than 0");
       return;
     }
+    if (expenseUploadStatus === 'failed') {
+      setErrorMsg('Receipt upload failed. Please click Retry or remove the receipt before saving.');
+      return;
+    }
 
     setIsSubmittingExpense(true);
+    setExpenseSubmitText('');
     setErrorMsg('');
     setSuccessMsg('');
 
     try {
       let finalReceiptUrl = expenseReceiptUrl;
 
-      if (expenseReceiptFile) {
-        const fileExtension = expenseReceiptFile.name.split('.').pop();
-        const timestamp = Date.now();
-        const path = `receipts/${timestamp}_${Math.random().toString(36).substring(2, 7)}.${fileExtension}`;
-        
-        try {
-          if (storage) {
-            const storageRef = ref(storage, path);
-            const snapshot = await uploadBytes(storageRef, expenseReceiptFile);
-            finalReceiptUrl = await getDownloadURL(snapshot.ref);
-          } else {
-            finalReceiptUrl = await new Promise((resolve) => {
-              const reader = new FileReader();
-              reader.onloadend = () => resolve(reader.result as string);
-              reader.readAsDataURL(expenseReceiptFile);
-            });
-          }
-        } catch (uploadError) {
-          finalReceiptUrl = await new Promise((resolve) => {
-            const reader = new FileReader();
-            reader.onloadend = () => resolve(reader.result as string);
-            reader.readAsDataURL(expenseReceiptFile);
-          });
+      if (
+        expenseReceiptFile &&
+        (expenseUploadStatus === 'preparing' || expenseUploadStatus === 'uploading' || !finalReceiptUrl)
+      ) {
+        setExpenseSubmitText('Finishing photo upload...');
+        const activePromise = expensePromiseRef.current || startExpenseReceiptUpload(expenseReceiptFile);
+        const res = await activePromise;
+        if (!res) {
+          setErrorMsg('Receipt upload failed. Please retry or remove the receipt before saving.');
+          setIsSubmittingExpense(false);
+          setExpenseSubmitText('');
+          return;
         }
+        finalReceiptUrl = res.url;
       }
 
+      setExpenseSubmitText('Saving Expense...');
       const finalExpenseId = expenseFormId || generateExpenseId();
       const expenseData: Omit<Expense, 'id'> = {
         expenseId: finalExpenseId,
@@ -1355,6 +1467,9 @@ export default function FinancialOverview({
         setSuccessMsg(`New expense record ${finalExpenseId} (৳${Number(expenseFormAmount).toLocaleString()}) recorded successfully.`);
       }
 
+      expenseSavedRef.current = true;
+      sessionExpensePathRef.current = undefined;
+      cleanupExpenseReceipt(false);
       setShowAddExpenseModal(false);
       setEditingExpense(null);
       await loadFinancialData();
@@ -1365,18 +1480,40 @@ export default function FinancialOverview({
       setErrorMsg(`Failed to save expense: ${err.message || err}`);
     } finally {
       setIsSubmittingExpense(false);
+      setExpenseSubmitText('');
     }
   };
 
   const handleExpenseFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      const file = e.target.files[0];
-      if (file.size > 5 * 1024 * 1024) {
-        setErrorMsg("Receipt image size must not exceed 5MB.");
-        return;
-      }
-      setExpenseReceiptFile(file);
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file) return;
+    const validationErr = validateImageUploadFile(file);
+    if (validationErr) {
+      setErrorMsg(validationErr);
+      return;
     }
+    setErrorMsg('');
+    if (expenseReceiptPreview && expenseReceiptPreview.startsWith('blob:')) {
+      URL.revokeObjectURL(expenseReceiptPreview);
+    }
+    const localUrl = URL.createObjectURL(file);
+    setExpenseReceiptFile(file);
+    setExpenseReceiptPreview(localUrl);
+    setExpenseReceiptUrl('');
+    expenseSavedRef.current = false;
+    void startExpenseReceiptUpload(file);
+  };
+
+  const handleClearExpenseReceipt = () => {
+    cleanupExpenseReceipt(true);
+    setExpenseReceiptFile(null);
+    setExpenseReceiptPreview('');
+    setExpenseReceiptUrl('');
+    setExpenseUploadStatus('idle');
+    setExpenseUploadProgress(0);
+    setExpenseUploadError(undefined);
+    setExpenseUploadBytes(undefined);
   };
 
   // SVG Visual Charts
@@ -3067,42 +3204,87 @@ export default function FinancialOverview({
                 <label className="block text-xs font-bold text-slate-500 uppercase tracking-tight mb-1">
                   Receipt / Proof of Payment (Optional)
                 </label>
-                {expenseReceiptUrl && !expenseReceiptFile ? (
-                  <div className="flex items-center justify-between p-2 rounded-xl border border-slate-200 bg-slate-50">
-                    <span className="text-xs text-slate-600 truncate flex items-center gap-1.5">
-                      <ImageIcon size={14} className="text-teal-600" /> Existing Receipt Attached
-                    </span>
-                    <div className="flex items-center gap-2">
-                      <button
-                        type="button"
-                        onClick={() => setViewingReceiptUrl(expenseReceiptUrl)}
-                        className="text-xs font-bold text-teal-600 hover:underline cursor-pointer"
-                      >
-                        View
-                      </button>
-                      <button
-                        type="button"
-                        onClick={() => setExpenseReceiptUrl('')}
-                        className="p-1 bg-red-50 text-red-500 rounded-md hover:bg-red-100 cursor-pointer"
-                      >
-                        <X size={12} />
-                      </button>
+                {(expenseReceiptPreview || expenseReceiptUrl) ? (
+                  <div className="p-2.5 rounded-xl border border-slate-200 bg-slate-50 space-y-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <div className="flex items-center gap-2 min-w-0">
+                        <img
+                          src={expenseReceiptPreview || expenseReceiptUrl}
+                          alt="Receipt preview"
+                          className="w-10 h-10 rounded-lg object-cover border border-slate-200 shrink-0"
+                        />
+                        <div className="min-w-0">
+                          <div className="text-xs font-semibold text-slate-700 truncate">
+                            {expenseReceiptFile ? expenseReceiptFile.name : 'Existing Receipt Attached'}
+                          </div>
+                          {(expenseUploadStatus === 'preparing' || expenseUploadStatus === 'uploading') && (
+                            <div className="flex items-center gap-1.5 text-[11px] text-amber-700 font-semibold">
+                              <Loader2 size={11} className="animate-spin" />
+                              <span>
+                                {expenseUploadStatus === 'preparing'
+                                  ? 'Compressing...'
+                                  : `Uploading ${expenseUploadProgress}%`}
+                              </span>
+                            </div>
+                          )}
+                          {expenseUploadStatus === 'done' && (
+                            <div className="text-[11px] text-emerald-700 font-semibold">
+                              {expenseUploadBytes
+                                ? `Uploaded • ${formatBytesCompact(expenseUploadBytes)}`
+                                : 'Attached'}
+                            </div>
+                          )}
+                          {expenseUploadStatus === 'failed' && (
+                            <div className="text-[11px] text-rose-600 font-semibold truncate">
+                              {expenseUploadError}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-1.5 shrink-0">
+                        {expenseUploadStatus === 'failed' && expenseReceiptFile && (
+                          <button
+                            type="button"
+                            onClick={() => void startExpenseReceiptUpload(expenseReceiptFile)}
+                            className="inline-flex items-center gap-1 px-2 py-1 rounded bg-amber-100 text-amber-800 text-[11px] font-bold cursor-pointer"
+                          >
+                            <RotateCcw size={11} /> Retry
+                          </button>
+                        )}
+                        {expenseReceiptUrl && (
+                          <button
+                            type="button"
+                            onClick={() => setViewingReceiptUrl(expenseReceiptUrl)}
+                            className="text-xs font-bold text-teal-600 hover:underline cursor-pointer px-1"
+                          >
+                            View
+                          </button>
+                        )}
+                        <button
+                          type="button"
+                          onClick={handleClearExpenseReceipt}
+                          className="p-1 bg-red-50 text-red-500 rounded-md hover:bg-red-100 cursor-pointer"
+                          title="Remove receipt"
+                        >
+                          <X size={12} />
+                        </button>
+                      </div>
                     </div>
                   </div>
                 ) : (
                   <div className="flex flex-col items-center justify-center border border-dashed border-slate-200 rounded-xl p-3 bg-slate-50 hover:bg-slate-100/60 transition-colors relative cursor-pointer">
                     <input
                       type="file"
-                      accept="image/*"
+                      accept="image/jpeg,image/png,image/webp,image/gif,image/heic,image/heif"
                       ref={fileInputRef}
                       onChange={handleExpenseFileChange}
                       className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
                     />
                     <Upload size={16} className="text-slate-400 mb-1" />
                     <span className="text-xs text-slate-600 font-semibold">
-                      {expenseReceiptFile ? expenseReceiptFile.name : 'Choose receipt image or snapshot'}
+                      Choose receipt image or snapshot
                     </span>
-                    <span className="text-[9px] text-slate-400">Max size 5MB</span>
+                    <span className="text-[9px] text-slate-400">JPG/PNG/WebP/HEIC up to 8 MB (auto-compressed)</span>
                   </div>
                 )}
               </div>
@@ -3133,7 +3315,7 @@ export default function FinancialOverview({
                         <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                         <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
                       </svg>
-                      Recording Expense...
+                      {expenseSubmitText || 'Recording Expense...'}
                     </>
                   ) : (
                     <>
