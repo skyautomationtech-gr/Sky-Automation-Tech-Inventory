@@ -1553,6 +1553,7 @@ export default function App() {
               productColors={productColors}
               productModels={productModels}
               user={user} 
+              rolePermissions={rolePermissions}
               onRefreshData={refreshApplicationData}
               initialAddMode={initialProductAddMode}
               initialSubTab={productSubTab}
@@ -1582,6 +1583,7 @@ export default function App() {
             <StockOperations 
               products={products.filter(p => !p.archived)} 
               user={user} 
+              rolePermissions={rolePermissions}
               onRefreshData={refreshApplicationData}
               initialAction={initialStockAction}
               onActionChange={(act) => {
@@ -1990,7 +1992,13 @@ export default function App() {
                     </div>
                     <button
                       type="button"
-                      onClick={() => handleRunExcelExport('All Collections (Multi-Sheet)', async () => (await import('./utils/excelExport')).exportEverythingWorkbook())}
+                      onClick={() =>
+                        handleRunExcelExport('All Collections (Multi-Sheet)', async () =>
+                          (await import('./utils/excelExport')).exportEverythingWorkbook({
+                            includeCost: hasPermission(user, rolePermissions, 'viewProductCost'),
+                          })
+                        )
+                      }
                       disabled={exportingType !== null}
                       className="py-2.5 px-5 bg-slate-900 hover:bg-black text-white font-bold text-xs rounded-xl cursor-pointer disabled:opacity-50 shrink-0 shadow-xs flex items-center gap-2"
                     >
@@ -2001,7 +2009,13 @@ export default function App() {
                   <div className="pt-4 border-t border-slate-200/60 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3">
                     <button
                       type="button"
-                      onClick={() => handleRunExcelExport('Products (CSV)', async () => (await import('./utils/excelExport')).exportProductsToCSV())}
+                      onClick={() =>
+                        handleRunExcelExport('Products (CSV)', async () =>
+                          (await import('./utils/excelExport')).exportProductsToCSV(undefined, undefined, {
+                            includeCost: hasPermission(user, rolePermissions, 'viewProductCost'),
+                          })
+                        )
+                      }
                       disabled={exportingType !== null}
                       className="py-2.5 px-4 bg-emerald-50 hover:bg-emerald-100/80 border border-emerald-200 text-emerald-900 font-bold text-xs rounded-xl cursor-pointer disabled:opacity-50 text-left transition-colors flex items-center justify-between shadow-2xs"
                     >
@@ -2021,7 +2035,13 @@ export default function App() {
 
                     <button
                       type="button"
-                      onClick={() => handleRunExcelExport('Products', async () => (await import('./utils/excelExport')).exportProductsToExcel())}
+                      onClick={() =>
+                        handleRunExcelExport('Products', async () =>
+                          (await import('./utils/excelExport')).exportProductsToExcel(undefined, {
+                            includeCost: hasPermission(user, rolePermissions, 'viewProductCost'),
+                          })
+                        )
+                      }
                       disabled={exportingType !== null}
                       className="py-2.5 px-4 bg-white hover:bg-slate-100 border border-slate-200 text-slate-800 font-semibold text-xs rounded-xl cursor-pointer disabled:opacity-50 text-left transition-colors flex items-center justify-between"
                     >

@@ -50,6 +50,11 @@ import {
 } from '../preOrders/constants';
 import { buildSidebarGroups } from '../navigation/sidebarConfig';
 import { formatBrandBadgeMeta, getUserAllowedSubBrandIds } from '../utils/subBrands';
+import {
+  doesProductMatchQuery,
+  formatPriceRange,
+  getProductSellingPriceRange,
+} from '../utils/productVariants';
 
 interface GlobalSearchPaletteProps {
   isOpen: boolean;
@@ -221,28 +226,18 @@ export const GlobalSearchPalette: React.FC<GlobalSearchPaletteProps> = ({
   const productResults = useMemo(() => {
     if (activeFilter !== 'all' && activeFilter !== 'products') return [];
     if (!query.trim() && query.length === 0 && activeFilter === 'all') return products.slice(0, 3).map(p => wrapProduct(p));
-    const q = query.toLowerCase().trim();
     return products
-      .filter(p => {
-        if (!p) return false;
-        return (
-          p.name.toLowerCase().includes(q) ||
-          p.sku.toLowerCase().includes(q) ||
-          (p.brand && p.brand.toLowerCase().includes(q)) ||
-          (p.category && p.category.toLowerCase().includes(q)) ||
-          (p.barcodeValue && p.barcodeValue.toLowerCase().includes(q)) ||
-          (p.variants && p.variants.some(v => v.color?.toLowerCase().includes(q) || v.model?.toLowerCase().includes(q)))
-        );
-      })
+      .filter(p => Boolean(p) && doesProductMatchQuery(p, query))
       .slice(0, 8)
       .map(p => wrapProduct(p));
 
     function wrapProduct(p: Product) {
+      const priceLabel = formatPriceRange(getProductSellingPriceRange(p));
       return {
         type: 'product' as const,
         id: p.id,
         title: p.name,
-        subtitle: `SKU: ${p.sku} · Stock: ${p.totalStock} · ৳${p.sellingPrice.toLocaleString()}`,
+        subtitle: `SKU: ${p.sku} · Stock: ${p.totalStock ?? 0} · ${priceLabel}`,
         image: p.images?.[0] || p.imageUrls?.[0],
         icon: Package,
         action: () => {

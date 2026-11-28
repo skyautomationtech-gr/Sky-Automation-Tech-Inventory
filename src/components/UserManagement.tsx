@@ -84,6 +84,7 @@ const CORE_PERMISSION_KEYS: Array<{ key: keyof RolePermissionSet; label: string 
   { key: 'stockAdjustment', label: 'Stock Adjustment' },
   { key: 'manageOrders', label: 'Manage Orders' },
   { key: 'voidInvoice', label: 'Void Invoice' },
+  { key: 'viewProductCost', label: 'View Cost Price & Margin' },
 ];
 
 const DEFAULT_PERMISSIONS = DEFAULT_ROLE_PERMISSIONS;

@@ -2,6 +2,7 @@ interface BarcodePrintItem {
   value: string;
   label: string;
   subLabel?: string;
+  priceLabel?: string;
 }
 
 /**
@@ -48,7 +49,6 @@ export async function generateBarcodePDF(
     const item = items[i];
     
     // Calculate page and positions
-    const pageIndex = Math.floor(currentIndex / (cols * rows));
     const positionInPage = currentIndex % (cols * rows);
     const colIndex = positionInPage % cols;
     const rowIndex = Math.floor(positionInPage / cols);
@@ -92,14 +92,14 @@ export async function generateBarcodePDF(
       const titleWidth = doc.getTextWidth(displayName);
       doc.text(displayName, x + (labelWidth - titleWidth) / 2, y + 3.8);
 
-      // 2. Draw sub-label (Variant properties like Color / Model)
+      // 2. Draw sub-label (Variant properties like Color / Model / Note)
       if (item.subLabel) {
         doc.setFont('Helvetica', 'normal');
         doc.setFontSize(5.0);
         doc.setTextColor(100, 116, 139); // Slate 500
         let displaySub = item.subLabel;
-        if (displaySub.length > 30) {
-          displaySub = displaySub.substring(0, 27) + '...';
+        if (displaySub.length > 32) {
+          displaySub = displaySub.substring(0, 29) + '...';
         }
         const subWidth = doc.getTextWidth(displaySub);
         doc.text(displaySub, x + (labelWidth - subWidth) / 2, y + 6.2);
@@ -110,12 +110,29 @@ export async function generateBarcodePDF(
       const barcodeHeight = 14.0;
       doc.addImage(imgData, 'PNG', x + 2.0, barcodeY, labelWidth - 4.0, barcodeHeight);
 
-      // 4. Draw Human-readable SKU/Barcode text below the bars (standard barcode convention)
-      doc.setFont('Courier', 'bold');
-      doc.setFontSize(6.0);
-      doc.setTextColor(30, 41, 59); // Slate 800
-      const codeWidth = doc.getTextWidth(item.value);
-      doc.text(item.value, x + (labelWidth - codeWidth) / 2, y + labelHeight - 1.6);
+      // 4. Draw Human-readable SKU/Barcode text + optional Selling Price below the bars
+      const normalizedPrice = item.priceLabel
+        ? item.priceLabel.replace(/৳/g, 'Tk ').trim()
+        : '';
+
+      if (normalizedPrice) {
+        doc.setFont('Courier', 'bold');
+        doc.setFontSize(5.4);
+        doc.setTextColor(30, 41, 59); // Slate 800
+        doc.text(item.value, x + 2.0, y + labelHeight - 1.6);
+
+        doc.setFont('Helvetica', 'bold');
+        doc.setFontSize(5.8);
+        doc.setTextColor(15, 23, 42);
+        const priceWidth = doc.getTextWidth(normalizedPrice);
+        doc.text(normalizedPrice, x + labelWidth - 2.0 - priceWidth, y + labelHeight - 1.6);
+      } else {
+        doc.setFont('Courier', 'bold');
+        doc.setFontSize(6.0);
+        doc.setTextColor(30, 41, 59); // Slate 800
+        const codeWidth = doc.getTextWidth(item.value);
+        doc.text(item.value, x + (labelWidth - codeWidth) / 2, y + labelHeight - 1.6);
+      }
       
     } catch (err) {
       console.error('Error generating barcode for PDF:', err);

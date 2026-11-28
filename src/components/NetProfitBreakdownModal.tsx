@@ -34,6 +34,10 @@ import {
   matchesGlobalBrandFilter,
 } from '../utils/subBrands';
 import { SubBrandBadge } from './PreOrders/PreOrderStatusBadge';
+import {
+  resolveVariantByOrderItem,
+  resolveVariantCostPrice,
+} from '../utils/productVariants';
 
 interface NetProfitBreakdownModalProps {
   isOpen: boolean;
@@ -88,11 +92,12 @@ export const NetProfitBreakdownModal: React.FC<NetProfitBreakdownModalProps> = (
     [subBrands, companySettings]
   );
 
-  // Map of product cost prices by productId
+  // Map of product info & variants by productId
   const productCostMap = useMemo(() => {
-    const map = new Map<string, { costPrice: number; name: string; category?: string; subBrand?: string; sku?: string }>();
+    const map = new Map<string, { product: any; costPrice: number; name: string; category?: string; subBrand?: string; sku?: string }>();
     products.forEach(p => {
       map.set(p.id, {
+        product: p,
         costPrice: Number(p.costPrice) || 0,
         name: p.name || 'Unnamed Product',
         category: p.category || 'General',
@@ -102,6 +107,21 @@ export const NetProfitBreakdownModal: React.FC<NetProfitBreakdownModalProps> = (
     });
     return map;
   }, [products]);
+
+  const resolveItemCost = (item: any, prodInfo?: { product: any; costPrice: number }) => {
+    if (item.costPrice !== undefined && Number(item.costPrice) > 0) {
+      return Number(item.costPrice);
+    }
+    if (prodInfo?.product) {
+      const variant = resolveVariantByOrderItem(prodInfo.product, item.variantId);
+      const variantCost = resolveVariantCostPrice(prodInfo.product, variant);
+      if (variantCost > 0) return variantCost;
+    }
+    if (prodInfo?.costPrice !== undefined && prodInfo.costPrice > 0) {
+      return prodInfo.costPrice;
+    }
+    return (Number(item.unitPrice) || 0) * 0.7;
+  };
 
   // Date range timestamps
   const { startMs, endMs } = useMemo(() => {
@@ -176,12 +196,8 @@ export const NetProfitBreakdownModal: React.FC<NetProfitBreakdownModalProps> = (
         const subBrand = prodInfo?.subBrand || order.subBrand || '';
         const sku = prodInfo?.sku || '';
         
-        // Accurate cost price: snapshotted line item costPrice (e.g. pre-order landed cost), product profile, or 70% fallback
-        const unitCost = (item.costPrice !== undefined && Number(item.costPrice) > 0)
-          ? Number(item.costPrice)
-          : prodInfo?.costPrice !== undefined && prodInfo.costPrice > 0 
-          ? prodInfo.costPrice 
-          : (item.unitPrice * 0.7);
+        // Accurate cost price: snapshotted line item costPrice (e.g. pre-order landed cost), variant/product profile, or 70% fallback
+        const unitCost = resolveItemCost(item, prodInfo);
 
         const qty = Number(item.qty) || 1;
         const lineRevenue = (Number(item.unitPrice) || 0) * qty;
@@ -271,11 +287,7 @@ export const NetProfitBreakdownModal: React.FC<NetProfitBreakdownModalProps> = (
       let orderCost = 0;
       const itemsList = (order.items || []).map(item => {
         const prodInfo = productCostMap.get(item.productId);
-        const cost = (item.costPrice !== undefined && Number(item.costPrice) > 0)
-          ? Number(item.costPrice)
-          : prodInfo?.costPrice !== undefined && prodInfo.costPrice > 0 
-          ? prodInfo.costPrice 
-          : (item.unitPrice * 0.7);
+        const cost = resolveItemCost(item, prodInfo);
         const itemQty = Number(item.qty) || 1;
         orderCost += cost * itemQty;
         return {
@@ -352,11 +364,7 @@ export const NetProfitBreakdownModal: React.FC<NetProfitBreakdownModalProps> = (
       let orderCost = 0;
       (order.items || []).forEach(item => {
         const prodInfo = productCostMap.get(item.productId);
-        const cost = (item.costPrice !== undefined && Number(item.costPrice) > 0)
-          ? Number(item.costPrice)
-          : prodInfo?.costPrice !== undefined && prodInfo.costPrice > 0 
-          ? prodInfo.costPrice 
-          : (item.unitPrice * 0.7);
+        const cost = resolveItemCost(item, prodInfo);
         orderCost += cost * (Number(item.qty) || 1);
       });
 

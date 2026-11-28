@@ -17,9 +17,16 @@ import {
   Star,
   RefreshCw,
   GripVertical,
+  Copy,
+  Grid,
+  Archive,
+  RotateCcw,
+  ExternalLink,
+  AlertTriangle,
 } from 'lucide-react';
 import { motion } from 'motion/react';
 import Barcode from './Barcode';
+import AttributeCombobox from './AttributeCombobox';
 import {
   Product,
   Variant,
@@ -31,6 +38,7 @@ import {
   ProductEditHistoryEntry,
   SubBrand,
   CompanySettings,
+  RolePermissionsMap,
 } from '../types';
 import {
   addProduct,
@@ -40,6 +48,7 @@ import {
   getUniqueBarcodeValue,
   logAuditAction,
   addNotification,
+  checkProductVariantHasHistory,
 } from '../firebase/db';
 import {
   uploadProductImage,
@@ -53,6 +62,19 @@ import {
   MediaUploadError,
   validateImageUploadFile,
 } from '../utils/mediaUpload';
+import {
+  MAX_VARIANTS_PER_PRODUCT,
+  buildVariantUniquenessKey,
+  canViewProductCost,
+  computeVariantProfitMargin,
+  formatPriceRange,
+  generateNextVariantSku,
+  getProductSellingPriceRange,
+  normalizeAttributeCompareKey,
+  normalizeAttributeName,
+  resolveVariantCostPrice,
+  resolveVariantSellingPrice,
+} from '../utils/productVariants';
 import { useToast } from '../design-system';
 import {
   formatBrandBadgeMeta,
@@ -72,6 +94,7 @@ interface ProductFormModalProps {
   isStaff: boolean;
   isSuperAdmin: boolean;
   user: UserProfile | null;
+  rolePermissions?: RolePermissionsMap | null;
   products: Product[];
   categories: Category[];
   brands: Brand[];
@@ -81,6 +104,7 @@ interface ProductFormModalProps {
   globalBrandFilter?: string;
   companySettings?: CompanySettings | null;
   requireCheckIn?: () => boolean;
+  onOpenAttributeManagement?: () => void;
   onRefreshData: () => Promise<void>;
   onSaved?: (info: { message: string; productId: string; status: 'pending_review' | 'approved' | 'rejected' }) => void;
 }
@@ -93,6 +117,7 @@ export default function ProductFormModal({
   isStaff,
   isSuperAdmin,
   user,
+  rolePermissions,
   products,
   categories,
   brands,
@@ -102,9 +127,13 @@ export default function ProductFormModal({
   globalBrandFilter,
   companySettings,
   requireCheckIn,
+  onOpenAttributeManagement,
   onRefreshData,
   onSaved,
 }: ProductFormModalProps) {
+  const canViewCost = canViewProductCost(user, rolePermissions) && (!isStaff || user?.permissionOverrides?.viewProductCost === true);
+  const hideCostFields = !canViewCost;
+
   const activeSellingSubBrands = React.useMemo(
     () => getSellingSubBrands(subBrands, { includeInactive: false, companySettings }),
     [subBrands, companySettings]
@@ -158,7 +187,13 @@ export default function ProductFormModal({
   const [photoFallbackNotice, setPhotoFallbackNotice] = useState('');
   const [brokenImgIndexes, setBrokenImgIndexes] = useState<Record<number, boolean>>({});
   const [formVariants, setFormVariants] = useState<Variant[]>([
-    { id: '1', color: 'Default', model: 'Standard', stock: 10 },
+    {
+      id: '1',
+      color: 'Default',
+      model: 'Standard',
+      stock: 10,
+      sameAsProductPrice: true,
+    },
   ]);
 
   const uploadingImages = photoItems.some(
@@ -186,11 +221,22 @@ export default function ProductFormModal({
   const [formSuccess, setFormSuccess] = useState('');
   const [submitting, setSubmitting] = useState(false);
 
-  const [customColorValue, setCustomColorValue] = useState<{ [key: string]: string }>({});
-  const [customSizeValue, setCustomSizeValue] = useState<{ [key: string]: string }>({});
-  const [isCustomColorMode, setIsCustomColorMode] = useState<{ [key: string]: boolean }>({});
-  const [isCustomSizeMode, setIsCustomSizeMode] = useState<{ [key: string]: boolean }>({});
   const [showDiscardConfirm, setShowDiscardConfirm] = useState(false);
+  const [showCombGenerator, setShowCombGenerator] = useState(false);
+  const [selectedCombColors, setSelectedCombColors] = useState<string[]>(['Default']);
+  const [selectedCombModels, setSelectedCombModels] = useState<string[]>(['Standard']);
+  const [combDefaultStock, setCombDefaultStock] = useState<number>(0);
+  const [combUseProductPrice, setCombUseProductPrice] = useState<boolean>(true);
+  const [combCustomSellPrice, setCombCustomSellPrice] = useState<string>('');
+  const [combCustomCostPrice, setCombCustomCostPrice] = useState<string>('');
+  const [bulkApplySellPrice, setBulkApplySellPrice] = useState<string>('');
+  const [bulkApplyCostPrice, setBulkApplyCostPrice] = useState<string>('');
+  const [bulkApplyQty, setBulkApplyQty] = useState<string>('');
+  const [archiveVariantConfirm, setArchiveVariantConfirm] = useState<{
+    variant: Variant;
+    reason: string;
+  } | null>(null);
+  const [checkingVariantId, setCheckingVariantId] = useState<string | null>(null);
 
   const generateSkuCode = (subBrand: string, category: string, brandName: string) => {
     const meta = resolveSubBrandMeta(subBrand, subBrands, companySettings);
@@ -247,10 +293,11 @@ export default function ProductFormModal({
     setPhotoFallbackNotice('');
     setDragPhotoIdx(null);
     sessionBucketWarnedRef.current = false;
-    setCustomColorValue({});
-    setCustomSizeValue({});
-    setIsCustomColorMode({});
-    setIsCustomSizeMode({});
+    setShowCombGenerator(false);
+    setArchiveVariantConfirm(null);
+    setBulkApplySellPrice('');
+    setBulkApplyCostPrice('');
+    setBulkApplyQty('');
 
     // Abort & revoke any lingering uploads from prior modal session
     photoItemsRef.current.forEach((p) => {
@@ -296,8 +343,31 @@ export default function ProductFormModal({
       setFormImageThumbs(existingUrls.map((u, idx) => existingThumbs[idx] || u));
       setFormVariants(
         editModeProduct.variants && editModeProduct.variants.length > 0
-          ? editModeProduct.variants.map((v) => ({ ...v }))
-          : [{ id: Date.now().toString(), color: 'Default', model: 'Standard', stock: 0 }]
+          ? editModeProduct.variants.map((v, idx) => {
+              const inherits =
+                v.sameAsProductPrice !== undefined
+                  ? v.sameAsProductPrice
+                  : v.sellingPrice === undefined && v.costPrice === undefined;
+              return {
+                ...v,
+                sameAsProductPrice: inherits,
+                variantSku:
+                  v.variantSku ||
+                  `${(editModeProduct.sku || 'SKU').trim().toUpperCase()}-V${idx + 1}`,
+                sellingPrice: resolveVariantSellingPrice(editModeProduct, v),
+                costPrice: resolveVariantCostPrice(editModeProduct, v),
+              };
+            })
+          : [
+              {
+                id: Date.now().toString(),
+                color: 'Default',
+                model: 'Standard',
+                stock: 0,
+                sameAsProductPrice: true,
+                variantSku: `${(editModeProduct.sku || 'SKU').trim().toUpperCase()}-V1`,
+              },
+            ]
       );
       setWizardStep(1);
       setWizardMaxStep(5);
@@ -307,6 +377,7 @@ export default function ProductFormModal({
       const mainCats = categories.filter((c) => c.level === 'main' || !c.level);
       const initialMain = mainCats[0]?.name || '';
       const initialBrand = brands[0]?.name || '';
+      const initialSku = generateSkuCode(defaultSellingSubBrand, initialMain, initialBrand);
       setFormMainCategory(initialMain);
       setFormSubCategory('');
       setFormChildCategory('');
@@ -315,17 +386,26 @@ export default function ProductFormModal({
       setFormSubBrand(defaultSellingSubBrand);
       setFormDescription('');
       setFormNotes('');
-      setFormCostPrice(isStaff ? 0 : '');
+      setFormCostPrice(hideCostFields ? 0 : '');
       setFormSellingPrice('');
       setFormReorderThreshold(5);
       photoItemsRef.current = [];
       setPhotoItems([]);
       setFormImages([]);
       setFormImageThumbs([]);
-      setFormVariants([{ id: Date.now().toString(), color: 'Default', model: 'Standard', stock: 10 }]);
+      setFormVariants([
+        {
+          id: Date.now().toString(),
+          color: 'Default',
+          model: 'Standard',
+          stock: 10,
+          sameAsProductPrice: true,
+          variantSku: `${initialSku}-V1`,
+        },
+      ]);
       setWizardStep(1);
       setWizardMaxStep(1);
-      setFormSku(generateSkuCode(defaultSellingSubBrand, initialMain, initialBrand));
+      setFormSku(initialSku);
     }
   }, [isOpen, editModeProduct?.id, defaultSellingSubBrand]);
 
@@ -389,7 +469,7 @@ export default function ProductFormModal({
         errors.brand = 'Brand is required';
       }
     } else if (step === 2) {
-      if (!isStaff) {
+      if (!hideCostFields) {
         if (formCostPrice === '') {
           errors.costPrice = 'Purchase Price is required';
         } else if (Number(formCostPrice) < 0) {
@@ -398,25 +478,62 @@ export default function ProductFormModal({
       }
       if (formSellingPrice === '') {
         errors.sellingPrice = 'Selling Price is required';
-      } else if (Number(formSellingPrice) <= 0) {
+      } else if (Number(formSellingPrice) < 0) {
+        errors.sellingPrice = 'Selling Price cannot be negative';
+      } else if (Number(formSellingPrice) === 0 && !formVariants.some((v) => !v.inactive && v.sameAsProductPrice === false && Number(v.sellingPrice) > 0)) {
         errors.sellingPrice = 'Selling Price must be greater than 0';
       }
       if (Number(formReorderThreshold) < 0) {
         errors.reorderThreshold = 'Reorder threshold cannot be negative';
       }
     } else if (step === 3) {
-      if (formVariants.length === 0) {
-        errors.variants = 'At least one variant configuration is required';
+      const activeVariants = formVariants.filter((v) => !v.inactive);
+      if (activeVariants.length === 0) {
+        errors.variants = 'At least one active variant configuration is required';
+      } else if (formVariants.length > MAX_VARIANTS_PER_PRODUCT) {
+        errors.variants = `Maximum ${MAX_VARIANTS_PER_PRODUCT} variants allowed per product (currently ${formVariants.length}).`;
       } else {
+        const keyMap = new Map<string, number>();
         formVariants.forEach((v, idx) => {
-          if (!v.color || !v.color.trim()) {
+          if (v.inactive) return;
+          const cleanColor = normalizeAttributeName(v.color);
+          const cleanModel = normalizeAttributeName(v.model);
+          if (!cleanColor) {
             errors[`variant-color-${v.id || idx}`] = `Color/Finish is required for Variant #${idx + 1}`;
           }
-          if (!v.model || !v.model.trim()) {
+          if (!cleanModel) {
             errors[`variant-model-${v.id || idx}`] = `Model/Size is required for Variant #${idx + 1}`;
           }
           if (Number(v.stock) < 0) {
             errors[`variant-stock-${v.id || idx}`] = `Stock cannot be negative for Variant #${idx + 1}`;
+          }
+          const effectiveSell =
+            v.sameAsProductPrice !== false ? Number(formSellingPrice || 0) : Number(v.sellingPrice ?? 0);
+          const effectiveCost =
+            v.sameAsProductPrice !== false ? Number(formCostPrice || 0) : Number(v.costPrice ?? 0);
+          if (effectiveSell < 0) {
+            errors[`variant-sell-${v.id || idx}`] = `Selling price cannot be negative`;
+          }
+          if (!hideCostFields && effectiveCost < 0) {
+            errors[`variant-cost-${v.id || idx}`] = `Purchase price cannot be negative`;
+          }
+          if (v.reorderThreshold !== undefined && Number(v.reorderThreshold) < 0) {
+            errors[`variant-threshold-${v.id || idx}`] = `Threshold cannot be negative`;
+          }
+
+          if (cleanColor && cleanModel) {
+            const key = buildVariantUniquenessKey({
+              color: cleanColor,
+              model: cleanModel,
+              variantNote: v.variantNote,
+            });
+            if (keyMap.has(key)) {
+              const dupMsg = `Duplicate variant (${cleanColor} / ${cleanModel}${v.variantNote ? ` / ${v.variantNote}` : ''}). Change color, model, or note.`;
+              errors[`variant-dup-${v.id || idx}`] = dupMsg;
+              errors.variants = dupMsg;
+            } else {
+              keyMap.set(key, idx);
+            }
           }
         });
       }
@@ -511,56 +628,224 @@ export default function ProductFormModal({
   };
 
   const addVariantField = () => {
+    if (formVariants.length >= MAX_VARIANTS_PER_PRODUCT) {
+      setStepErrors((prev) => ({
+        ...prev,
+        variants: `Maximum ${MAX_VARIANTS_PER_PRODUCT} variants allowed per product.`,
+      }));
+      return;
+    }
+    const nextSku = generateNextVariantSku(formSku || 'SKU', formVariants);
     setFormVariants((prev) => [
       ...prev,
-      { id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`, color: '', model: '', stock: 0 },
+      {
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        color: '',
+        model: '',
+        variantNote: '',
+        variantSku: nextSku,
+        sameAsProductPrice: true,
+        sellingPrice: Number(formSellingPrice || 0),
+        costPrice: Number(formCostPrice || 0),
+        stock: 0,
+      },
     ]);
   };
 
-  const removeVariantField = (id: string) => {
-    if (formVariants.length > 1) {
-      setFormVariants((prev) => prev.filter((v) => v.id !== id));
+  const duplicateVariantField = (source: Variant) => {
+    if (formVariants.length >= MAX_VARIANTS_PER_PRODUCT) {
+      setStepErrors((prev) => ({
+        ...prev,
+        variants: `Maximum ${MAX_VARIANTS_PER_PRODUCT} variants allowed per product.`,
+      }));
+      return;
     }
+    const nextSku = generateNextVariantSku(formSku || 'SKU', formVariants);
+    setFormVariants((prev) => [
+      ...prev,
+      {
+        ...source,
+        id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+        variantSku: nextSku,
+        barcodeValue: undefined,
+        reservedQty: undefined,
+        reservedForPreOrders: undefined,
+        inactive: false,
+      },
+    ]);
   };
 
-  const updateVariantValue = (
-    id: string,
-    field: 'color' | 'model' | 'stock',
-    value: string | number
-  ) => {
+  const handleRequestRemoveVariant = async (variant: Variant) => {
+    const activeCount = formVariants.filter((v) => !v.inactive).length;
+    if (!variant.inactive && activeCount <= 1) {
+      toast.warning('At least 1 active variant is required.');
+      return;
+    }
+    if (editModeProduct?.id) {
+      setCheckingVariantId(variant.id);
+      try {
+        const res = await checkProductVariantHasHistory(editModeProduct.id, variant.id, variant);
+        if (res.hasHistory) {
+          setArchiveVariantConfirm({
+            variant,
+            reason: res.reason || 'Variant has stock or sales history.',
+          });
+          return;
+        }
+      } finally {
+        setCheckingVariantId(null);
+      }
+    } else if ((Number(variant.stock) || 0) > 0 && formVariants.length <= 1) {
+      return;
+    }
+    setFormVariants((prev) => prev.filter((v) => v.id !== variant.id));
+  };
+
+  const confirmArchiveVariant = () => {
+    if (!archiveVariantConfirm) return;
+    const targetId = archiveVariantConfirm.variant.id;
     setFormVariants((prev) =>
-      prev.map((v) => (v.id === id ? { ...v, [field]: value } : v))
+      prev.map((v) => (v.id === targetId ? { ...v, inactive: true, stock: 0 } : v))
     );
+    setArchiveVariantConfirm(null);
+    toast.success('Variant archived and hidden from new sales.');
   };
 
-  const handleAddCustomColor = async (color: string) => {
-    const trimmed = color.trim();
-    if (
-      trimmed &&
-      !productColors.find((c) => c.name.toLowerCase() === trimmed.toLowerCase())
-    ) {
-      try {
-        await addProductColor(trimmed, '#000000');
-        await onRefreshData();
-      } catch (err) {
-        console.error('Failed to add custom color', err);
-      }
-    }
+  const reactivateVariant = (id: string) => {
+    setFormVariants((prev) => prev.map((v) => (v.id === id ? { ...v, inactive: false } : v)));
   };
 
-  const handleAddCustomSize = async (size: string) => {
-    const trimmed = size.trim();
-    if (
-      trimmed &&
-      !productModels.find((m) => m.name.toLowerCase() === trimmed.toLowerCase())
-    ) {
-      try {
-        await addProductModel(trimmed);
-        await onRefreshData();
-      } catch (err) {
-        console.error('Failed to add custom model/size', err);
-      }
+  const updateVariantFields = (id: string, patch: Partial<Variant>) => {
+    setFormVariants((prev) => prev.map((v) => (v.id === id ? { ...v, ...patch } : v)));
+  };
+
+  const handleAddCustomColor = async (color: string): Promise<ProductColor> => {
+    const trimmed = normalizeAttributeName(color);
+    const existing = productColors.find(
+      (c) => normalizeAttributeCompareKey(c.name) === normalizeAttributeCompareKey(trimmed)
+    );
+    if (existing) {
+      return existing;
     }
+    const created = await addProductColor(trimmed, '#000000');
+    await onRefreshData();
+    return created;
+  };
+
+  const handleAddCustomSize = async (size: string): Promise<ProductModel> => {
+    const trimmed = normalizeAttributeName(size);
+    const existing = productModels.find(
+      (m) => normalizeAttributeCompareKey(m.name) === normalizeAttributeCompareKey(trimmed)
+    );
+    if (existing) {
+      return existing;
+    }
+    const created = await addProductModel(trimmed);
+    await onRefreshData();
+    return created;
+  };
+
+  const handleGenerateCombinations = () => {
+    const colors = selectedCombColors.map((c) => normalizeAttributeName(c)).filter(Boolean);
+    const models = selectedCombModels.map((m) => normalizeAttributeName(m)).filter(Boolean);
+    if (colors.length === 0 || models.length === 0) {
+      toast.warning('Pick at least one color and one model to generate combinations.');
+      return;
+    }
+    const existingKeys = new Set(
+      formVariants.filter((v) => !v.inactive).map((v) => buildVariantUniquenessKey(v))
+    );
+    const newVariants: Variant[] = [];
+    const customSell =
+      !combUseProductPrice && combCustomSellPrice !== ''
+        ? Math.max(0, Number(combCustomSellPrice) || 0)
+        : Number(formSellingPrice || 0);
+    const customCost =
+      !combUseProductPrice && combCustomCostPrice !== '' && !hideCostFields
+        ? Math.max(0, Number(combCustomCostPrice) || 0)
+        : Number(formCostPrice || 0);
+
+    for (const c of colors) {
+      for (const m of models) {
+        const key = buildVariantUniquenessKey({ color: c, model: m, variantNote: '' });
+        if (existingKeys.has(key)) continue;
+        existingKeys.add(key);
+        const allSoFar = [...formVariants, ...newVariants];
+        if (allSoFar.length >= MAX_VARIANTS_PER_PRODUCT) {
+          toast.warning(`Stopped at ${MAX_VARIANTS_PER_PRODUCT} max variants per product.`);
+          break;
+        }
+        newVariants.push({
+          id: `${Date.now()}-${Math.random().toString(36).slice(2, 6)}-${newVariants.length}`,
+          color: c,
+          model: m,
+          variantNote: '',
+          variantSku: generateNextVariantSku(formSku || 'SKU', allSoFar),
+          sameAsProductPrice: combUseProductPrice,
+          sellingPrice: customSell,
+          costPrice: customCost,
+          stock: Math.max(0, Number(combDefaultStock) || 0),
+        });
+      }
+      if (formVariants.length + newVariants.length >= MAX_VARIANTS_PER_PRODUCT) break;
+    }
+
+    if (newVariants.length === 0) {
+      toast.info('All selected combinations already exist.');
+      return;
+    }
+    // Replace single untouched default stub if user didn't customize it
+    const shouldReplaceUntouchedStub =
+      formVariants.length === 1 &&
+      !editModeProduct &&
+      formVariants[0].color === 'Default' &&
+      formVariants[0].model === 'Standard' &&
+      !formVariants[0].variantNote &&
+      newVariants.length > 0 &&
+      !(colors.includes('Default') && models.includes('Standard'));
+
+    if (shouldReplaceUntouchedStub) {
+      setFormVariants(
+        newVariants.map((v, idx) => ({
+          ...v,
+          variantSku: `${(formSku || 'SKU').trim().toUpperCase()}-V${idx + 1}`,
+        }))
+      );
+    } else {
+      setFormVariants((prev) => [...prev, ...newVariants]);
+    }
+    setShowCombGenerator(false);
+    setStepErrors({});
+    toast.success(`Added ${newVariants.length} variant combination(s).`);
+  };
+
+  const handleBulkApplyPriceToAll = () => {
+    const sellVal = bulkApplySellPrice.trim();
+    const costVal = bulkApplyCostPrice.trim();
+    if (sellVal === '' && costVal === '') return;
+    const nextSell = sellVal !== '' ? Math.max(0, Number(sellVal) || 0) : undefined;
+    const nextCost = !hideCostFields && costVal !== '' ? Math.max(0, Number(costVal) || 0) : undefined;
+    setFormVariants((prev) =>
+      prev.map((v) => {
+        if (v.inactive) return v;
+        return {
+          ...v,
+          sameAsProductPrice: false,
+          sellingPrice: nextSell !== undefined ? nextSell : resolveVariantSellingPrice(Number(formSellingPrice || 0), v),
+          costPrice: nextCost !== undefined ? nextCost : resolveVariantCostPrice(Number(formCostPrice || 0), v),
+        };
+      })
+    );
+    toast.success('Applied price to all active variants.');
+  };
+
+  const handleBulkApplyQuantityToAll = () => {
+    if (bulkApplyQty.trim() === '') return;
+    const nextQty = Math.max(0, Number(bulkApplyQty) || 0);
+    setFormVariants((prev) =>
+      prev.map((v) => (v.inactive ? v : { ...v, stock: nextQty }))
+    );
+    toast.success(`Set stock quantity to ${nextQty} for all active variants.`);
   };
 
   const startUploadForPhotoItem = (item: ProductPhotoItem): Promise<ProductPhotoItem | null> => {
@@ -802,8 +1087,9 @@ export default function ProductFormModal({
     }
 
     for (const v of formVariants) {
-      const cleanColor = v.color.trim();
-      const cleanModel = v.model.trim();
+      if (v.inactive) continue;
+      const cleanColor = normalizeAttributeName(v.color);
+      const cleanModel = normalizeAttributeName(v.model);
       const existingV = editModeProduct?.variants?.find(
         (ev) => ev.id === v.id || (ev.color === cleanColor && ev.model === cleanModel)
       );
@@ -848,10 +1134,6 @@ export default function ProductFormModal({
 
     setSubmitting(true);
 
-    // Determine final workflow status:
-    // - Editing a pending_review item ALWAYS stays pending_review (editing never auto-approves!)
-    // - Creating or resubmitting by non-SuperAdmin goes to pending_review
-    // - SuperAdmin creating or editing an approved catalog item stays approved
     let finalStatus: 'pending_review' | 'approved' | 'rejected' = 'approved';
     if (isPendingEditContext) {
       finalStatus = 'pending_review';
@@ -884,9 +1166,15 @@ export default function ProductFormModal({
       generatedInSession.add(mainBarcodeValue);
     }
 
-    const updatedVariants = formVariants.map((v) => {
-      const cleanColor = v.color.trim();
-      const cleanModel = v.model.trim();
+    const effectiveCostPrice = hideCostFields
+      ? Number(editModeProduct?.costPrice ?? 0)
+      : Number(formCostPrice || 0);
+    const effectiveSellingPrice = Number(formSellingPrice || 0);
+
+    const updatedVariants: Variant[] = formVariants.map((v, idx) => {
+      const cleanColor = normalizeAttributeName(v.color) || 'Default';
+      const cleanModel = normalizeAttributeName(v.model) || 'Standard';
+      const cleanNote = normalizeAttributeName(v.variantNote);
       const vColorCode = cleanColor.toUpperCase().replace(/[^A-Z0-9]/g, '-').replace(/-+/g, '-');
       const vModelCode = cleanModel.toUpperCase().replace(/[^A-Z0-9]/g, '-').replace(/-+/g, '-');
       const oldLongBarcodeValue = `${finalSku}-${vColorCode}-${vModelCode}`;
@@ -904,20 +1192,37 @@ export default function ProductFormModal({
         generatedInSession.add(vBarcodeValue);
       }
 
+      const inherits = v.sameAsProductPrice !== false;
+      const resolvedSell = inherits
+        ? effectiveSellingPrice
+        : Math.max(0, Number(v.sellingPrice ?? effectiveSellingPrice) || 0);
+      const resolvedCost = hideCostFields
+        ? Number(existingV?.costPrice ?? effectiveCostPrice)
+        : inherits
+        ? effectiveCostPrice
+        : Math.max(0, Number(v.costPrice ?? effectiveCostPrice) || 0);
+
       const preservedReserved = Number(existingV?.reservedQty ?? v.reservedQty) || 0;
+      const vSku = (v.variantSku || '').trim().toUpperCase() || `${finalSku}-V${idx + 1}`;
       return {
         ...v,
         color: cleanColor,
         model: cleanModel,
-        stock: Number(v.stock),
+        ...(cleanNote ? { variantNote: cleanNote } : { variantNote: undefined }),
+        variantSku: vSku,
+        sameAsProductPrice: inherits,
+        sellingPrice: resolvedSell,
+        costPrice: resolvedCost,
+        ...(v.reorderThreshold !== undefined && v.reorderThreshold !== null && String(v.reorderThreshold) !== ''
+          ? { reorderThreshold: Math.max(0, Number(v.reorderThreshold) || 0) }
+          : { reorderThreshold: undefined }),
+        ...(v.inactive ? { inactive: true } : { inactive: undefined }),
+        stock: v.inactive ? 0 : Math.max(0, Number(v.stock) || 0),
         ...(preservedReserved > 0 ? { reservedQty: preservedReserved } : {}),
         barcodeValue: vBarcodeValue,
       };
     });
 
-    const effectiveCostPrice = isStaff
-      ? Number(editModeProduct?.costPrice ?? 0)
-      : Number(formCostPrice || 0);
     const finalizedPhotos = photoItemsRef.current.filter((p) => p.status === 'done' && p.url);
     const cleanImages = finalizedPhotos.map((p) => p.url);
     const cleanThumbs = finalizedPhotos.map((p) => p.thumbUrl || p.url);
@@ -936,7 +1241,7 @@ export default function ProductFormModal({
       subBrand: effectiveSubBrand,
       subBrandId: effectiveSubBrand,
       costPrice: effectiveCostPrice,
-      sellingPrice: Number(formSellingPrice),
+      sellingPrice: effectiveSellingPrice,
       reorderThreshold: Number(formReorderThreshold || 0),
       images: cleanImages,
       imageUrls: cleanImages,
@@ -970,7 +1275,7 @@ export default function ProductFormModal({
       let successMsg = '';
 
       if (editModeProduct) {
-        const changes = buildProductFieldDiff(editModeProduct, basePayload, !isStaff);
+        const changes = buildProductFieldDiff(editModeProduct, basePayload, canViewCost);
         const existingHistory: ProductEditHistoryEntry[] = Array.isArray(
           editModeProduct.editHistory
         )
@@ -993,8 +1298,8 @@ export default function ProductFormModal({
         });
 
         const priceChanged =
-          (!isStaff && Number(editModeProduct.costPrice) !== effectiveCostPrice) ||
-          Number(editModeProduct.sellingPrice) !== Number(formSellingPrice);
+          (canViewCost && Number(editModeProduct.costPrice) !== effectiveCostPrice) ||
+          Number(editModeProduct.sellingPrice) !== effectiveSellingPrice;
         const diffSummary =
           changes.length > 0
             ? changes.map((c) => `${c.label}: "${c.before}" → "${c.after}"`).join(' | ')
@@ -1503,11 +1808,14 @@ export default function ProductFormModal({
               transition={{ duration: 0.2 }}
               className="bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 p-5 rounded-2xl space-y-4"
             >
-              <div className={`grid ${isStaff ? 'grid-cols-1' : 'grid-cols-2'} gap-4`}>
-                {!isStaff && (
+              <div className="p-3 rounded-xl bg-amber-50/70 dark:bg-amber-950/20 border border-amber-200/70 dark:border-amber-800/50 text-[11px] text-amber-800 dark:text-amber-300">
+                Default product-level price &amp; threshold. In Step 3, any variant can inherit these automatically or set its own custom price.
+              </div>
+              <div className={`grid ${hideCostFields ? 'grid-cols-1' : 'grid-cols-2'} gap-4`}>
+                {!hideCostFields && (
                   <div>
                     <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300 mb-1">
-                      Purchase Price <span className="text-rose-500">*</span>
+                      Default Purchase Price <span className="text-rose-500">*</span>
                     </label>
                     <div className="relative flex rounded-xl">
                       <span className="inline-flex items-center rounded-l-xl border border-r-0 border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 px-3 text-slate-500 dark:text-slate-400 text-sm font-mono font-bold">
@@ -1531,7 +1839,7 @@ export default function ProductFormModal({
 
                 <div>
                   <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300 mb-1">
-                    Selling Price <span className="text-rose-500">*</span>
+                    Default Selling Price <span className="text-rose-500">*</span>
                   </label>
                   <div className="relative flex rounded-xl">
                     <span className="inline-flex items-center rounded-l-xl border border-r-0 border-slate-200 dark:border-slate-700 bg-slate-100 dark:bg-slate-800 px-3 text-slate-500 dark:text-slate-400 text-sm font-mono font-bold">
@@ -1553,7 +1861,7 @@ export default function ProductFormModal({
                 </div>
               </div>
 
-              {!isStaff && Number(formSellingPrice) > 0 && (
+              {!hideCostFields && Number(formSellingPrice) > 0 && (
                 <div className="p-3.5 bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 rounded-xl space-y-2">
                   <div className="flex items-center justify-between text-xs font-bold">
                     <span className="text-slate-500 dark:text-slate-400">Calculated Profit:</span>
@@ -1584,7 +1892,7 @@ export default function ProductFormModal({
 
               <div>
                 <label className="block text-xs font-bold uppercase tracking-wider text-slate-600 dark:text-slate-300 mb-1">
-                  Reorder Alert Threshold (Units)
+                  Default Reorder Alert Threshold (Units)
                 </label>
                 <input
                   type="number"
@@ -1609,21 +1917,293 @@ export default function ProductFormModal({
               initial={{ opacity: 0, x: 10 }}
               animate={{ opacity: 1, x: 0 }}
               transition={{ duration: 0.2 }}
-              className="bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 p-5 rounded-2xl space-y-4"
+              className="bg-slate-50 dark:bg-slate-800/40 border border-slate-200 dark:border-slate-800 p-4 sm:p-5 rounded-2xl space-y-4"
             >
-              <div className="flex justify-between items-center border-b border-slate-200 dark:border-slate-700 pb-3">
+              <div className="flex flex-wrap justify-between items-center gap-2 border-b border-slate-200 dark:border-slate-700 pb-3">
                 <div>
-                  <h3 className="text-sm font-black text-slate-900 dark:text-white">Variants & Stock</h3>
-                  <p className="text-xs text-slate-500 dark:text-slate-400">Add physical color/model variants and quantities.</p>
+                  <div className="flex items-center gap-2">
+                    <h3 className="text-sm font-black text-slate-900 dark:text-white">
+                      Variants &amp; Per-Variant Pricing ({formVariants.filter((v) => !v.inactive).length})
+                    </h3>
+                    {onOpenAttributeManagement && (
+                      <button
+                        type="button"
+                        onClick={onOpenAttributeManagement}
+                        className="inline-flex items-center gap-1 text-[11px] font-bold text-amber-600 dark:text-amber-400 hover:underline cursor-pointer"
+                      >
+                        Manage <ExternalLink size={11} />
+                      </button>
+                    )}
+                  </div>
+                  <p className="text-xs text-slate-500 dark:text-slate-400">
+                    Type to search or add new colors/models inline. Set per-variant prices or inherit defaults.
+                  </p>
                 </div>
-                <button
-                  type="button"
-                  onClick={addVariantField}
-                  className="text-xs font-bold text-slate-950 bg-amber-400 hover:bg-amber-500 px-3 py-1.5 rounded-lg flex items-center gap-1 cursor-pointer"
-                >
-                  <Plus size={12} /> Add Variant
-                </button>
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setShowCombGenerator((prev) => !prev)}
+                    className={`text-xs font-bold px-2.5 py-1.5 rounded-lg flex items-center gap-1 border cursor-pointer transition-colors ${
+                      showCombGenerator
+                        ? 'bg-slate-900 dark:bg-slate-100 text-white dark:text-slate-950 border-slate-900 dark:border-slate-100'
+                        : 'bg-white dark:bg-slate-900 text-slate-700 dark:text-slate-200 border-slate-200 dark:border-slate-700 hover:border-amber-400'
+                    }`}
+                  >
+                    <Grid size={12} /> Generate Combinations
+                  </button>
+                  <button
+                    type="button"
+                    onClick={addVariantField}
+                    disabled={formVariants.length >= MAX_VARIANTS_PER_PRODUCT}
+                    className="text-xs font-bold text-slate-950 bg-amber-400 hover:bg-amber-500 px-3 py-1.5 rounded-lg flex items-center gap-1 cursor-pointer disabled:opacity-50"
+                  >
+                    <Plus size={12} /> Add Variant
+                  </button>
+                </div>
               </div>
+
+              {/* Generate Combinations Panel */}
+              {showCombGenerator && (
+                <div className="p-3.5 rounded-xl bg-white dark:bg-slate-900 border border-amber-300 dark:border-amber-700/70 space-y-3 shadow-xs">
+                  <div className="flex items-center justify-between">
+                    <span className="text-xs font-black uppercase tracking-wider text-amber-700 dark:text-amber-300">
+                      Combination Generator
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => setShowCombGenerator(false)}
+                      className="text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 cursor-pointer"
+                    >
+                      <X size={14} />
+                    </button>
+                  </div>
+
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <div>
+                      <span className="block text-[10px] font-bold uppercase text-slate-500 mb-1.5">
+                        Select Colors ({selectedCombColors.length})
+                      </span>
+                      <div className="max-h-32 overflow-y-auto flex flex-wrap gap-1.5 p-2 rounded-lg bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700">
+                        {Array.from(
+                          new Map(
+                            [
+                              { id: 'builtin-default', name: 'Default' },
+                              ...productColors,
+                            ].map((c) => [normalizeAttributeCompareKey(c.name), c])
+                          ).values()
+                        ).map((c) => {
+                          const checked = selectedCombColors.some(
+                            (sc) => normalizeAttributeCompareKey(sc) === normalizeAttributeCompareKey(c.name)
+                          );
+                          return (
+                            <button
+                              key={c.id}
+                              type="button"
+                              onClick={() =>
+                                setSelectedCombColors((prev) =>
+                                  checked
+                                    ? prev.filter(
+                                        (x) => normalizeAttributeCompareKey(x) !== normalizeAttributeCompareKey(c.name)
+                                      )
+                                    : [...prev, c.name]
+                                )
+                              }
+                              className={`px-2 py-1 rounded-md text-[11px] font-semibold border cursor-pointer transition-colors ${
+                                checked
+                                  ? 'bg-amber-400 text-slate-950 border-amber-500'
+                                  : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700'
+                              }`}
+                            >
+                              {c.name}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+
+                    <div>
+                      <span className="block text-[10px] font-bold uppercase text-slate-500 mb-1.5">
+                        Select Models / Sizes ({selectedCombModels.length})
+                      </span>
+                      <div className="max-h-32 overflow-y-auto flex flex-wrap gap-1.5 p-2 rounded-lg bg-slate-50 dark:bg-slate-800/70 border border-slate-200 dark:border-slate-700">
+                        {Array.from(
+                          new Map(
+                            [
+                              { id: 'builtin-std', name: 'Standard' },
+                              ...productModels,
+                            ].map((m) => [normalizeAttributeCompareKey(m.name), m])
+                          ).values()
+                        ).map((m) => {
+                          const checked = selectedCombModels.some(
+                            (sm) => normalizeAttributeCompareKey(sm) === normalizeAttributeCompareKey(m.name)
+                          );
+                          return (
+                            <button
+                              key={m.id}
+                              type="button"
+                              onClick={() =>
+                                setSelectedCombModels((prev) =>
+                                  checked
+                                    ? prev.filter(
+                                        (x) => normalizeAttributeCompareKey(x) !== normalizeAttributeCompareKey(m.name)
+                                      )
+                                    : [...prev, m.name]
+                                )
+                              }
+                              className={`px-2 py-1 rounded-md text-[11px] font-semibold border cursor-pointer transition-colors ${
+                                checked
+                                  ? 'bg-amber-400 text-slate-950 border-amber-500'
+                                  : 'bg-white dark:bg-slate-900 text-slate-600 dark:text-slate-300 border-slate-200 dark:border-slate-700'
+                              }`}
+                            >
+                              {m.name}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 items-end">
+                    <div>
+                      <label className="text-[10px] font-bold uppercase text-slate-500 block">
+                        Default Qty
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        value={combDefaultStock}
+                        onChange={(e) => setCombDefaultStock(Math.max(0, Number(e.target.value) || 0))}
+                        className="mt-1 w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg py-1.5 px-2.5 text-xs font-mono"
+                      />
+                    </div>
+                    <label className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-700 dark:text-slate-300 cursor-pointer pb-1.5">
+                      <input
+                        type="checkbox"
+                        checked={combUseProductPrice}
+                        onChange={(e) => setCombUseProductPrice(e.target.checked)}
+                        className="rounded border-slate-300"
+                      />
+                      Use product price
+                    </label>
+                    {!combUseProductPrice && (
+                      <>
+                        {!hideCostFields && (
+                          <div>
+                            <label className="text-[10px] font-bold uppercase text-slate-500 block">
+                              Cost (৳)
+                            </label>
+                            <input
+                              type="number"
+                              min={0}
+                              placeholder={String(formCostPrice || 0)}
+                              value={combCustomCostPrice}
+                              onChange={(e) => setCombCustomCostPrice(e.target.value)}
+                              className="mt-1 w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg py-1.5 px-2 text-xs font-mono"
+                            />
+                          </div>
+                        )}
+                        <div>
+                          <label className="text-[10px] font-bold uppercase text-slate-500 block">
+                            Sell (৳)
+                          </label>
+                          <input
+                            type="number"
+                            min={0}
+                            placeholder={String(formSellingPrice || 0)}
+                            value={combCustomSellPrice}
+                            onChange={(e) => setCombCustomSellPrice(e.target.value)}
+                            className="mt-1 w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg py-1.5 px-2 text-xs font-mono"
+                          />
+                        </div>
+                      </>
+                    )}
+                  </div>
+
+                  <div className="flex items-center justify-between pt-1">
+                    <span className="text-[11px] text-slate-500 font-medium">
+                      Will generate up to{' '}
+                      <strong className="text-slate-900 dark:text-white">
+                        {selectedCombColors.length * selectedCombModels.length}
+                      </strong>{' '}
+                      combinations (max {MAX_VARIANTS_PER_PRODUCT} total).
+                    </span>
+                    <button
+                      type="button"
+                      onClick={handleGenerateCombinations}
+                      className="px-3 py-1.5 bg-amber-400 hover:bg-amber-500 text-slate-950 font-bold rounded-lg text-xs cursor-pointer"
+                    >
+                      Generate ({selectedCombColors.length * selectedCombModels.length})
+                    </button>
+                  </div>
+                </div>
+              )}
+
+              {/* Bulk Quick Apply Strip (shows when >= 2 active variants) */}
+              {formVariants.filter((v) => !v.inactive).length >= 2 && (
+                <div className="p-3 rounded-xl bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-700 grid grid-cols-1 sm:grid-cols-2 gap-2.5 text-xs">
+                  <div className="flex items-end gap-1.5">
+                    {!hideCostFields && (
+                      <div className="flex-1 min-w-0">
+                        <label className="text-[10px] font-bold text-slate-500 uppercase block">
+                          Cost (৳)
+                        </label>
+                        <input
+                          type="number"
+                          min={0}
+                          placeholder="All"
+                          value={bulkApplyCostPrice}
+                          onChange={(e) => setBulkApplyCostPrice(e.target.value)}
+                          className="mt-0.5 w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg py-1.5 px-2 text-xs font-mono"
+                        />
+                      </div>
+                    )}
+                    <div className="flex-1 min-w-0">
+                      <label className="text-[10px] font-bold text-slate-500 uppercase block">
+                        Sell (৳)
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        placeholder="All"
+                        value={bulkApplySellPrice}
+                        onChange={(e) => setBulkApplySellPrice(e.target.value)}
+                        className="mt-0.5 w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg py-1.5 px-2 text-xs font-mono"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleBulkApplyPriceToAll}
+                      className="px-2.5 py-1.5 rounded-lg bg-slate-900 dark:bg-slate-700 text-white font-bold text-[11px] hover:bg-slate-800 shrink-0 cursor-pointer"
+                    >
+                      Apply price to all
+                    </button>
+                  </div>
+
+                  <div className="flex items-end gap-1.5">
+                    <div className="flex-1 min-w-0">
+                      <label className="text-[10px] font-bold text-slate-500 uppercase block">
+                        Stock Qty
+                      </label>
+                      <input
+                        type="number"
+                        min={0}
+                        placeholder="Qty for all"
+                        value={bulkApplyQty}
+                        onChange={(e) => setBulkApplyQty(e.target.value)}
+                        className="mt-0.5 w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg py-1.5 px-2 text-xs font-mono"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      onClick={handleBulkApplyQuantityToAll}
+                      className="px-2.5 py-1.5 rounded-lg bg-slate-900 dark:bg-slate-700 text-white font-bold text-[11px] hover:bg-slate-800 shrink-0 cursor-pointer"
+                    >
+                      Apply quantity to all
+                    </button>
+                  </div>
+                </div>
+              )}
 
               {stepErrors.variants && (
                 <p className="text-xs font-bold text-rose-600 bg-rose-50 dark:bg-rose-950/30 p-3 rounded-xl">
@@ -1631,182 +2211,350 @@ export default function ProductFormModal({
                 </p>
               )}
 
-              <div className="space-y-3 max-h-[380px] overflow-y-auto pr-1">
-                {formVariants.map((variant, index) => (
-                  <div
-                    key={variant.id}
-                    className="p-4 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700 space-y-3"
-                  >
-                    <div className="flex justify-between items-center">
-                      <span className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
-                        Variant #{index + 1}
-                      </span>
-                      {formVariants.length > 1 && (
+              <div className="space-y-3 max-h-[420px] overflow-y-auto pr-1">
+                {formVariants.map((variant, index) => {
+                  const isArchivedVariant = Boolean(variant.inactive);
+                  const inheritsProductPrice = variant.sameAsProductPrice !== false;
+                  const effectiveSell = inheritsProductPrice
+                    ? Number(formSellingPrice || 0)
+                    : Number(variant.sellingPrice ?? formSellingPrice ?? 0);
+                  const effectiveCost = inheritsProductPrice
+                    ? Number(formCostPrice || 0)
+                    : Number(variant.costPrice ?? formCostPrice ?? 0);
+                  const { profit: vProfit, marginPercent: vMargin, isLoss } =
+                    computeVariantProfitMargin(effectiveSell, effectiveCost);
+
+                  if (isArchivedVariant) {
+                    return (
+                      <div
+                        key={variant.id}
+                        className="p-3 bg-slate-100/80 dark:bg-slate-900/50 rounded-xl border border-dashed border-slate-300 dark:border-slate-700 flex items-center justify-between gap-2 opacity-80"
+                      >
+                        <div className="min-w-0">
+                          <div className="flex items-center gap-2 text-xs font-bold text-slate-600 dark:text-slate-300">
+                            <Archive size={13} className="text-slate-400 shrink-0" />
+                            <span className="truncate">
+                              {variant.color} / {variant.model}
+                              {variant.variantNote ? ` (${variant.variantNote})` : ''}
+                            </span>
+                            <span className="px-1.5 py-0.5 rounded bg-slate-200 dark:bg-slate-800 text-[10px] font-bold uppercase text-slate-500">
+                              Archived
+                            </span>
+                          </div>
+                          <p className="text-[11px] text-slate-500 mt-0.5">
+                            Hidden from new orders while preserving historical reports.
+                          </p>
+                        </div>
                         <button
                           type="button"
-                          onClick={() => removeVariantField(variant.id)}
-                          className="text-slate-400 hover:text-rose-500 cursor-pointer"
-                          title="Remove Variant"
+                          onClick={() => reactivateVariant(variant.id)}
+                          className="px-2.5 py-1 rounded-lg bg-white dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-[11px] font-bold text-slate-700 dark:text-slate-200 hover:border-amber-400 flex items-center gap-1 cursor-pointer shrink-0"
                         >
-                          <Trash2 size={15} />
+                          <RotateCcw size={11} /> Reactivate
                         </button>
-                      )}
-                    </div>
+                      </div>
+                    );
+                  }
 
-                    <div className="grid grid-cols-2 gap-3">
-                      <div>
-                        <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">
-                          Color / Finish
-                        </label>
-                        {!isCustomColorMode[variant.id] ? (
-                          <select
+                  return (
+                    <div
+                      key={variant.id}
+                      className={`p-3.5 bg-white dark:bg-slate-900 rounded-xl border space-y-3 ${
+                        stepErrors[`variant-dup-${variant.id}`]
+                          ? 'border-rose-400 ring-2 ring-rose-400/20'
+                          : 'border-slate-200 dark:border-slate-700'
+                      }`}
+                    >
+                      <div className="flex flex-wrap justify-between items-center gap-2">
+                        <div className="flex items-center gap-2">
+                          <span className="text-xs font-black text-slate-600 dark:text-slate-300 uppercase tracking-wider">
+                            Variant #{index + 1}
+                          </span>
+                          {variant.variantSku && (
+                            <span className="px-1.5 py-0.5 rounded bg-slate-100 dark:bg-slate-800 text-[10px] font-mono text-slate-600 dark:text-slate-300">
+                              {variant.variantSku}
+                            </span>
+                          )}
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <label className="inline-flex items-center gap-1.5 text-[11px] font-semibold text-slate-600 dark:text-slate-300 cursor-pointer">
+                            <input
+                              type="checkbox"
+                              checked={inheritsProductPrice}
+                              onChange={(e) => {
+                                const useSame = e.target.checked;
+                                updateVariantFields(variant.id, {
+                                  sameAsProductPrice: useSame,
+                                  sellingPrice: Number(formSellingPrice || 0),
+                                  costPrice: Number(formCostPrice || 0),
+                                });
+                              }}
+                              className="rounded border-slate-300"
+                            />
+                            Same price as product
+                          </label>
+                          <button
+                            type="button"
+                            onClick={() => duplicateVariantField(variant)}
+                            title="Duplicate Variant"
+                            className="p-1 text-slate-400 hover:text-amber-500 cursor-pointer"
+                          >
+                            <Copy size={14} />
+                          </button>
+                          {formVariants.filter((v) => !v.inactive).length > 1 && (
+                            <button
+                              type="button"
+                              disabled={checkingVariantId === variant.id}
+                              onClick={() => void handleRequestRemoveVariant(variant)}
+                              className="p-1 text-slate-400 hover:text-rose-500 cursor-pointer disabled:opacity-40"
+                              title="Remove or Archive Variant"
+                            >
+                              {checkingVariantId === variant.id ? (
+                                <Loader2 size={14} className="animate-spin" />
+                              ) : (
+                                <Trash2 size={14} />
+                              )}
+                            </button>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">
+                            Color / Finish <span className="text-rose-500">*</span>
+                          </label>
+                          <AttributeCombobox
                             value={variant.color}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              if (val === '__add_custom__') {
-                                setIsCustomColorMode((prev) => ({ ...prev, [variant.id]: true }));
-                                updateVariantValue(variant.id, 'color', '');
-                              } else {
-                                updateVariantValue(variant.id, 'color', val);
-                              }
+                            options={productColors}
+                            builtinDefault="Default"
+                            placeholder="Select or add color..."
+                            searchPlaceholder="Search or + Add color..."
+                            hasError={Boolean(stepErrors[`variant-color-${variant.id}`])}
+                            onChange={(val) => {
+                              updateVariantFields(variant.id, { color: val });
+                              setStepErrors((prev) => ({
+                                ...prev,
+                                [`variant-color-${variant.id}`]: '',
+                                [`variant-dup-${variant.id}`]: '',
+                                variants: '',
+                              }));
                             }}
-                            className="mt-1 w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl py-2 px-3 text-sm text-slate-900 dark:text-slate-100"
-                          >
-                            <option value="">-- Select Color --</option>
-                            {variant.color &&
-                              !productColors.some((c) => c.name.toLowerCase() === variant.color.toLowerCase()) && (
-                                <option value={variant.color}>{variant.color}</option>
-                              )}
-                            {productColors.map((c) => (
-                              <option key={c.id} value={c.name}>
-                                {c.name}
-                              </option>
-                            ))}
-                            <option value="__add_custom__">+ Add custom color...</option>
-                          </select>
-                        ) : (
-                          <div className="mt-1 flex gap-1">
-                            <input
-                              type="text"
-                              placeholder="Color name"
-                              value={customColorValue[variant.id] || ''}
-                              onChange={(e) =>
-                                setCustomColorValue((prev) => ({ ...prev, [variant.id]: e.target.value }))
-                              }
-                              className="flex-1 min-w-0 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl py-1.5 px-2.5 text-sm"
-                            />
-                            <button
-                              type="button"
-                              onClick={async () => {
-                                const customVal = (customColorValue[variant.id] || '').trim();
-                                if (customVal) {
-                                  await handleAddCustomColor(customVal);
-                                  updateVariantValue(variant.id, 'color', customVal);
-                                  setIsCustomColorMode((prev) => ({ ...prev, [variant.id]: false }));
-                                }
-                              }}
-                              className="px-2 bg-amber-400 text-slate-950 font-bold rounded-lg text-xs cursor-pointer"
-                            >
-                              Save
-                            </button>
-                          </div>
-                        )}
-                        {stepErrors[`variant-color-${variant.id}`] && (
-                          <p className="text-[11px] font-semibold text-rose-500 mt-1">
-                            {stepErrors[`variant-color-${variant.id}`]}
-                          </p>
-                        )}
-                      </div>
+                            onCreateNew={handleAddCustomColor}
+                          />
+                          {stepErrors[`variant-color-${variant.id}`] && (
+                            <p className="text-[11px] font-semibold text-rose-500 mt-1">
+                              {stepErrors[`variant-color-${variant.id}`]}
+                            </p>
+                          )}
+                        </div>
 
-                      <div>
-                        <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">
-                          Model / Size
-                        </label>
-                        {!isCustomSizeMode[variant.id] ? (
-                          <select
+                        <div>
+                          <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">
+                            Model / Size <span className="text-rose-500">*</span>
+                          </label>
+                          <AttributeCombobox
                             value={variant.model}
-                            onChange={(e) => {
-                              const val = e.target.value;
-                              if (val === '__add_custom__') {
-                                setIsCustomSizeMode((prev) => ({ ...prev, [variant.id]: true }));
-                                updateVariantValue(variant.id, 'model', '');
-                              } else {
-                                updateVariantValue(variant.id, 'model', val);
-                              }
+                            options={productModels}
+                            builtinDefault="Standard"
+                            placeholder="Select or add model..."
+                            searchPlaceholder="Search or + Add model..."
+                            hasError={Boolean(stepErrors[`variant-model-${variant.id}`])}
+                            onChange={(val) => {
+                              updateVariantFields(variant.id, { model: val });
+                              setStepErrors((prev) => ({
+                                ...prev,
+                                [`variant-model-${variant.id}`]: '',
+                                [`variant-dup-${variant.id}`]: '',
+                                variants: '',
+                              }));
                             }}
-                            className="mt-1 w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl py-2 px-3 text-sm text-slate-900 dark:text-slate-100"
-                          >
-                            <option value="">-- Select Model --</option>
-                            {variant.model &&
-                              !productModels.some((s) => s.name.toLowerCase() === variant.model.toLowerCase()) && (
-                                <option value={variant.model}>{variant.model}</option>
-                              )}
-                            {productModels.map((s) => (
-                              <option key={s.id} value={s.name}>
-                                {s.name}
-                              </option>
-                            ))}
-                            <option value="__add_custom__">+ Add custom model...</option>
-                          </select>
-                        ) : (
-                          <div className="mt-1 flex gap-1">
+                            onCreateNew={handleAddCustomSize}
+                          />
+                          {stepErrors[`variant-model-${variant.id}`] && (
+                            <p className="text-[11px] font-semibold text-rose-500 mt-1">
+                              {stepErrors[`variant-model-${variant.id}`]}
+                            </p>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                        <div>
+                          <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">
+                            Variant Note (Optional)
+                          </label>
+                          <input
+                            type="text"
+                            placeholder='e.g. "with box", "EU plug"'
+                            value={variant.variantNote || ''}
+                            onChange={(e) => {
+                              updateVariantFields(variant.id, { variantNote: e.target.value });
+                              setStepErrors((prev) => ({
+                                ...prev,
+                                [`variant-dup-${variant.id}`]: '',
+                                variants: '',
+                              }));
+                            }}
+                            className="mt-1 w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl py-2 px-3 text-xs text-slate-900 dark:text-slate-100"
+                          />
+                        </div>
+
+                        <div>
+                          <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">
+                            Variant SKU (Editable)
+                          </label>
+                          <input
+                            type="text"
+                            placeholder={`${formSku || 'SKU'}-V${index + 1}`}
+                            value={variant.variantSku || ''}
+                            onChange={(e) =>
+                              updateVariantFields(variant.id, {
+                                variantSku: e.target.value.toUpperCase(),
+                              })
+                            }
+                            className="mt-1 w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl py-2 px-3 text-xs font-mono uppercase text-slate-900 dark:text-slate-100"
+                          />
+                        </div>
+                      </div>
+
+                      {/* Per-variant pricing, stock & threshold */}
+                      <div className={`grid ${hideCostFields ? 'grid-cols-3' : 'grid-cols-2 sm:grid-cols-4'} gap-2.5`}>
+                        {!hideCostFields && (
+                          <div>
+                            <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">
+                              Purchase Price (৳)
+                            </label>
                             <input
-                              type="text"
-                              placeholder="Model/Size"
-                              value={customSizeValue[variant.id] || ''}
+                              type="number"
+                              min={0}
+                              disabled={inheritsProductPrice}
+                              value={effectiveCost}
                               onChange={(e) =>
-                                setCustomSizeValue((prev) => ({ ...prev, [variant.id]: e.target.value }))
+                                updateVariantFields(variant.id, {
+                                  sameAsProductPrice: false,
+                                  costPrice: e.target.value === '' ? 0 : Number(e.target.value),
+                                })
                               }
-                              className="flex-1 min-w-0 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl py-1.5 px-2.5 text-sm"
+                              className="mt-1 w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl py-2 px-2.5 text-xs font-mono text-slate-900 dark:text-slate-100 disabled:opacity-60"
                             />
-                            <button
-                              type="button"
-                              onClick={async () => {
-                                const customVal = (customSizeValue[variant.id] || '').trim();
-                                if (customVal) {
-                                  await handleAddCustomSize(customVal);
-                                  updateVariantValue(variant.id, 'model', customVal);
-                                  setIsCustomSizeMode((prev) => ({ ...prev, [variant.id]: false }));
-                                }
-                              }}
-                              className="px-2 bg-amber-400 text-slate-950 font-bold rounded-lg text-xs cursor-pointer"
-                            >
-                              Save
-                            </button>
+                            {stepErrors[`variant-cost-${variant.id}`] && (
+                              <p className="text-[10px] font-semibold text-rose-500 mt-0.5">
+                                {stepErrors[`variant-cost-${variant.id}`]}
+                              </p>
+                            )}
                           </div>
                         )}
-                        {stepErrors[`variant-model-${variant.id}`] && (
-                          <p className="text-[11px] font-semibold text-rose-500 mt-1">
-                            {stepErrors[`variant-model-${variant.id}`]}
-                          </p>
-                        )}
-                      </div>
-                    </div>
 
-                    <div>
-                      <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">
-                        Stock Quantity
-                      </label>
-                      <input
-                        type="number"
-                        value={variant.stock}
-                        onChange={(e) =>
-                          updateVariantValue(
-                            variant.id,
-                            'stock',
-                            e.target.value === '' ? 0 : Number(e.target.value)
-                          )
-                        }
-                        className="mt-1 w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl py-2 px-3 text-sm font-mono font-bold text-slate-900 dark:text-slate-100"
-                      />
-                      {stepErrors[`variant-stock-${variant.id}`] && (
-                        <p className="text-[11px] font-semibold text-rose-500 mt-1">
-                          {stepErrors[`variant-stock-${variant.id}`]}
+                        <div>
+                          <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">
+                            Selling Price (৳)
+                          </label>
+                          <input
+                            type="number"
+                            min={0}
+                            disabled={inheritsProductPrice}
+                            value={effectiveSell}
+                            onChange={(e) =>
+                              updateVariantFields(variant.id, {
+                                sameAsProductPrice: false,
+                                sellingPrice: e.target.value === '' ? 0 : Number(e.target.value),
+                              })
+                            }
+                            className="mt-1 w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl py-2 px-2.5 text-xs font-mono font-bold text-slate-900 dark:text-slate-100 disabled:opacity-60"
+                          />
+                          {stepErrors[`variant-sell-${variant.id}`] && (
+                            <p className="text-[10px] font-semibold text-rose-500 mt-0.5">
+                              {stepErrors[`variant-sell-${variant.id}`]}
+                            </p>
+                          )}
+                        </div>
+
+                        <div>
+                          <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">
+                            Stock Qty
+                          </label>
+                          <input
+                            type="number"
+                            min={0}
+                            value={variant.stock}
+                            onChange={(e) =>
+                              updateVariantFields(variant.id, {
+                                stock: e.target.value === '' ? 0 : Number(e.target.value),
+                              })
+                            }
+                            className="mt-1 w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl py-2 px-2.5 text-xs font-mono font-bold text-slate-900 dark:text-slate-100"
+                          />
+                          {stepErrors[`variant-stock-${variant.id}`] && (
+                            <p className="text-[10px] font-semibold text-rose-500 mt-0.5">
+                              {stepErrors[`variant-stock-${variant.id}`]}
+                            </p>
+                          )}
+                        </div>
+
+                        <div>
+                          <label className="text-[10px] font-bold text-slate-500 dark:text-slate-400 uppercase">
+                            Low-Stock Alert
+                          </label>
+                          <input
+                            type="number"
+                            min={0}
+                            placeholder={String(formReorderThreshold || 5)}
+                            value={variant.reorderThreshold ?? ''}
+                            onChange={(e) =>
+                              updateVariantFields(variant.id, {
+                                reorderThreshold:
+                                  e.target.value === '' ? undefined : Math.max(0, Number(e.target.value)),
+                              })
+                            }
+                            className="mt-1 w-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-xl py-2 px-2.5 text-xs font-mono text-slate-900 dark:text-slate-100"
+                          />
+                        </div>
+                      </div>
+
+                      {!hideCostFields && effectiveSell > 0 && (
+                        <div className="flex flex-wrap items-center justify-between gap-2 pt-1 text-[11px] border-t border-slate-100 dark:border-slate-800">
+                          <span className="text-slate-500 font-medium">
+                            Profit:{' '}
+                            <strong
+                              className={`font-mono ${
+                                vProfit >= 0
+                                  ? 'text-emerald-600 dark:text-emerald-400'
+                                  : 'text-rose-600 dark:text-rose-400'
+                              }`}
+                            >
+                              ৳{vProfit.toLocaleString()}
+                            </strong>
+                          </span>
+                          <span
+                            className={`px-2 py-0.5 rounded font-mono font-bold ${
+                              vMargin > 0
+                                ? 'bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-400'
+                                : vMargin < 0
+                                ? 'bg-rose-50 dark:bg-rose-950/40 text-rose-700 dark:text-rose-400'
+                                : 'bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300'
+                            }`}
+                          >
+                            {vMargin}% {vMargin < 0 ? 'Loss' : 'Margin'}
+                          </span>
+                        </div>
+                      )}
+
+                      {!hideCostFields && isLoss && (
+                        <div className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-[11px] font-semibold text-rose-700 dark:text-rose-300">
+                          <AlertTriangle size={13} className="shrink-0" />
+                          <span>Selling price (৳{effectiveSell}) is lower than purchase price (৳{effectiveCost}).</span>
+                        </div>
+                      )}
+
+                      {stepErrors[`variant-dup-${variant.id}`] && (
+                        <p className="text-[11px] font-semibold text-rose-500">
+                          {stepErrors[`variant-dup-${variant.id}`]}
                         </p>
                       )}
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
               </div>
             </motion.div>
           )}
@@ -2089,18 +2837,23 @@ export default function ProductFormModal({
                       {formReorderThreshold} units
                     </span>
                   </div>
-                  {!isStaff && (
+                  {!hideCostFields && (
                     <div>
-                      <span className="text-slate-400 block">Purchase Price</span>
+                      <span className="text-slate-400 block">Default Purchase Price</span>
                       <span className="font-mono font-bold text-slate-900 dark:text-white">
                         ৳{Number(formCostPrice || 0).toLocaleString()}
                       </span>
                     </div>
                   )}
                   <div>
-                    <span className="text-slate-400 block">Selling Price</span>
+                    <span className="text-slate-400 block">Selling Price (Range)</span>
                     <span className="font-mono font-bold text-slate-900 dark:text-white">
-                      ৳{Number(formSellingPrice || 0).toLocaleString()}
+                      {formatPriceRange(
+                        getProductSellingPriceRange({
+                          sellingPrice: Number(formSellingPrice || 0),
+                          variants: formVariants,
+                        })
+                      )}
                     </span>
                   </div>
                 </div>
@@ -2120,22 +2873,66 @@ export default function ProductFormModal({
 
               <div className="bg-white dark:bg-slate-900 p-4 rounded-xl border border-slate-200 dark:border-slate-700 space-y-2">
                 <h4 className="text-xs font-bold text-slate-500 dark:text-slate-400 uppercase tracking-wider">
-                  Variants ({formVariants.length}) • Total {formVariants.reduce((s, v) => s + (Number(v.stock) || 0), 0)} pcs
+                  Variants ({formVariants.filter((v) => !v.inactive).length} active) • Total{' '}
+                  {formVariants.filter((v) => !v.inactive).reduce((s, v) => s + (Number(v.stock) || 0), 0)} pcs
                 </h4>
-                <div className="space-y-1.5 max-h-[140px] overflow-y-auto text-xs">
-                  {formVariants.map((v, i) => (
-                    <div
-                      key={v.id}
-                      className="flex justify-between items-center bg-slate-50 dark:bg-slate-800 px-3 py-1.5 rounded-lg"
-                    >
-                      <span className="font-semibold text-slate-800 dark:text-slate-200">
-                        #{i + 1}: {v.color} / {v.model}
-                      </span>
-                      <span className="font-mono font-bold text-slate-900 dark:text-white">
-                        {v.stock} pcs
-                      </span>
-                    </div>
-                  ))}
+                <div className="overflow-x-auto max-h-[210px] border border-slate-100 dark:border-slate-800 rounded-lg">
+                  <table className="w-full text-left border-collapse text-[11px]">
+                    <thead className="bg-slate-50 dark:bg-slate-800 text-slate-500 uppercase font-mono">
+                      <tr>
+                        <th className="py-1.5 px-2.5">Variant</th>
+                        <th className="py-1.5 px-2">SKU</th>
+                        {!hideCostFields && <th className="py-1.5 px-2 text-right">Cost</th>}
+                        <th className="py-1.5 px-2 text-right">Sell</th>
+                        {!hideCostFields && <th className="py-1.5 px-2 text-right">Margin</th>}
+                        <th className="py-1.5 px-2.5 text-right">Qty</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                      {formVariants.map((v, i) => {
+                        const effSell =
+                          v.sameAsProductPrice !== false
+                            ? Number(formSellingPrice || 0)
+                            : Number(v.sellingPrice ?? formSellingPrice ?? 0);
+                        const effCost =
+                          v.sameAsProductPrice !== false
+                            ? Number(formCostPrice || 0)
+                            : Number(v.costPrice ?? formCostPrice ?? 0);
+                        const { marginPercent: vMargin } = computeVariantProfitMargin(effSell, effCost);
+                        return (
+                          <tr key={v.id} className={v.inactive ? 'opacity-50 line-through' : ''}>
+                            <td className="py-1.5 px-2.5 font-semibold text-slate-800 dark:text-slate-200">
+                              #{i + 1}: {v.color} / {v.model}
+                              {v.variantNote ? (
+                                <span className="block text-[10px] text-slate-400 font-normal">
+                                  {v.variantNote}
+                                </span>
+                              ) : null}
+                            </td>
+                            <td className="py-1.5 px-2 font-mono text-slate-500">
+                              {v.variantSku || `${formSku}-V${i + 1}`}
+                            </td>
+                            {!hideCostFields && (
+                              <td className="py-1.5 px-2 text-right font-mono text-slate-600 dark:text-slate-300">
+                                ৳{effCost.toLocaleString()}
+                              </td>
+                            )}
+                            <td className="py-1.5 px-2 text-right font-mono font-bold text-slate-900 dark:text-white">
+                              ৳{effSell.toLocaleString()}
+                            </td>
+                            {!hideCostFields && (
+                              <td className="py-1.5 px-2 text-right font-mono font-semibold text-emerald-600 dark:text-emerald-400">
+                                {vMargin}%
+                              </td>
+                            )}
+                            <td className="py-1.5 px-2.5 text-right font-mono font-bold text-slate-900 dark:text-white">
+                              {v.inactive ? 'Archived' : `${v.stock} pcs`}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
                 </div>
               </div>
 
@@ -2298,6 +3095,54 @@ export default function ProductFormModal({
           </div>
         </div>
       </div>
+
+      {/* Archive Variant With History Confirmation */}
+      {archiveVariantConfirm && (
+        <div
+          className="fixed inset-0 z-[95] flex items-center justify-center p-4 bg-slate-950/60 backdrop-blur-xs"
+          onClick={(e) => {
+            e.stopPropagation();
+            setArchiveVariantConfirm(null);
+          }}
+        >
+          <div
+            className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-6 max-w-sm w-full space-y-4 shadow-2xl"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-start gap-2.5">
+              <Archive size={18} className="text-amber-500 shrink-0 mt-0.5" />
+              <div>
+                <h3 className="text-sm font-black text-slate-900 dark:text-white">
+                  Archive Variant Instead of Deleting?
+                </h3>
+                <p className="text-xs text-slate-600 dark:text-slate-400 mt-1 leading-relaxed">
+                  <strong>
+                    {archiveVariantConfirm.variant.color} / {archiveVariantConfirm.variant.model}
+                  </strong>{' '}
+                  cannot be permanently deleted ({archiveVariantConfirm.reason}). Archiving hides it
+                  from new sales while keeping historical orders and reports intact.
+                </p>
+              </div>
+            </div>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setArchiveVariantConfirm(null)}
+                className="px-4 py-2 bg-slate-100 dark:bg-slate-800 text-slate-700 dark:text-slate-200 rounded-xl text-xs font-bold cursor-pointer"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={confirmArchiveVariant}
+                className="px-4 py-2 bg-amber-400 hover:bg-amber-500 text-slate-950 rounded-xl text-xs font-bold cursor-pointer"
+              >
+                Archive Variant
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Discard Confirmation */}
       {showDiscardConfirm && (

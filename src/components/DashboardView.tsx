@@ -39,6 +39,10 @@ import {
   matchesGlobalBrandFilter,
   normalizeSubBrandCode,
 } from '../utils/subBrands';
+import {
+  computeProductInventoryValue,
+  isProductOrAnyVariantLowStock,
+} from '../utils/productVariants';
 
 const DashboardSalesTrendChart = lazy(() =>
   import('./DashboardCharts').then((m) => ({ default: m.DashboardSalesTrendChart }))
@@ -288,8 +292,8 @@ export default function DashboardView({
     approvedProducts.forEach((product) => {
       const productQty = product.variants.reduce((sum, v) => sum + (v.stock || 0), 0);
       totalStockUnits += productQty;
-      totalStockValue += (product.costPrice || 0) * productQty;
-      if (productQty <= product.reorderThreshold) {
+      totalStockValue += computeProductInventoryValue(product);
+      if (isProductOrAnyVariantLowStock(product)) {
         lowStockCount++;
       }
     });

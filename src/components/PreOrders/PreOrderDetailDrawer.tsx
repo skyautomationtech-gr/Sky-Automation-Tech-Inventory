@@ -161,6 +161,12 @@ import ReceiveStockModal from './ReceiveStockModal';
 import ConvertToSaleModal from './ConvertToSaleModal';
 import CancelReconcileModal from './CancelReconcileModal';
 import CustomerMessageModal from './CustomerMessageModal';
+import {
+  formatVariantLabel,
+  getActiveVariants,
+  resolveVariantCostPrice,
+  resolveVariantSellingPrice,
+} from '../../utils/productVariants';
 
 export interface PreOrderDetailDrawerProps {
   preOrderId: string | null;
@@ -2088,6 +2094,47 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
                               )}
                             </div>
 
+                            {(() => {
+                              const linkedProd = it.linkedProductId
+                                ? localProducts.find((p) => p.id === it.linkedProductId)
+                                : undefined;
+                              const linkedVariants = linkedProd ? getActiveVariants(linkedProd) : [];
+                              if (!linkedProd || linkedVariants.length === 0) return null;
+                              return (
+                                <FormField label="Linked Catalog Variant" className="mb-1">
+                                  <Select
+                                    options={linkedVariants.map((v) => ({
+                                      value: v.id,
+                                      label: `${formatVariantLabel(v)}${v.variantSku ? ` [${v.variantSku}]` : ''}`,
+                                      sublabel: `${formatBDT(resolveVariantSellingPrice(linkedProd, v))} • Stock: ${v.stock || 0}`,
+                                    }))}
+                                    value={it.linkedVariantId}
+                                    onChange={(val) => {
+                                      const vid = String(val || '');
+                                      const v = linkedProd.variants.find((item) => item.id === vid);
+                                      if (!v) return;
+                                      const sell = resolveVariantSellingPrice(linkedProd, v);
+                                      const cost = canViewProfit ? resolveVariantCostPrice(linkedProd, v) : 0;
+                                      updateEditItem(it.itemId, {
+                                        linkedVariantId: vid,
+                                        sku: v.variantSku || linkedProd.sku || it.sku,
+                                        color: v.color || '',
+                                        model: v.model || '',
+                                        variant: v.variantNote || [v.color, v.model].filter(Boolean).join(' / '),
+                                        ...(!financialFieldsLocked && sell > 0
+                                          ? { sellingUnitPrice: String(sell) }
+                                          : {}),
+                                        ...(canViewProfit && cost > 0
+                                          ? { chinaUnitCost: String(cost) }
+                                          : {}),
+                                      });
+                                    }}
+                                    placeholder="Select variant..."
+                                  />
+                                </FormField>
+                              );
+                            })()}
+
                             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                               <FormField label="Product Name" required className="sm:col-span-2">
                                 <Input
@@ -2117,7 +2164,7 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
                                   className="font-mono"
                                 />
                               </FormField>
-                              <FormField label="Model">
+                              <FormField label="Model / Size">
                                 <Input
                                   value={it.model}
                                   onChange={(e) =>
@@ -2125,7 +2172,7 @@ export const PreOrderDetailDrawer: React.FC<PreOrderDetailDrawerProps> = ({
                                   }
                                 />
                               </FormField>
-                              <FormField label="Variant">
+                              <FormField label="Variant / Note">
                                 <Input
                                   value={it.variant}
                                   onChange={(e) =>

@@ -152,7 +152,10 @@
         "customerPhone": { "type": "string" },
         "subBrand": { "type": "string" },
         "salesChannel": { "type": "string" },
-        "items": { "type": "array" },
+        "items": {
+          "type": "array",
+          "description": "Order line items including productId, variantId, variantLabel, variantSku, costPrice, unitPrice, quantity, total"
+        },
         "totalAmount": { "type": "number" },
         "courier": { "type": "string" },
         "courierTrackingNumber": { "type": "string" },
@@ -241,7 +244,10 @@
         "reorderThreshold": { "type": "number" },
         "images": { "type": "array" },
         "imageUrls": { "type": "array" },
-        "variants": { "type": "array" },
+        "variants": {
+          "type": "array",
+          "description": "1 to 100 variants; each variant supports id, color, model, variantNote, variantSku, costPrice, sellingPrice, sameAsProductPrice, reorderThreshold, stock, reservedQty, inactive, archived"
+        },
         "totalStock": { "type": "number" },
         "archived": { "type": "boolean" },
         "status": { "type": "string" },
@@ -259,6 +265,25 @@
         "editHistory": { "type": "array" },
         "createdAt": { "type": "number" }
       }
+    },
+    "ProductColor": {
+      "title": "ProductColor",
+      "description": "Shared product color / finish attribute option",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" },
+        "hexCode": { "type": "string" }
+      },
+      "required": ["name"]
+    },
+    "ProductModel": {
+      "title": "ProductModel",
+      "description": "Shared product model / size attribute option",
+      "type": "object",
+      "properties": {
+        "name": { "type": "string" }
+      },
+      "required": ["name"]
     },
     "Invoice": {
       "title": "Invoice",
@@ -892,6 +917,14 @@
     "/products/{productId}": {
       "schema": "Product",
       "description": "Inventory catalog & pending products collection"
+    },
+    "/productColors/{colorId}": {
+      "schema": "ProductColor",
+      "description": "Shared catalog product colors and finishes"
+    },
+    "/productModels/{modelId}": {
+      "schema": "ProductModel",
+      "description": "Shared catalog product models and sizes"
     },
     "/notifications/{notificationId}": {
       "schema": "AppNotification",

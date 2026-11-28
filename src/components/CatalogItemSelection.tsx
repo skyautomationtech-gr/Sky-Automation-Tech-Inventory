@@ -20,6 +20,14 @@ import {
   Layers
 } from 'lucide-react';
 import { getProductAvailableStock, getVariantAvailableStock } from '../firebase/db';
+import {
+  doesProductMatchQuery,
+  formatVariantLabel,
+  getActiveVariants,
+  isVariantLowStock,
+  resolveVariantCostPrice,
+  resolveVariantSellingPrice,
+} from '../utils/productVariants';
 
 interface CatalogItemSelectionProps {
   products: Product[];
@@ -70,8 +78,7 @@ export default function CatalogItemSelection({
   // Filter products by search, category, and brand
   const filteredProducts = useMemo(() => {
     return products.filter(p => {
-      const matchesSearch = p.name.toLowerCase().includes(searchQuery.toLowerCase()) || 
-                            p.sku.toLowerCase().includes(searchQuery.toLowerCase());
+      const matchesSearch = doesProductMatchQuery(p, searchQuery);
       const matchesCategory = selectedCategory === 'All' || p.category === selectedCategory;
       const matchesBrand = selectedBrand === 'All' || p.brand === selectedBrand;
       const matchesStockStatus = p.stockStatus !== 'out_of_stock' && getProductAvailableStock(p) > 0;
@@ -79,12 +86,24 @@ export default function CatalogItemSelection({
     });
   }, [products, searchQuery, selectedCategory, selectedBrand]);
 
-  // Helper to get selection state for a product
+  // Helper to get selection state for a product (uses active variants)
   const getSelection = (product: Product) => {
+    const availVariants = getActiveVariants(product);
     const current = selections[product.id];
-    if (current) return current;
+    if (current) {
+      if (availVariants.length === 0 || availVariants.some(v => v.id === current.variantId)) {
+        return current;
+      }
+      const fallback = availVariants[0];
+      return {
+        color: fallback?.color || '',
+        model: fallback?.model || '',
+        variantId: fallback?.id || 'no-variant',
+        qty: current.qty || 1
+      };
+    }
 
-    const firstVariant = product.variants?.[0];
+    const firstVariant = availVariants[0];
     return {
       color: firstVariant?.color || '',
       model: firstVariant?.model || '',
@@ -107,10 +126,11 @@ export default function CatalogItemSelection({
   const handleColorSelect = (product: Product, color: string) => {
     const sel = getSelection(product);
     const targetModel = sel.model;
-    
-    const matchedVariant = product.variants?.find(v => v.color === color && (!targetModel || v.model === targetModel)) ||
-                           product.variants?.find(v => v.color === color) ||
-                           product.variants?.[0];
+    const availVariants = getActiveVariants(product);
+
+    const matchedVariant = availVariants.find(v => v.color === color && (!targetModel || v.model === targetModel)) ||
+                           availVariants.find(v => v.color === color) ||
+                           availVariants[0];
 
     updateSelection(product.id, {
       color,
@@ -123,10 +143,11 @@ export default function CatalogItemSelection({
   const handleModelSelect = (product: Product, model: string) => {
     const sel = getSelection(product);
     const targetColor = sel.color;
+    const availVariants = getActiveVariants(product);
 
-    const matchedVariant = product.variants?.find(v => v.model === model && (!targetColor || v.color === targetColor)) ||
-                           product.variants?.find(v => v.model === model) ||
-                           product.variants?.[0];
+    const matchedVariant = availVariants.find(v => v.model === model && (!targetColor || v.color === targetColor)) ||
+                           availVariants.find(v => v.model === model) ||
+                           availVariants[0];
 
     updateSelection(product.id, {
       model,
@@ -137,7 +158,7 @@ export default function CatalogItemSelection({
 
   // Unified variant selection
   const handleVariantSelect = (product: Product, variantId: string) => {
-    const variant = product.variants?.find(v => v.id === variantId);
+    const variant = getActiveVariants(product).find(v => v.id === variantId);
     if (variant) {
       updateSelection(product.id, {
         variantId: variant.id,
@@ -150,7 +171,8 @@ export default function CatalogItemSelection({
   // Quantity stepper (respects available stock excluding reserved pre-order units)
   const handleQtyChange = (product: Product, delta: number) => {
     const sel = getSelection(product);
-    const variant = product.variants?.find(v => v.id === sel.variantId) || product.variants?.[0];
+    const availVariants = getActiveVariants(product);
+    const variant = availVariants.find(v => v.id === sel.variantId) || availVariants[0];
     const maxAvail = variant ? getVariantAvailableStock(variant) : getProductAvailableStock(product);
     const requested = sel.qty + delta;
     if (delta > 0 && maxAvail > 0 && requested > maxAvail) {
@@ -165,13 +187,12 @@ export default function CatalogItemSelection({
   // Add to Cart
   const handleAddToCart = (product: Product) => {
     const sel = getSelection(product);
-    const variant = product.variants?.find(v => v.id === sel.variantId) || product.variants?.[0];
+    const availVariants = getActiveVariants(product);
+    const variant = availVariants.find(v => v.id === sel.variantId) || availVariants[0];
     const maxAvail = variant ? getVariantAvailableStock(variant) : getProductAvailableStock(product);
     const reserved = variant ? (Number(variant.reservedQty) || 0) : (Number(product.reservedQty) || 0);
 
-    const vLabel = variant 
-      ? (`${variant.color || ''} ${variant.model || ''}`.trim() || 'Standard') 
-      : 'Standard';
+    const vLabel = variant ? formatVariantLabel(variant) : 'Standard';
     const vId = variant ? variant.id : 'no-variant';
 
     const existingInCart = orderItems.find(item => item.productId === product.id && item.variantId === vId)?.qty || 0;
@@ -186,20 +207,24 @@ export default function CatalogItemSelection({
       return;
     }
 
+    const resolvedUnitPrice = resolveVariantSellingPrice(product, variant);
+    const resolvedCostPrice = resolveVariantCostPrice(product, variant);
     const newItem: OrderItem = {
       productId: product.id,
       variantId: vId,
+      ...(variant?.variantSku ? { variantSku: variant.variantSku } : {}),
       productName: product.name,
       variantLabel: vLabel,
       qty: sel.qty,
-      unitPrice: product.sellingPrice
+      unitPrice: resolvedUnitPrice,
+      costPrice: resolvedCostPrice,
     };
 
     setOrderItems(prev => {
       const existingIdx = prev.findIndex(item => item.productId === newItem.productId && item.variantId === newItem.variantId);
       if (existingIdx >= 0) {
         const copy = [...prev];
-        copy[existingIdx].qty += newItem.qty;
+        copy[existingIdx] = { ...copy[existingIdx], qty: copy[existingIdx].qty + newItem.qty };
         return copy;
       }
       return [...prev, newItem];
@@ -213,13 +238,12 @@ export default function CatalogItemSelection({
   // Buy Now (Fast Single/Direct Checkout)
   const handleBuyNow = (product: Product) => {
     const sel = getSelection(product);
-    const variant = product.variants?.find(v => v.id === sel.variantId) || product.variants?.[0];
+    const availVariants = getActiveVariants(product);
+    const variant = availVariants.find(v => v.id === sel.variantId) || availVariants[0];
     const maxAvail = variant ? getVariantAvailableStock(variant) : getProductAvailableStock(product);
     const reserved = variant ? (Number(variant.reservedQty) || 0) : (Number(product.reservedQty) || 0);
 
-    const vLabel = variant 
-      ? (`${variant.color || ''} ${variant.model || ''}`.trim() || 'Standard') 
-      : 'Standard';
+    const vLabel = variant ? formatVariantLabel(variant) : 'Standard';
     const vId = variant ? variant.id : 'no-variant';
 
     const existingInCart = orderItems.find(item => item.productId === product.id && item.variantId === vId)?.qty || 0;
@@ -234,20 +258,24 @@ export default function CatalogItemSelection({
       return;
     }
 
+    const resolvedUnitPrice = resolveVariantSellingPrice(product, variant);
+    const resolvedCostPrice = resolveVariantCostPrice(product, variant);
     const newItem: OrderItem = {
       productId: product.id,
       variantId: vId,
+      ...(variant?.variantSku ? { variantSku: variant.variantSku } : {}),
       productName: product.name,
       variantLabel: vLabel,
       qty: sel.qty,
-      unitPrice: product.sellingPrice
+      unitPrice: resolvedUnitPrice,
+      costPrice: resolvedCostPrice,
     };
 
     setOrderItems(prev => {
       const existingIdx = prev.findIndex(item => item.productId === newItem.productId && item.variantId === newItem.variantId);
       if (existingIdx >= 0) {
         const copy = [...prev];
-        copy[existingIdx].qty += newItem.qty;
+        copy[existingIdx] = { ...copy[existingIdx], qty: copy[existingIdx].qty + newItem.qty };
         return copy;
       }
       return [...prev, newItem];
@@ -328,7 +356,7 @@ export default function CatalogItemSelection({
             <Search className="absolute left-3 top-3 h-4 w-4 text-slate-400" />
             <input
               type="text"
-              placeholder="Search catalog by product name or SKU..."
+              placeholder="Search catalog by name, product SKU, variant SKU, note or color..."
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               className="w-full h-10 bg-white border border-slate-200 rounded-lg py-2 pl-9 pr-8 text-xs font-medium focus:outline-hidden focus:border-amber-400 focus:ring-1 focus:ring-amber-400 placeholder-slate-400"
@@ -426,14 +454,17 @@ export default function CatalogItemSelection({
         {/* Product Cards Grid: 2 columns on phones with 8-10px gaps (3 on tablets, 4-5 on desktop) */}
         <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-4 xl:grid-cols-5 gap-2 sm:gap-2.5">
           {filteredProducts.map(product => {
+            const availVariants = getActiveVariants(product);
             const currentSel = getSelection(product);
-            const activeVariant = product.variants?.find(v => v.id === currentSel.variantId) || product.variants?.[0];
+            const activeVariant = availVariants.find(v => v.id === currentSel.variantId) || availVariants[0];
             const activeStock = activeVariant ? getVariantAvailableStock(activeVariant) : getProductAvailableStock(product);
             const activeReserved = activeVariant ? (Number(activeVariant.reservedQty) || 0) : (Number(product.reservedQty) || 0);
-            const uniqueColors = Array.from(new Set(product.variants?.map(v => v.color).filter(Boolean) || [])) as string[];
-            const uniqueModels = Array.from(new Set(product.variants?.map(v => v.model).filter(Boolean) || [])) as string[];
+            const uniqueColors = Array.from(new Set(availVariants.map(v => v.color).filter(Boolean) || [])) as string[];
+            const uniqueModels = Array.from(new Set(availVariants.map(v => v.model).filter(Boolean) || [])) as string[];
             const isOutOfStock = activeStock <= 0 || product.stockStatus === 'out_of_stock';
-            const isLowStock = !isOutOfStock && activeStock <= (product.reorderThreshold || 5);
+            const isLowStock = !isOutOfStock && isVariantLowStock(product, activeVariant);
+            const activeSellPrice = resolveVariantSellingPrice(product, activeVariant);
+            const activeSku = activeVariant?.variantSku || product.sku;
 
             return (
               <div 
@@ -503,7 +534,7 @@ export default function CatalogItemSelection({
                   {/* Secondary info (Brand, SKU) - 11-12px text */}
                   <div className="flex items-center justify-between text-[11px] text-slate-500 mb-0.5 gap-1">
                     <span className="truncate">{product.brand || product.category || 'Gadget'}</span>
-                    <span className="font-mono text-[10px] text-slate-400 truncate">{product.sku}</span>
+                    <span className="font-mono text-[10px] text-slate-400 truncate" title={activeSku}>{activeSku}</span>
                   </div>
 
                   {/* Product Name - 13-14px, max 2 lines, ellipsis */}
@@ -519,15 +550,20 @@ export default function CatalogItemSelection({
                   </h3>
 
                   {/* Price - 14-15px bold */}
-                  <div className="flex items-baseline gap-1 mb-1.5">
+                  <div className="flex items-baseline gap-1 mb-1.5 flex-wrap">
                     <span className="text-[15px] font-bold text-amber-600 font-mono tracking-tight">
-                      ৳{product.sellingPrice.toLocaleString()}
+                      ৳{activeSellPrice.toLocaleString()}
                     </span>
                     <span className="text-[10px] font-mono text-slate-400">/ unit</span>
+                    {activeVariant?.variantNote && (
+                      <span className="text-[10px] bg-slate-100 text-slate-600 px-1.5 py-0.5 rounded truncate max-w-[110px]" title={activeVariant.variantNote}>
+                        {activeVariant.variantNote}
+                      </span>
+                    )}
                   </div>
 
                   {/* Compact Variant Swatches if available */}
-                  {product.variants && product.variants.length > 0 && (
+                  {availVariants.length > 0 && (
                     <div className="mb-2 space-y-1">
                       {uniqueColors.length > 0 && (
                         <div className="flex items-center gap-1 overflow-x-auto no-scrollbar py-0.5">
@@ -908,73 +944,96 @@ export default function CatalogItemSelection({
               </div>
 
               {/* Price & Stock info - 14-15px bold price, 11-12px secondary text */}
-              <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 flex items-center justify-between">
-                <div>
-                  <span className="text-[11px] text-slate-500 font-medium">Selling Price:</span>
-                  <div className="text-[15px] font-bold text-amber-600 font-mono tracking-tight">
-                    ৳{detailModalProduct.sellingPrice.toLocaleString()}
-                  </div>
-                </div>
-                <div className="text-right">
-                  <span className="text-[11px] text-slate-500 font-medium">SKU Code:</span>
-                  <div className="text-xs font-mono font-bold text-slate-800">
-                    {detailModalProduct.sku}
-                  </div>
-                </div>
-              </div>
+              {(() => {
+                const modalAvailVariants = getActiveVariants(detailModalProduct);
+                const modalSel = getSelection(detailModalProduct);
+                const modalVariant = modalAvailVariants.find(v => v.id === modalSel.variantId) || modalAvailVariants[0];
+                const modalPrice = resolveVariantSellingPrice(detailModalProduct, modalVariant);
+                const modalSku = modalVariant?.variantSku || detailModalProduct.sku;
+                const modalAvail = modalVariant ? getVariantAvailableStock(modalVariant) : getProductAvailableStock(detailModalProduct);
+                const modalColors = Array.from(new Set(modalAvailVariants.map(v => v.color).filter((c): c is string => Boolean(c))));
+                const modalModels = Array.from(new Set(modalAvailVariants.map(v => v.model).filter((m): m is string => Boolean(m))));
 
-              {/* Variant Swatches inside Modal */}
-              {detailModalProduct.variants && detailModalProduct.variants.length > 0 && (
-                <div className="space-y-2 bg-slate-50 border border-slate-200 rounded-lg p-2.5">
-                  <span className="text-xs font-bold text-slate-700 block">Select Variant:</span>
-                  
-                  {/* Colors */}
-                  {Array.from(new Set(detailModalProduct.variants.map(v => v.color).filter(Boolean))).length > 0 && (
-                    <div className="space-y-1">
-                      <span className="text-[11px] text-slate-500 font-medium">Color:</span>
-                      <div className="flex flex-wrap gap-1">
-                        {Array.from(new Set<string>(detailModalProduct.variants.map(v => v.color).filter((c): c is string => Boolean(c)))).map(col => (
-                          <button
-                            key={col}
-                            type="button"
-                            onClick={() => handleColorSelect(detailModalProduct, col)}
-                            className={`h-[30px] px-2.5 rounded-md text-xs font-semibold border cursor-pointer ${
-                              getSelection(detailModalProduct).color === col 
-                                ? 'bg-slate-900 text-amber-400 border-amber-400' 
-                                : 'bg-white text-slate-700 border-slate-200 hover:border-slate-400'
-                            }`}
-                          >
-                            {col}
-                          </button>
-                        ))}
+                return (
+                  <>
+                    <div className="bg-slate-50 border border-slate-200 rounded-lg p-2.5 flex items-center justify-between gap-2">
+                      <div>
+                        <span className="text-[11px] text-slate-500 font-medium">Selling Price:</span>
+                        <div className="text-[15px] font-bold text-amber-600 font-mono tracking-tight">
+                          ৳{modalPrice.toLocaleString()}
+                        </div>
+                        {modalVariant?.variantNote && (
+                          <span className="inline-block mt-0.5 text-[10px] bg-white border border-slate-200 text-slate-600 px-1.5 py-0.5 rounded">
+                            {modalVariant.variantNote}
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-right">
+                        <span className="text-[11px] text-slate-500 font-medium">SKU / Stock:</span>
+                        <div className="text-xs font-mono font-bold text-slate-800">
+                          {modalSku}
+                        </div>
+                        <div className="text-[10px] font-mono text-emerald-700 font-semibold">
+                          {modalAvail} available
+                        </div>
                       </div>
                     </div>
-                  )}
 
-                  {/* Models */}
-                  {Array.from(new Set(detailModalProduct.variants.map(v => v.model).filter(Boolean))).length > 0 && (
-                    <div className="space-y-1">
-                      <span className="text-[11px] text-slate-500 font-medium">Model / Size:</span>
-                      <div className="flex flex-wrap gap-1">
-                        {Array.from(new Set<string>(detailModalProduct.variants.map(v => v.model).filter((m): m is string => Boolean(m)))).map(mod => (
-                          <button
-                            key={mod}
-                            type="button"
-                            onClick={() => handleModelSelect(detailModalProduct, mod)}
-                            className={`h-[30px] px-2.5 rounded-md text-xs font-semibold border cursor-pointer ${
-                              getSelection(detailModalProduct).model === mod 
-                                ? 'bg-slate-900 text-amber-400 border-amber-400' 
-                                : 'bg-white text-slate-700 border-slate-200 hover:border-slate-400'
-                            }`}
-                          >
-                            {mod}
-                          </button>
-                        ))}
+                    {/* Variant Swatches inside Modal */}
+                    {modalAvailVariants.length > 0 && (
+                      <div className="space-y-2 bg-slate-50 border border-slate-200 rounded-lg p-2.5">
+                        <span className="text-xs font-bold text-slate-700 block">Select Variant:</span>
+
+                        {/* Colors */}
+                        {modalColors.length > 0 && (
+                          <div className="space-y-1">
+                            <span className="text-[11px] text-slate-500 font-medium">Color:</span>
+                            <div className="flex flex-wrap gap-1">
+                              {modalColors.map(col => (
+                                <button
+                                  key={col}
+                                  type="button"
+                                  onClick={() => handleColorSelect(detailModalProduct, col)}
+                                  className={`h-[30px] px-2.5 rounded-md text-xs font-semibold border cursor-pointer ${
+                                    modalSel.color === col 
+                                      ? 'bg-slate-900 text-amber-400 border-amber-400' 
+                                      : 'bg-white text-slate-700 border-slate-200 hover:border-slate-400'
+                                  }`}
+                                >
+                                  {col}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Models */}
+                        {modalModels.length > 0 && (
+                          <div className="space-y-1">
+                            <span className="text-[11px] text-slate-500 font-medium">Model / Size:</span>
+                            <div className="flex flex-wrap gap-1">
+                              {modalModels.map(mod => (
+                                <button
+                                  key={mod}
+                                  type="button"
+                                  onClick={() => handleModelSelect(detailModalProduct, mod)}
+                                  className={`h-[30px] px-2.5 rounded-md text-xs font-semibold border cursor-pointer ${
+                                    modalSel.model === mod 
+                                      ? 'bg-slate-900 text-amber-400 border-amber-400' 
+                                      : 'bg-white text-slate-700 border-slate-200 hover:border-slate-400'
+                                  }`}
+                                >
+                                  {mod}
+                                </button>
+                              ))}
+                            </div>
+                          </div>
+                        )}
                       </div>
-                    </div>
-                  )}
-                </div>
-              )}
+                    )}
+                  </>
+                );
+              })()}
 
               {/* Quantity Stepper & Modal Action Buttons */}
               <div className="pt-2 border-t border-slate-100 flex items-center gap-2">

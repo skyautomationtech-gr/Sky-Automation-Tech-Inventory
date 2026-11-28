@@ -1,5 +1,9 @@
 import { Product } from '../types';
 import { resolveDefaultSellingSubBrand } from '../utils/subBrands';
+import {
+  resolveVariantCostPrice,
+  resolveVariantSellingPrice,
+} from '../utils/productVariants';
 
 export interface ResellerSyncConfig {
   enabled: boolean;
@@ -67,6 +71,13 @@ export function buildResellerProductPayload(product: Product, config: ResellerSy
       id: v.id,
       color: v.color || '',
       model: v.model || '',
+      variantNote: v.variantNote || '',
+      variantSku: v.variantSku || '',
+      sellingPrice: config.syncPrices ? resolveVariantSellingPrice(product, v) : undefined,
+      costPrice: resolveVariantCostPrice(product, v),
+      sameAsProductPrice: v.sameAsProductPrice !== false,
+      reorderThreshold: v.reorderThreshold,
+      inactive: Boolean(v.inactive),
       stock: config.syncStock ? (v.stock || 0) : 0,
       barcodeValue: v.barcodeValue || ''
     })),

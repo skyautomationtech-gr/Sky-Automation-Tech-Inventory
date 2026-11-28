@@ -66,7 +66,7 @@ import {
   validateImageFile,
 } from '../../preOrders/imageUpload';
 import { formatBytesCompact, MediaUploadResult } from '../../utils/mediaUpload';
-import { addSupplier, getSuppliers } from '../../firebase/db';
+import { addProductColor, addProductModel, addSupplier, getProductColors, getProductModels, getSuppliers } from '../../firebase/db';
 import {
   CreatePreOrderResult,
   actorFromUser,
@@ -87,6 +87,17 @@ import {
   useToast,
 } from '../../design-system';
 import { PreOrderStatusBadge, SubBrandBadge } from './PreOrderStatusBadge';
+import AttributeCombobox, { AttributeOption } from '../AttributeCombobox';
+import {
+  formatPriceRange,
+  formatVariantLabel,
+  getActiveVariants,
+  getProductSellingPriceRange,
+  normalizeAttributeCompareKey,
+  normalizeAttributeName,
+  resolveVariantCostPrice,
+  resolveVariantSellingPrice,
+} from '../../utils/productVariants';
 
 export interface CreatePreOrderViewProps {
   user: UserProfile;
@@ -340,6 +351,58 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
     };
   }, []);
 
+  const [sharedColors, setSharedColors] = useState<AttributeOption[]>([]);
+  const [sharedModels, setSharedModels] = useState<AttributeOption[]>([]);
+
+  useEffect(() => {
+    let active = true;
+    Promise.all([
+      getProductColors().catch(() => []),
+      getProductModels().catch(() => []),
+    ]).then(([colors, models]) => {
+      if (!active) return;
+      setSharedColors(colors || []);
+      setSharedModels(models || []);
+    });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  const handleCreateSharedColor = async (rawName: string) => {
+    const clean = normalizeAttributeName(rawName);
+    if (!clean) return '';
+    const existing = sharedColors.find(
+      (c) => normalizeAttributeCompareKey(c.name) === normalizeAttributeCompareKey(clean)
+    );
+    if (existing) return existing;
+    const createdAttr = await addProductColor(clean);
+    const created: AttributeOption = { id: createdAttr.id, name: createdAttr.name };
+    setSharedColors((prev) =>
+      prev.some((c) => normalizeAttributeCompareKey(c.name) === normalizeAttributeCompareKey(clean))
+        ? prev
+        : [...prev, created]
+    );
+    return created;
+  };
+
+  const handleCreateSharedModel = async (rawName: string) => {
+    const clean = normalizeAttributeName(rawName);
+    if (!clean) return '';
+    const existing = sharedModels.find(
+      (m) => normalizeAttributeCompareKey(m.name) === normalizeAttributeCompareKey(clean)
+    );
+    if (existing) return existing;
+    const createdAttr = await addProductModel(clean);
+    const created: AttributeOption = { id: createdAttr.id, name: createdAttr.name };
+    setSharedModels((prev) =>
+      prev.some((m) => normalizeAttributeCompareKey(m.name) === normalizeAttributeCompareKey(clean))
+        ? prev
+        : [...prev, created]
+    );
+    return created;
+  };
+
   useEffect(() => {
     if (!allowedSubBrands.includes(subBrand)) {
       setSubBrand(
@@ -550,6 +613,7 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
       .map((p) => {
         const total = p.totalStock ?? p.stock ?? 0;
         const avail = Math.max(0, total - (p.reservedQty || 0));
+        const priceRange = getProductSellingPriceRange(p);
         return {
           value: p.id,
           label: p.name,
@@ -560,7 +624,9 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
           ]
             .filter(Boolean)
             .join(' • '),
-          badge: p.sellingPrice ? formatBDT(p.sellingPrice) : undefined,
+          badge: priceRange.min > 0
+            ? (priceRange.isRange ? formatPriceRange(priceRange) : formatBDT(priceRange.min))
+            : undefined,
         };
       });
   }, [products]);
@@ -703,30 +769,35 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
     if (!found) return;
 
     const currentLine = lines.find((l) => l.itemId === itemId);
+    const activeVars = getActiveVariants(found);
+    const firstVar = activeVars[0];
     const patch: Partial<DraftPreOrderLine> = {
       linkedProductId: prodId,
       linkedVariantId: '',
       productName: found.name,
       category: found.category || currentLine?.category || '',
-      sku: found.sku || currentLine?.sku || '',
+      sku: firstVar?.variantSku || found.sku || currentLine?.sku || '',
     };
 
-    if (found.variants && found.variants.length > 0) {
-      const firstVar = found.variants[0];
+    if (firstVar) {
       patch.linkedVariantId = firstVar.id;
       patch.color = firstVar.color || '';
       patch.model = firstVar.model || '';
-      patch.variant = [firstVar.color, firstVar.model].filter(Boolean).join(' / ');
+      patch.variant = firstVar.variantNote || [firstVar.color, firstVar.model].filter(Boolean).join(' / ');
     } else {
       patch.model = found.model || '';
       patch.color = found.color || '';
     }
 
-    if (found.sellingPrice > 0) {
-      patch.sellingUnitPrice = String(found.sellingPrice);
+    const resolvedSell = resolveVariantSellingPrice(found, firstVar);
+    if (resolvedSell > 0) {
+      patch.sellingUnitPrice = String(resolvedSell);
     }
-    if (canViewChinaCost && found.purchasePrice > 0 && !currentLine?.chinaUnitCost) {
-      patch.chinaUnitCost = String(found.purchasePrice);
+    const resolvedCost = firstVar
+      ? resolveVariantCostPrice(found, firstVar)
+      : (Number(found.purchasePrice ?? found.costPrice) || 0);
+    if (canViewChinaCost && resolvedCost > 0 && !currentLine?.chinaUnitCost) {
+      patch.chinaUnitCost = String(resolvedCost);
     }
     if (found.imageUrl) {
       cleanupLineMedia(itemId);
@@ -755,11 +826,16 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
       updateLine(itemId, { linkedVariantId: varId });
       return;
     }
+    const sellPrice = resolveVariantSellingPrice(foundProd, varItem);
+    const costPrice = canViewChinaCost ? resolveVariantCostPrice(foundProd, varItem) : 0;
     updateLine(itemId, {
       linkedVariantId: varId,
+      sku: varItem.variantSku || foundProd?.sku || '',
       color: varItem.color || '',
       model: varItem.model || '',
-      variant: [varItem.color, varItem.model].filter(Boolean).join(' / '),
+      variant: varItem.variantNote || [varItem.color, varItem.model].filter(Boolean).join(' / '),
+      ...(sellPrice > 0 ? { sellingUnitPrice: String(sellPrice) } : {}),
+      ...(canViewChinaCost && costPrice > 0 ? { chinaUnitCost: String(costPrice) } : {}),
     });
   };
 
@@ -1579,7 +1655,7 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
                 const linkedProd = line.linkedProductId
                   ? products.find((p) => p.id === line.linkedProductId)
                   : undefined;
-                const prodVariants = linkedProd?.variants || [];
+                const prodVariants = getActiveVariants(linkedProd);
                 const lineSelling = Math.max(0, Number(line.sellingUnitPrice) || 0);
                 const lineTotal = roundMoney((Number(line.qty) || 0) * lineSelling);
                 const dupInfo = duplicateMatches[line.itemId];
@@ -1717,10 +1793,11 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
                             <Select
                               options={prodVariants.map((v) => {
                                 const avail = Math.max(0, (v.stock || 0) - (v.reservedQty || 0));
+                                const vPrice = resolveVariantSellingPrice(linkedProd, v);
                                 return {
                                   value: v.id,
-                                  label: `${v.color || 'Standard'} / ${v.model || 'Standard'}`,
-                                  sublabel: `Avail: ${avail} • On hand: ${v.stock || 0} pcs`,
+                                  label: `${formatVariantLabel(v)}${v.variantSku ? ` [${v.variantSku}]` : ''}`,
+                                  sublabel: `${formatBDT(vPrice)} • Avail: ${avail} • On hand: ${v.stock || 0} pcs`,
                                 };
                               })}
                               value={line.linkedVariantId}
@@ -1784,27 +1861,35 @@ export const CreatePreOrderView: React.FC<CreatePreOrderViewProps> = ({
                         </div>
                       </FormField>
 
-                      <FormField label="Model">
-                        <Input
+                      <FormField label="Model / Size">
+                        <AttributeCombobox
                           value={line.model}
-                          onChange={(e) => updateLine(line.itemId, { model: e.target.value })}
-                          placeholder="e.g. ZM85EL-2.0"
+                          options={sharedModels}
+                          builtinDefault="Standard"
+                          placeholder="Select or add model/size..."
+                          searchPlaceholder="Search or add model..."
+                          onChange={(val) => updateLine(line.itemId, { model: val })}
+                          onCreateNew={handleCreateSharedModel}
                         />
                       </FormField>
 
-                      <FormField label="Variant / Spec">
+                      <FormField label="Variant / Note">
                         <Input
                           value={line.variant}
                           onChange={(e) => updateLine(line.itemId, { variant: e.target.value })}
-                          placeholder="e.g. 3 Meter / EU Plug"
+                          placeholder="e.g. 3 Meter / EU Plug / with box"
                         />
                       </FormField>
 
-                      <FormField label="Color">
-                        <Input
+                      <FormField label="Color / Finish">
+                        <AttributeCombobox
                           value={line.color}
-                          onChange={(e) => updateLine(line.itemId, { color: e.target.value })}
-                          placeholder="e.g. Matte Black"
+                          options={sharedColors}
+                          builtinDefault="Default"
+                          placeholder="Select or add color..."
+                          searchPlaceholder="Search or add color..."
+                          onChange={(val) => updateLine(line.itemId, { color: val })}
+                          onCreateNew={handleCreateSharedColor}
                         />
                       </FormField>
 

@@ -44,7 +44,24 @@ import { getBrandLogo } from '../utils/brandLogos';
 import {
   normalizeProductImages,
   buildCategoryPathLabel,
+  buildProductFieldDiff,
 } from '../utils/productImageUpload';
+import {
+  canViewProductCost,
+  computeVariantProfitMargin,
+  doesProductMatchQuery,
+  formatPriceRange,
+  formatVariantLabel,
+  getActiveVariants,
+  getProductCostPriceRange,
+  getProductSellingPriceRange,
+  isProductOrAnyVariantLowStock,
+  isVariantActive,
+  normalizeAttributeCompareKey,
+  resolveVariantCostPrice,
+  resolveVariantReorderThreshold,
+  resolveVariantSellingPrice,
+} from '../utils/productVariants';
 import {
   Product,
   Category,
@@ -54,8 +71,10 @@ import {
   ProductColor,
   ProductModel,
   ProductEditHistoryEntry,
+  RolePermissionsMap,
   SubBrand,
   CompanySettings,
+  Variant,
 } from '../types';
 import {
   formatBrandBadgeMeta,
@@ -108,6 +127,7 @@ interface ProductManagementProps {
   productColors: ProductColor[];
   productModels: ProductModel[];
   user: UserProfile | null;
+  rolePermissions?: RolePermissionsMap | null;
   onRefreshData: () => Promise<void>;
   initialAddMode?: boolean; // opens drawer automatically if navigated from dashboard
   initialSubTab?: ProductSubTab;
@@ -200,6 +220,7 @@ export default function ProductManagement({
   productColors,
   productModels,
   user,
+  rolePermissions,
   onRefreshData,
   initialAddMode = false,
   initialSubTab,
@@ -215,6 +236,9 @@ export default function ProductManagement({
   const isStaff = user?.role === 'staff';
   const isSuperAdmin = user?.role === 'superadmin' || (user?.role as string) === 'super_admin';
   const isAdminOrOwner = isSuperAdmin || user?.role === 'admin';
+  const canViewCost =
+    canViewProductCost(user, rolePermissions) &&
+    (!isStaff || user?.permissionOverrides?.viewProductCost === true);
 
   const activeSellingSubBrands = useMemo(
     () => getSellingSubBrands(subBrands, { includeInactive: false, companySettings }),
@@ -279,6 +303,12 @@ export default function ProductManagement({
   const [productLogs, setProductLogs] = useState<StockLog[]>([]);
   const [isDrawerOpen, setIsDrawerOpen] = useState(false);
   const [editModeProduct, setEditModeProduct] = useState<Product | null>(null);
+
+  // Admin "Set Variant Prices" Quick Modal State
+  const [priceEditorProduct, setPriceEditorProduct] = useState<Product | null>(null);
+  const [priceEditorVariants, setPriceEditorVariants] = useState<Variant[]>([]);
+  const [priceEditorSaving, setPriceEditorSaving] = useState(false);
+  const [priceEditorError, setPriceEditorError] = useState('');
 
   // Bulk Selling Sub-Brand Assignment Modal
   const [isBulkBrandModalOpen, setIsBulkBrandModalOpen] = useState(false);
@@ -382,12 +412,108 @@ export default function ProductManagement({
   const [inlinePrice, setInlinePrice] = useState<number>(0);
   const [inlineStock, setInlineStock] = useState<number>(0);
 
+  const handleOpenVariantPriceEditor = (product: Product, e?: React.MouseEvent) => {
+    e?.stopPropagation();
+    if (!isAdminOrOwner) return;
+    if (requireCheckIn && !requireCheckIn()) return;
+    setPriceEditorError('');
+    setPriceEditorProduct(product);
+    setPriceEditorVariants(
+      (product.variants || []).map((v, idx) => ({
+        ...v,
+        variantSku: v.variantSku || `${product.sku}-V${idx + 1}`,
+        sameAsProductPrice: v.sameAsProductPrice ?? true,
+        sellingPrice:
+          v.sameAsProductPrice !== false
+            ? Number(product.sellingPrice) || 0
+            : Number(v.sellingPrice ?? product.sellingPrice) || 0,
+        costPrice:
+          v.sameAsProductPrice !== false
+            ? Number(product.costPrice) || 0
+            : Number(v.costPrice ?? product.costPrice) || 0,
+      }))
+    );
+  };
+
+  const handleSaveVariantPrices = async () => {
+    if (!priceEditorProduct || !isAdminOrOwner) return;
+    setPriceEditorError('');
+    for (const v of priceEditorVariants) {
+      if ((Number(v.sellingPrice) || 0) < 0 || (Number(v.costPrice) || 0) < 0) {
+        setPriceEditorError('Purchase and selling prices cannot be negative.');
+        return;
+      }
+    }
+    setPriceEditorSaving(true);
+    try {
+      const normalizedVariants = priceEditorVariants.map((v) => {
+        const useBase = v.sameAsProductPrice !== false;
+        return {
+          ...v,
+          sameAsProductPrice: useBase,
+          sellingPrice: useBase
+            ? Number(priceEditorProduct.sellingPrice) || 0
+            : Number(v.sellingPrice) || 0,
+          costPrice: useBase
+            ? Number(priceEditorProduct.costPrice) || 0
+            : Number(v.costPrice) || 0,
+        };
+      });
+      const existingHistory: ProductEditHistoryEntry[] = Array.isArray(priceEditorProduct.editHistory)
+        ? priceEditorProduct.editHistory
+        : [];
+      const diff = buildProductFieldDiff(
+        priceEditorProduct,
+        { ...priceEditorProduct, variants: normalizedVariants },
+        canViewCost
+      );
+      const historyEntry: ProductEditHistoryEntry | null =
+        diff.length > 0
+          ? {
+              id: `eh-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`,
+              editedByUid: user?.id || '',
+              editedByName: user?.name || 'Admin',
+              editedByRole: user?.role || 'admin',
+              editedAt: Date.now(),
+              action: 'edited',
+              note: 'Updated variant pricing via Set Variant Prices',
+              changes: diff,
+            }
+          : null;
+
+      await updateProduct(priceEditorProduct.id, {
+        variants: normalizedVariants,
+        ...(historyEntry ? { editHistory: [...existingHistory, historyEntry] } : {}),
+      });
+      await logAuditAction(
+        'UPDATE',
+        'Product',
+        priceEditorProduct.id,
+        priceEditorProduct.name,
+        `Updated per-variant prices (${normalizedVariants.length} variants)`,
+        user
+      );
+      setPriceEditorProduct(null);
+      await onRefreshData();
+      setFormSuccess(`Updated variant prices for "${priceEditorProduct.name}".`);
+      setTimeout(() => setFormSuccess(''), 3000);
+    } catch (err: any) {
+      setPriceEditorError(err?.message || 'Failed to save variant prices.');
+    } finally {
+      setPriceEditorSaving(false);
+    }
+  };
+
   const handleStartInlineEdit = (product: Product, e: React.MouseEvent) => {
     e.stopPropagation();
     if (requireCheckIn && !requireCheckIn()) return;
+    if ((product.variants || []).length > 1 && isAdminOrOwner) {
+      handleOpenVariantPriceEditor(product, e);
+      return;
+    }
     setInlineEditProductId(product.id);
     setInlinePrice(product.sellingPrice || 0);
-    const totalStock = (product.variants || []).reduce((sum, v) => sum + (v.stock || 0), 0);
+    const totalStock = getActiveVariants(product).reduce((sum, v) => sum + (v.stock || 0), 0);
     setInlineStock(totalStock);
   };
 
@@ -398,13 +524,18 @@ export default function ProductManagement({
     try {
       const reservedSum = (product.variants || []).reduce((s, v) => s + (Number(v.reservedQty) || 0), 0);
       const nextStock = Number(inlineStock) || 0;
+      const nextSellingPrice = Math.max(0, Number(inlinePrice) || 0);
       if (nextStock < reservedSum) {
         setFormError(`Cannot reduce stock below ${reservedSum} pcs currently reserved for Pre-Orders.`);
         setTimeout(() => setFormError(''), 4000);
         return;
       }
 
-      const newVariants = [...(product.variants || [])];
+      const newVariants = (product.variants || []).map((v) =>
+        v.sameAsProductPrice !== false
+          ? { ...v, sellingPrice: nextSellingPrice }
+          : v
+      );
       if (newVariants.length > 0) {
         const otherVariantsStock = newVariants.slice(1).reduce((s, v) => s + (Number(v.stock) || 0), 0);
         const firstReserved = Number(newVariants[0].reservedQty) || 0;
@@ -416,11 +547,19 @@ export default function ProductManagement({
         }
         newVariants[0] = { ...newVariants[0], stock: firstNewStock };
       } else {
-        newVariants.push({ id: '1', color: 'Default', model: 'Standard', stock: nextStock });
+        newVariants.push({
+          id: '1',
+          color: 'Default',
+          model: 'Standard',
+          stock: nextStock,
+          sameAsProductPrice: true,
+          sellingPrice: nextSellingPrice,
+          costPrice: Number(product.costPrice) || 0,
+        });
       }
 
       await updateProduct(product.id, {
-        sellingPrice: Number(inlinePrice) || 0,
+        sellingPrice: nextSellingPrice,
         variants: newVariants
       });
 
@@ -569,33 +708,39 @@ export default function ProductManagement({
 
   // Helper to print sheet of barcodes for a single product (primary or variants)
   const printProductLabelSheet = async (product: Product, mode: 'primary' | 'variants') => {
-    const itemsToPrint: { value: string; label: string; subLabel?: string }[] = [];
+    const itemsToPrint: { value: string; label: string; subLabel?: string; priceLabel?: string }[] = [];
     
     if (mode === 'primary') {
       // Print 36 copies of the primary barcode to fill a standard A4 sheet (4x9 grid)
+      const sellRange = getProductSellingPriceRange(product);
+      const primaryPrice = sellRange.isRange ? undefined : `৳${sellRange.min.toLocaleString()}`;
       for (let i = 0; i < 36; i++) {
         itemsToPrint.push({
           value: product.barcodeValue || product.sku,
           label: product.name,
-          subLabel: 'Primary SKU Code'
+          subLabel: 'Primary SKU Code',
+          priceLabel: primaryPrice,
         });
       }
     } else {
-      // Print copies for all variants. Fill the 36-slot sheet as much as possible
-      const variantsList = product.variants || [];
+      // Print copies for active variants (fallback to all if all archived). Fill the 36-slot sheet
+      const activeList = getActiveVariants(product);
+      const variantsList = activeList.length > 0 ? activeList : (product.variants || []);
       const repeatCount = Math.max(1, Math.floor(36 / (variantsList.length || 1)));
       variantsList.forEach(v => {
-        const cleanColor = v.color.trim();
-        const cleanModel = v.model.trim();
+        const cleanColor = (v.color || 'Default').trim();
+        const cleanModel = (v.model || 'Standard').trim();
         const vColorCode = cleanColor.toUpperCase().replace(/[^A-Z0-9]/g, '-').replace(/-+/g, '-');
         const vModelCode = cleanModel.toUpperCase().replace(/[^A-Z0-9]/g, '-').replace(/-+/g, '-');
         const fallbackBarcode = `${product.sku}-${vColorCode}-${vModelCode}`;
+        const vPrice = resolveVariantSellingPrice(product, v);
         
         for (let i = 0; i < repeatCount; i++) {
           itemsToPrint.push({
             value: v.barcodeValue || fallbackBarcode,
             label: product.name,
-            subLabel: `${v.color} / ${v.model}`
+            subLabel: formatVariantLabel(v),
+            priceLabel: `৳${vPrice.toLocaleString()}`,
           });
         }
       });
@@ -609,32 +754,37 @@ export default function ProductManagement({
     const selectedProducts = products.filter(p => selectedProductIds.includes(p.id));
     if (selectedProducts.length === 0) return;
 
-    const itemsToPrint: { value: string; label: string; subLabel?: string }[] = [];
+    const itemsToPrint: { value: string; label: string; subLabel?: string; priceLabel?: string }[] = [];
     selectedProducts.forEach(product => {
-      if (product.variants && product.variants.length > 0) {
-        product.variants.forEach(v => {
-          const cleanColor = v.color.trim();
-          const cleanModel = v.model.trim();
+      const activeVariants = getActiveVariants(product);
+      const list = activeVariants.length > 0 ? activeVariants : (product.variants || []);
+      if (list.length > 0) {
+        list.forEach(v => {
+          const cleanColor = (v.color || 'Default').trim();
+          const cleanModel = (v.model || 'Standard').trim();
           const vColorCode = cleanColor.toUpperCase().replace(/[^A-Z0-9]/g, '-').replace(/-+/g, '-');
           const vModelCode = cleanModel.toUpperCase().replace(/[^A-Z0-9]/g, '-').replace(/-+/g, '-');
           const fallbackBarcode = `${product.sku}-${vColorCode}-${vModelCode}`;
+          const vPrice = resolveVariantSellingPrice(product, v);
           
           itemsToPrint.push({
             value: v.barcodeValue || fallbackBarcode,
             label: product.name,
-            subLabel: `${v.color} / ${v.model}`
+            subLabel: formatVariantLabel(v),
+            priceLabel: `৳${vPrice.toLocaleString()}`,
           });
         });
       } else {
         itemsToPrint.push({
           value: product.barcodeValue || product.sku,
           label: product.name,
-          subLabel: 'Standard Unit'
+          subLabel: 'Standard Unit',
+          priceLabel: `৳${Number(product.sellingPrice || 0).toLocaleString()}`,
         });
       }
     });
 
-  await generateBarcodePDF(itemsToPrint, `Bulk_${selectedProducts.length}_Products`);
+    await generateBarcodePDF(itemsToPrint, `Bulk_${selectedProducts.length}_Products`);
   };
 
   // Handle drawer auto-trigger
@@ -1208,11 +1358,18 @@ export default function ProductManagement({
     setFormSuccess('');
     
     if (requireCheckIn && !requireCheckIn()) return;
-    if (!newColorName.trim()) return;
+    const trimmed = newColorName.trim();
+    if (!trimmed) return;
+    const compareKey = normalizeAttributeCompareKey(trimmed);
+    const existing = productColors.find((c) => normalizeAttributeCompareKey(c.name) === compareKey);
+    if (existing || compareKey === 'default') {
+      setFormError(`Color "${existing?.name || 'Default'}" already exists (duplicates are prevented).`);
+      return;
+    }
     
     try {
-      await addProductColor(newColorName.trim(), newColorHex);
-      setFormSuccess(`Color "${newColorName}" created!`);
+      await addProductColor(trimmed, newColorHex);
+      setFormSuccess(`Color "${trimmed}" created!`);
       setNewColorName('');
       setNewColorHex('#000000');
       await onRefreshData();
@@ -1261,11 +1418,18 @@ export default function ProductManagement({
     setFormSuccess('');
     
     if (requireCheckIn && !requireCheckIn()) return;
-    if (!newModelName.trim()) return;
+    const trimmed = newModelName.trim();
+    if (!trimmed) return;
+    const compareKey = normalizeAttributeCompareKey(trimmed);
+    const existing = productModels.find((m) => normalizeAttributeCompareKey(m.name) === compareKey);
+    if (existing || compareKey === 'standard') {
+      setFormError(`Model/Size "${existing?.name || 'Standard'}" already exists (duplicates are prevented).`);
+      return;
+    }
     
     try {
-      await addProductModel(newModelName.trim());
-      setFormSuccess(`Model/Size "${newModelName}" created!`);
+      await addProductModel(trimmed);
+      setFormSuccess(`Model/Size "${trimmed}" created!`);
       setNewModelName('');
       await onRefreshData();
       setTimeout(() => setFormSuccess(''), 3000);
@@ -1331,8 +1495,8 @@ export default function ProductManagement({
           return;
         }
 
-        // Header mapping validation
-        const headers = lines[0].toLowerCase().split(',').map(h => h.trim());
+        // Header mapping validation (supports base format + optional per-variant columns)
+        const headers = lines[0].toLowerCase().split(',').map(h => h.trim().replace(/^"|"$/g, ''));
         const nameIdx = headers.indexOf('name');
         const skuIdx = headers.indexOf('sku');
         const categoryIdx = headers.indexOf('category');
@@ -1341,48 +1505,90 @@ export default function ProductManagement({
         const costPriceIdx = headers.indexOf('costprice');
         const sellingPriceIdx = headers.indexOf('sellingprice');
         const reorderIdx = headers.indexOf('reorderthreshold');
+        const colorIdx = headers.indexOf('variantcolor') !== -1 ? headers.indexOf('variantcolor') : headers.indexOf('color');
+        const modelIdx = headers.indexOf('variantmodel') !== -1 ? headers.indexOf('variantmodel') : headers.indexOf('model');
+        const noteIdx = headers.indexOf('variantnote');
+        const variantSkuIdx = headers.indexOf('variantsku');
+        const variantCostIdx = headers.indexOf('variantcostprice');
+        const variantSellIdx = headers.indexOf('variantsellingprice');
+        const variantStockIdx = headers.indexOf('variantstock') !== -1 ? headers.indexOf('variantstock') : headers.indexOf('stock');
+        const variantThreshIdx = headers.indexOf('variantreorderthreshold');
 
         if (nameIdx === -1 || skuIdx === -1) {
           setCsvError('CSV must at least contain "Name" and "SKU" columns.');
           return;
         }
 
-        let importCount = 0;
+        // Group rows by SKU so multi-variant rows with the same SKU import into one product cleanly
+        const groupedProducts = new Map<string, Omit<Product, 'id'>>();
         for (let i = 1; i < lines.length; i++) {
           const cols = lines[i].split(',').map(c => c.trim().replace(/^"|"$/g, ''));
-          if (cols.length < headers.length) continue;
+          if (cols.length < 2) continue;
 
           const pName = cols[nameIdx];
-          const pSku = cols[skuIdx];
+          const pSku = (cols[skuIdx] || '').toUpperCase();
           if (!pName || !pSku) continue;
 
-          // Build a basic product payload from row
           const pCategory = categoryIdx !== -1 ? cols[categoryIdx] : 'Smart Phones';
           const pBrand = brandIdx !== -1 ? cols[brandIdx] : 'Generic';
           const pSubBrandRaw = subBrandIdx !== -1 ? normalizeSubBrandCode(cols[subBrandIdx]) : '';
           const matchedSelling = allSellingSubBrands.find((b) => b.shortCode === pSubBrandRaw);
           const pSubBrand = matchedSelling ? matchedSelling.shortCode : defaultSellingSubBrand;
-          const pCost = costPriceIdx !== -1 ? Number(cols[costPriceIdx]) || 0 : 0;
-          const pSelling = sellingPriceIdx !== -1 ? Number(cols[sellingPriceIdx]) || 0 : 0;
-          const pReorder = reorderIdx !== -1 ? Number(cols[reorderIdx]) || 5 : 5;
+          const pCost = canViewCost && costPriceIdx !== -1 ? Math.max(0, Number(cols[costPriceIdx]) || 0) : 0;
+          const pSelling = sellingPriceIdx !== -1 ? Math.max(0, Number(cols[sellingPriceIdx]) || 0) : 0;
+          const pReorder = reorderIdx !== -1 ? Math.max(0, Number(cols[reorderIdx]) || 5) : 5;
 
-          const productPayload: Omit<Product, 'id'> = {
-            name: pName,
-            sku: pSku.toUpperCase(),
-            category: pCategory,
-            brand: pBrand,
-            subBrand: pSubBrand,
-            subBrandId: pSubBrand,
-            costPrice: pCost,
-            sellingPrice: pSelling,
-            reorderThreshold: pReorder,
-            images: [],
-            variants: [{ id: Date.now().toString() + i, color: 'Default', model: 'Standard', stock: 10 }],
-            archived: false,
-            createdAt: Date.now(),
-            status: isSuperAdmin ? 'approved' : 'pending_review'
+          const vColor = colorIdx !== -1 && cols[colorIdx] ? cols[colorIdx] : 'Default';
+          const vModel = modelIdx !== -1 && cols[modelIdx] ? cols[modelIdx] : 'Standard';
+          const vNote = noteIdx !== -1 && cols[noteIdx] ? cols[noteIdx] : undefined;
+          const vCostRaw = canViewCost && variantCostIdx !== -1 && cols[variantCostIdx] !== '' ? Math.max(0, Number(cols[variantCostIdx]) || 0) : pCost;
+          const vSellRaw = variantSellIdx !== -1 && cols[variantSellIdx] !== '' ? Math.max(0, Number(cols[variantSellIdx]) || 0) : pSelling;
+          const vStock = variantStockIdx !== -1 && cols[variantStockIdx] !== '' ? Math.max(0, Number(cols[variantStockIdx]) || 0) : 10;
+          const vThresh = variantThreshIdx !== -1 && cols[variantThreshIdx] !== '' ? Math.max(0, Number(cols[variantThreshIdx]) || 0) : undefined;
+          const hasCustomPrice = (variantSellIdx !== -1 && cols[variantSellIdx] !== '' && vSellRaw !== pSelling) ||
+            (canViewCost && variantCostIdx !== -1 && cols[variantCostIdx] !== '' && vCostRaw !== pCost);
+
+          const existingProd = groupedProducts.get(pSku);
+          const varIdx = (existingProd?.variants.length || 0) + 1;
+          const variantObj: Variant = {
+            id: `${Date.now()}-${i}-${varIdx}`,
+            color: vColor,
+            model: vModel,
+            ...(vNote ? { variantNote: vNote } : {}),
+            variantSku: variantSkuIdx !== -1 && cols[variantSkuIdx] ? cols[variantSkuIdx].toUpperCase() : `${pSku}-V${varIdx}`,
+            stock: vStock,
+            costPrice: vCostRaw,
+            sellingPrice: vSellRaw,
+            sameAsProductPrice: !hasCustomPrice,
+            ...(vThresh !== undefined ? { reorderThreshold: vThresh } : {}),
           };
 
+          if (existingProd) {
+            if (existingProd.variants.length < 100) {
+              existingProd.variants.push(variantObj);
+            }
+          } else {
+            groupedProducts.set(pSku, {
+              name: pName,
+              sku: pSku,
+              category: pCategory,
+              brand: pBrand,
+              subBrand: pSubBrand,
+              subBrandId: pSubBrand,
+              costPrice: pCost,
+              sellingPrice: pSelling,
+              reorderThreshold: pReorder,
+              images: [],
+              variants: [variantObj],
+              archived: false,
+              createdAt: Date.now(),
+              status: isSuperAdmin ? 'approved' : 'pending_review',
+            });
+          }
+        }
+
+        let importCount = 0;
+        for (const productPayload of groupedProducts.values()) {
           await addProduct(productPayload, user?.id || 'csv-import', user?.name || 'CSV Bulk Agent');
           importCount++;
         }
@@ -1390,7 +1596,7 @@ export default function ProductManagement({
         setCsvSuccess(`Successfully imported ${importCount} products!`);
         await onRefreshData();
       } catch (err: any) {
-        setCsvError('Parsing failed. Ensure your CSV is formatted properly with commas.');
+        setCsvError(err?.message || 'Parsing failed. Ensure your CSV is formatted properly with commas.');
       }
     };
     reader.readAsText(file);
@@ -1399,17 +1605,7 @@ export default function ProductManagement({
   // Filtering & Sorting Logic (memoized + 250ms debounced)
   const filteredProducts = useMemo(() => products.filter((product) => {
     if (!product) return false;
-    const query = (debouncedSearch || '').toLowerCase().trim();
-    const pName = (product.name || '').toLowerCase();
-    const pSku = (product.sku || '').toLowerCase();
-    const pBrand = (product.brand || '').toLowerCase();
-    const pBarcode = (product.barcodeValue || '').toLowerCase();
-    
-    const matchesSearch = !query || 
-                          pName.includes(query) ||
-                          pSku.includes(query) ||
-                          pBrand.includes(query) ||
-                          pBarcode.includes(query);
+    const matchesSearch = doesProductMatchQuery(product, debouncedSearch);
     
     const matchesCategory = !filterCategory || product.category === filterCategory || product.mainCategory === filterCategory;
     const matchesBrand = !filterBrand || product.brand === filterBrand;
@@ -1424,13 +1620,13 @@ export default function ProductManagement({
         : normalizeSubBrandCode(product.subBrand) === normalizeSubBrandCode(filterSubBrand);
     
     const availQty = getProductAvailableStock(product);
-    const threshold = product.reorderThreshold ?? 5;
+    const isLowAny = isProductOrAnyVariantLowStock(product);
 
     let matchesStock = true;
     if (filterStockStatus === 'instock') {
-      matchesStock = availQty > threshold;
+      matchesStock = availQty > 0 && !isLowAny;
     } else if (filterStockStatus === 'lowstock') {
-      matchesStock = availQty > 0 && availQty <= threshold;
+      matchesStock = availQty > 0 && isLowAny;
     } else if (filterStockStatus === 'out') {
       matchesStock = availQty <= 0;
     }
@@ -1448,10 +1644,10 @@ export default function ProductManagement({
     if (sortBy === 'name') {
       return a.name.localeCompare(b.name) * factor;
     } else if (sortBy === 'price') {
-      return (a.sellingPrice - b.sellingPrice) * factor;
+      return (getProductSellingPriceRange(a).min - getProductSellingPriceRange(b).min) * factor;
     } else if (sortBy === 'stock') {
-      const stockA = (a.variants || []).reduce((sum, v) => sum + (v.stock || 0), 0);
-      const stockB = (b.variants || []).reduce((sum, v) => sum + (v.stock || 0), 0);
+      const stockA = getActiveVariants(a).reduce((sum, v) => sum + (v.stock || 0), 0);
+      const stockB = getActiveVariants(b).reduce((sum, v) => sum + (v.stock || 0), 0);
       return (stockA - stockB) * factor;
     }
     return 0;
@@ -1506,7 +1702,11 @@ export default function ProductManagement({
                   type="button"
                   onClick={() => {
                     setIsExportDropdownOpen(false);
-                    exportProductsToCSV(filteredProducts, `products-filtered-${filteredProducts.length}-${new Date().toISOString().split('T')[0]}.csv`);
+                    exportProductsToCSV(
+                      filteredProducts,
+                      `products-filtered-${filteredProducts.length}-${new Date().toISOString().split('T')[0]}.csv`,
+                      { includeCost: canViewCost }
+                    );
                   }}
                   className="w-full px-3.5 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-emerald-50 hover:text-emerald-900 flex items-center justify-between cursor-pointer transition-colors"
                 >
@@ -1522,7 +1722,11 @@ export default function ProductManagement({
                   onClick={() => {
                     setIsExportDropdownOpen(false);
                     const activeProds = products.filter(p => !p.archived);
-                    exportProductsToCSV(activeProds, `products-all-${activeProds.length}-${new Date().toISOString().split('T')[0]}.csv`);
+                    exportProductsToCSV(
+                      activeProds,
+                      `products-all-${activeProds.length}-${new Date().toISOString().split('T')[0]}.csv`,
+                      { includeCost: canViewCost }
+                    );
                   }}
                   className="w-full px-3.5 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-emerald-50 hover:text-emerald-900 flex items-center justify-between cursor-pointer transition-colors"
                 >
@@ -1537,7 +1741,7 @@ export default function ProductManagement({
                   type="button"
                   onClick={() => {
                     setIsExportDropdownOpen(false);
-                    exportProductsToExcel(filteredProducts);
+                    exportProductsToExcel(filteredProducts, { includeCost: canViewCost });
                   }}
                   className="w-full px-3.5 py-2 text-left text-xs font-semibold text-slate-700 hover:bg-slate-50 hover:text-slate-900 flex items-center justify-between cursor-pointer transition-colors border-t border-slate-100"
                 >
@@ -1663,7 +1867,8 @@ export default function ProductManagement({
                     </thead>
                     <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                       {mySubmissions.map((item) => {
-                        const totalQty = (item.variants || []).reduce((s, v) => s + (v.stock || 0), 0);
+                        const totalQty = getActiveVariants(item).reduce((s, v) => s + (v.stock || 0), 0);
+                        const sellRange = getProductSellingPriceRange(item);
                         const canEditOwn = item.status === 'pending_review';
                         return (
                           <tr
@@ -1687,7 +1892,7 @@ export default function ProductManagement({
                               <span className="text-[11px] text-slate-400">{item.brand}</span>
                             </td>
                             <td className="py-2.5 px-3 text-right font-mono font-bold tabular-nums text-slate-900 dark:text-white">
-                              ৳{Number(item.sellingPrice || 0).toLocaleString()}
+                              {formatPriceRange(sellRange)}
                             </td>
                             <td className="py-2.5 px-3 text-center font-mono font-bold tabular-nums text-slate-700 dark:text-slate-200">
                               {totalQty} pcs
@@ -1778,7 +1983,7 @@ export default function ProductManagement({
                 <Search className="absolute top-3.5 left-4 text-slate-400" size={18} />
                 <input
                   type="text"
-                  placeholder="Search products by name, SKU code, or brand..."
+                  placeholder="Search products by name, SKU, variant SKU, color, model, note, barcode, or brand..."
                   value={search}
                   onChange={(e) => setSearch(e.target.value)}
                   className="pl-11 w-full bg-white border border-slate-200 rounded-2xl py-3 text-sm focus:outline-hidden focus:ring-2 focus:ring-teal-500/20 focus:border-teal-600 font-medium shadow-2xs transition-all"
@@ -1920,10 +2125,13 @@ export default function ProductManagement({
                         </tr>
                       ) : (
                         paginatedProducts.map((product) => {
-                          const totalQty = (product.variants || []).reduce((s, v) => s + (v.stock || 0), 0);
+                          const activeVars = getActiveVariants(product);
+                          const totalQty = activeVars.reduce((s, v) => s + (v.stock || 0), 0);
                           const reservedQty = Number(product.reservedQty) || 0;
                           const availQty = getProductAvailableStock(product);
-                          const isLow = availQty <= (product.reorderThreshold ?? 5);
+                          const isLow = isProductOrAnyVariantLowStock(product);
+                          const sellRange = getProductSellingPriceRange(product);
+                          const costRange = getProductCostPriceRange(product);
 
                           return (
                             <tr 
@@ -1959,6 +2167,9 @@ export default function ProductManagement({
                                   </span>
                                   <span className="bg-slate-100 text-slate-500 text-[9px] font-mono font-bold px-1 rounded">
                                     {product.category}
+                                  </span>
+                                  <span className="bg-amber-50 text-amber-800 border border-amber-200/70 text-[9px] font-mono font-bold px-1.5 rounded">
+                                    {activeVars.length} {activeVars.length === 1 ? 'var' : 'vars'}
                                   </span>
                                   {product.deletionStatus === 'pending_approval' && (
                                     <span className="bg-rose-100 text-rose-700 text-[9px] font-mono font-bold px-1.5 py-0.5 rounded animate-pulse">
@@ -2018,9 +2229,9 @@ export default function ProductManagement({
                                   </div>
                                 ) : (
                                   <>
-                                    <p className="font-bold text-slate-900">৳ {product.sellingPrice.toLocaleString()}</p>
-                                    {!isStaff && (
-                                      <p className="text-[9px] text-slate-400 font-mono">Cost: ৳{product.costPrice}</p>
+                                    <p className="font-bold text-slate-900 font-mono">{formatPriceRange(sellRange)}</p>
+                                    {canViewCost && (
+                                      <p className="text-[9px] text-slate-400 font-mono">Cost: {formatPriceRange(costRange)}</p>
                                     )}
                                   </>
                                 )}
@@ -2049,7 +2260,7 @@ export default function ProductManagement({
                                       <button
                                         onClick={(e) => handleStartInlineEdit(product, e)}
                                         className="p-1 text-teal-600 hover:text-teal-800 hover:bg-teal-50 rounded cursor-pointer transition-colors"
-                                        title="Quick Price & Stock Edit (Inline)"
+                                        title={(product.variants || []).length > 1 && isAdminOrOwner ? 'Set Variant Prices' : 'Quick Price & Stock Edit (Inline)'}
                                       >
                                         <Coins size={14} />
                                       </button>
@@ -2096,14 +2307,18 @@ export default function ProductManagement({
                     </div>
                   ) : (
                     paginatedProducts.map((product) => {
-                      const totalQty = (product.variants || []).reduce((s, v) => s + (v.stock || 0), 0);
+                      const activeVars = getActiveVariants(product);
+                      const totalQty = activeVars.reduce((s, v) => s + (v.stock || 0), 0);
                       const reservedQty = Number(product.reservedQty) || 0;
                       const availQty = getProductAvailableStock(product);
-                      const isLow = availQty <= (product.reorderThreshold ?? 5);
+                      const isLow = isProductOrAnyVariantLowStock(product);
+                      const sellRange = getProductSellingPriceRange(product);
+                      const costRange = getProductCostPriceRange(product);
+                      const baseProfit = sellRange.min - costRange.min;
 
                       return (
                         <div 
-                          key={product.id}
+                          key={product.id} 
                           className={`bg-white border border-slate-200 rounded-2xl p-3 flex flex-col justify-between shadow-xs hover:shadow-md hover:-translate-y-0.5 transition-all cursor-pointer ${
                             selectedProduct?.id === product.id ? 'border-amber-400 ring-2 ring-amber-300' : ''
                           }`}
@@ -2140,6 +2355,9 @@ export default function ProductManagement({
                                 }`}>
                                   {availQty <= 0 ? (reservedQty > 0 ? '0 Avail (Reserved)' : 'Out of Stock') : reservedQty > 0 ? `${availQty} avail / ${totalQty}` : `${totalQty} in stock`}
                                 </span>
+                                <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-slate-900/80 text-white shadow-xs">
+                                  {activeVars.length} var
+                                </span>
                                 {reservedQty > 0 && (
                                   <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-md bg-amber-400 text-slate-950 shadow-xs">
                                     Res: {reservedQty}
@@ -2161,12 +2379,14 @@ export default function ProductManagement({
                             </h4>
 
                             <div className="flex items-baseline justify-between mb-3">
-                              <span className="text-lg font-black text-amber-600 font-mono">
-                                ৳{product.sellingPrice.toLocaleString()}
+                              <span className="text-base font-black text-amber-600 font-mono">
+                                {formatPriceRange(sellRange)}
                               </span>
-                              {!isStaff && (
+                              {canViewCost && (
                                 <span className="text-xs text-slate-400 font-mono">
-                                  Profit: ৳{(product.sellingPrice - product.costPrice).toLocaleString()}
+                                  {sellRange.isRange || costRange.isRange
+                                    ? `Cost: ${formatPriceRange(costRange)}`
+                                    : `Profit: ৳${baseProfit.toLocaleString()}`}
                                 </span>
                               )}
                             </div>
@@ -2203,14 +2423,16 @@ export default function ProductManagement({
                   </div>
                 ) : (
                   paginatedProducts.map((product) => {
-                    const totalQty = (product.variants || []).reduce((s, v) => s + (v.stock || 0), 0);
+                    const activeVars = getActiveVariants(product);
+                    const totalQty = activeVars.reduce((s, v) => s + (v.stock || 0), 0);
                     const reservedQty = Number(product.reservedQty) || 0;
                     const availQty = getProductAvailableStock(product);
-                    const isLow = availQty <= (product.reorderThreshold ?? 5);
+                    const isLow = isProductOrAnyVariantLowStock(product);
+                    const sellRange = getProductSellingPriceRange(product);
 
                     return (
                       <div 
-                        key={product.id}
+                        key={product.id} 
                         className={`bg-white border border-slate-200/80 rounded-xl p-2 flex flex-col justify-between shadow-xs hover:shadow-sm transition-all ${
                           selectedProduct?.id === product.id ? 'border-amber-400 ring-1 ring-amber-300' : ''
                         }`}
@@ -2275,8 +2497,8 @@ export default function ProductManagement({
                           </h4>
 
                           {/* Price - 14-15px bold */}
-                          <div className="text-[15px] font-bold text-amber-600 font-mono tracking-tight mb-2">
-                            ৳{product.sellingPrice.toLocaleString()}
+                          <div className="text-[14px] font-bold text-amber-600 font-mono tracking-tight mb-2">
+                            {formatPriceRange(sellRange)}
                           </div>
                         </div>
 
@@ -2362,7 +2584,11 @@ export default function ProductManagement({
                     type="button"
                     onClick={() => {
                       const selectedItems = products.filter(p => selectedProductIds.includes(p.id));
-                      exportProductsToCSV(selectedItems, `selected-products-${selectedItems.length}-${new Date().toISOString().split('T')[0]}.csv`);
+                      exportProductsToCSV(
+                        selectedItems,
+                        `selected-products-${selectedItems.length}-${new Date().toISOString().split('T')[0]}.csv`,
+                        { includeCost: canViewCost }
+                      );
                     }}
                     className="px-3 py-1.5 bg-emerald-500 hover:bg-emerald-600 text-white font-bold text-xs rounded-xl flex items-center gap-1.5 transition-all shadow-xs cursor-pointer"
                     title="Export selected products to CSV"
@@ -2483,24 +2709,37 @@ export default function ProductManagement({
             )}
 
             {/* FULL SCREEN PRODUCT OVERVIEW MODAL */}
-            {selectedProduct && (
+            {selectedProduct && (() => {
+              const liveSelectedProduct = products.find((p) => p.id === selectedProduct.id) || selectedProduct;
+              const overviewSellRange = getProductSellingPriceRange(liveSelectedProduct);
+              const overviewCostRange = getProductCostPriceRange(liveSelectedProduct);
+              return (
               <div className="fixed inset-0 z-50 bg-slate-950/70 backdrop-blur-md flex items-center justify-center p-3 sm:p-6 animate-in fade-in duration-200">
                 <div className="bg-white rounded-3xl shadow-2xl border border-slate-200 w-full max-w-5xl max-h-[92vh] overflow-y-auto flex flex-col">
                   
                   {/* Modal Header */}
-                  <div className="sticky top-0 z-20 bg-white/95 backdrop-blur-md border-b border-slate-200 px-6 py-4 flex items-center justify-between">
+                  <div className="sticky top-0 z-20 bg-white/95 backdrop-blur-md border-b border-slate-200 px-6 py-4 flex items-center justify-between gap-2">
                     <div>
                       <span className="text-[10px] font-mono tracking-widest font-extrabold text-teal-700 bg-teal-50 px-2.5 py-1 rounded-full uppercase">
-                        {formatBrandBadgeMeta(selectedProduct.subBrand, subBrands, companySettings).shortLabel} Product Overview
+                        {formatBrandBadgeMeta(liveSelectedProduct.subBrand, subBrands, companySettings).shortLabel} Product Overview
                       </span>
-                      <h2 className="text-xl sm:text-2xl font-black text-slate-900 mt-1">{selectedProduct.name}</h2>
-                      <p className="text-xs font-mono text-slate-500">SKU: {selectedProduct.sku}</p>
+                      <h2 className="text-xl sm:text-2xl font-black text-slate-900 mt-1">{liveSelectedProduct.name}</h2>
+                      <p className="text-xs font-mono text-slate-500">SKU: {liveSelectedProduct.sku}</p>
                     </div>
                     <div className="flex items-center gap-2">
+                      {isAdminOrOwner && (liveSelectedProduct.variants || []).length > 0 && (
+                        <button
+                          type="button"
+                          onClick={(e) => handleOpenVariantPriceEditor(liveSelectedProduct, e)}
+                          className="px-3.5 py-2 bg-amber-400 hover:bg-amber-500 text-slate-950 rounded-xl text-xs font-bold transition-all cursor-pointer flex items-center gap-1.5 shadow-xs"
+                        >
+                          <Coins size={14} /> Set Variant Prices
+                        </button>
+                      )}
                       <button
                         type="button"
                         onClick={() => {
-                          const prod = selectedProduct;
+                          const prod = liveSelectedProduct;
                           setSelectedProduct(null);
                           openEditDrawer(prod);
                         }}
@@ -2663,47 +2902,64 @@ export default function ProductManagement({
                       <div className="bg-gradient-to-r from-slate-900 via-slate-800 to-teal-950 text-white rounded-2xl p-5 shadow-md grid grid-cols-2 sm:grid-cols-4 gap-4">
                         <div>
                           <span className="text-xs text-slate-400 uppercase tracking-wider font-bold">Category</span>
-                          <p className="text-sm font-bold mt-0.5 truncate">{selectedProduct.category}</p>
+                          <p className="text-sm font-bold mt-0.5 truncate">{liveSelectedProduct.category}</p>
                         </div>
                         <div>
                           <span className="text-xs text-slate-400 uppercase tracking-wider font-bold">Brand</span>
-                          <p className="text-sm font-bold mt-0.5 truncate">{selectedProduct.brand}</p>
+                          <p className="text-sm font-bold mt-0.5 truncate">{liveSelectedProduct.brand}</p>
                         </div>
-                        {!isStaff && (
+                        {canViewCost && (
                           <div>
                             <span className="text-xs text-slate-400 uppercase tracking-wider font-bold">Cost Price</span>
-                            <p className="text-base font-mono font-bold mt-0.5 text-amber-400">৳ {selectedProduct.costPrice.toLocaleString()}</p>
+                            <p className="text-base font-mono font-bold mt-0.5 text-amber-400">{formatPriceRange(overviewCostRange)}</p>
                           </div>
                         )}
                         <div>
                           <span className="text-xs text-teal-300 uppercase tracking-wider font-bold">Selling Price</span>
-                          <p className="text-lg font-mono font-black mt-0.5 text-teal-300">৳ {selectedProduct.sellingPrice.toLocaleString()}</p>
+                          <p className="text-lg font-mono font-black mt-0.5 text-teal-300">{formatPriceRange(overviewSellRange)}</p>
                         </div>
                       </div>
 
-                      {/* Variants Stock Grid */}
+                      {/* Variants Stock Distribution */}
                       <div className="space-y-3">
                         <div className="flex justify-between items-center">
-                          <h4 className="text-sm font-bold text-slate-900">Variants Stock Distribution</h4>
+                          <h4 className="text-sm font-bold text-slate-900">Variants Stock &amp; Price Distribution</h4>
                           <span className="text-xs font-mono font-bold bg-slate-100 text-slate-700 px-2 py-0.5 rounded-full">
-                            Reorder Threshold: {selectedProduct.reorderThreshold} pcs
+                            Default Reorder: {liveSelectedProduct.reorderThreshold ?? 5} pcs
                           </span>
                         </div>
-                        <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
-                          {(selectedProduct.variants || []).map((v) => {
+                        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                          {(liveSelectedProduct.variants || []).map((v, vIdx) => {
                             const avail = getVariantAvailableStock(v);
                             const res = Number(v.reservedQty) || 0;
+                            const vSell = resolveVariantSellingPrice(liveSelectedProduct, v);
+                            const vCost = resolveVariantCostPrice(liveSelectedProduct, v);
+                            const vThresh = resolveVariantReorderThreshold(liveSelectedProduct, v);
+                            const active = isVariantActive(v);
                             return (
-                              <div key={v.id} className="p-3 bg-slate-50 rounded-xl border border-slate-200 text-center font-mono relative shadow-3xs">
-                                {avail <= 0 && (
-                                   <span className="absolute -top-1.5 -right-1.5 bg-rose-600 text-white text-[9px] font-black uppercase px-2 py-0.5 rounded-full shadow-xs z-10">
-                                     {res > 0 ? 'Reserved' : 'Out'}
-                                   </span>
-                                )}
-                                <p className="text-xs font-bold text-slate-600 truncate">{v.color} • {v.model}</p>
+                              <div key={v.id || vIdx} className={`p-3 rounded-xl border text-center font-mono relative shadow-3xs ${active ? 'bg-slate-50 border-slate-200' : 'bg-slate-100/70 border-slate-200 opacity-65'}`}>
+                                {!active ? (
+                                  <span className="absolute -top-1.5 -right-1.5 bg-slate-500 text-white text-[9px] font-black uppercase px-2 py-0.5 rounded-full shadow-xs z-10">
+                                    Archived
+                                  </span>
+                                ) : avail <= 0 ? (
+                                  <span className="absolute -top-1.5 -right-1.5 bg-rose-600 text-white text-[9px] font-black uppercase px-2 py-0.5 rounded-full shadow-xs z-10">
+                                    {res > 0 ? 'Reserved' : 'Out'}
+                                  </span>
+                                ) : null}
+                                <p className="text-xs font-bold text-slate-700 truncate" title={formatVariantLabel(v)}>{formatVariantLabel(v)}</p>
+                                <p className="text-[10px] text-slate-400 truncate mt-0.5">
+                                  {v.variantSku || `${liveSelectedProduct.sku}-V${vIdx + 1}`} • Thresh: {vThresh}
+                                </p>
                                 <p className={`text-base font-black mt-1 ${avail <= 0 ? 'text-rose-600' : 'text-slate-900'}`}>
                                   {res > 0 ? `${avail} avail` : `${v.stock} pcs`}
                                 </p>
+                                <div className="mt-1 pt-1 border-t border-slate-200/80 flex items-center justify-center gap-2 text-[11px]">
+                                  <span className="font-bold text-teal-700">৳{vSell.toLocaleString()}</span>
+                                  {canViewCost && (
+                                    <span className="text-slate-400">Cost: ৳{vCost.toLocaleString()}</span>
+                                  )}
+                                </div>
                                 {res > 0 && (
                                   <p className="text-[10px] font-bold text-amber-700 mt-0.5">
                                     Total: {v.stock} • Res: {res}
@@ -2758,7 +3014,7 @@ export default function ProductManagement({
                       <button
                         type="button"
                         onClick={() => {
-                          const prod = selectedProduct;
+                          const prod = liveSelectedProduct;
                           setSelectedProduct(null);
                           openEditDrawer(prod);
                         }}
@@ -2769,7 +3025,7 @@ export default function ProductManagement({
                       <button
                         type="button"
                         onClick={() => {
-                          const prod = selectedProduct;
+                          const prod = liveSelectedProduct;
                           setSelectedProduct(null);
                           handleArchiveProduct(prod);
                         }}
@@ -2789,7 +3045,8 @@ export default function ProductManagement({
 
                 </div>
               </div>
-            )}
+              );
+            })()}
 
           </div>
         </div>
@@ -3779,7 +4036,7 @@ export default function ProductManagement({
                         <th className="py-3.5 px-3 font-bold">Product Name & SKU</th>
                         <th className="py-3.5 px-3 font-bold text-center">Sub-Brand</th>
                         <th className="py-3.5 px-3 font-bold">Category / Brand</th>
-                        {!isStaff && (
+                        {canViewCost && (
                           <th className="py-3.5 px-3 font-bold text-right">Purchase Price</th>
                         )}
                         <th className="py-3.5 px-3 font-bold text-right">Selling Price</th>
@@ -3791,10 +4048,12 @@ export default function ProductManagement({
                     </thead>
                     <tbody className="divide-y divide-slate-100 dark:divide-slate-800 text-slate-700 dark:text-slate-200">
                       {filteredPendingProducts.map((product) => {
-                        const totalQty = (product.variants || []).reduce(
+                        const totalQty = getActiveVariants(product).reduce(
                           (s, v) => s + (Number(v.stock) || 0),
                           0
                         );
+                        const sellRange = getProductSellingPriceRange(product);
+                        const costRange = getProductCostPriceRange(product);
                         const submitterName =
                           product.submittedBy?.name || product.createdBy || 'Unknown';
                         const submitterRole = product.submittedBy?.role || 'operator';
@@ -3824,7 +4083,7 @@ export default function ProductManagement({
                                   {product.sku}
                                 </span>
                                 <span className="text-[10px] font-mono px-1.5 py-0.2 rounded bg-slate-100 dark:bg-slate-800 text-slate-600 dark:text-slate-300">
-                                  {(product.variants || []).length} var
+                                  {getActiveVariants(product).length} var
                                 </span>
                               </div>
                             </td>
@@ -3842,13 +4101,13 @@ export default function ProductManagement({
                                 {product.brand || 'Generic'}
                               </p>
                             </td>
-                            {!isStaff && (
+                            {canViewCost && (
                               <td className="py-3 px-3 text-right font-mono font-semibold tabular-nums text-slate-700 dark:text-slate-300 whitespace-nowrap">
-                                ৳{Number(product.costPrice || 0).toLocaleString()}
+                                {formatPriceRange(costRange)}
                               </td>
                             )}
                             <td className="py-3 px-3 text-right font-mono font-bold tabular-nums text-slate-900 dark:text-white whitespace-nowrap">
-                              ৳{Number(product.sellingPrice || 0).toLocaleString()}
+                              {formatPriceRange(sellRange)}
                             </td>
                             <td className="py-3 px-3 text-right font-mono font-bold tabular-nums text-slate-800 dark:text-slate-200 whitespace-nowrap">
                               {totalQty} pcs
@@ -3934,10 +4193,12 @@ export default function ProductManagement({
                 {/* Mobile Compact Card List */}
                 <div className="md:hidden divide-y divide-slate-100 dark:divide-slate-800">
                   {filteredPendingProducts.map((product) => {
-                    const totalQty = (product.variants || []).reduce(
+                    const totalQty = getActiveVariants(product).reduce(
                       (s, v) => s + (Number(v.stock) || 0),
                       0
                     );
+                    const sellRange = getProductSellingPriceRange(product);
+                    const costRange = getProductCostPriceRange(product);
                     const submitterName =
                       product.submittedBy?.name || product.createdBy || 'Unknown';
                     const submittedAt = product.submittedAt || product.createdAt;
@@ -3973,18 +4234,18 @@ export default function ProductManagement({
                         </div>
 
                         <div className="grid grid-cols-3 gap-2 text-xs bg-slate-50 dark:bg-slate-800/50 p-2.5 rounded-xl">
-                          {!isStaff && (
+                          {canViewCost && (
                             <div>
                               <span className="text-[10px] text-slate-400 block">Cost</span>
                               <span className="font-mono font-bold">
-                                ৳{Number(product.costPrice || 0).toLocaleString()}
+                                {formatPriceRange(costRange)}
                               </span>
                             </div>
                           )}
                           <div>
                             <span className="text-[10px] text-slate-400 block">Selling</span>
                             <span className="font-mono font-bold">
-                              ৳{Number(product.sellingPrice || 0).toLocaleString()}
+                              {formatPriceRange(sellRange)}
                             </span>
                           </div>
                           <div>
@@ -4078,8 +4339,9 @@ export default function ProductManagement({
                   </tr>
                 ) : (
                   products.filter(p => (p.stockStatus === 'out_of_stock' || getProductAvailableStock(p) <= 0) && !p.archived).map((product) => {
-                    const totalQty = (product.variants || []).reduce((s, v) => s + (v.stock || 0), 0);
+                    const totalQty = getActiveVariants(product).reduce((s, v) => s + (v.stock || 0), 0);
                     const reservedQty = Number(product.reservedQty) || 0;
+                    const sellRange = getProductSellingPriceRange(product);
                     return (
                       <tr key={product.id} className="hover:bg-slate-50/50 transition-colors">
                         <td className="py-3 px-4">
@@ -4106,7 +4368,7 @@ export default function ProductManagement({
                           {renderSubBrandBadge(product.subBrand)}
                         </td>
                         <td className="py-3 px-3 text-right">
-                          <p className="font-bold text-slate-900">৳ {product.sellingPrice.toLocaleString()}</p>
+                          <p className="font-bold text-slate-900 font-mono">{formatPriceRange(sellRange)}</p>
                         </td>
                         <td className="py-3 px-3 text-center">
                            {reservedQty > 0 && totalQty > 0 ? (
@@ -4198,7 +4460,7 @@ export default function ProductManagement({
                           {renderSubBrandBadge(product.subBrand)}
                         </td>
                         <td className="py-3 px-3 text-right">
-                          <p className="font-bold text-slate-900">৳ {product.sellingPrice.toLocaleString()}</p>
+                          <p className="font-bold text-slate-900 font-mono">{formatPriceRange(getProductSellingPriceRange(product))}</p>
                         </td>
                         <td className="py-3 px-4 text-center">
                           <div className="flex items-center justify-center gap-2">
@@ -4347,6 +4609,7 @@ export default function ProductManagement({
         isStaff={isStaff}
         isSuperAdmin={isSuperAdmin}
         user={user}
+        rolePermissions={rolePermissions}
         products={products}
         categories={categories}
         brands={brands}
@@ -4357,6 +4620,7 @@ export default function ProductManagement({
         companySettings={companySettings}
         requireCheckIn={requireCheckIn}
         onRefreshData={onRefreshData}
+        onOpenAttributeManagement={!isStaff ? () => handleSelectSubTab('attributes') : undefined}
         onSaved={({ message }) => {
           setFormSuccess(message);
           setTimeout(() => setFormSuccess(''), 3500);
@@ -4368,6 +4632,8 @@ export default function ProductManagement({
         product={reviewProduct}
         isOpen={Boolean(reviewProduct)}
         isStaff={isStaff}
+        user={user}
+        rolePermissions={rolePermissions}
         canApprove={isSuperAdmin}
         canEdit={Boolean(
           reviewProduct &&
@@ -4388,6 +4654,197 @@ export default function ProductManagement({
         onRequestApprove={(prod) => handleRequestApproveProduct(prod)}
         onConfirmReject={handleConfirmRejectProduct}
       />
+
+      {/* ADMIN "SET VARIANT PRICES" QUICK MODAL */}
+      {priceEditorProduct &&
+        isAdminOrOwner &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            data-confirm-dialog="true"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Set Variant Prices"
+            className="fixed inset-0 z-[85] flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-xs"
+            onClick={() => !priceEditorSaving && setPriceEditorProduct(null)}
+          >
+            <div
+              onClick={(e) => e.stopPropagation()}
+              className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl max-w-4xl w-full max-h-[88vh] flex flex-col shadow-2xl overflow-hidden"
+            >
+              <div className="px-5 py-4 border-b border-slate-200 dark:border-slate-800 flex items-center justify-between">
+                <div>
+                  <h3 className="text-base font-black text-slate-900 dark:text-white">
+                    Set Variant Prices — {priceEditorProduct.name}
+                  </h3>
+                  <p className="text-xs text-slate-500 dark:text-slate-400 mt-0.5">
+                    SKU: {priceEditorProduct.sku} • Base Sell: ৳{Number(priceEditorProduct.sellingPrice || 0).toLocaleString()}
+                    {canViewCost && ` • Base Cost: ৳${Number(priceEditorProduct.costPrice || 0).toLocaleString()}`}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  disabled={priceEditorSaving}
+                  onClick={() => setPriceEditorProduct(null)}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-slate-700 dark:hover:text-white cursor-pointer"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+
+              <div className="p-5 overflow-y-auto space-y-3">
+                {priceEditorError && (
+                  <div className="p-3 rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs font-semibold">
+                    {priceEditorError}
+                  </div>
+                )}
+
+                <div className="overflow-x-auto border border-slate-200 dark:border-slate-800 rounded-xl">
+                  <table className="w-full text-left border-collapse text-xs">
+                    <thead>
+                      <tr className="bg-slate-50 dark:bg-slate-800/70 border-b border-slate-200 dark:border-slate-800 text-[10px] font-mono uppercase tracking-wider text-slate-500">
+                        <th className="py-2.5 px-3">Variant</th>
+                        <th className="py-2.5 px-3">Follow Base</th>
+                        {canViewCost && <th className="py-2.5 px-3">Purchase (৳)</th>}
+                        <th className="py-2.5 px-3">Selling (৳)</th>
+                        {canViewCost && <th className="py-2.5 px-3 text-right">Margin</th>}
+                        <th className="py-2.5 px-3 text-right">Threshold</th>
+                        <th className="py-2.5 px-3 text-right">Stock</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
+                      {priceEditorVariants.map((v, idx) => {
+                        const followBase = v.sameAsProductPrice !== false;
+                        const effSell = followBase
+                          ? Number(priceEditorProduct.sellingPrice) || 0
+                          : Number(v.sellingPrice) || 0;
+                        const effCost = followBase
+                          ? Number(priceEditorProduct.costPrice) || 0
+                          : Number(v.costPrice) || 0;
+                        const { profit, marginPercent: marginPct, isLoss: isBelowCost } = computeVariantProfitMargin(effSell, effCost);
+                        return (
+                          <tr key={v.id || idx} className={!isVariantActive(v) ? 'opacity-55' : ''}>
+                            <td className="py-2.5 px-3">
+                              <div className="font-bold text-slate-800 dark:text-slate-100">{formatVariantLabel(v)}</div>
+                              <div className="text-[10px] font-mono text-slate-400">{v.variantSku || `${priceEditorProduct.sku}-V${idx + 1}`}</div>
+                            </td>
+                            <td className="py-2.5 px-3">
+                              <label className="inline-flex items-center gap-1.5 cursor-pointer">
+                                <input
+                                  type="checkbox"
+                                  checked={followBase}
+                                  onChange={(e) => {
+                                    const checked = e.target.checked;
+                                    setPriceEditorVariants((prev) =>
+                                      prev.map((item, i) =>
+                                        i === idx
+                                          ? {
+                                              ...item,
+                                              sameAsProductPrice: checked,
+                                              sellingPrice: checked
+                                                ? Number(priceEditorProduct.sellingPrice) || 0
+                                                : item.sellingPrice,
+                                              costPrice: checked
+                                                ? Number(priceEditorProduct.costPrice) || 0
+                                                : item.costPrice,
+                                            }
+                                          : item
+                                      )
+                                    );
+                                  }}
+                                />
+                                <span className="text-[11px] font-semibold text-slate-600 dark:text-slate-300">Same as base</span>
+                              </label>
+                            </td>
+                            {canViewCost && (
+                              <td className="py-2.5 px-3">
+                                <input
+                                  type="number"
+                                  min="0"
+                                  disabled={followBase}
+                                  value={effCost}
+                                  onChange={(e) => {
+                                    const val = Math.max(0, Number(e.target.value) || 0);
+                                    setPriceEditorVariants((prev) =>
+                                      prev.map((item, i) =>
+                                        i === idx ? { ...item, sameAsProductPrice: false, costPrice: val } : item
+                                      )
+                                    );
+                                  }}
+                                  className="w-24 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2 py-1 font-mono font-bold disabled:opacity-50"
+                                />
+                              </td>
+                            )}
+                            <td className="py-2.5 px-3">
+                              <input
+                                type="number"
+                                min="0"
+                                disabled={followBase}
+                                value={effSell}
+                                onChange={(e) => {
+                                  const val = Math.max(0, Number(e.target.value) || 0);
+                                  setPriceEditorVariants((prev) =>
+                                    prev.map((item, i) =>
+                                      i === idx ? { ...item, sameAsProductPrice: false, sellingPrice: val } : item
+                                    )
+                                  );
+                                }}
+                                className="w-24 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2 py-1 font-mono font-bold disabled:opacity-50"
+                              />
+                            </td>
+                            {canViewCost && (
+                              <td className={`py-2.5 px-3 text-right font-mono font-bold ${isBelowCost ? 'text-rose-600' : 'text-emerald-600'}`}>
+                                ৳{profit.toLocaleString()} ({marginPct}%)
+                              </td>
+                            )}
+                            <td className="py-2.5 px-3 text-right">
+                              <input
+                                type="number"
+                                min="0"
+                                value={v.reorderThreshold ?? priceEditorProduct.reorderThreshold ?? 5}
+                                onChange={(e) => {
+                                  const val = Math.max(0, Number(e.target.value) || 0);
+                                  setPriceEditorVariants((prev) =>
+                                    prev.map((item, i) => (i === idx ? { ...item, reorderThreshold: val } : item))
+                                  );
+                                }}
+                                className="w-16 bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2 py-1 font-mono text-right"
+                              />
+                            </td>
+                            <td className="py-2.5 px-3 text-right font-mono font-bold text-slate-700 dark:text-slate-200">
+                              {Number(v.stock) || 0} pcs
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div className="px-5 py-3.5 border-t border-slate-200 dark:border-slate-800 flex items-center justify-end gap-2 bg-slate-50 dark:bg-slate-950/60">
+                <button
+                  type="button"
+                  disabled={priceEditorSaving}
+                  onClick={() => setPriceEditorProduct(null)}
+                  className="px-4 py-2 rounded-xl bg-slate-100 hover:bg-slate-200 text-slate-700 text-xs font-bold cursor-pointer"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  disabled={priceEditorSaving}
+                  onClick={handleSaveVariantPrices}
+                  className="px-5 py-2 rounded-xl bg-slate-900 hover:bg-black text-amber-400 text-xs font-bold inline-flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                >
+                  {priceEditorSaving && <Loader2 size={13} className="animate-spin" />}
+                  <span>Save Variant Prices</span>
+                </button>
+              </div>
+            </div>
+          </div>,
+          document.body
+        )}
 
       {/* PENDING QUEUE QUICK REJECTION DIALOG (When rejecting directly from Queue Table) */}
       {rejectModalProduct &&
@@ -4510,7 +4967,7 @@ export default function ProductManagement({
             </h3>
             
             <p className="text-sm text-slate-400 mt-2 leading-relaxed">
-              Import a CSV dataset containing inventory records. Below are the required headers for columns:
+              Import a CSV dataset containing inventory records. Required base headers (plus optional variant columns <span className="font-mono text-xs text-slate-600">Color, Model, VariantNote, VariantSKU, VariantCostPrice, VariantSellingPrice, VariantStock, VariantReorderThreshold</span>):
             </p>
             <div className="mt-2 bg-slate-900 text-amber-400 p-3 rounded-xl font-mono text-sm select-all overflow-x-auto border border-slate-800">
               Name, SKU, Category, Brand, SubBrand, CostPrice, SellingPrice, ReorderThreshold

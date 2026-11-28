@@ -129,6 +129,30 @@ service cloud.firestore {
         (!('warrantyPolicyText' in data) || (data.warrantyPolicyText is string && data.warrantyPolicyText.size() <= 2000));
     }
 
+    function hasValidProductVariants(data) {
+      return data.variants is list &&
+        data.variants.size() >= 1 &&
+        data.variants.size() <= 100 &&
+        data.variants[0] is map;
+    }
+
+    function isValidProductColorCreate(data) {
+      return data.keys().hasAll(['name']) &&
+        data.keys().hasOnly(['name', 'hexCode']) &&
+        data.name is string &&
+        data.name.size() > 0 &&
+        data.name.size() <= 80 &&
+        (!('hexCode' in data) || (data.hexCode is string && data.hexCode.size() <= 20));
+    }
+
+    function isValidProductModelCreate(data) {
+      return data.keys().hasAll(['name']) &&
+        data.keys().hasOnly(['name']) &&
+        data.name is string &&
+        data.name.size() > 0 &&
+        data.name.size() <= 80;
+    }
+
     function hasValidPreOrderBase(data) {
       return data.preOrderNumber is string &&
         data.preOrderNumber.size() > 0 &&
@@ -749,12 +773,18 @@ service cloud.firestore {
     // ==========================================
     match /products/{docId} {
       allow read: if isSignedIn();
-      allow create: if isAdmin() || (
-        isActiveUser() &&
-        request.resource.data.status == 'pending_review' &&
-        !request.resource.data.get('archived', false)
+      allow create: if hasValidProductVariants(request.resource.data) && (
+        isAdmin() || (
+          isActiveUser() &&
+          request.resource.data.status == 'pending_review' &&
+          !request.resource.data.get('archived', false)
+        )
       );
-      allow update: if isAdmin() ||
+      allow update: if (
+        !request.resource.data.diff(resource.data).affectedKeys().hasAny(['variants']) ||
+        hasValidProductVariants(request.resource.data)
+      ) && (
+        isAdmin() ||
         hasPreOrderPerm('preOrderReceiveStock') ||
         hasPreOrderPerm('preOrderConvertSale') ||
         hasPreOrderPerm('preOrderUpdateStatus') ||
@@ -770,13 +800,22 @@ service cloud.firestore {
               resource.data.submittedBy.get('uid', '') == request.auth.uid
             )
           )
-        );
+        )
+      );
       allow delete: if isAdmin();
     }
     match /categories/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
     match /brands/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
-    match /productColors/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
-    match /productModels/{docId} { allow read: if isSignedIn(); allow write: if isAdmin(); }
+    match /productColors/{docId} {
+      allow read: if isSignedIn();
+      allow create: if (isAdmin() || isActiveUser()) && isValidProductColorCreate(request.resource.data);
+      allow update, delete: if isAdmin();
+    }
+    match /productModels/{docId} {
+      allow read: if isSignedIn();
+      allow create: if (isAdmin() || isActiveUser()) && isValidProductModelCreate(request.resource.data);
+      allow update, delete: if isAdmin();
+    }
     match /orders/{docId} {
       allow read: if isSignedIn();
       allow create, update: if isAdmin() || hasPreOrderPerm('preOrderConvertSale');

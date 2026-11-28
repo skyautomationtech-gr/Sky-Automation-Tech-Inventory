@@ -529,6 +529,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
     stockAdjustment: true,
     manageOrders: true,
     voidInvoice: true,
+    viewProductCost: true,
     ...DEFAULT_PRE_ORDER_PERMISSIONS.superadmin,
   },
   admin: {
@@ -541,6 +542,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
     stockAdjustment: true,
     manageOrders: true,
     voidInvoice: false,
+    viewProductCost: true,
     ...DEFAULT_PRE_ORDER_PERMISSIONS.admin,
   },
   manager: {
@@ -553,6 +555,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
     stockAdjustment: true,
     manageOrders: true,
     voidInvoice: false,
+    viewProductCost: true,
     ...DEFAULT_PRE_ORDER_PERMISSIONS.manager,
   },
   staff: {
@@ -565,6 +568,7 @@ export const DEFAULT_ROLE_PERMISSIONS: RolePermissionsMap = {
     stockAdjustment: false,
     manageOrders: false,
     voidInvoice: false,
+    viewProductCost: false,
     ...DEFAULT_PRE_ORDER_PERMISSIONS.staff,
   },
 };

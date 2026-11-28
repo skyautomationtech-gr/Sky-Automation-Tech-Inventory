@@ -67,6 +67,13 @@ import {
   normalizeSubBrandCode,
   resolveDefaultSellingSubBrand,
 } from '../utils/subBrands';
+import {
+  formatVariantLabel,
+  getActiveVariants,
+  resolveVariantByOrderItem,
+  resolveVariantCostPrice,
+  resolveVariantSellingPrice,
+} from '../utils/productVariants';
 
 interface OrderManagementProps {
   user: UserProfile | null;
@@ -362,20 +369,30 @@ export default function OrderManagement({
 
   // Items select options
   const selectedProductObj = products.find(p => p.id === itemProductId);
-  const activeVariants = selectedProductObj?.variants || [];
+  const activeVariants = getActiveVariants(selectedProductObj);
 
-  // Update item defaults
+  // Update item defaults on product or variant change
   useEffect(() => {
     if (selectedProductObj) {
-      // Find standard selling price or cost
-      setItemPrice(selectedProductObj.sellingPrice || 0);
       if (activeVariants.length > 0) {
-        setItemVariantId(activeVariants[0].id);
+        const first = activeVariants[0];
+        setItemVariantId(first.id);
+        setItemPrice(resolveVariantSellingPrice(selectedProductObj, first));
       } else {
         setItemVariantId('');
+        setItemPrice(selectedProductObj.sellingPrice || 0);
       }
     }
   }, [itemProductId]);
+
+  useEffect(() => {
+    if (selectedProductObj && itemVariantId) {
+      const matched = activeVariants.find(v => v.id === itemVariantId) || selectedProductObj.variants?.find(v => v.id === itemVariantId);
+      if (matched) {
+        setItemPrice(resolveVariantSellingPrice(selectedProductObj, matched));
+      }
+    }
+  }, [itemVariantId]);
 
   const handleAddItem = () => {
     if (!itemProductId || !itemVariantId) return;
@@ -397,16 +414,23 @@ export default function OrderManagement({
     const duplicateIdx = orderItems.findIndex(i => i.productId === itemProductId && i.variantId === itemVariantId);
     if (duplicateIdx >= 0) {
       const updated = [...orderItems];
-      updated[duplicateIdx].qty += itemQty;
+      updated[duplicateIdx] = {
+        ...updated[duplicateIdx],
+        qty: updated[duplicateIdx].qty + itemQty,
+        ...(updated[duplicateIdx].costPrice === undefined ? { costPrice: resolveVariantCostPrice(prod, variant) } : {}),
+        ...(variant.variantSku && !updated[duplicateIdx].variantSku ? { variantSku: variant.variantSku } : {}),
+      };
       setOrderItems(updated);
     } else {
       const newItem: OrderItem = {
         productId: itemProductId,
         variantId: itemVariantId,
+        ...(variant.variantSku ? { variantSku: variant.variantSku } : {}),
         productName: prod.name,
-        variantLabel: `${variant.color || ''} ${variant.model || ''}`.trim() || 'Standard',
+        variantLabel: formatVariantLabel(variant),
         qty: itemQty,
-        unitPrice: itemPrice
+        unitPrice: itemPrice,
+        costPrice: resolveVariantCostPrice(prod, variant),
       };
       setOrderItems([...orderItems, newItem]);
     }
@@ -925,7 +949,9 @@ export default function OrderManagement({
         updated[existingIdx] = {
           ...updated[existingIdx],
           qty: updated[existingIdx].qty + (editAddItemQty || 1),
-          unitPrice: editAddItemPrice > 0 ? editAddItemPrice : updated[existingIdx].unitPrice
+          unitPrice: editAddItemPrice > 0 ? editAddItemPrice : updated[existingIdx].unitPrice,
+          ...(updated[existingIdx].costPrice === undefined ? { costPrice: resolveVariantCostPrice(prod, variant) } : {}),
+          ...(variant.variantSku && !updated[existingIdx].variantSku ? { variantSku: variant.variantSku } : {}),
         };
         return updated;
       });
@@ -933,10 +959,12 @@ export default function OrderManagement({
       const newItem: OrderItem = {
         productId: editAddItemProductId,
         variantId: editAddItemVariantId,
+        ...(variant.variantSku ? { variantSku: variant.variantSku } : {}),
         productName: prod.name,
-        variantLabel: `${variant.color || ''} ${variant.model || ''}`.trim() || 'Standard',
+        variantLabel: formatVariantLabel(variant),
         qty: editAddItemQty || 1,
-        unitPrice: editAddItemPrice
+        unitPrice: editAddItemPrice,
+        costPrice: resolveVariantCostPrice(prod, variant),
       };
       setEditItems(prev => [...prev, newItem]);
     }
@@ -1069,13 +1097,22 @@ export default function OrderManagement({
     setOrderShippingCharge('');
   };
 
-  const productCostMap = useMemo(() => {
-    const map = new Map<string, number>();
+  const productMap = useMemo(() => {
+    const map = new Map<string, Product>();
     products.forEach((p) => {
-      map.set(p.id, Number(p.costPrice) || 0);
+      map.set(p.id, p);
     });
     return map;
   }, [products]);
+
+  const resolveOrderItemUnitCost = (item: OrderItem): number => {
+    if (item.costPrice !== undefined && item.costPrice !== null && !Number.isNaN(Number(item.costPrice))) {
+      return Number(item.costPrice);
+    }
+    const prod = productMap.get(item.productId);
+    const variant = resolveVariantByOrderItem(prod, item.variantId);
+    return resolveVariantCostPrice(prod, variant);
+  };
 
   // Filters
   const filteredOrders = useMemo(() => orders.filter(order => {
@@ -1280,7 +1317,7 @@ export default function OrderManagement({
                       const itemCount = order.items.reduce((acc, i) => acc + i.qty, 0);
                       let totalCost = 0;
                       (order.items || []).forEach(it => {
-                        totalCost += (productCostMap.get(it.productId) || 0) * (Number(it.qty) || 1);
+                        totalCost += resolveOrderItemUnitCost(it) * (Number(it.qty) || 1);
                       });
                       const profit = (Number(order.totalAmount) || 0) - totalCost;
                       return (
@@ -1445,9 +1482,7 @@ export default function OrderManagement({
                     {(() => {
                       let totalCost = 0;
                       (selectedOrder.items || []).forEach(it => {
-                        const p = products.find(prod => prod.id === it.productId);
-                        const c = (Number(it.costPrice) > 0 ? Number(it.costPrice) : Number(p?.costPrice)) || 0;
-                        totalCost += c * (Number(it.qty) || 1);
+                        totalCost += resolveOrderItemUnitCost(it) * (Number(it.qty) || 1);
                       });
                       const profit = (Number(selectedOrder.totalAmount) || 0) - totalCost;
                       return profit < 0 ? (
@@ -1769,8 +1804,7 @@ export default function OrderManagement({
                 {isSuperAdmin && (() => {
                   let totalCOGS = 0;
                   const lines = (selectedOrder.items || []).map(item => {
-                    const prod = products.find(p => p.id === item.productId);
-                    const unitCost = Number(prod?.costPrice) || 0;
+                    const unitCost = resolveOrderItemUnitCost(item);
                     const unitSell = Number(item.unitPrice) || 0;
                     const qty = Number(item.qty) || 1;
                     const lineCost = unitCost * qty;
@@ -2729,12 +2763,14 @@ export default function OrderManagement({
                           const pid = e.target.value;
                           setEditAddItemProductId(pid);
                           const prod = products.find(p => p.id === pid);
+                          const avail = getActiveVariants(prod);
                           if (prod) {
-                            setEditAddItemPrice(prod.sellingPrice || 0);
-                            if (prod.variants && prod.variants.length > 0) {
-                              setEditAddItemVariantId(prod.variants[0].id);
+                            if (avail.length > 0) {
+                              setEditAddItemVariantId(avail[0].id);
+                              setEditAddItemPrice(resolveVariantSellingPrice(prod, avail[0]));
                             } else {
                               setEditAddItemVariantId('');
+                              setEditAddItemPrice(prod.sellingPrice || 0);
                             }
                           } else {
                             setEditAddItemVariantId('');
@@ -2756,16 +2792,27 @@ export default function OrderManagement({
                       <label className="block text-[10px] font-bold uppercase text-slate-400 mb-0.5">Variant</label>
                       <select
                         value={editAddItemVariantId}
-                        onChange={(e) => setEditAddItemVariantId(e.target.value)}
+                        onChange={(e) => {
+                          const vid = e.target.value;
+                          setEditAddItemVariantId(vid);
+                          const prod = products.find(p => p.id === editAddItemProductId);
+                          const v = prod?.variants.find(item => item.id === vid);
+                          if (prod && v) {
+                            setEditAddItemPrice(resolveVariantSellingPrice(prod, v));
+                          }
+                        }}
                         disabled={!editAddItemProductId}
                         className="w-full bg-white border border-slate-200 rounded-xl py-1.5 px-2.5 text-xs focus:outline-hidden focus:border-amber-400 text-slate-800 disabled:opacity-50"
                       >
                         <option value="">-- Choose Variant --</option>
-                        {products.find(p => p.id === editAddItemProductId)?.variants.map((v) => (
-                          <option key={v.id} value={v.id}>
-                            {v.color || ''} {v.model || ''} (Stock: {v.stock})
-                          </option>
-                        ))}
+                        {getActiveVariants(products.find(p => p.id === editAddItemProductId)).map((v) => {
+                          const prod = products.find(p => p.id === editAddItemProductId);
+                          return (
+                            <option key={v.id} value={v.id}>
+                              {formatVariantLabel(v)} • ৳{resolveVariantSellingPrice(prod, v).toLocaleString()} (Stock: {v.stock})
+                            </option>
+                          );
+                        })}
                       </select>
                     </div>
 

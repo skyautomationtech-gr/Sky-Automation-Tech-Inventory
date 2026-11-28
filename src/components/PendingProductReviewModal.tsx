@@ -25,17 +25,38 @@ import {
   Loader2,
 } from 'lucide-react';
 import Barcode from './Barcode';
-import { CompanySettings, Product, SubBrand } from '../types';
+import {
+  CompanySettings,
+  Product,
+  RolePermissionsMap,
+  SubBrand,
+  UserProfile as UserType,
+} from '../types';
 import {
   normalizeProductImages,
   buildCategoryPathLabel,
 } from '../utils/productImageUpload';
 import { formatBrandBadgeMeta } from '../utils/subBrands';
+import {
+  canViewProductCost,
+  computeVariantProfitMargin,
+  formatPriceRange,
+  formatVariantLabel,
+  getActiveVariants,
+  getProductCostPriceRange,
+  getProductSellingPriceRange,
+  isVariantActive,
+  resolveVariantCostPrice,
+  resolveVariantReorderThreshold,
+  resolveVariantSellingPrice,
+} from '../utils/productVariants';
 
 interface PendingProductReviewModalProps {
   product: Product | null;
   isOpen: boolean;
   isStaff: boolean;
+  user?: UserType | null;
+  rolePermissions?: RolePermissionsMap | null;
   canApprove: boolean;
   canEdit: boolean;
   actionLoading?: boolean;
@@ -70,6 +91,8 @@ export default function PendingProductReviewModal({
   product,
   isOpen,
   isStaff,
+  user,
+  rolePermissions,
   canApprove,
   canEdit,
   actionLoading = false,
@@ -176,15 +199,20 @@ export default function PendingProductReviewModal({
 
   if (!isOpen || !product || typeof document === 'undefined') return null;
 
+  const canViewCost = user ? canViewProductCost(user, rolePermissions) : !isStaff;
   const variants = product.variants || [];
-  const totalStock = variants.reduce((sum, v) => sum + (Number(v.stock) || 0), 0);
+  const activeVariants = getActiveVariants(product);
+  const archivedVariantCount = Math.max(0, variants.length - activeVariants.length);
+  const totalStock = activeVariants.reduce((sum, v) => sum + (Number(v.stock) || 0), 0);
   const categoryPath = buildCategoryPathLabel(product);
   const submitterName = product.submittedBy?.name || product.createdBy || 'Unknown';
   const submitterRole = product.submittedBy?.role || 'operator';
   const submitterPhoto = product.submittedBy?.photoUrl;
   const submittedTimestamp = product.submittedAt || product.createdAt;
-  const sellingPrice = Number(product.sellingPrice) || 0;
-  const costPrice = Number(product.costPrice) || 0;
+  const sellingRange = getProductSellingPriceRange(product);
+  const costRange = getProductCostPriceRange(product);
+  const sellingPrice = sellingRange.min;
+  const costPrice = costRange.min;
   const profit = sellingPrice - costPrice;
   const marginPct = sellingPrice > 0 ? Math.round((profit / sellingPrice) * 100) : 0;
 
@@ -462,16 +490,16 @@ export default function PendingProductReviewModal({
             {/* Pricing & Stock Key Metrics */}
             <div
               className={`grid grid-cols-2 ${
-                !isStaff ? 'sm:grid-cols-4' : 'sm:grid-cols-3'
+                canViewCost ? 'sm:grid-cols-4' : 'sm:grid-cols-3'
               } gap-3`}
             >
-              {!isStaff && (
+              {canViewCost && (
                 <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4">
                   <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 block">
                     Purchase Price
                   </span>
                   <span className="text-lg font-black font-mono tabular-nums text-slate-900 dark:text-white mt-1 block">
-                    ৳{costPrice.toLocaleString()}
+                    {formatPriceRange(costRange)}
                   </span>
                 </div>
               )}
@@ -481,14 +509,14 @@ export default function PendingProductReviewModal({
                   Selling Price
                 </span>
                 <span className="text-lg font-black font-mono tabular-nums text-amber-600 dark:text-amber-400 mt-1 block">
-                  ৳{sellingPrice.toLocaleString()}
+                  {formatPriceRange(sellingRange)}
                 </span>
               </div>
 
-              {!isStaff && (
+              {canViewCost && (
                 <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4">
                   <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 block">
-                    Profit / Margin
+                    {sellingRange.isRange || costRange.isRange ? 'Base Margin' : 'Profit / Margin'}
                   </span>
                   <div className="mt-1 flex items-baseline gap-1.5">
                     <span
@@ -516,12 +544,12 @@ export default function PendingProductReviewModal({
                     {totalStock} pcs
                   </span>
                   <span className="text-xs text-slate-500 dark:text-slate-400">
-                    ({variants.length} var)
+                    ({activeVariants.length} active{archivedVariantCount > 0 ? `, ${archivedVariantCount} archived` : ''})
                   </span>
                 </div>
               </div>
 
-              {isStaff && (
+              {!canViewCost && (
                 <div className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-2xl p-4">
                   <span className="text-[11px] font-bold uppercase tracking-wider text-slate-500 dark:text-slate-400 block">
                     Reorder Threshold
@@ -628,51 +656,112 @@ export default function PendingProductReviewModal({
                   Attributes & Physical Variants ({variants.length})
                 </h3>
                 <span className="text-xs font-mono font-bold text-slate-500 dark:text-slate-400 tabular-nums">
-                  Total: {totalStock} pcs
+                  Active Stock: {totalStock} pcs
                 </span>
               </div>
               <div className="overflow-x-auto">
                 <table className="w-full text-left border-collapse text-xs sm:text-sm">
                   <thead>
                     <tr className="bg-slate-50 dark:bg-slate-800/60 border-b border-slate-200 dark:border-slate-800 text-[11px] font-mono uppercase tracking-wider text-slate-500 dark:text-slate-400">
-                      <th className="py-2.5 px-4 font-bold">#</th>
-                      <th className="py-2.5 px-4 font-bold">Color / Finish</th>
-                      <th className="py-2.5 px-4 font-bold">Model / Size</th>
-                      <th className="py-2.5 px-4 font-bold">Variant Barcode</th>
-                      <th className="py-2.5 px-4 font-bold text-right">Stock Qty</th>
+                      <th className="py-2.5 px-3 font-bold">#</th>
+                      <th className="py-2.5 px-3 font-bold">Variant</th>
+                      <th className="py-2.5 px-3 font-bold">SKU / Barcode</th>
+                      {canViewCost && <th className="py-2.5 px-3 font-bold text-right">Cost</th>}
+                      <th className="py-2.5 px-3 font-bold text-right">Sell</th>
+                      {canViewCost && <th className="py-2.5 px-3 font-bold text-right">Margin</th>}
+                      <th className="py-2.5 px-3 font-bold text-right">Thresh</th>
+                      <th className="py-2.5 px-3 font-bold text-right">Stock</th>
+                      <th className="py-2.5 px-3 font-bold text-center">Status</th>
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100 dark:divide-slate-800">
                     {variants.length === 0 ? (
                       <tr>
                         <td
-                          colSpan={5}
+                          colSpan={canViewCost ? 9 : 7}
                           className="py-6 text-center text-slate-400 dark:text-slate-500 italic"
                         >
                           No variants configured.
                         </td>
                       </tr>
                     ) : (
-                      variants.map((v, idx) => (
-                        <tr
-                          key={v.id || idx}
-                          className="hover:bg-slate-50/70 dark:hover:bg-slate-800/40"
-                        >
-                          <td className="py-2.5 px-4 font-mono text-slate-400">{idx + 1}</td>
-                          <td className="py-2.5 px-4 font-semibold text-slate-800 dark:text-slate-200">
-                            {v.color || 'Default'}
-                          </td>
-                          <td className="py-2.5 px-4 font-semibold text-slate-700 dark:text-slate-300">
-                            {v.model || 'Standard'}
-                          </td>
-                          <td className="py-2.5 px-4 font-mono text-xs text-slate-500 dark:text-slate-400">
-                            {v.barcodeValue || 'Auto-assigned'}
-                          </td>
-                          <td className="py-2.5 px-4 text-right font-mono font-black tabular-nums text-slate-900 dark:text-white">
-                            {Number(v.stock) || 0} pcs
-                          </td>
-                        </tr>
-                      ))
+                      variants.map((v, idx) => {
+                        const vSell = resolveVariantSellingPrice(product, v);
+                        const vCost = resolveVariantCostPrice(product, v);
+                        const { profit: vProfit, marginPercent: vMargin, isLoss: isBelowCost } =
+                          computeVariantProfitMargin(vSell, vCost);
+                        const active = isVariantActive(v);
+                        const vThreshold = resolveVariantReorderThreshold(product, v);
+                        return (
+                          <tr
+                            key={v.id || idx}
+                            className={
+                              active
+                                ? 'hover:bg-slate-50/70 dark:hover:bg-slate-800/40'
+                                : 'opacity-60 bg-slate-50/60 dark:bg-slate-900/60'
+                            }
+                          >
+                            <td className="py-2.5 px-3 font-mono text-slate-400">{idx + 1}</td>
+                            <td className="py-2.5 px-3">
+                              <div className="font-semibold text-slate-800 dark:text-slate-200">
+                                {formatVariantLabel(v)}
+                              </div>
+                              {v.variantNote && (
+                                <div className="text-[10px] text-slate-500 dark:text-slate-400">
+                                  Note: {v.variantNote}
+                                </div>
+                              )}
+                            </td>
+                            <td className="py-2.5 px-3 font-mono text-[11px] text-slate-600 dark:text-slate-300">
+                              <div>{v.variantSku || `${product.sku}-V${idx + 1}`}</div>
+                              <div className="text-[10px] text-slate-400">
+                                {v.barcodeValue || 'Auto-assigned'}
+                              </div>
+                            </td>
+                            {canViewCost && (
+                              <td className="py-2.5 px-3 text-right font-mono text-xs text-slate-700 dark:text-slate-300 tabular-nums">
+                                ৳{vCost.toLocaleString()}
+                              </td>
+                            )}
+                            <td className="py-2.5 px-3 text-right font-mono text-xs font-bold text-amber-600 dark:text-amber-400 tabular-nums">
+                              ৳{vSell.toLocaleString()}
+                              {v.sameAsProductPrice !== false && (
+                                <span className="block text-[9px] font-normal text-slate-400">
+                                  base price
+                                </span>
+                              )}
+                            </td>
+                            {canViewCost && (
+                              <td
+                                className={`py-2.5 px-3 text-right font-mono text-xs font-bold tabular-nums ${
+                                  isBelowCost
+                                    ? 'text-rose-600 dark:text-rose-400'
+                                    : 'text-emerald-600 dark:text-emerald-400'
+                                }`}
+                              >
+                                ৳{vProfit.toLocaleString()} ({vMargin}%)
+                              </td>
+                            )}
+                            <td className="py-2.5 px-3 text-right font-mono text-xs text-slate-500 dark:text-slate-400 tabular-nums">
+                              {vThreshold}
+                            </td>
+                            <td className="py-2.5 px-3 text-right font-mono font-black tabular-nums text-slate-900 dark:text-white">
+                              {Number(v.stock) || 0} pcs
+                            </td>
+                            <td className="py-2.5 px-3 text-center">
+                              <span
+                                className={`px-2 py-0.5 rounded-full text-[10px] font-bold uppercase ${
+                                  active
+                                    ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-400'
+                                    : 'bg-slate-200 dark:bg-slate-800 text-slate-500 dark:text-slate-400'
+                                }`}
+                              >
+                                {active ? 'Active' : 'Archived'}
+                              </span>
+                            </td>
+                          </tr>
+                        );
+                      })
                     )}
                   </tbody>
                 </table>
@@ -756,7 +845,11 @@ export default function PendingProductReviewModal({
                 <div className="space-y-3 max-h-72 overflow-y-auto pr-1">
                   {historyList.map((entry) => {
                     const visibleChanges = (entry.changes || []).filter(
-                      (c) => !(isStaff && c.field === 'costPrice')
+                      (c) =>
+                        canViewCost ||
+                        (c.field !== 'costPrice' &&
+                          !/cost\s*price/i.test(c.label || '') &&
+                          !/\bcost:৳/i.test(`${c.before || ''} ${c.after || ''}`))
                     );
                     const actionBadgeCls =
                       entry.action === 'approved'

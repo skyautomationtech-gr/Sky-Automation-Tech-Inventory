@@ -113,6 +113,13 @@ export interface Variant {
   id: string;
   color: string;
   model: string;
+  variantNote?: string;
+  variantSku?: string;
+  costPrice?: number;
+  sellingPrice?: number;
+  sameAsProductPrice?: boolean;
+  reorderThreshold?: number;
+  inactive?: boolean;
   stock: number;
   reservedQty?: number;
   reservedForPreOrders?: ProductPreOrderReservation[];
@@ -443,9 +450,10 @@ export interface OrderItem {
   variantId: string;
   productName: string;
   variantLabel: string;
+  variantSku?: string;
   qty: number;
   unitPrice: number;
-  costPrice?: number; // Landed cost snapshot per unit (used for exact pre-order COGS)
+  costPrice?: number; // Cost/landed cost snapshot per unit at time of sale (used for exact COGS & profit)
 }
 
 export interface OrderStatusHistory {
@@ -835,7 +843,8 @@ export type LegacyRolePermissionKey =
   | 'stockOut'
   | 'stockAdjustment'
   | 'manageOrders'
-  | 'voidInvoice';
+  | 'voidInvoice'
+  | 'viewProductCost';
 
 export type AppPermissionKey = LegacyRolePermissionKey | PreOrderPermissionKey;
 

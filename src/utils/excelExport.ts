@@ -1,6 +1,17 @@
 import type { WorkBook } from 'xlsx';
 import type { Product, Brand, Category } from '../types';
 import { formatBrandBadgeMeta } from './subBrands';
+import {
+  formatPriceRange,
+  formatVariantLabel,
+  getActiveVariants,
+  getProductCostPriceRange,
+  getProductSellingPriceRange,
+  isVariantActive,
+  resolveVariantCostPrice,
+  resolveVariantReorderThreshold,
+  resolveVariantSellingPrice,
+} from './productVariants';
 import { 
   getProducts, 
   getOrders, 
@@ -62,7 +73,12 @@ function escapeCsv(val: any): string {
   return `"${str.replace(/"/g, '""')}"`;
 }
 
-export async function exportProductsToCSV(productsList?: Product[], customFilename?: string) {
+export async function exportProductsToCSV(
+  productsList?: Product[],
+  customFilename?: string,
+  options?: { includeCost?: boolean }
+) {
+  const includeCost = options?.includeCost ?? false;
   const products = productsList || await getProducts(true);
   const headers = [
     'Product ID',
@@ -74,8 +90,9 @@ export async function exportProductsToCSV(productsList?: Product[], customFilena
     'Child Category',
     'Brand',
     'Sub-Brand',
-    'Cost Price (৳)',
+    ...(includeCost ? ['Cost Price (৳)', 'Cost Price Range (৳)'] : []),
     'Selling Price (৳)',
+    'Selling Price Range (৳)',
     'Total Stock',
     'Low Stock Threshold',
     'Stock Status',
@@ -87,10 +104,27 @@ export async function exportProductsToCSV(productsList?: Product[], customFilena
   ];
 
   const rows = products.map(p => {
-    const totalStock = p.variants?.reduce((sum, v) => sum + (v.stock || 0), 0) ?? 0;
-    const variantsStr = p.variants?.map(v => 
-      `${v.color || 'Standard'} / ${v.model || 'Standard'} (Stock: ${v.stock || 0}${v.barcodeValue ? `, Barcode: ${v.barcodeValue}` : ''})`
-    ).join(' | ') || '';
+    const activeVariants = getActiveVariants(p);
+    const totalStock = activeVariants.reduce((sum, v) => sum + (v.stock || 0), 0);
+    const sellRange = getProductSellingPriceRange(p);
+    const costRange = getProductCostPriceRange(p);
+    const variantsStr = (p.variants || []).map((v, idx) => {
+      const vLabel = formatVariantLabel(v);
+      const vSku = v.variantSku || `${p.sku || 'SKU'}-V${idx + 1}`;
+      const vSell = resolveVariantSellingPrice(p, v);
+      const vCost = resolveVariantCostPrice(p, v);
+      const vThresh = resolveVariantReorderThreshold(p, v);
+      const parts = [
+        `[${vSku}]`,
+        `Sell: ৳${vSell}`,
+        ...(includeCost ? [`Cost: ৳${vCost}`] : []),
+        `Stock: ${v.stock || 0}`,
+        `Thresh: ${vThresh}`,
+        ...(v.barcodeValue ? [`Barcode: ${v.barcodeValue}`] : []),
+        ...(!isVariantActive(v) ? ['ARCHIVED'] : []),
+      ];
+      return `${vLabel} (${parts.join(', ')})`;
+    }).join(' | ') || '';
 
     return [
       escapeCsv(p.id),
@@ -102,8 +136,9 @@ export async function exportProductsToCSV(productsList?: Product[], customFilena
       escapeCsv(p.childCategory || ''),
       escapeCsv(p.brand || ''),
       escapeCsv(formatExportSubBrand(p.subBrand, 'Needs Assignment')),
-      p.costPrice || 0,
+      ...(includeCost ? [p.costPrice || 0, escapeCsv(formatPriceRange(costRange))] : []),
       p.sellingPrice || 0,
+      escapeCsv(formatPriceRange(sellRange)),
       totalStock,
       p.reorderThreshold ?? 5,
       escapeCsv(p.stockStatus || (totalStock > 0 ? 'in_stock' : 'out_of_stock')),
@@ -207,29 +242,70 @@ export async function exportCategoriesToCSV(categoriesList?: Category[], product
   downloadCSV(csvContent, customFilename || `categories-bulk-export-${dateStr}.csv`);
 }
 
-export async function exportProductsToExcel(productsList?: Product[]) {
+export async function exportProductsToExcel(
+  productsList?: Product[],
+  options?: { includeCost?: boolean }
+) {
+  const includeCost = options?.includeCost ?? false;
   const [XLSX, products] = await Promise.all([
     loadXlsx(),
     productsList ? Promise.resolve(productsList) : getProducts(true)
   ]);
-  const data = products.map(p => ({
-    'Product ID': p.id,
-    'SKU': p.sku || '',
-    'Name': p.name || '',
-    'Category': p.category || '',
-    'Brand': p.brand || '',
-    'Sub-Brand': formatExportSubBrand(p.subBrand, 'Needs Assignment'),
-    'Cost Price (৳)': p.costPrice || 0,
-    'Selling Price (৳)': p.sellingPrice || 0,
-    'Stock Status': p.stockStatus || '',
-    'Total Stock': p.variants?.reduce((acc, v) => acc + (v.stock || 0), 0) ?? 0,
-    'Archived': p.archived ? 'Yes' : 'No',
-    'Barcode': p.barcodeValue || '',
-    'Created At': formatDate(p.createdAt)
-  }));
-  const worksheet = XLSX.utils.json_to_sheet(data);
+  const data = products.map(p => {
+    const sellRange = getProductSellingPriceRange(p);
+    const costRange = getProductCostPriceRange(p);
+    const activeVariants = getActiveVariants(p);
+    const baseRow: Record<string, any> = {
+      'Product ID': p.id,
+      'SKU': p.sku || '',
+      'Name': p.name || '',
+      'Category': p.category || '',
+      'Brand': p.brand || '',
+      'Sub-Brand': formatExportSubBrand(p.subBrand, 'Needs Assignment'),
+    };
+    if (includeCost) {
+      baseRow['Cost Price (৳)'] = formatPriceRange(costRange);
+    }
+    baseRow['Selling Price (৳)'] = formatPriceRange(sellRange);
+    baseRow['Variants'] = (p.variants || []).length;
+    baseRow['Stock Status'] = p.stockStatus || '';
+    baseRow['Total Stock'] = activeVariants.reduce((acc, v) => acc + (v.stock || 0), 0);
+    baseRow['Archived'] = p.archived ? 'Yes' : 'No';
+    baseRow['Barcode'] = p.barcodeValue || '';
+    baseRow['Created At'] = formatDate(p.createdAt);
+    return baseRow;
+  });
+
+  const variantRows = products.flatMap(p =>
+    (p.variants || []).map((v, idx) => {
+      const row: Record<string, any> = {
+        'Product ID': p.id,
+        'Product SKU': p.sku || '',
+        'Product Name': p.name || '',
+        'Variant SKU': v.variantSku || `${p.sku || 'SKU'}-V${idx + 1}`,
+        'Color': v.color || 'Default',
+        'Model': v.model || 'Standard',
+        'Variant Note': v.variantNote || '',
+      };
+      if (includeCost) {
+        row['Cost Price (৳)'] = resolveVariantCostPrice(p, v);
+      }
+      row['Selling Price (৳)'] = resolveVariantSellingPrice(p, v);
+      row['Same As Product Price'] = v.sameAsProductPrice !== false ? 'Yes' : 'No';
+      row['Stock'] = v.stock || 0;
+      row['Reserved'] = v.reservedQty || 0;
+      row['Reorder Threshold'] = resolveVariantReorderThreshold(p, v);
+      row['Barcode'] = v.barcodeValue || '';
+      row['Variant Status'] = isVariantActive(v) ? 'Active' : 'Archived';
+      return row;
+    })
+  );
+
   const workbook = XLSX.utils.book_new();
-  XLSX.utils.book_append_sheet(workbook, worksheet, 'Products');
+  XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(data), 'Products');
+  if (variantRows.length > 0) {
+    XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(variantRows), 'Variants');
+  }
   const dateStr = new Date().toISOString().split('T')[0];
   downloadWorkbook(XLSX, workbook, `products-export-${dateStr}.xlsx`);
 }
@@ -427,23 +503,32 @@ export async function exportAttendanceToExcel() {
   downloadWorkbook(XLSX, workbook, `attendance-export-${dateStr}.xlsx`);
 }
 
-export async function exportEverythingWorkbook() {
+export async function exportEverythingWorkbook(options?: { includeCost?: boolean }) {
+  const includeCost = options?.includeCost ?? false;
   const XLSX = await loadXlsx();
   const workbook = XLSX.utils.book_new();
   
   try {
     const products = await getProducts(true);
-    const prodData = products.map(p => ({
-      'Product ID': p.id,
-      'SKU': p.sku || '',
-      'Name': p.name || '',
-      'Category': p.category || '',
-      'Brand': p.brand || '',
-      'Selling Price (৳)': p.sellingPrice || 0,
-      'Total Stock': p.variants?.reduce((acc, v) => acc + (v.stock || 0), 0) ?? 0,
-      'Archived': p.archived ? 'Yes' : 'No',
-      'Created At': formatDate(p.createdAt)
-    }));
+    const prodData = products.map(p => {
+      const sellRange = getProductSellingPriceRange(p);
+      const activeVariants = getActiveVariants(p);
+      const row: Record<string, any> = {
+        'Product ID': p.id,
+        'SKU': p.sku || '',
+        'Name': p.name || '',
+        'Category': p.category || '',
+        'Brand': p.brand || '',
+      };
+      if (includeCost) {
+        row['Cost Price (৳)'] = formatPriceRange(getProductCostPriceRange(p));
+      }
+      row['Selling Price (৳)'] = formatPriceRange(sellRange);
+      row['Total Stock'] = activeVariants.reduce((acc, v) => acc + (v.stock || 0), 0);
+      row['Archived'] = p.archived ? 'Yes' : 'No';
+      row['Created At'] = formatDate(p.createdAt);
+      return row;
+    });
     XLSX.utils.book_append_sheet(workbook, XLSX.utils.json_to_sheet(prodData), 'Products');
   } catch (e) { console.error(e); }
 

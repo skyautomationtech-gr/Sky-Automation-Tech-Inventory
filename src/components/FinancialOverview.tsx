@@ -86,6 +86,10 @@ import {
   normalizeSubBrandCode,
 } from '../utils/subBrands';
 import { SubBrandBadge } from './PreOrders/PreOrderStatusBadge';
+import {
+  resolveVariantByOrderItem,
+  resolveVariantCostPrice,
+} from '../utils/productVariants';
 
 interface FinancialOverviewProps {
   user: UserProfile;
@@ -534,9 +538,9 @@ export default function FinancialOverview({
       .reduce((sum, inc) => sum + (inc.amount || 0), 0);
 
     // 2. Sold Products Purchase Cost (COGS - বিক্রিত পণ্যের ক্রয়মূল্য / কেনা দাম)
-    const productCostMap = new Map<string, number>();
+    const productMap = new Map<string, any>();
     products.forEach(p => {
-      productCostMap.set(p.id, p.costPrice || 0);
+      productMap.set(p.id, p);
     });
 
     const salesOrderIds = new Set(
@@ -549,11 +553,12 @@ export default function FinancialOverview({
     orders.forEach(order => {
       if (salesOrderIds.has(order.id) && order.status !== 'Returned/Cancelled') {
         const orderCost = (order.items || []).reduce((sum, item) => {
+          const prod = productMap.get(item.productId);
           const cost = (item.costPrice !== undefined && Number(item.costPrice) > 0)
             ? Number(item.costPrice)
-            : productCostMap.has(item.productId)
-            ? productCostMap.get(item.productId)!
-            : (item.unitPrice * 0.7); // Fallback to 70% cost if costPrice not specified
+            : prod
+            ? resolveVariantCostPrice(prod, resolveVariantByOrderItem(prod, item.variantId))
+            : (item.unitPrice * 0.7); // Fallback to 70% cost if product/costPrice not found
           return sum + (cost * (item.qty || 1));
         }, 0);
         totalSoldProductCost += orderCost;

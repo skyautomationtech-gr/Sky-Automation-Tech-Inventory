@@ -21,6 +21,15 @@ import {
 } from 'firebase/firestore';
 import { pushProductToReseller } from '../services/resellerSync';
 import { normalizeProductImages } from '../utils/productImageUpload';
+import {
+  MAX_VARIANTS_PER_PRODUCT,
+  buildVariantUniquenessKey,
+  normalizeAttributeCompareKey,
+  normalizeAttributeName,
+  resolveVariantCostPrice,
+  resolveVariantReorderThreshold,
+  resolveVariantSellingPrice,
+} from '../utils/productVariants';
 import { db, auth } from './config';
 import { perfTrackRead, perfTrackWrite, perfTrackListener } from '../utils/perfLogger';
 import { triggerPublicTrackingSync } from './trackingSyncBridge';
@@ -1031,14 +1040,40 @@ export function subscribeToProductColors(callback: (colors: ProductColor[]) => v
 }
 
 export async function addProductColor(name: string, hexCode?: string): Promise<ProductColor> {
+  const cleanName = normalizeAttributeName(name);
+  if (!cleanName) {
+    throw new Error('Color name cannot be empty.');
+  }
+  const existingList = await getProductColors();
+  const targetKey = normalizeAttributeCompareKey(cleanName);
+  const existingMatch = existingList.find(
+    (c) => normalizeAttributeCompareKey(c.name) === targetKey
+  );
+  if (existingMatch) {
+    return existingMatch;
+  }
+
   dbCache.colors = null;
   dbCache.products = null; dbCache.productsArchived = null;
   try {
     const colRef = collection(db, 'productColors');
-    const data: any = { name };
+    // Double-check against live Firestore snapshot to avoid race duplicates
+    const snap = await getDocs(colRef);
+    let liveMatch: ProductColor | null = null;
+    snap.forEach((d) => {
+      const data = d.data() as any;
+      if (!liveMatch && normalizeAttributeCompareKey(data?.name) === targetKey) {
+        liveMatch = { id: d.id, name: data.name, hexCode: data.hexCode };
+      }
+    });
+    if (liveMatch) {
+      return liveMatch;
+    }
+
+    const data: any = { name: cleanName };
     if (hexCode) data.hexCode = hexCode;
     const docRef = await addDoc(colRef, data);
-    return { id: docRef.id, name, hexCode };
+    return { id: docRef.id, name: cleanName, hexCode };
   } catch (error) {
     handleFirestoreError(error, OperationType.CREATE, 'productColors');
   }
@@ -1114,12 +1149,37 @@ export function subscribeToProductModels(callback: (models: ProductModel[]) => v
 }
 
 export async function addProductModel(name: string): Promise<ProductModel> {
+  const cleanName = normalizeAttributeName(name);
+  if (!cleanName) {
+    throw new Error('Model/Size name cannot be empty.');
+  }
+  const existingList = await getProductModels();
+  const targetKey = normalizeAttributeCompareKey(cleanName);
+  const existingMatch = existingList.find(
+    (m) => normalizeAttributeCompareKey(m.name) === targetKey
+  );
+  if (existingMatch) {
+    return existingMatch;
+  }
+
   dbCache.models = null;
   dbCache.products = null; dbCache.productsArchived = null;
   try {
     const colRef = collection(db, 'productModels');
-    const docRef = await addDoc(colRef, { name });
-    return { id: docRef.id, name };
+    const snap = await getDocs(colRef);
+    let liveMatch: ProductModel | null = null;
+    snap.forEach((d) => {
+      const data = d.data() as any;
+      if (!liveMatch && normalizeAttributeCompareKey(data?.name) === targetKey) {
+        liveMatch = { id: d.id, name: data.name };
+      }
+    });
+    if (liveMatch) {
+      return liveMatch;
+    }
+
+    const docRef = await addDoc(colRef, { name: cleanName });
+    return { id: docRef.id, name: cleanName };
   } catch (error) {
     handleFirestoreError(error, OperationType.CREATE, 'productModels');
   }
@@ -1202,18 +1262,45 @@ export function normalizeProduct(id: string, data: any): Product {
   const imageUrls = images;
 
   const variants: Variant[] = Array.isArray(data.variants) && data.variants.length > 0
-    ? data.variants.map((v: any, idx: number) => ({
-        id: v.id || `v-${idx + 1}`,
-        color: v.color || 'Standard',
-        model: v.model || 'Standard',
-        stock: Number(v.stock) || 0,
-        reservedQty: Math.max(0, Number(v.reservedQty) || 0),
-        reservedForPreOrders: Array.isArray(v.reservedForPreOrders) ? v.reservedForPreOrders : [],
-        barcodeValue: v.barcodeValue || ''
-      }))
+    ? data.variants.map((v: any, idx: number) => {
+        const parsedCost = v.costPrice !== undefined && v.costPrice !== null && v.costPrice !== ''
+          ? Number(v.costPrice)
+          : undefined;
+        const parsedSell = v.sellingPrice !== undefined && v.sellingPrice !== null && v.sellingPrice !== ''
+          ? Number(v.sellingPrice)
+          : undefined;
+        const parsedThreshold =
+          v.reorderThreshold !== undefined && v.reorderThreshold !== null && v.reorderThreshold !== ''
+            ? Number(v.reorderThreshold)
+            : undefined;
+        return {
+          id: v.id || `v-${idx + 1}`,
+          color: v.color || 'Default',
+          model: v.model || 'Standard',
+          ...(typeof v.variantNote === 'string' && v.variantNote.trim()
+            ? { variantNote: v.variantNote.trim() }
+            : {}),
+          ...(typeof v.variantSku === 'string' && v.variantSku.trim()
+            ? { variantSku: v.variantSku.trim().toUpperCase() }
+            : {}),
+          ...(parsedCost !== undefined && Number.isFinite(parsedCost) ? { costPrice: parsedCost } : {}),
+          ...(parsedSell !== undefined && Number.isFinite(parsedSell) ? { sellingPrice: parsedSell } : {}),
+          ...(typeof v.sameAsProductPrice === 'boolean'
+            ? { sameAsProductPrice: v.sameAsProductPrice }
+            : {}),
+          ...(parsedThreshold !== undefined && Number.isFinite(parsedThreshold)
+            ? { reorderThreshold: parsedThreshold }
+            : {}),
+          ...(v.inactive ? { inactive: true } : {}),
+          stock: Number(v.stock) || 0,
+          reservedQty: Math.max(0, Number(v.reservedQty) || 0),
+          reservedForPreOrders: Array.isArray(v.reservedForPreOrders) ? v.reservedForPreOrders : [],
+          barcodeValue: v.barcodeValue || ''
+        };
+      })
     : [{
         id: 'v-1',
-        color: 'Standard',
+        color: 'Default',
         model: 'Standard',
         stock: Number(data.stock ?? data.totalStock ?? 0),
         reservedQty: Math.max(0, Number(data.reservedQty) || 0),
@@ -1221,12 +1308,14 @@ export function normalizeProduct(id: string, data: any): Product {
         barcodeValue: data.barcodeValue || ''
       }];
 
-  const variantStockSum = variants.reduce((acc, v) => acc + (v.stock || 0), 0);
+  const activeVariants = variants.filter((v) => !v.inactive);
+  const stockCountList = activeVariants.length > 0 ? activeVariants : variants;
+  const variantStockSum = stockCountList.reduce((acc, v) => acc + (v.stock || 0), 0);
   const totalStock = Array.isArray(data.variants) && data.variants.length > 0
     ? variantStockSum
     : Number(data.totalStock ?? variantStockSum);
 
-  const variantReservedSum = variants.reduce((acc, v) => acc + (v.reservedQty || 0), 0);
+  const variantReservedSum = stockCountList.reduce((acc, v) => acc + (v.reservedQty || 0), 0);
   const reservedQty = Math.max(Number(data.reservedQty) || 0, variantReservedSum);
   const reservedForPreOrders = Array.isArray(data.reservedForPreOrders)
     ? data.reservedForPreOrders
@@ -1239,7 +1328,14 @@ export function normalizeProduct(id: string, data: any): Product {
   if (!stockStatus) {
     if (availableStock <= 0) {
       stockStatus = 'out_of_stock';
-    } else if (availableStock <= reorderThreshold) {
+    } else if (
+      availableStock <= reorderThreshold ||
+      stockCountList.some(
+        (v) =>
+          Math.max(0, (Number(v.stock) || 0) - Math.max(0, Number(v.reservedQty) || 0)) <=
+          resolveVariantReorderThreshold(reorderThreshold, v)
+      )
+    ) {
       stockStatus = 'low_stock';
     } else {
       stockStatus = 'in_stock';
@@ -1408,14 +1504,144 @@ export async function syncProductStockStatuses(): Promise<void> {
   }
 }
 
+function prepareVariantsForWrite(
+  variants: Variant[],
+  productSellingPrice?: number,
+  productCostPrice?: number
+): Variant[] {
+  if (!Array.isArray(variants) || variants.length === 0) {
+    throw new Error('At least 1 active variant is required.');
+  }
+  if (variants.length > MAX_VARIANTS_PER_PRODUCT) {
+    throw new Error(`A product can have at most ${MAX_VARIANTS_PER_PRODUCT} variants.`);
+  }
+  const activeVariants = variants.filter((v) => !v.inactive);
+  if (activeVariants.length === 0) {
+    throw new Error('At least 1 active variant is required.');
+  }
+
+  const seenKeys = new Set<string>();
+  return variants.map((v, idx) => {
+    const color = normalizeAttributeName(v.color) || 'Default';
+    const model = normalizeAttributeName(v.model) || 'Standard';
+    const variantNote = normalizeAttributeName(v.variantNote);
+    if (!v.inactive) {
+      const key = buildVariantUniquenessKey({ color, model, variantNote });
+      if (seenKeys.has(key)) {
+        throw new Error(
+          `Duplicate variant combination: "${color} / ${model}${variantNote ? ` (${variantNote})` : ''}".`
+        );
+      }
+      seenKeys.add(key);
+    }
+
+    const inherits = v.sameAsProductPrice !== false;
+    const sellPrice = inherits && productSellingPrice !== undefined
+      ? Math.max(0, Number(productSellingPrice) || 0)
+      : resolveVariantSellingPrice(productSellingPrice ?? 0, v);
+    const costPrice = inherits && productCostPrice !== undefined
+      ? Math.max(0, Number(productCostPrice) || 0)
+      : resolveVariantCostPrice(productCostPrice ?? 0, v);
+
+    if (sellPrice < 0 || costPrice < 0) {
+      throw new Error('Variant prices cannot be negative.');
+    }
+
+    const cleaned: Variant = {
+      id: v.id || `v-${idx + 1}`,
+      color,
+      model,
+      stock: Math.max(0, Number(v.stock) || 0),
+      sameAsProductPrice: inherits,
+      sellingPrice: sellPrice,
+      costPrice,
+    };
+    if (variantNote) cleaned.variantNote = variantNote;
+    if (v.variantSku && v.variantSku.trim()) cleaned.variantSku = v.variantSku.trim().toUpperCase();
+    if (v.reorderThreshold !== undefined && v.reorderThreshold !== null && Number.isFinite(Number(v.reorderThreshold))) {
+      cleaned.reorderThreshold = Math.max(0, Number(v.reorderThreshold));
+    }
+    if (v.inactive) cleaned.inactive = true;
+    if (v.reservedQty && Number(v.reservedQty) > 0) cleaned.reservedQty = Math.max(0, Number(v.reservedQty));
+    if (Array.isArray(v.reservedForPreOrders) && v.reservedForPreOrders.length > 0) {
+      cleaned.reservedForPreOrders = v.reservedForPreOrders;
+    }
+    if (v.barcodeValue) cleaned.barcodeValue = v.barcodeValue;
+    return cleaned;
+  });
+}
+
+export async function checkProductVariantHasHistory(
+  productId: string,
+  variantId: string,
+  variant?: Partial<Variant>
+): Promise<{ hasHistory: boolean; reason?: string }> {
+  if ((Number(variant?.stock) || 0) > 0) {
+    return { hasHistory: true, reason: 'Variant currently has stock on hand.' };
+  }
+  if ((Number(variant?.reservedQty) || 0) > 0) {
+    return { hasHistory: true, reason: 'Variant has units reserved for Pre-Orders.' };
+  }
+
+  try {
+    const cachedOrders = dbCache.orders || localStore.get<Order[]>('orders_list') || [];
+    const matchInCachedOrder = cachedOrders.some((o) =>
+      (o.items || []).some((it) => it.productId === productId && it.variantId === variantId)
+    );
+    if (matchInCachedOrder) {
+      return { hasHistory: true, reason: 'Variant is referenced in past orders.' };
+    }
+
+    const logs = await getStockLogs(productId);
+    const labelNeedle = variant?.color && variant?.model
+      ? `(${variant.color} - ${variant.model})`.toLowerCase()
+      : '';
+    const matchLog = logs.some(
+      (l) =>
+        l.variantId === variantId ||
+        (labelNeedle && (l.productName || '').toLowerCase().includes(labelNeedle))
+    );
+    if (matchLog) {
+      return { hasHistory: true, reason: 'Variant has recorded stock ledger history.' };
+    }
+
+    if (cachedOrders.length === 0 && auth?.currentUser) {
+      const ordSnap = await getDocs(query(collection(db, 'orders'), limit(200)));
+      let foundInOrder = false;
+      ordSnap.forEach((d) => {
+        const data = d.data() as any;
+        if (
+          Array.isArray(data?.items) &&
+          data.items.some((it: any) => it.productId === productId && it.variantId === variantId)
+        ) {
+          foundInOrder = true;
+        }
+      });
+      if (foundInOrder) {
+        return { hasHistory: true, reason: 'Variant is referenced in past orders.' };
+      }
+    }
+  } catch (err) {
+    console.warn('checkProductVariantHasHistory notice:', err);
+  }
+
+  return { hasHistory: false };
+}
+
 export async function addProduct(product: Omit<Product, 'id'>, userId: string, userName: string): Promise<string> {
   dbCache.products = null; dbCache.productsArchived = null;
   try {
     const colRef = collection(db, 'products');
-    const totalQty = product.variants.reduce((acc, v) => acc + (v.stock || 0), 0);
+    const preparedVariants = prepareVariantsForWrite(
+      product.variants,
+      product.sellingPrice,
+      product.costPrice
+    );
+    const activeVariants = preparedVariants.filter((v) => !v.inactive);
+    const totalQty = activeVariants.reduce((acc, v) => acc + (v.stock || 0), 0);
     const reservedQty = Math.max(
       Number(product.reservedQty) || 0,
-      product.variants.reduce((acc, v) => acc + (v.reservedQty || 0), 0)
+      activeVariants.reduce((acc, v) => acc + (v.reservedQty || 0), 0)
     );
     const stockStatus = Math.max(0, totalQty - reservedQty) <= 0 ? 'out_of_stock' : 'in_stock';
     const normalizedImages = normalizeProductImages(product);
@@ -1426,6 +1652,7 @@ export async function addProduct(product: Omit<Product, 'id'>, userId: string, u
     };
     const sanitizedProduct = sanitizeData({
       ...product,
+      variants: preparedVariants,
       images: normalizedImages,
       imageUrls: normalizedImages,
       createdById: product.createdById || userId || submittedBy.uid || '',
@@ -1440,7 +1667,7 @@ export async function addProduct(product: Omit<Product, 'id'>, userId: string, u
     const docRef = await addDoc(colRef, sanitizedProduct);
     perfTrackWrite('products/addProduct', 1);
 
-    // Create an initial stock log / opening stock entry for each variant that has quantity > 0
+    // Create an initial stock log / opening stock entry if opening stock > 0
     if (totalQty > 0) {
       await addStockLog({
         productId: docRef.id,
@@ -1475,15 +1702,23 @@ export async function updateProduct(id: string, updatedFields: Partial<Product>)
       payload.images = normalizedImages;
       payload.imageUrls = normalizedImages;
     }
-    if (payload.variants && !payload.stockStatus) {
-      const totalQty = payload.variants.reduce((acc, v) => acc + (v.stock || 0), 0);
-      const reservedQty = Math.max(
-        Number(payload.reservedQty) || 0,
-        payload.variants.reduce((acc, v) => acc + (v.reservedQty || 0), 0)
+    if (payload.variants) {
+      payload.variants = prepareVariantsForWrite(
+        payload.variants,
+        payload.sellingPrice,
+        payload.costPrice
       );
-      payload.totalStock = totalQty;
-      payload.reservedQty = reservedQty;
-      payload.stockStatus = Math.max(0, totalQty - reservedQty) <= 0 ? 'out_of_stock' : 'in_stock';
+      if (!payload.stockStatus) {
+        const activeVariants = payload.variants.filter((v) => !v.inactive);
+        const totalQty = activeVariants.reduce((acc, v) => acc + (v.stock || 0), 0);
+        const reservedQty = Math.max(
+          Number(payload.reservedQty) || 0,
+          activeVariants.reduce((acc, v) => acc + (v.reservedQty || 0), 0)
+        );
+        payload.totalStock = totalQty;
+        payload.reservedQty = reservedQty;
+        payload.stockStatus = Math.max(0, totalQty - reservedQty) <= 0 ? 'out_of_stock' : 'in_stock';
+      }
     }
     const docRef = doc(db, 'products', id);
     const sanitizedData = sanitizeData(payload);

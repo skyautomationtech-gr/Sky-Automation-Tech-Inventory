@@ -13,14 +13,22 @@ import {
   Clock,
   Coins,
 } from 'lucide-react';
-import { Product, Variant, StockLog, StockLogType, UserProfile } from '../types';
+import { Product, Variant, StockLog, StockLogType, UserProfile, RolePermissionsMap } from '../types';
 import { addStockLog, updateProduct, getStockLogs, getVariantAvailableStock } from '../firebase/db';
 import { auth } from '../firebase/config';
 import { matchesGlobalBrandFilter } from '../utils/subBrands';
+import {
+  canViewProductCost,
+  formatVariantLabel,
+  getActiveVariants,
+  resolveVariantCostPrice,
+  resolveVariantReorderThreshold,
+} from '../utils/productVariants';
 
 interface StockOperationsProps {
   products: Product[];
   user: UserProfile | null;
+  rolePermissions?: RolePermissionsMap | null;
   onRefreshData: () => Promise<void>;
   initialAction?: string; // e.g. "in", "out", "adjust", "ledger"
   onActionChange?: (action: 'in' | 'out' | 'adjust' | 'ledger') => void;
@@ -32,6 +40,7 @@ interface StockOperationsProps {
 export default function StockOperations({
   products,
   user,
+  rolePermissions,
   onRefreshData,
   initialAction = 'in',
   onActionChange,
@@ -51,6 +60,7 @@ export default function StockOperations({
     [products, globalBrandFilter, initialProductId]
   );
   const isStaff = user?.role === 'staff';
+  const canViewCost = canViewProductCost(user, rolePermissions) && (!isStaff || user?.permissionOverrides?.viewProductCost === true);
 
   const normalizeAction = (act?: string): 'in' | 'out' | 'adjust' | 'ledger' => {
     if (act === 'in' || act === 'out' || act === 'adjust' || act === 'ledger') return act;
@@ -108,19 +118,46 @@ export default function StockOperations({
 
   // Pre-fill variant prices on selection
   const selectedProduct = products.find(p => p.id === selectedProductId);
+  const availableVariants = React.useMemo(() => {
+    if (!selectedProduct) return [];
+    const active = getActiveVariants(selectedProduct);
+    if (selectedVariantId && !active.some(v => v.id === selectedVariantId)) {
+      const pre = selectedProduct.variants.find(v => v.id === selectedVariantId);
+      return pre ? [...active, pre] : active;
+    }
+    return active;
+  }, [selectedProduct, selectedVariantId]);
   const selectedVariant = selectedProduct?.variants.find(v => v.id === selectedVariantId);
 
   useEffect(() => {
     if (selectedProduct) {
-      setCostPrice(selectedProduct.costPrice);
-      // default first variant
-      if (selectedProduct.variants.length > 0 && !selectedVariantId) {
-        setSelectedVariantId(selectedProduct.variants[0].id);
+      const active = getActiveVariants(selectedProduct);
+      const nextVar = active.find(v => v.id === selectedVariantId) || active[0] || selectedProduct.variants[0];
+      if (nextVar && nextVar.id !== selectedVariantId) {
+        setSelectedVariantId(nextVar.id);
+      } else if (!nextVar) {
+        setSelectedVariantId('');
+      }
+      if (canViewCost) {
+        setCostPrice(resolveVariantCostPrice(selectedProduct, nextVar));
+      } else {
+        setCostPrice('');
       }
     } else {
       setSelectedVariantId('');
+      setCostPrice('');
     }
-  }, [selectedProductId]);
+  }, [selectedProductId, canViewCost]);
+
+  useEffect(() => {
+    if (selectedProduct && selectedVariant) {
+      if (canViewCost) {
+        setCostPrice(resolveVariantCostPrice(selectedProduct, selectedVariant));
+      } else {
+        setCostPrice('');
+      }
+    }
+  }, [selectedVariantId, canViewCost]);
 
   const resetForm = () => {
     setSelectedProductId('');
@@ -205,10 +242,28 @@ export default function StockOperations({
         reasonLabel = `Adjustment: ${adjustNote || 'Physical Stock Audit Count'}`;
       }
 
-      // Update variant stock in Product array
-      const updatedVariants = selectedProduct.variants.map(v => 
-        v.id === selectedVariantId ? { ...v, stock: newStock } : v
-      );
+      // Update variant stock (and purchase cost on Stock In when permitted)
+      const parsedCost = costPrice !== '' && !Number.isNaN(Number(costPrice)) ? Number(costPrice) : undefined;
+      const shouldUpdateVariantCost =
+        activeAction === 'in' &&
+        canViewCost &&
+        parsedCost !== undefined &&
+        parsedCost >= 0;
+
+      const updatedVariants = selectedProduct.variants.map(v => {
+        if (v.id !== selectedVariantId) return v;
+        if (!shouldUpdateVariantCost) {
+          return { ...v, stock: newStock };
+        }
+        const prodBaseCost = Number(selectedProduct.costPrice) || 0;
+        const keepInheriting = v.sameAsProductPrice !== false && parsedCost === prodBaseCost;
+        return {
+          ...v,
+          stock: newStock,
+          costPrice: parsedCost,
+          sameAsProductPrice: keepInheriting,
+        };
+      });
 
       // Perform update to Product Firestore document
       await updateProduct(selectedProduct.id, {
@@ -218,7 +273,8 @@ export default function StockOperations({
       // Log Stock Entry
       await addStockLog({
         productId: selectedProduct.id,
-        productName: `${selectedProduct.name} (${selectedVariant.color} - ${selectedVariant.model})`,
+        variantId: selectedVariant.id,
+        productName: `${selectedProduct.name} (${formatVariantLabel(selectedVariant)})`,
         type: activeAction === 'adjust' ? 'adjustment' : activeAction === 'in' ? 'in' : 'out',
         qty: qtyChange,
         reason: reasonLabel,
@@ -228,7 +284,7 @@ export default function StockOperations({
         afterQty: newStock,
         refNo: refNo || '',
         supplierName: activeAction === 'in' ? supplierName || '' : '',
-        purchasePrice: activeAction === 'in' ? (costPrice !== '' ? Number(costPrice) : selectedProduct.costPrice) : undefined
+        purchasePrice: activeAction === 'in' && canViewCost ? (parsedCost ?? resolveVariantCostPrice(selectedProduct, selectedVariant)) : undefined
       });
 
       setSuccess(`Successfully executed inventory transaction! Stock updated.`);
@@ -469,12 +525,13 @@ export default function StockOperations({
                     required
                   >
                     <option value="">-- Choose Variant --</option>
-                    {selectedProduct.variants.map(v => {
+                    {availableVariants.map(v => {
                       const avail = getVariantAvailableStock(v);
                       const res = Number(v.reservedQty) || 0;
+                      const label = formatVariantLabel(v);
                       return (
                         <option key={v.id} value={v.id}>
-                          {v.color} - {v.model} (Avail: {avail} / Total: {v.stock}{res > 0 ? ` / Reserved: ${res}` : ''})
+                          {label}{v.variantSku ? ` [${v.variantSku}]` : ''} (Avail: {avail} / Total: {v.stock}{res > 0 ? ` / Reserved: ${res}` : ''}{v.inactive ? ' • Inactive' : ''})
                         </option>
                       );
                     })}
@@ -489,7 +546,7 @@ export default function StockOperations({
 
               {/* Input for STOCK IN & OUT */}
               {activeAction !== 'adjust' ? (
-                <div className="grid grid-cols-2 gap-3">
+                <div className={`grid gap-3 ${canViewCost ? 'grid-cols-2' : 'grid-cols-1'}`}>
                   <div>
                     <label className="block text-sm font-semibold uppercase tracking-wider text-slate-400">
                       Quantity (Units)
@@ -502,19 +559,27 @@ export default function StockOperations({
                       required
                     />
                   </div>
-                  <div>
-                    <label className="block text-sm font-semibold uppercase tracking-wider text-slate-400">
-                      Purchase Cost Price (৳)
-                    </label>
-                    <input
-                      type="number"
-                      value={costPrice}
-                      onChange={(e) => setCostPrice(e.target.value === '' ? '' : Number(e.target.value))}
-                      className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-sm text-slate-800 focus:outline-hidden"
-                      required
-                      disabled={isStaff}
-                    />
-                  </div>
+                  {canViewCost && (
+                    <div>
+                      <label className="block text-sm font-semibold uppercase tracking-wider text-slate-400">
+                        Purchase Cost Price (৳)
+                      </label>
+                      <input
+                        type="number"
+                        min="0"
+                        step="any"
+                        value={costPrice}
+                        onChange={(e) => setCostPrice(e.target.value === '' ? '' : Number(e.target.value))}
+                        className="mt-1 w-full bg-slate-50 border border-slate-200 rounded-xl py-2 px-3 text-sm text-slate-800 focus:outline-hidden"
+                        required
+                      />
+                      {activeAction === 'in' && (
+                        <p className="text-[11px] text-slate-400 mt-1">
+                          Updates this variant&apos;s purchase price when changed.
+                        </p>
+                      )}
+                    </div>
+                  )}
                 </div>
               ) : (
                 /* Input for ADJUSTMENT */
@@ -642,7 +707,10 @@ export default function StockOperations({
                     Active Target Selected
                   </span>
                   <h5 className="text-sm font-extrabold text-slate-900 font-sans mt-1">{selectedProduct.name}</h5>
-                  <p className="text-sm font-mono text-slate-500">Variant: {selectedVariant.color} / {selectedVariant.model}</p>
+                  <p className="text-sm font-mono text-slate-500">
+                    Variant: {formatVariantLabel(selectedVariant)}
+                    {selectedVariant.variantSku ? ` • ${selectedVariant.variantSku}` : ''}
+                  </p>
                 </div>
 
                 <div className="grid grid-cols-2 gap-2 text-center">
@@ -652,15 +720,15 @@ export default function StockOperations({
                   </div>
                   <div className="p-3 bg-slate-50 rounded-xl border border-slate-100">
                     <p className="text-sm text-slate-400">Reorder Alert</p>
-                    <p className="text-base font-black text-slate-900 mt-1 font-mono">{selectedProduct.reorderThreshold} pcs</p>
+                    <p className="text-base font-black text-slate-900 mt-1 font-mono">{resolveVariantReorderThreshold(selectedProduct, selectedVariant)} pcs</p>
                   </div>
                 </div>
 
-                {activeAction === 'in' && qty > 0 && (
+                {activeAction === 'in' && typeof qty === 'number' && qty > 0 && (
                   <div className="p-4 bg-teal-50 border border-teal-100 rounded-2xl space-y-1 text-teal-800 text-sm">
                     <p className="font-bold">Summary of proposed transaction:</p>
                     <p>• Stock will increase from <span className="font-bold">{selectedVariant.stock}</span> to <span className="font-bold">{selectedVariant.stock + qty}</span> units.</p>
-                    {!isStaff && (
+                    {canViewCost && typeof costPrice === 'number' && (
                       <p>• Total investment cost of ৳<span className="font-bold">{(costPrice * qty).toLocaleString()}</span> will be recorded.</p>
                     )}
                   </div>

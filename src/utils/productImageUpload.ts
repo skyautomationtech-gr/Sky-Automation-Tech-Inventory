@@ -129,10 +129,30 @@ export function buildCategoryPathLabel(product: {
   return parts.length > 0 ? parts.join(' → ') : 'Uncategorized';
 }
 
-function formatVariantsSummary(variants: Variant[] = []): string {
+function formatVariantsSummary(
+  variants: Variant[] = [],
+  productPrices?: { sellingPrice?: number; costPrice?: number },
+  includeCostPrice: boolean = false
+): string {
   if (!variants.length) return 'None';
   return variants
-    .map((v) => `${v.color || 'Default'} / ${v.model || 'Standard'}: ${Number(v.stock) || 0} pcs`)
+    .map((v) => {
+      const label = `${v.color || 'Default'} / ${v.model || 'Standard'}${
+        v.variantNote ? ` (${v.variantNote})` : ''
+      }`;
+      const skuTag = v.variantSku ? ` [${v.variantSku}]` : '';
+      const sp =
+        v.sameAsProductPrice !== false
+          ? Number(productPrices?.sellingPrice ?? v.sellingPrice ?? 0)
+          : Number(v.sellingPrice ?? productPrices?.sellingPrice ?? 0);
+      const cp =
+        v.sameAsProductPrice !== false
+          ? Number(productPrices?.costPrice ?? v.costPrice ?? 0)
+          : Number(v.costPrice ?? productPrices?.costPrice ?? 0);
+      const costPart = includeCostPrice ? `, Cost ৳${cp}` : '';
+      const statusPart = v.inactive ? ' [Archived]' : '';
+      return `${label}${skuTag}: ${Number(v.stock) || 0} pcs, Sell ৳${sp}${costPart}${statusPart}`;
+    })
     .join('; ');
 }
 
@@ -252,8 +272,19 @@ export function buildProductFieldDiff(
   }
 
   if (after.variants !== undefined) {
-    const prevSummary = formatVariantsSummary(before.variants || []);
-    const nextSummary = formatVariantsSummary(after.variants || []);
+    const prevSummary = formatVariantsSummary(
+      before.variants || [],
+      { sellingPrice: before.sellingPrice, costPrice: before.costPrice },
+      includeCostPrice
+    );
+    const nextSummary = formatVariantsSummary(
+      after.variants || [],
+      {
+        sellingPrice: after.sellingPrice ?? before.sellingPrice,
+        costPrice: after.costPrice ?? before.costPrice,
+      },
+      includeCostPrice
+    );
     if (prevSummary !== nextSummary) {
       changes.push({
         field: 'variants',

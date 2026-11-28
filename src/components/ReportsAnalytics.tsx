@@ -36,6 +36,10 @@ import {
   matchesGlobalBrandFilter,
 } from '../utils/subBrands';
 import { SubBrandBadge } from './PreOrders/PreOrderStatusBadge';
+import {
+  resolveVariantByOrderItem,
+  resolveVariantCostPrice,
+} from '../utils/productVariants';
 
 interface ReportsAnalyticsProps {
   user: UserProfile | null;
@@ -132,11 +136,23 @@ export default function ReportsAnalytics({
   }, [dateRangeType, startDate, endDate]);
 
   // COGS Calculation Map
-  const productCostMap = useMemo(() => {
-    const map = new Map<string, number>();
-    products.forEach(p => map.set(p.id, Number(p.costPrice || p.purchasePrice) || 0));
+  const productMap = useMemo(() => {
+    const map = new Map<string, Product>();
+    products.forEach(p => map.set(p.id, p));
     return map;
   }, [products]);
+
+  const resolveLineUnitCost = (item: Order['items'][number]): number => {
+    if (item.costPrice !== undefined && item.costPrice !== null && !Number.isNaN(Number(item.costPrice)) && Number(item.costPrice) > 0) {
+      return Number(item.costPrice);
+    }
+    const prod = productMap.get(item.productId);
+    if (!prod) return 0;
+    const variant = resolveVariantByOrderItem(prod, item.variantId);
+    const resolved = resolveVariantCostPrice(prod, variant);
+    if (resolved > 0) return resolved;
+    return Number((prod as any).purchasePrice) || 0;
+  };
 
   // Filter Orders within Date Range & Sub-Brand & Loss-Making toggle
   const filteredOrders = useMemo(() => {
@@ -148,7 +164,7 @@ export default function ReportsAnalytics({
       if (filterLossMakingOnly) {
         let totalCost = 0;
         (o.items || []).forEach(it => {
-          const c = productCostMap.get(it.productId) || 0;
+          const c = resolveLineUnitCost(it);
           totalCost += c * (Number(it.qty) || 1);
         });
         const profit = (Number(o.totalAmount) || 0) - totalCost;
@@ -157,7 +173,7 @@ export default function ReportsAnalytics({
 
       return true;
     });
-  }, [orders, rangeStartTs, rangeEndTs, subBrandFilter, filterLossMakingOnly, productCostMap]);
+  }, [orders, rangeStartTs, rangeEndTs, subBrandFilter, filterLossMakingOnly, productMap]);
 
   // Filter Expenses within Date Range & Sub-Brand
   const filteredExpenses = useMemo(() => {
@@ -201,12 +217,12 @@ export default function ReportsAnalytics({
       .filter(o => o.status !== 'Returned/Cancelled')
       .forEach(o => {
         o.items.forEach(item => {
-          const cost = productCostMap.get(item.productId) || 0;
+          const cost = resolveLineUnitCost(item);
           cogs += cost * item.qty;
         });
       });
     return cogs;
-  }, [filteredOrders, productCostMap]);
+  }, [filteredOrders, productMap]);
 
   const netProfit = totalSalesRevenue - totalCOGS - totalOperatingExpenses;
 
@@ -290,7 +306,7 @@ export default function ReportsAnalytics({
       let sbCogs = 0;
       validOrders.forEach(o => {
         o.items.forEach(item => {
-          sbCogs += (productCostMap.get(item.productId) || 0) * item.qty;
+          sbCogs += resolveLineUnitCost(item) * item.qty;
         });
       });
 
@@ -311,7 +327,7 @@ export default function ReportsAnalytics({
         netProfit: netProf
       };
     });
-  }, [orders, expenses, rangeStartTs, rangeEndTs, productCostMap, sellingSubBrands]);
+  }, [orders, expenses, rangeStartTs, rangeEndTs, productMap, sellingSubBrands]);
 
   // CSV Export
   const handleExportCSV = () => {
